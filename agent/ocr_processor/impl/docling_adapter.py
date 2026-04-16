@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
@@ -10,6 +11,7 @@ from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 from docling.datamodel.base_models import DocumentStream, InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions, RapidOcrOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
+import pypdfium2 as pdfium
 
 from ..schemas import BoundingBox, ContentBlock
 
@@ -17,6 +19,17 @@ _AGENT_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_DOCLING_ARTIFACTS_PATH = (
     _AGENT_ROOT / "ocr_processor" / "impl" / "pdf" / "artifacts" / "docling-models"
 )
+_THIN_TEXT_BBOX_THRESHOLD = 6.0
+_PAGE_RENDER_SCALE = 2.0
+
+
+@dataclass(slots=True)
+class _PageRender:
+    image: Any
+    scale_x: float
+    scale_y: float
+    page_width: float
+    page_height: float
 
 
 def convert_with_docling(content: bytes, filename: str) -> Any:
@@ -71,8 +84,13 @@ def _get_pdf_converter(artifacts_path: str) -> DocumentConverter:
     )
 
 
-def build_blocks_from_docling_result(conversion_result: Any) -> list[ContentBlock]:
+def build_blocks_from_docling_result(
+    conversion_result: Any,
+    *,
+    pdf_bytes: bytes | None = None,
+) -> list[ContentBlock]:
     document = conversion_result.document
+    page_renders = _render_pdf_page_images(pdf_bytes) if pdf_bytes else {}
     blocks: list[ContentBlock] = []
 
     for text_item in document.texts:
@@ -87,6 +105,12 @@ def build_blocks_from_docling_result(conversion_result: Any) -> list[ContentBloc
         )
         page_height = _resolve_page_height(document=document, page_no=page_no)
         bbox = _build_bbox(first_prov, page_height=page_height)
+        if bbox is not None and page_no is not None:
+            bbox = _refine_bbox_from_page_image(
+                bbox=bbox,
+                text=text,
+                page_render=page_renders.get(page_no),
+            )
 
         block_meta: dict[str, Any] = {}
         if first_prov is not None:
@@ -157,4 +181,75 @@ def _build_bbox(
         y0=float(source_bbox.t),
         x1=float(source_bbox.r),
         y1=float(source_bbox.b),
+    )
+
+
+def _render_pdf_page_images(pdf_bytes: bytes) -> dict[int, _PageRender]:
+    pdf_document = pdfium.PdfDocument(BytesIO(pdf_bytes))
+    page_renders: dict[int, _PageRender] = {}
+
+    for page_index in range(len(pdf_document)):
+        page = pdf_document[page_index]
+        page_width, page_height = page.get_size()
+        image = page.render(scale=_PAGE_RENDER_SCALE).to_pil()
+        page_renders[page_index + 1] = _PageRender(
+            image=image,
+            scale_x=image.width / page_width,
+            scale_y=image.height / page_height,
+            page_width=float(page_width),
+            page_height=float(page_height),
+        )
+
+    return page_renders
+
+
+def _refine_bbox_from_page_image(
+    *,
+    bbox: BoundingBox,
+    text: str,
+    page_render: _PageRender | None,
+) -> BoundingBox:
+    height = bbox.y1 - bbox.y0
+    if page_render is None or height >= _THIN_TEXT_BBOX_THRESHOLD:
+        return bbox
+
+    center_y = (bbox.y0 + bbox.y1) / 2
+    margin_x = max(2.0, min(10.0, len(text) * 0.25))
+    margin_y = max(12.0, _THIN_TEXT_BBOX_THRESHOLD * 2)
+
+    left = max(0, int((bbox.x0 - margin_x) * page_render.scale_x))
+    top = max(0, int((center_y - margin_y) * page_render.scale_y))
+    right = min(
+        page_render.image.width,
+        int((bbox.x1 + margin_x) * page_render.scale_x),
+    )
+    bottom = min(
+        page_render.image.height,
+        int((center_y + margin_y) * page_render.scale_y),
+    )
+    if left >= right or top >= bottom:
+        return bbox
+
+    crop = page_render.image.crop((left, top, right, bottom)).convert("L")
+    binary = crop.point(lambda value: 255 if value < 220 else 0)
+    refined_bbox = binary.getbbox()
+    if refined_bbox is None:
+        return bbox
+
+    refined_left = left + refined_bbox[0]
+    refined_top = top + refined_bbox[1]
+    refined_right = left + refined_bbox[2]
+    refined_bottom = top + refined_bbox[3]
+
+    padding_px = 1
+    refined_left = max(0, refined_left - padding_px)
+    refined_top = max(0, refined_top - padding_px)
+    refined_right = min(page_render.image.width, refined_right + padding_px)
+    refined_bottom = min(page_render.image.height, refined_bottom + padding_px)
+
+    return BoundingBox(
+        x0=refined_left / page_render.scale_x,
+        y0=refined_top / page_render.scale_y,
+        x1=refined_right / page_render.scale_x,
+        y1=refined_bottom / page_render.scale_y,
     )

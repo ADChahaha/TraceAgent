@@ -6,12 +6,12 @@
 ## 0) 项目总览
 
 - 项目名：`agent_gate`
-- 当前聚焦：`agent/` 服务的 OCR 预处理链路落地与稳定化，正在用 TDD 修 PDF 薄框 bbox
+- 当前聚焦：`agent/` 服务的 OCR 预处理链路落地与稳定化，PDF 薄框 bbox 已做首轮图像精修
 - 主模块：`ocr_processor`（预处理/OCR）与 `file_extraction_agent`（抽取，待完善）
 - 主链路：`raw file -> ocr_processor -> ProcessResult(blocks) -> file_extraction_agent`
 - 当前支持：`pdf`、`docx`；`doc` 明确未实现
 - PDF 默认模型路径：`agent/ocr_processor/impl/pdf/artifacts/docling-models`
-- 当前状态：`ocr_processor` 关键用例可跑通，PDF `bbox` 可提取，`docx` 在 Docling 失败时可回退到 zip/xml 文本抽取
+- 当前状态：`ocr_processor` 关键用例可跑通，PDF `bbox` 可提取且已修正明显薄框，`docx` 在 Docling 失败时可回退到 zip/xml 文本抽取
 
 ## 1) 当前目标与边界
 
@@ -68,6 +68,7 @@
 
 - 首选：Docling + RapidOCR（`meta_info["engine"] = "docling_rapidocr"`）
 - 回退：pdfplumber（`meta_info["engine"] = "pdfplumber_fallback"`）
+- 当 Docling 返回的高层文本框高度异常小时，会基于页面图像做一次局部 bbox 精修
 
 ### DOC/DOCX 处理链路
 
@@ -81,6 +82,11 @@
 - 命令：`conda run -n agent-gate pytest tests/ocr_processor/test_processor.py -q`
 - 结果：`6 passed`
 
+新增 bbox 精修单测：
+
+- 命令：`conda run -n agent-gate pytest tests/ocr_processor/test_docling_adapter.py -q`
+- 结果：`2 passed`
+
 并且已验证 PDF 可产出 bbox（含扫描 PDF 场景）。
 
 真实样本验证（2026-04-16）：
@@ -88,6 +94,7 @@
 - 用户提供的 `实验报告-模板.docx` 会触发 Docling `SimplePipeline` 失败，但当前已能通过 zip/xml fallback 成功提取文本块
 - 用户提供的扫描 PDF 第 1 页已成功输出 OCR blocks，并生成原页叠框图用于人工检查
 - 当前发现问题：Docling 高层 `document.texts[*].prov.bbox` 在扫描 PDF 上常出现“高度接近 0 的细框”，直接用于高亮效果较差
+- 当前进展：第 1 页“横线框”已明显改善；第 2 页这类表格页仍存在碎框/噪声框
 
 ## 5) 最近提交（与当前上下文相关）
 
@@ -101,13 +108,16 @@
 - `e9cc347` `fix(agent): revert legacy doc to explicit unimplemented`
 - `981e119` `test(agent): define docx fallback on docling failure`
 - `eea2f70` `fix(agent): add docx fallback for docling failures`
+- `114bdf4` `test(agent): define pdf bbox image refinement behavior`
 
 ## 6) 当前工作区状态（需要注意）
 
 仓库根目录当前有未提交内容：
 
 - 修改：`agent/CONTEXT.md`
-- 未跟踪：`agent/tests/ocr_processor/test_docling_adapter.py`
+- 修改：`agent/ocr_processor/impl/docling_adapter.py`
+- 修改：`agent/ocr_processor/impl/pdf/processor.py`
+- 修改：`agent/ocr_processor/README.md`
 - 未跟踪：`agent/output/`（真实样本验证输出）
 - 未跟踪：`backend/`、`frontend/`
 
@@ -115,7 +125,7 @@
 
 ## 7) 下一个建议动作（按优先级）
 
-1. **完成 bbox 修正 green 实现**：对扫描 PDF 的薄框做页面图像精修，再重新输出叠框图验证。
+1. **继续清理表格页碎框**：对过小框、单字符噪声框或同一行碎片框做聚合/过滤。
 2. **评估 fallback 粒度**：如果后续需要更强保真度，可继续补 header/footer/表格/文本框的抽取策略。
 3. **规划 legacy `.doc` 策略**：若要支持，优先选非平台专属的转换方案。
 

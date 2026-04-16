@@ -20,7 +20,10 @@ class PdfProcessor(Processor):
         safe_filename = filename or "document.pdf"
         try:
             conversion_result = docling_adapter.convert_pdf_with_docling(content, safe_filename)
-            blocks = docling_adapter.build_blocks_from_docling_result(conversion_result)
+            blocks = docling_adapter.build_blocks_from_docling_result(
+                conversion_result,
+                pdf_bytes=content,
+            )
             if blocks:
                 return ProcessResult(
                     processor_name="pdf_processor",
