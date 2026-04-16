@@ -1,10 +1,6 @@
 from __future__ import annotations
 
 from io import BytesIO
-from pathlib import Path
-import shutil
-import subprocess
-import tempfile
 
 import pytest
 from PIL import Image, ImageDraw, ImageFont
@@ -60,24 +56,6 @@ def build_docx_bytes(paragraphs: list[str]) -> bytes:
         document.add_paragraph(paragraph)
     document.save(buffer)
     return buffer.getvalue()
-
-
-def build_doc_bytes(paragraphs: list[str]) -> bytes:
-    textutil_path = shutil.which("textutil")
-    if textutil_path is None:
-        pytest.skip("textutil is required to build legacy .doc fixtures.")
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        txt_path = Path(tmpdir) / "sample.txt"
-        doc_path = Path(tmpdir) / "sample.doc"
-
-        txt_path.write_text("\n\n".join(paragraphs), encoding="utf-8")
-        subprocess.run(
-            [textutil_path, "-convert", "doc", "-output", str(doc_path), str(txt_path)],
-            check=True,
-            capture_output=True,
-        )
-        return doc_path.read_bytes()
 
 
 class FakeDoclingTextItem:
@@ -148,8 +126,8 @@ def test_process_infers_docx_type_from_filename(monkeypatch):
     assert result.meta_info["byte_size"] == len(docx_bytes)
 
 
-def test_process_extracts_text_from_doc_with_textutil():
-    doc_bytes = build_doc_bytes(["Hello DOC World", "Second paragraph"])
+def test_process_reports_legacy_doc_as_unimplemented():
+    doc_bytes = b"legacy-doc-placeholder"
     file_obj = DummyUploadFile(
         filename="sample.doc",
         content=doc_bytes,
@@ -162,16 +140,12 @@ def test_process_extracts_text_from_doc_with_textutil():
     assert result.file_type == FileType.DOC
     assert result.processor_name == "doc_processor"
     assert result.filename == "sample.doc"
-    assert result.blocks
-    assert any("Hello DOC World" in block.text for block in result.blocks)
-    assert any("Second paragraph" in block.text for block in result.blocks)
-    assert all(block.kind == "text" for block in result.blocks)
-    assert all(block.page_no is None for block in result.blocks)
-    assert all(block.bbox is None for block in result.blocks)
+    assert result.blocks == []
     assert result.meta_info["source"] == "doc"
     assert result.meta_info["byte_size"] == len(doc_bytes)
-    assert result.meta_info["engine"] == "textutil"
-    assert result.warnings == []
+    assert result.meta_info["block_count"] == 0
+    assert result.meta_info["engine"] == "unimplemented"
+    assert result.warnings == ["Legacy .doc processing is not implemented yet."]
 
 
 def test_process_allows_explicit_type_override():
