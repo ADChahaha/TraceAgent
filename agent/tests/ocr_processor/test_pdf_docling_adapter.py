@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from PIL import Image, ImageDraw
 
-from ocr_processor.impl import docling_adapter
+from ocr_processor.impl.pdf import docling_adapter
 from ocr_processor.schemas import BoundingBox
 
 

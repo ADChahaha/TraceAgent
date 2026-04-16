@@ -8,6 +8,7 @@ from .processor import (
     ProcessorDispatcher,
     process,
 )
+from .markdown_export import build_markdown_from_blocks
 
 __all__ = [
     "BoundingBox",
@@ -17,5 +18,6 @@ __all__ = [
     "PdfProcessor",
     "ProcessResult",
     "ProcessorDispatcher",
+    "build_markdown_from_blocks",
     "process",
 ]

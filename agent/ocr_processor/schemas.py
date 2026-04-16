@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .types import FileType
+from ocr_processor.types import FileType
 
 
 @dataclass(slots=True)
@@ -31,9 +31,8 @@ class ContentBlock:
 class ProcessResult:
     """Unified result returned by the processor dispatcher."""
 
-    processor_name: str
     file_type: FileType
     filename: str | None
-    blocks: list[ContentBlock]
-    meta_info: dict[str, Any] = field(default_factory=dict)
+    markdown: str = ""
+    blocks: list[ContentBlock] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)

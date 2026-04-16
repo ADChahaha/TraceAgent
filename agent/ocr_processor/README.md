@@ -36,6 +36,7 @@
 ```text
 agent/ocr_processor/
 ├── README.md
+├── pyproject.toml
 ├── processor.py
 ├── schemas.py
 ├── types.py
@@ -43,18 +44,23 @@ agent/ocr_processor/
     ├── __init__.py
     ├── base.py
     ├── dispatcher.py
-    ├── docling_adapter.py
     ├── doc/
     │   ├── __init__.py
+    │   ├── docling_adapter.py
     │   └── processor.py
     └── pdf/
         ├── artifacts/
         │   └── docling-models/
         ├── __init__.py
+        ├── docling_adapter.py
         └── processor.py
 ```
 
 这样做的目的，是让外部调用时只需要关注顶层入口，而具体的多态实现各自收在自己的目录里。
+
+当前 `ocr_processor` 作为独立 Python 包维护，包配置位于：
+
+- `agent/ocr_processor/pyproject.toml`
 
 ## 处理方式
 
@@ -96,14 +102,13 @@ result = process(file_obj)
 
 `ProcessResult` 的核心内容是：
 
-- `processor_name`
 - `file_type`
 - `filename`
+- `markdown`
 - `blocks`
-- `meta_info`
 - `warnings`
 
-其中最重要的是 `blocks`。
+其中最重要的是 `blocks` 和 `markdown`。
 
 ## Content Block
 
@@ -130,8 +135,24 @@ ContentBlock(
 这样设计的原因是：
 
 - `file_extraction` 只需要消费 `text`
-- 前端高亮需要 `page_no + bbox`
+- 前端如果需要定位能力，可以继续使用 `page_no + bbox`
 - 不同文件类型可以共用一套外壳
+
+## Markdown 输出
+
+除了 block 列表，当前 `ProcessResult` 还会提供一份整篇 `markdown`，用于前端展示处理后的文档内容。
+
+当前规则是：
+
+- 普通 `text` block 直接按段落拼接
+- `table` block 原样保留 Markdown 表格
+- 其他语义类型可以继续在 block 级别扩展，再映射到 Markdown
+
+这意味着：
+
+- `pdf/docx` 都可以直接输出标准化阅读视图
+- 前端可以直接消费 `markdown`
+- `pdf` 如果后续仍需要原页定位，也可以继续额外使用 `page_no + bbox`
 
 ## PDF 和 DOC/DOCX 的差异
 
@@ -148,11 +169,6 @@ ContentBlock(
 这样前端可以根据页码和边界框做高亮定位。
 
 当前实现优先使用 `Docling` 做转换；如果当前环境下 `Docling` 的 PDF 管线不可用，则回退到 `pdfplumber` 提取行级文本和边界框。
-
-返回结果中的 `meta_info["engine"]` 用于标识当前实际使用的处理链路：
-
-- `docling_rapidocr`：Docling PDF 管线可用
-- `pdfplumber_fallback`：Docling 不可用或未提取到文本时的回退链路
 
 当前 PDF 映射中还做了一层轻量 bbox 修正：
 
@@ -193,9 +209,9 @@ ContentBlock(
 当前实现中：
 
 - `docx` 默认使用 `Docling`
-- 如果 `docx` 的 Docling 管线失败，则回退到 zip/xml 文本抽取（`engine = "zip_xml_fallback"`）
+- 如果 `docx` 的 Docling 管线失败，或成功但未产出任何 block，则回退到 zip/xml 文本抽取
 - `pdf` 使用 `Docling + PyPdfium + RapidOCR`
-- `doc` 老格式当前未实现，返回空块和 warning（`engine = "unimplemented"`）
+- `doc` 老格式当前未实现，返回空块和 warning
 - `docx` fallback 和 `doc` 当前都不提供稳定的页码和几何位置信息，因此返回 `page_no = None`、`bbox = None`
 
 ## 为什么不拆成两套 API
@@ -210,7 +226,7 @@ ContentBlock(
 
 因此当前策略是：
 
-- 统一返回 `blocks`
+- 返回最小可用字段：`file_type / filename / markdown / blocks / warnings`
 - PDF 在 block 上补充 `page_no` 和 `bbox`
 - PDF 表格使用 `kind = "table"`，并把 Markdown 放进 `text`
 - DOC/DOCX 没有时就为空
@@ -232,7 +248,7 @@ ContentBlock(
 
 这一层在整体系统中的位置可以理解为：
 
-`raw file -> ocr_processor -> ProcessResult(blocks) -> file_extraction`
+`raw file -> ocr_processor -> ProcessResult(blocks + markdown) -> file_extraction`
 
 其中：
 

@@ -6,18 +6,18 @@
 ## 0) 项目总览
 
 - 项目名：`agent_gate`
-- 当前聚焦：`agent/` 服务的 OCR 预处理链路落地与稳定化，PDF 薄框 bbox 已做首轮图像精修，表格已升级为保留语义的 `table` blocks，并已增加页外/页脚噪声 text 过滤
+- 当前聚焦：`agent/` 服务的 OCR 预处理链路落地与稳定化，输出契约开始向 Markdown 优先的最小可用结构收敛
 - 主模块：`ocr_processor`（预处理/OCR）与 `file_extraction_agent`（抽取，待完善）
-- 主链路：`raw file -> ocr_processor -> ProcessResult(blocks) -> file_extraction_agent`
+- 主链路：`raw file -> ocr_processor -> ProcessResult(blocks + markdown) -> file_extraction_agent`
 - 当前支持：`pdf`、`docx`；`doc` 明确未实现
 - PDF 默认模型路径：`agent/ocr_processor/impl/pdf/artifacts/docling-models`
-- 当前状态：`ocr_processor` 关键用例可跑通，PDF `bbox` 可提取且已修正明显薄框，PDF 表格会输出 `kind="table"` + Markdown，`docx` 在 Docling 失败时可回退到 zip/xml 文本抽取
+- 当前状态：`ocr_processor` 关键用例可跑通，返回契约已收敛到 Markdown 优先的最小可用字段，PDF 表格会输出 `kind="table"` + Markdown，`docx` 在 Docling 失败时可回退到 zip/xml 文本抽取
 
 ## 1) 当前目标与边界
 
 `agent` 负责文档处理链路，分为两段：
 
-- `ocr_processor`：文档预处理/OCR，输出统一 `ProcessResult(blocks)`
+- `ocr_processor`：文档预处理/OCR，输出统一 `ProcessResult(blocks + markdown)`
 - `file_extraction_agent`：消费预处理结果做抽取（后续完善）
 
 系统职责边界：
@@ -27,6 +27,14 @@
 
 ## 2) 最近关键决策（已落地）
 
+### 包导入与打包约定
+
+已确认并落地：
+
+- 除 `__init__.py` 外，模块内部统一使用绝对导入
+- `ocr_processor` 使用独立的 `agent/ocr_processor/pyproject.toml`
+- `agent/pyproject.toml` 仅保留 `file_extraction_agent`
+
 ### PDF artifacts 路径归属
 
 已确认并落地：PDF 的 Docling 本地模型目录按模块归属放在：
@@ -35,7 +43,7 @@
 
 对应代码默认路径：
 
-- `ocr_processor/impl/docling_adapter.py` 中 `_DEFAULT_DOCLING_ARTIFACTS_PATH`
+- `ocr_processor/impl/pdf/docling_adapter.py` 中 `_DEFAULT_DOCLING_ARTIFACTS_PATH`
 
 对应文档已同步：
 
@@ -57,17 +65,22 @@
 
 统一输出 `ProcessResult`，核心字段：
 
-- `processor_name`
 - `file_type`
 - `filename`
+- `markdown`（整篇标准化 Markdown，供前端展示）
 - `blocks`（每块至少 `text/page_no/bbox/meta_info`）
-- `meta_info`
 - `warnings`
+
+当前这轮按 TDD 推进：
+
+- `red`：先新增最小字段契约测试，确认旧结构因 `processor_name/meta_info` 失败
+- `green`：移除顶层冗余字段，保留 `file_type / filename / markdown / blocks / warnings`
+- `refactor`：补齐 README、AGENT 协作约定、真实文件验证测试
 
 ### PDF 处理链路
 
-- 首选：Docling + RapidOCR（`meta_info["engine"] = "docling_rapidocr"`）
-- 回退：pdfplumber（`meta_info["engine"] = "pdfplumber_fallback"`）
+- 首选：Docling + RapidOCR
+- 回退：pdfplumber
 - 当 Docling 返回的高层文本框高度异常小时，会基于页面图像做一次局部 bbox 精修
 - 如果本地 Docling artifacts 中包含 table structure 模型，则会开启表格结构分析，并把整表输出成 `kind="table"` block
 - table block 的 `text` 直接使用 Markdown，`meta_info` 中会补 `row_count` / `column_count`
@@ -76,30 +89,37 @@
 ### DOC/DOCX 处理链路
 
 - `docx`：默认 Docling；若 Docling 失败则回退到 zip/xml 文本抽取（text-only）
-- `doc`：显式返回空 blocks + warning，`engine = "unimplemented"`
+- `doc`：显式返回空 blocks + warning
 
 ## 4) 测试状态（已验证）
 
 在 `agent-gate` conda 环境下，`ocr_processor` 测试通过：
 
 - 命令：`conda run -n agent-gate pytest tests/ocr_processor/test_processor.py -q`
+- 结果：`8 passed`
+
+新增 PDF `docling_adapter` 单测：
+
+- 命令：`conda run -n agent-gate pytest tests/ocr_processor/test_pdf_docling_adapter.py -q`
 - 结果：`6 passed`
 
-新增 `docling_adapter` 单测：
+新增 Markdown 导出单测：
 
-- 命令：`conda run -n agent-gate pytest tests/ocr_processor/test_docling_adapter.py -q`
-- 结果：`4 passed`
+- 命令：`conda run -n agent-gate pytest tests/ocr_processor/test_markdown_export.py -q`
+- 结果：`2 passed`
+
+新增真实文件文档测试：
+
+- 命令：`conda run -n agent-gate pytest tests/ocr_processor/test_sample_documents.py -q`
+- 结果：`2 passed`
 
 并且已验证 PDF 可产出 bbox（含扫描 PDF 场景）。
 
 真实样本验证（2026-04-16）：
 
-- 用户提供的 `实验报告-模板.docx` 会触发 Docling `SimplePipeline` 失败，但当前已能通过 zip/xml fallback 成功提取文本块
-- 用户提供的扫描 PDF 第 1 页已成功输出 OCR blocks，并生成原页叠框图用于人工检查
-- 当前发现问题：Docling 高层 `document.texts[*].prov.bbox` 在扫描 PDF 上常出现“高度接近 0 的细框”，直接用于高亮效果较差
-- 当前进展：第 1 页“横线框”已明显改善；第 2 页表格页现已验证可输出单个 table block，并在原页叠框图中显示为整表红框
-- 当前实测：`source-page-2.pdf` 处理结果为 `1` 个 table block + `38` 个表外 text blocks；表格 Markdown 已导出到 `agent/output/processor_checks/pdf-page-002-table-001.md`
-- 当前进展：页外负坐标垃圾框、页脚/印章短噪声框、表格底部 spillover text 已做首轮过滤；真实样本整本 PDF 当前压缩到 `15` 个 blocks（`8 text + 7 table`）
+- `实验报告-模板.docx` 当前可稳定产出 Markdown，实测约 `21` 个 blocks、`143` 字符 Markdown，包含“杭州电子科技大学”“实验报告”等模板标题
+- `daa1d114-5c04-45d2-82b3-16bb8dc57206.pdf` 当前可稳定产出 Markdown，实测约 `11` 个 blocks、`1701` 字符 Markdown，并保留教师名单表格的 Markdown 结构
+- PDF `bbox` 能力仍保留，但当前主展示方向已转为 Markdown 优先
 
 ## 5) 最近提交（与当前上下文相关）
 
@@ -122,9 +142,20 @@
 仓库根目录当前有未提交内容：
 
 - 修改：`agent/CONTEXT.md`
-- 修改：`agent/ocr_processor/impl/docling_adapter.py`
+- 修改：`agent/README.md`
+- 修改：`agent/pyproject.toml`
+- 新增：`agent/ocr_processor/pyproject.toml`
+- 修改：`agent/ocr_processor/impl/pdf/docling_adapter.py`
+- 新增：`agent/ocr_processor/impl/doc/docling_adapter.py`
+- 新增：`agent/ocr_processor/markdown_export.py`
 - 修改：`agent/ocr_processor/impl/pdf/processor.py`
+- 修改：`agent/ocr_processor/impl/doc/processor.py`
+- 修改：`agent/ocr_processor/schemas.py`
 - 修改：`agent/ocr_processor/README.md`
+- 修改：`agent/tests/ocr_processor/test_processor.py`
+- 新增：`agent/tests/ocr_processor/test_markdown_export.py`
+- 新增：`agent/tests/ocr_processor/test_pdf_docling_adapter.py`
+- 新增：`agent/tests/ocr_processor/test_sample_documents.py`
 - 未跟踪：`agent/output/`（真实样本验证输出）
 - 未跟踪：`backend/`、`frontend/`
 
@@ -132,8 +163,8 @@
 
 ## 7) 下一个建议动作（按优先级）
 
-1. **继续校准正文 bbox**：第一页等非表格页的正文框已够用，但仍可继续收紧标题/长段落的贴合度。
-2. **评估表格细粒度结构**：如果后续需要单元格级交互，可继续补 cell/row 级 bbox 映射。
+1. **细化 block 语义**：把 `heading / paragraph / list_item / table` 判别做稳，提升 Markdown 质量。
+2. **规划前端消费契约**：优先按 `markdown` 展示，`blocks` 作为抽取和辅助定位输入。
 3. **规划 legacy `.doc` 策略**：若要支持，优先选非平台专属的转换方案。
 
 ## 8) 快速上手命令
@@ -156,6 +187,7 @@ git status --short
 - `ocr_processor/impl/dispatcher.py`：类型分发
 - `ocr_processor/impl/pdf/processor.py`：PDF 处理 + fallback
 - `ocr_processor/impl/doc/processor.py`：DOC/DOCX 处理
-- `ocr_processor/impl/docling_adapter.py`：Docling 适配 + artifacts 路径
+- `ocr_processor/impl/pdf/docling_adapter.py`：PDF Docling 适配 + artifacts 路径
+- `ocr_processor/impl/doc/docling_adapter.py`：DOCX Docling 适配
 - `ocr_processor/README.md`：模块说明
 - `tests/ocr_processor/test_processor.py`：核心测试

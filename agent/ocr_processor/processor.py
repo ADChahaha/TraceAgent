@@ -1,9 +1,9 @@
-from .impl.base import InvalidFileObjectError, Processor
-from .impl.dispatcher import ProcessorDispatcher
-from .impl.doc import DocProcessor
-from .impl.pdf import PdfProcessor
-from .schemas import BoundingBox, ContentBlock, ProcessResult
-from .types import FileType, UnsupportedFileTypeError, infer_file_type
+from ocr_processor.impl.base import InvalidFileObjectError, Processor
+from ocr_processor.impl.dispatcher import ProcessorDispatcher
+from ocr_processor.impl.doc import DocProcessor
+from ocr_processor.impl.pdf import PdfProcessor
+from ocr_processor.schemas import BoundingBox, ContentBlock, ProcessResult
+from ocr_processor.types import FileType, UnsupportedFileTypeError, infer_file_type
 
 _dispatcher = ProcessorDispatcher()
 

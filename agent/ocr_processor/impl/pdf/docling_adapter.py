@@ -14,9 +14,9 @@ from docling.datamodel.pipeline_options import PdfPipelineOptions, RapidOcrOptio
 from docling.document_converter import DocumentConverter, PdfFormatOption
 import pypdfium2 as pdfium
 
-from ..schemas import BoundingBox, ContentBlock
+from ocr_processor.schemas import BoundingBox, ContentBlock
 
-_AGENT_ROOT = Path(__file__).resolve().parents[2]
+_AGENT_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_DOCLING_ARTIFACTS_PATH = (
     _AGENT_ROOT / "ocr_processor" / "impl" / "pdf" / "artifacts" / "docling-models"
 )
@@ -42,11 +42,6 @@ class _PageRender:
     page_height: float
 
 
-def convert_with_docling(content: bytes, filename: str) -> Any:
-    converter = _get_default_converter()
-    return converter.convert(DocumentStream(name=filename, stream=BytesIO(content)))
-
-
 def convert_pdf_with_docling(content: bytes, filename: str) -> Any:
     artifacts_path = resolve_docling_artifacts_path()
     if artifacts_path is None or not artifacts_path.exists():
@@ -64,11 +59,6 @@ def resolve_docling_artifacts_path() -> Path | None:
     if env_value:
         return Path(env_value).expanduser()
     return _DEFAULT_DOCLING_ARTIFACTS_PATH
-
-
-@lru_cache(maxsize=1)
-def _get_default_converter() -> DocumentConverter:
-    return DocumentConverter()
 
 
 @lru_cache(maxsize=2)

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from ..base import Processor
-from .. import docling_adapter
-from ...schemas import BoundingBox, ContentBlock, ProcessResult
-from ...types import FileType
-import pdfplumber
 from io import BytesIO
+
+import pdfplumber
+
+from ocr_processor.impl.base import Processor
+from ocr_processor.impl.pdf import docling_adapter
+from ocr_processor.markdown_export import build_markdown_from_blocks
+from ocr_processor.schemas import BoundingBox, ContentBlock, ProcessResult
+from ocr_processor.types import FileType
 
 
 class PdfProcessor(Processor):
@@ -26,16 +29,10 @@ class PdfProcessor(Processor):
             )
             if blocks:
                 return ProcessResult(
-                    processor_name="pdf_processor",
                     file_type=self.file_type,
                     filename=filename,
+                    markdown=build_markdown_from_blocks(blocks),
                     blocks=blocks,
-                    meta_info={
-                        "byte_size": len(content),
-                        "source": "pdf",
-                        "block_count": len(blocks),
-                        "engine": "docling_rapidocr",
-                    },
                     warnings=[],
                 )
         except Exception as exc:
@@ -88,16 +85,10 @@ class PdfProcessor(Processor):
             warnings.append("No text blocks were extracted from the PDF.")
 
         return ProcessResult(
-            processor_name="pdf_processor",
             file_type=self.file_type,
             filename=filename,
+            markdown=build_markdown_from_blocks(blocks),
             blocks=blocks,
-            meta_info={
-                "byte_size": len(content),
-                "source": "pdf",
-                "block_count": len(blocks),
-                "engine": "pdfplumber_fallback",
-            },
             warnings=warnings,
         )
 

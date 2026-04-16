@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from .doc import DocProcessor
-from .pdf import PdfProcessor
-from ..schemas import ProcessResult
-from ..types import FileType, UnsupportedFileTypeError, infer_file_type
+from ocr_processor.impl.doc import DocProcessor
+from ocr_processor.impl.pdf import PdfProcessor
+from ocr_processor.schemas import ProcessResult
+from ocr_processor.types import FileType, UnsupportedFileTypeError, infer_file_type
 
 
 class ProcessorDispatcher:

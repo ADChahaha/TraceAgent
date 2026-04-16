@@ -4,8 +4,8 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Protocol
 
-from ..schemas import ProcessResult
-from ..types import FileType
+from ocr_processor.schemas import ProcessResult
+from ocr_processor.types import FileType
 
 
 class InvalidFileObjectError(TypeError):

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from dataclasses import fields
 from io import BytesIO
 
 import pytest
 from PIL import Image, ImageDraw, ImageFont
 from reportlab.lib.utils import ImageReader
 from ocr_processor import FileType, ProcessResult, process
-from ocr_processor.impl import docling_adapter
+from ocr_processor.impl.doc import docling_adapter as doc_docling_adapter
+from ocr_processor.impl.pdf import docling_adapter as pdf_docling_adapter
+from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from docx import Document
@@ -58,6 +61,40 @@ def build_docx_bytes(paragraphs: list[str]) -> bytes:
     return buffer.getvalue()
 
 
+def build_docx_with_table_bytes(*, paragraphs: list[str], table_rows: list[list[str]]) -> bytes:
+    buffer = BytesIO()
+    document = Document()
+    for paragraph in paragraphs:
+        document.add_paragraph(paragraph)
+
+    if table_rows:
+        table = document.add_table(rows=0, cols=len(table_rows[0]))
+        for row_values in table_rows:
+            row_cells = table.add_row().cells
+            for index, value in enumerate(row_values):
+                row_cells[index].text = value
+
+    document.save(buffer)
+    return buffer.getvalue()
+
+
+def build_structured_docx_bytes() -> bytes:
+    buffer = BytesIO()
+    document = Document()
+
+    title = document.add_paragraph()
+    title.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+    title.add_run("Project Proposal")
+
+    document.add_paragraph("")
+    document.add_paragraph("Overview")
+    document.add_paragraph("")
+    document.add_paragraph("This is the first body paragraph.")
+
+    document.save(buffer)
+    return buffer.getvalue()
+
+
 class FakeDoclingTextItem:
     def __init__(self, text: str):
         self.text = text
@@ -74,6 +111,16 @@ class FakeDoclingConversionResult:
         self.document = FakeDoclingDocument(texts)
 
 
+def test_process_result_exposes_minimal_public_fields():
+    assert [field.name for field in fields(ProcessResult)] == [
+        "file_type",
+        "filename",
+        "markdown",
+        "blocks",
+        "warnings",
+    ]
+
+
 def test_process_infers_pdf_type_from_filename():
     pdf_bytes = build_pdf_bytes("Hello PDF World")
     file_obj = DummyUploadFile(
@@ -86,20 +133,18 @@ def test_process_infers_pdf_type_from_filename():
 
     assert isinstance(result, ProcessResult)
     assert result.file_type == FileType.PDF
-    assert result.processor_name == "pdf_processor"
     assert result.filename == "sample.pdf"
     assert result.blocks
     assert result.blocks[0].page_no == 1
     assert result.blocks[0].bbox is not None
     assert "Hello" in result.blocks[0].text
-    assert result.meta_info["source"] == "pdf"
-    assert result.meta_info["byte_size"] == len(pdf_bytes)
-    assert result.meta_info["engine"] in {"docling_rapidocr", "pdfplumber_fallback"}
+    assert "Hello PDF World" in result.markdown
+    assert hasattr(result, "warnings")
 
 
 def test_process_infers_docx_type_from_filename(monkeypatch):
     monkeypatch.setattr(
-        docling_adapter,
+        doc_docling_adapter,
         "convert_with_docling",
         lambda content, filename: FakeDoclingConversionResult([FakeDoclingTextItem("Hello DOCX World")]),
     )
@@ -115,22 +160,20 @@ def test_process_infers_docx_type_from_filename(monkeypatch):
 
     assert isinstance(result, ProcessResult)
     assert result.file_type == FileType.DOCX
-    assert result.processor_name == "doc_processor"
     assert result.filename == "sample.docx"
     assert result.blocks
     assert result.blocks[0].kind == "text"
     assert result.blocks[0].page_no is None
     assert result.blocks[0].bbox is None
     assert result.blocks[0].text == "Hello DOCX World"
-    assert result.meta_info["source"] == "docx"
-    assert result.meta_info["byte_size"] == len(docx_bytes)
+    assert result.markdown == "Hello DOCX World"
 
 
 def test_process_falls_back_when_docling_docx_conversion_fails(monkeypatch):
     def raise_docling_failure(content, filename):
         raise RuntimeError("docling docx conversion failed")
 
-    monkeypatch.setattr(docling_adapter, "convert_with_docling", raise_docling_failure)
+    monkeypatch.setattr(doc_docling_adapter, "convert_with_docling", raise_docling_failure)
 
     docx_bytes = build_docx_bytes(["First paragraph", "Second paragraph"])
     file_obj = DummyUploadFile(
@@ -143,19 +186,94 @@ def test_process_falls_back_when_docling_docx_conversion_fails(monkeypatch):
 
     assert isinstance(result, ProcessResult)
     assert result.file_type == FileType.DOCX
-    assert result.processor_name == "doc_processor"
     assert result.filename == "sample.docx"
     assert result.blocks
     assert [block.text for block in result.blocks] == ["First paragraph", "Second paragraph"]
     assert all(block.page_no is None for block in result.blocks)
     assert all(block.bbox is None for block in result.blocks)
-    assert result.meta_info["source"] == "docx"
-    assert result.meta_info["byte_size"] == len(docx_bytes)
-    assert result.meta_info["engine"] == "zip_xml_fallback"
+    assert result.markdown == "First paragraph\n\nSecond paragraph"
     assert result.warnings == [
-        "Docling DOCX pipeline failed; used zip/xml fallback.",
+        "Docling DOCX pipeline failed; used python-docx fallback.",
         "docling docx conversion failed",
     ]
+
+
+def test_process_falls_back_when_docling_docx_returns_no_blocks(monkeypatch):
+    monkeypatch.setattr(
+        doc_docling_adapter,
+        "convert_with_docling",
+        lambda content, filename: FakeDoclingConversionResult([]),
+    )
+
+    docx_bytes = build_docx_bytes(["First paragraph", "Second paragraph"])
+    file_obj = DummyUploadFile(
+        filename="sample.docx",
+        content=docx_bytes,
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+
+    result = process(file_obj)
+
+    assert isinstance(result, ProcessResult)
+    assert result.file_type == FileType.DOCX
+    assert result.filename == "sample.docx"
+    assert [block.text for block in result.blocks] == ["First paragraph", "Second paragraph"]
+    assert all(block.page_no is None for block in result.blocks)
+    assert all(block.bbox is None for block in result.blocks)
+    assert result.markdown == "First paragraph\n\nSecond paragraph"
+    assert result.warnings == [
+        "Docling DOCX pipeline returned no blocks; used python-docx fallback."
+    ]
+
+
+def test_process_docx_fallback_preserves_table_as_markdown(monkeypatch):
+    monkeypatch.setattr(
+        doc_docling_adapter,
+        "convert_with_docling",
+        lambda content, filename: FakeDoclingConversionResult([]),
+    )
+
+    docx_bytes = build_docx_with_table_bytes(
+        paragraphs=["实验报告"],
+        table_rows=[
+            ["题目", ""],
+            ["姓名", "张三"],
+        ],
+    )
+    file_obj = DummyUploadFile(
+        filename="sample.docx",
+        content=docx_bytes,
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+
+    result = process(file_obj)
+
+    assert result.file_type == FileType.DOCX
+    assert "实验报告" in result.markdown
+    assert "| 题目 |  |" in result.markdown
+    assert "| 姓名 | 张三 |" in result.markdown
+
+
+def test_process_docx_fallback_detects_generic_headings(monkeypatch):
+    monkeypatch.setattr(
+        doc_docling_adapter,
+        "convert_with_docling",
+        lambda content, filename: FakeDoclingConversionResult([]),
+    )
+
+    docx_bytes = build_structured_docx_bytes()
+    file_obj = DummyUploadFile(
+        filename="structured.docx",
+        content=docx_bytes,
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+
+    result = process(file_obj)
+
+    assert result.file_type == FileType.DOCX
+    assert "# Project Proposal" in result.markdown
+    assert "# Overview" in result.markdown
+    assert "This is the first body paragraph." in result.markdown
 
 
 def test_process_reports_legacy_doc_as_unimplemented():
@@ -170,13 +288,9 @@ def test_process_reports_legacy_doc_as_unimplemented():
 
     assert isinstance(result, ProcessResult)
     assert result.file_type == FileType.DOC
-    assert result.processor_name == "doc_processor"
     assert result.filename == "sample.doc"
     assert result.blocks == []
-    assert result.meta_info["source"] == "doc"
-    assert result.meta_info["byte_size"] == len(doc_bytes)
-    assert result.meta_info["block_count"] == 0
-    assert result.meta_info["engine"] == "unimplemented"
+    assert result.markdown == ""
     assert result.warnings == ["Legacy .doc processing is not implemented yet."]
 
 
@@ -190,12 +304,11 @@ def test_process_allows_explicit_type_override():
     result = process(file_obj, "pdf")
 
     assert result.file_type == FileType.PDF
-    assert result.processor_name == "pdf_processor"
     assert result.blocks
 
 
 def test_process_extracts_bbox_from_scanned_pdf():
-    artifacts_path = docling_adapter.resolve_docling_artifacts_path()
+    artifacts_path = pdf_docling_adapter.resolve_docling_artifacts_path()
     if artifacts_path is None or not artifacts_path.exists():
         pytest.skip("Docling PDF artifacts are not available for scanned PDF testing.")
 
@@ -209,7 +322,6 @@ def test_process_extracts_bbox_from_scanned_pdf():
     result = process(file_obj)
 
     assert result.file_type == FileType.PDF
-    assert result.meta_info["engine"] == "docling_rapidocr"
     assert result.blocks
     assert any("Hello" in block.text for block in result.blocks)
 

@@ -31,8 +31,11 @@ agent/
 ├── main.py
 ├── pyproject.toml
 ├── ocr_processor/
+│   └── pyproject.toml
 └── file_extraction_agent/
 ```
+
+当前 `agent/pyproject.toml` 只服务 `file_extraction_agent`；`ocr_processor` 作为独立包使用自己的 `ocr_processor/pyproject.toml`。模块内部除 `__init__.py` 外统一使用绝对导入，避免相对导入层级扩散。
 
 ## 模块职责
 
@@ -46,8 +49,8 @@ agent/
 
 输出：
 
-- 处理后的文本
-- 文本对应的 meta info
+- 处理后的 Markdown
+- 对应的内容块列表
 
 它的目标不是直接做信息抽取，而是把原始文件转换成后续抽取阶段更容易使用的标准化输入。
 
@@ -57,7 +60,7 @@ agent/
 
 输入：
 
-- `ocr_processor` 输出的带 meta info 的文本
+- `ocr_processor` 输出的 Markdown 和内容块
 
 输出：
 
@@ -72,14 +75,14 @@ agent/
 1. `backend` 创建任务并保存原始文件。
 2. `agent service` 通过 `backend` 内部 API 获取任务输入和文件。
 3. 交给 `ocr_processor` 做 OCR 和预处理。
-4. 得到带 meta info 的文本结果。
+4. 得到 Markdown 优先的标准化结果。
 5. 将该结果交给 `file_extraction_agent`。
 6. 输出最终抽取结果。
 7. 将结果回传给 `backend`。
 
 可以理解为：
 
-`raw file -> ocr_processor -> normalized text with meta info -> file_extraction_agent -> extraction result`
+`raw file -> ocr_processor -> normalized markdown + blocks -> file_extraction_agent -> extraction result`
 
 ## 设计原则
 
