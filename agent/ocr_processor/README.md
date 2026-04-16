@@ -112,6 +112,7 @@ result = process(file_obj)
 - `text`
 - `page_no`
 - `bbox`
+- `kind`
 - `meta_info`
 
 也就是：
@@ -121,6 +122,7 @@ ContentBlock(
     text="...",
     page_no=1,
     bbox=BoundingBox(...),
+    kind="text",
     meta_info={...},
 )
 ```
@@ -157,6 +159,14 @@ ContentBlock(
 - 如果 Docling 返回的文本框高度异常小，会在对应页面图像中局部搜索深色像素，重新收缩出更接近真实文字区域的矩形框
 - 这一步主要改善扫描 PDF 上“框压在文字中线”的情况
 - 对表格页和碎片化 OCR，当前仍可能出现过碎的框，后续可继续做聚合/过滤
+
+当前 PDF 还会在 table structure artifacts 可用时保留表格语义：
+
+- 会开启 Docling 的 table structure 分析
+- 整张表会输出为 `kind = "table"` 的 block
+- `block.text` 直接保存表格 Markdown，便于下游抽取和检索
+- `block.meta_info` 会补 `row_count` / `column_count` / `format = "markdown"`
+- 落在 table bbox 内的普通文本块会被抑制，避免前端高亮时出现整表框和碎文字框重叠
 
 当前 PDF 处理默认使用本地 `Docling` artifacts，约定路径为：
 
@@ -200,6 +210,7 @@ ContentBlock(
 
 - 统一返回 `blocks`
 - PDF 在 block 上补充 `page_no` 和 `bbox`
+- PDF 表格使用 `kind = "table"`，并把 Markdown 放进 `text`
 - DOC/DOCX 没有时就为空
 
 ## 当前阶段的边界
@@ -211,7 +222,7 @@ ContentBlock(
 - 输入是文件对象
 - 可以自动识别类型并分发
 - 返回统一的 `ProcessResult`
-- `block` 至少有 `text / page_no / bbox / meta_info`
+- `block` 至少有 `text / page_no / bbox / kind / meta_info`
 
 当前已经使用 `Docling` 作为主要解析器，并在必要时对底层输出做映射和兜底。
 
