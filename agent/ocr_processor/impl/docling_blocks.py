@@ -259,17 +259,28 @@ def _build_bbox(
         else None
     )
 
-    if origin_name == "bottomleft" and page_height is not None:
-        return BoundingBox(
-            x0=float(source_bbox.l),
-            y0=float(page_height - source_bbox.t),
-            x1=float(source_bbox.r),
-            y1=float(page_height - source_bbox.b),
-        )
+    l = getattr(source_bbox, "l", None)
+    t = getattr(source_bbox, "t", None)
+    r = getattr(source_bbox, "r", None)
+    b = getattr(source_bbox, "b", None)
+    if None in (l, t, r, b):
+        return None
 
-    return BoundingBox(
-        x0=float(source_bbox.l),
-        y0=float(source_bbox.t),
-        x1=float(source_bbox.r),
-        y1=float(source_bbox.b),
-    )
+    x0 = float(l)
+    x1 = float(r)
+    top = float(t)
+    bottom = float(b)
+
+    if origin_name == "bottomleft":
+        if page_height is None:
+            return None
+        y0 = float(page_height) - bottom
+        y1 = float(page_height) - top
+    else:
+        y0 = top
+        y1 = bottom
+
+    if x1 <= x0 or y1 <= y0:
+        return None
+
+    return BoundingBox(x0=x0, y0=y0, x1=x1, y1=y1)

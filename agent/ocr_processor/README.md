@@ -29,37 +29,221 @@
 - 不强依赖本地文件路径
 - 后续也更容易接 storage、内存流或内部下载结果
 
+## 接口分层
+
+当前链路明确保留两套并行接口：
+
+- 业务接口：`ocr_processor.processor.process(file_obj, file_type=None)`
+- route 接口：`agent/routes/ocr_processor.py`
+
+两者职责不同：
+
+- 业务接口负责文件类型分发、OCR 执行和统一 `ProcessResult` 返回
+- route 接口只负责 HTTP 协议适配，例如 `UploadFile` 解析、异常到 HTTP 状态码映射、`ProcessResult` 到响应 schema 的转换
+
+约束：
+
+- route 层不反向定义业务层返回结构
+- 业务层不依赖 FastAPI 或 Pydantic
+- Python 调用方优先直接使用业务接口，HTTP 调用方通过 `agent/routes/` 访问
+- `ocr_processor/__init__.py` 只导出公共业务接口；内部实现模块放在 `impl/`，并通过惰性导出避免 import-time 拉起整条 OCR 依赖链
+
+## Pipeline
+
+这部分说明 `ocr_processor` 现在实际跑的处理链路，而不是只看目录名猜职责。
+
+### 1. 业务层 pipeline
+
+业务层的主入口是：
+
+```python
+from ocr_processor.processor import process
+
+result = process(file_obj, file_type=None)
+```
+
+实际调用链如下：
+
+```text
+file_obj
+  -> processor.process(...)
+  -> ProcessorDispatcher.process(...)
+  -> 按文件类型选择 PdfProcessor / DocProcessor
+  -> Processor.process(...)
+  -> 解析真实 stream / filename / bytes
+  -> 具体 processor 执行 OCR 或结构化提取
+  -> block 归一化
+  -> markdown / md_list / meta_info 构建
+  -> ProcessResult
+```
+
+各层职责：
+
+- `processor.py`
+  对外统一业务入口，只暴露 `process(...)`
+- `impl/dispatcher.py`
+  负责 `file_type -> processor` 的分发
+- `impl/base.py`
+  负责文件对象适配，例如普通文件对象、内存流、FastAPI `UploadFile.file`
+- `impl/pdf/processor.py`
+  负责 PDF 主链路和 fallback
+- `impl/doc/processor.py`
+  负责 DOCX 主链路和 fallback，同时对 `.doc` 返回未实现结果
+- `impl/docling_blocks.py`
+  负责把 Docling 的文档对象适配成统一 `ContentBlock`
+- `impl/markdown_export.py`
+  负责把统一 block 列表导出为 `md_list`、`markdown`、`meta_info`
+- `schemas.py`
+  定义内部统一返回结构 `BoundingBox / ContentBlock / ProcessResult`
+- `types.py`
+  定义 `FileType`、类型推断和相关异常
+
+### 2. PDF pipeline
+
+PDF 当前优先走 Docling，失败时回退到 `pdfplumber`。
+
+```text
+pdf bytes
+  -> impl/pdf/processor.py
+  -> docling_adapter.convert_pdf_with_docling(...)
+  -> docling_adapter.build_blocks_from_docling_result(...)
+  -> docling_blocks.build_blocks_from_docling_document(...)
+  -> 统一 ContentBlock 列表
+  -> markdown_export.build_markdown_items_from_blocks(...)
+  -> markdown_export.build_meta_info_from_blocks(...)
+  -> ProcessResult
+```
+
+如果 Docling 异常或没有返回文本块，则回退到：
+
+```text
+pdf bytes
+  -> pdfplumber.open(...)
+  -> extract_words(...)
+  -> 按行聚合
+  -> 生成 ContentBlock
+  -> markdown_export.*
+  -> ProcessResult(warnings + fallback_used=True)
+```
+
+当前 PDF 链路的几个关键行为：
+
+- 主链路引擎标记为 `docling_rapidocr`
+- fallback 引擎标记为 `pdfplumber_fallback`
+- 如果存在表格结构模型，表格会以 `kind="table"` + Markdown 形式输出
+- 对落在表格区域内的普通文本块会做抑制，减少重复噪声
+- 会尽量保留 `page_no + bbox`
+
+### 3. DOCX pipeline
+
+DOCX 当前优先走 Docling，失败或空结果时回退到 `python-docx`。
+
+```text
+docx bytes
+  -> impl/doc/processor.py
+  -> docling_adapter.convert_with_docling(...)
+  -> docling_adapter.build_blocks_from_docling_result(...)
+  -> docling_blocks.build_blocks_from_docling_document(...)
+  -> 统一 ContentBlock 列表
+  -> markdown_export.*
+  -> ProcessResult
+```
+
+如果 Docling 失败，回退到：
+
+```text
+docx bytes
+  -> python-docx Document(...)
+  -> 遍历 paragraph / table
+  -> 段落分类为 heading / text
+  -> 表格转换成 Markdown
+  -> 统一 ContentBlock 列表
+  -> markdown_export.*
+  -> ProcessResult(warnings + fallback_used=True)
+```
+
+当前 DOCX fallback 的几个关键行为：
+
+- 会保留段落和表格顺序
+- 表格会转换成 Markdown
+- 会用启发式规则识别 `heading`
+- `.doc` 当前不做转换，只返回空结果和 warning
+
+### 4. HTTP API pipeline
+
+HTTP 调用链和业务层并行存在，但 route 层只做适配，不做业务决策。
+
+```text
+multipart/form-data
+  -> agent/routes/ocr_processor.py
+  -> UploadFile / file_type 解析
+  -> UploadFileProxy
+  -> run_in_threadpool(process, ...)
+  -> ProcessResult
+  -> route 内定义的响应 schema
+  -> JSON response
+```
+
+当前 route 层负责的事情只有：
+
+- 请求解析
+- 调用业务层 `process(...)`
+- 业务异常到 HTTP 状态码映射
+- `ProcessResult` 到 HTTP response 的显式转换
+
+它不负责：
+
+- 类型分发策略
+- OCR 主逻辑
+- Markdown 构建逻辑
+- block 语义归一化
+
 ## 目录结构
 
-当前目录分为两层：
+当前目录分为三层：
 
 - 顶层保留公共接口和公共数据结构
 - `impl/` 里放具体实现
+- route 层单独放在包外的 `agent/routes/`
 
 ```text
-agent/ocr_processor/
-├── README.md
-├── pyproject.toml
-├── processor.py
-├── schemas.py
-├── types.py
-└── impl/
-    ├── __init__.py
-    ├── base.py
-    ├── dispatcher.py
-    ├── doc/
-    │   ├── __init__.py
-    │   ├── docling_adapter.py
-    │   └── processor.py
-    └── pdf/
-        ├── artifacts/
-        │   └── docling-models/
+agent/
+├── main.py
+├── routes/
+│   ├── __init__.py
+│   └── ocr_processor.py
+└── ocr_processor/
+    ├── README.md
+    ├── pyproject.toml
+    ├── processor.py
+    ├── schemas.py
+    ├── types.py
+    └── impl/
         ├── __init__.py
-        ├── docling_adapter.py
-        └── processor.py
+        ├── base.py
+        ├── dispatcher.py
+        ├── docling_blocks.py
+        ├── doc/
+        │   ├── __init__.py
+        │   ├── docling_adapter.py
+        │   └── processor.py
+        ├── markdown_export.py
+        └── pdf/
+            ├── artifacts/
+            │   └── docling-models/
+            ├── __init__.py
+            ├── docling_adapter.py
+            └── processor.py
 ```
 
-这样做的目的，是让外部调用时只需要关注顶层入口，而具体的多态实现各自收在自己的目录里。
+这样做的目的，是让业务接口、route 适配层和底层实现各自收束，不把 FastAPI 细节塞回 `ocr_processor` 业务包。
+
+如果只看这个目录树不够直观，可以按 pipeline 去理解：
+
+- 顶层：业务公开入口和公开契约
+- `impl/`：按文件类型拆开的具体执行器
+- `impl/docling_blocks.py` / `impl/markdown_export.py`：业务主链路里的内部转换逻辑
+- `agent/routes/`：包外 HTTP 协议适配
 
 当前 `ocr_processor` 作为独立 Python 包维护，包配置位于：
 
@@ -103,6 +287,11 @@ pip install -e ".[dev]"
 - `docx` 在 Docling 失败时会回退到 `python-docx`
 - `.doc` 当前不支持
 
+如果要运行 `agent/routes/ocr_processor.py` 里的 HTTP 路由，需要在 `agent` 运行环境中另外准备：
+
+- `fastapi`
+- `python-multipart`
+
 如果需要启用 PDF 的 Docling 主链路，请确保本地已准备好模型目录：
 
 - 默认路径：`agent/ocr_processor/impl/pdf/artifacts/docling-models`
@@ -135,13 +324,15 @@ export DOCLING_ARTIFACTS_PATH=/your/path/to/docling-models
 
 这一层内部采用“类型分发”的方式。
 
-对外则提供一个统一入口：
+对 Python 调用方，对外则提供一个统一业务入口：
 
 ```python
 from ocr_processor.processor import process
 
 result = process(file_obj)
 ```
+
+对 HTTP 调用方，则通过 `agent/routes/ocr_processor.py` 暴露 FastAPI 路由；该层内部仍然调用上面的 `process(...)`，但会显式完成请求和响应映射。
 
 ## 用法
 
@@ -220,6 +411,32 @@ for block in result.blocks:
 - 行为可控
 - 后续替换单个处理器不会影响整个接口
 - 对外仍然可以保持一个简单的 `process(file_obj)` 调用方式
+
+## API 用法
+
+如果需要把 `ocr_processor` 作为 HTTP 服务接入，可在 `agent` 的 FastAPI 应用中挂载：
+
+```python
+from fastapi import FastAPI
+
+from routes import ocr_processor_router
+
+app = FastAPI()
+app.include_router(ocr_processor_router)
+```
+
+当前 API 路由包括：
+
+- `GET /healthz`
+- `GET /v1/ocr/capabilities`
+- `POST /v1/ocr/process`
+
+其中：
+
+- `POST /v1/ocr/process` 接收 `multipart/form-data`
+- 上传文件字段名为 `file`
+- 可选 `file_type` 用于显式覆盖文件类型推断
+- API 响应结构在 `agent/routes/ocr_processor.py` 中定义，不直接暴露业务 dataclass
 
 ## 统一返回结构
 

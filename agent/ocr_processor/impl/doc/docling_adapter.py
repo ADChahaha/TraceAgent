@@ -7,7 +7,7 @@ from typing import Any
 from docling.datamodel.base_models import DocumentStream
 from docling.document_converter import DocumentConverter
 
-from ocr_processor.docling_blocks import build_blocks_from_docling_document
+from ocr_processor.impl.docling_blocks import build_blocks_from_docling_document
 from ocr_processor.schemas import ContentBlock
 
 

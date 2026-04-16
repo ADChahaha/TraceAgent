@@ -1,6 +1,6 @@
 # Agent Context (handoff-ready)
 
-> 最后更新：2026-04-16
+> 最后更新：2026-04-17
 > 目标：让任何新接入的 LLM/开发者在 2-5 分钟内理解当前 `agent/` 的状态并继续工作。
 
 ## 0) 项目总览
@@ -11,7 +11,7 @@
 - 主链路：`raw file -> ocr_processor -> ProcessResult(blocks + md_list + markdown) -> file_extraction_agent`
 - 当前支持：`pdf`、`docx`；`doc` 明确未实现
 - PDF 默认模型路径：`agent/ocr_processor/impl/pdf/artifacts/docling-models`
-- 当前状态：`ocr_processor` 关键用例可跑通，返回契约已扩展到 `blocks + md_list + markdown + meta_info`，PDF 表格会输出 `kind="table"` + Markdown，`docx` 在 Docling 失败时可回退到 python-docx
+- 当前状态：`ocr_processor` 关键用例可跑通，返回契约已扩展到 `blocks + md_list + markdown + meta_info`，PDF 表格会输出 `kind="table"` + Markdown，`docx` 在 Docling 失败时可回退到 python-docx；FastAPI 入口已移到包外的 `agent/routes/`，并明确作为独立于业务接口的 HTTP 适配层存在
 
 ## 1) 当前目标与边界
 
@@ -35,6 +35,11 @@
 - 除 `__init__.py` 外，模块内部统一使用绝对导入
 - `ocr_processor` 使用独立的 `agent/ocr_processor/pyproject.toml`
 - `agent/pyproject.toml` 仅保留 `file_extraction_agent`
+- `ocr_processor` 的 FastAPI 入口移到包外的 `agent/routes/`，避免把 HTTP 层塞回业务包
+- `docling_blocks.py` 和 `markdown_export.py` 已收进 `ocr_processor/impl/`，明确它们属于内部实现逻辑
+- `ocr_processor` 同时保留两套并行接口：业务层 `process(...)` 和 route 层 `routes/ocr_processor.py`
+- route 层只负责请求/响应映射，不直接把业务 dataclass 当成 HTTP 契约
+- `ocr_processor/__init__.py` 改为惰性导出，避免 import 内部小模块时被迫加载整条 OCR 处理链和 `docling` 依赖
 
 ### PDF artifacts 路径归属
 
@@ -66,7 +71,14 @@
 ### 输入类型
 
 - 支持：`pdf` / `doc` / `docx`
-- 入口：`ocr_processor.processor.process(file_obj, file_type=None)`
+- 业务入口：`ocr_processor.processor.process(file_obj, file_type=None)`
+
+### API 层
+
+- 路由入口：`agent/routes/ocr_processor.py`
+- 响应 schema：当前直接定义在 `agent/routes/ocr_processor.py`
+- 当前职责：`UploadFile` 适配、HTTP 错误码映射、`ProcessResult` -> HTTP response 显式转换
+- 设计约束：不让 FastAPI/Pydantic 反向塑造业务层接口
 
 ### 输出结构
 
@@ -153,6 +165,26 @@
 - `21fe8fb` `test(agent): define table block extraction behavior`
 - `1bf2a8f` `test(agent): define pdf noise filtering behavior`
 
+## 5.1) 本轮未提交改动（2026-04-17）
+
+- 新增：`routes/ocr_processor.py`
+- 新增：`routes/__init__.py`
+- 新增：`ocr_processor/impl/docling_blocks.py`
+- 新增：`ocr_processor/impl/markdown_export.py`
+- 删除：`ocr_processor/api/router.py`
+- 删除：`ocr_processor/api/schemas.py`
+- 删除：`ocr_processor/api/__init__.py`
+- 删除：`ocr_processor/docling_blocks.py`
+- 删除：`ocr_processor/markdown_export.py`
+- 调整：`main.py` 改为从 `routes` 挂载路由
+- 调整：`ocr_processor/pyproject.toml` 去掉不再需要的 `api` extra
+- 调整：`routes/ocr_processor.py` 通过显式适配函数把业务结果转换为 HTTP response，不直接复用业务 dataclass 作为接口契约
+- 调整：`ocr_processor/README.md` 目录结构和安装说明
+- 调整：`ocr_processor` 内部对 `docling_blocks` / `markdown_export` 的引用切到 `impl/`
+- 调整：`ocr_processor/README.md` 新增业务层 pipeline、PDF pipeline、DOCX pipeline、HTTP API pipeline 的调用链说明
+- 调整：`agent/README.md`、`agent/CONTEXT.md` 补充“业务接口和 API 接口并行存在”的边界说明
+- 调整：`tests/test_api.py` 适配新导入路径
+
 ## 6) 当前工作区状态（需要注意）
 
 仓库根目录当前有未提交内容：
@@ -160,19 +192,23 @@
 - 修改：`agent/CONTEXT.md`
 - 修改：`agent/README.md`
 - 修改：`agent/pyproject.toml`
+- 新增：`agent/routes/__init__.py`
+- 新增：`agent/routes/ocr_processor.py`
 - 新增：`agent/ocr_processor/pyproject.toml`
-- 新增：`agent/ocr_processor/docling_blocks.py`
+- 新增：`agent/ocr_processor/impl/docling_blocks.py`
 - 修改：`agent/ocr_processor/impl/pdf/docling_adapter.py`
 - 新增：`agent/ocr_processor/impl/doc/docling_adapter.py`
-- 新增：`agent/ocr_processor/markdown_export.py`
+- 新增：`agent/ocr_processor/impl/markdown_export.py`
 - 修改：`agent/ocr_processor/impl/pdf/processor.py`
 - 修改：`agent/ocr_processor/impl/doc/processor.py`
+- 修改：`agent/ocr_processor/__init__.py`
 - 修改：`agent/ocr_processor/schemas.py`
 - 修改：`agent/ocr_processor/README.md`
 - 修改：`agent/tests/ocr_processor/test_processor.py`
-- 新增：`agent/tests/ocr_processor/test_markdown_export.py`
+- 修改：`agent/tests/ocr_processor/test_markdown_export.py`
 - 新增：`agent/tests/ocr_processor/test_pdf_docling_adapter.py`
-- 新增：`agent/tests/ocr_processor/test_docling_blocks.py`
+- 修改：`agent/tests/ocr_processor/test_docling_blocks.py`
+- 修改：`agent/tests/test_api.py`
 - 新增：`agent/tests/ocr_processor/test_sample_documents.py`
 - 未跟踪：`agent/output/`（真实样本验证输出）
 - 未跟踪：`backend/`、`frontend/`
@@ -182,8 +218,9 @@
 ## 7) 下一个建议动作（按优先级）
 
 1. **细化 block 语义**：把 `heading / paragraph / list_item / table` 判别做稳，提升 Markdown 质量。
-2. **规划前端消费契约**：优先按 `md_list` 展示和高亮，`blocks` 作为抽取和辅助定位输入。
-3. **规划 legacy `.doc` 策略**：若要支持，优先选非平台专属的转换方案。
+2. **继续收命名**：若还觉得 `ocr_processor/` 顶层语义不清，下一步优先考虑把 `types.py` 重命名成更具体的名字，例如 `file_types.py`。
+3. **规划前端消费契约**：优先按 `md_list` 展示和高亮，`blocks` 作为抽取和辅助定位输入。
+4. **规划 legacy `.doc` 策略**：若要支持，优先选非平台专属的转换方案。
 
 ## 8) 快速上手命令
 

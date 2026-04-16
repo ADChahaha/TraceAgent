@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import inspect
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -55,12 +56,18 @@ class Processor(ABC):
         - an object like FastAPI UploadFile, where the real stream is in `.file`
         """
 
-        if hasattr(file_obj, "read"):
-            return file_obj
-
         inner_file = getattr(file_obj, "file", None)
-        if inner_file is not None and hasattr(inner_file, "read"):
+        direct_read = getattr(file_obj, "read", None)
+
+        # Starlette/FastAPI UploadFile exposes an async `.read()`, but the actual
+        # synchronous stream still lives under `.file`.
+        if inner_file is not None and hasattr(inner_file, "read") and (
+            direct_read is None or inspect.iscoroutinefunction(direct_read)
+        ):
             return inner_file
+
+        if direct_read is not None and not inspect.iscoroutinefunction(direct_read):
+            return file_obj
 
         raise InvalidFileObjectError(
             "file_obj must be readable or expose a readable `.file` attribute"

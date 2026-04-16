@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
+import sys
 from types import SimpleNamespace
 
-from ocr_processor.docling_blocks import build_blocks_from_docling_document
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from ocr_processor.impl.docling_blocks import build_blocks_from_docling_document
 
 
 class _FakeTableItem:

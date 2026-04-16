@@ -6,7 +6,7 @@ import pdfplumber
 
 from ocr_processor.impl.base import Processor
 from ocr_processor.impl.pdf import docling_adapter
-from ocr_processor.markdown_export import (
+from ocr_processor.impl.markdown_export import (
     build_markdown_items_from_blocks,
     build_meta_info_from_blocks,
 )

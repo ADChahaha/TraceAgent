@@ -14,7 +14,7 @@ from docling.datamodel.pipeline_options import PdfPipelineOptions, RapidOcrOptio
 from docling.document_converter import DocumentConverter, PdfFormatOption
 import pypdfium2 as pdfium
 
-from ocr_processor.docling_blocks import build_blocks_from_docling_document
+from ocr_processor.impl.docling_blocks import build_blocks_from_docling_document
 from ocr_processor.schemas import BoundingBox, ContentBlock
 
 _AGENT_ROOT = Path(__file__).resolve().parents[3]

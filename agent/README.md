@@ -32,10 +32,19 @@ agent/
 ├── pyproject.toml
 ├── ocr_processor/
 │   └── pyproject.toml
+├── routes/
+│   ├── __init__.py
+│   └── ocr_processor.py
 └── file_extraction_agent/
 ```
 
 当前 `agent/pyproject.toml` 只服务 `file_extraction_agent`；`ocr_processor` 作为独立包使用自己的 `ocr_processor/pyproject.toml`。模块内部除 `__init__.py` 外统一使用绝对导入，避免相对导入层级扩散。
+
+其中：
+
+- `ocr_processor.processor.process(...)` 是业务接口
+- `routes/ocr_processor.py` 是 HTTP 适配层
+- `agent/main.py` 只负责创建 FastAPI app 并挂载 router
 
 ## 模块职责
 
@@ -53,6 +62,13 @@ agent/
 - 对应的内容块列表
 
 它的目标不是直接做信息抽取，而是把原始文件转换成后续抽取阶段更容易使用的标准化输入。
+
+当前链路明确保留两套并行接口：
+
+- Python 业务调用使用 `process(...)`
+- HTTP 调用使用 `routes/ocr_processor.py`
+
+两者并行存在，但不要互相耦合：route 层只做协议转换，不反向定义业务层对象。
 
 ### `file_extraction_agent`
 

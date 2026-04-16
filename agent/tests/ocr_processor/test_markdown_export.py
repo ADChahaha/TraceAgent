@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from ocr_processor.markdown_export import build_markdown_from_blocks
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from ocr_processor.impl.markdown_export import build_markdown_from_blocks
 from ocr_processor.schemas import ContentBlock
 
 
