@@ -6,7 +6,7 @@
 ## 0) 项目总览
 
 - 项目名：`agent_gate`
-- 当前聚焦：`agent/` 服务的 OCR 预处理链路落地与稳定化，正在做真实 `PDF/DOCX` 样本验证
+- 当前聚焦：`agent/` 服务的 OCR 预处理链路落地与稳定化，正在用 TDD 修 PDF 薄框 bbox
 - 主模块：`ocr_processor`（预处理/OCR）与 `file_extraction_agent`（抽取，待完善）
 - 主链路：`raw file -> ocr_processor -> ProcessResult(blocks) -> file_extraction_agent`
 - 当前支持：`pdf`、`docx`；`doc` 明确未实现
@@ -87,6 +87,7 @@
 
 - 用户提供的 `实验报告-模板.docx` 会触发 Docling `SimplePipeline` 失败，但当前已能通过 zip/xml fallback 成功提取文本块
 - 用户提供的扫描 PDF 第 1 页已成功输出 OCR blocks，并生成原页叠框图用于人工检查
+- 当前发现问题：Docling 高层 `document.texts[*].prov.bbox` 在扫描 PDF 上常出现“高度接近 0 的细框”，直接用于高亮效果较差
 
 ## 5) 最近提交（与当前上下文相关）
 
@@ -106,7 +107,7 @@
 仓库根目录当前有未提交内容：
 
 - 修改：`agent/CONTEXT.md`
-- 修改：`agent/ocr_processor/README.md`
+- 未跟踪：`agent/tests/ocr_processor/test_docling_adapter.py`
 - 未跟踪：`agent/output/`（真实样本验证输出）
 - 未跟踪：`backend/`、`frontend/`
 
@@ -114,7 +115,7 @@
 
 ## 7) 下一个建议动作（按优先级）
 
-1. **完成整本 PDF 可视化验证**：继续确认用户提供的 8 页扫描 PDF 每页叠框结果是否都合理。
+1. **完成 bbox 修正 green 实现**：对扫描 PDF 的薄框做页面图像精修，再重新输出叠框图验证。
 2. **评估 fallback 粒度**：如果后续需要更强保真度，可继续补 header/footer/表格/文本框的抽取策略。
 3. **规划 legacy `.doc` 策略**：若要支持，优先选非平台专属的转换方案。
 
