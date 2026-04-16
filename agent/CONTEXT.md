@@ -6,7 +6,7 @@
 ## 0) 项目总览
 
 - 项目名：`agent_gate`
-- 当前聚焦：`agent/` 服务的 OCR 预处理链路落地与稳定化，PDF 薄框 bbox 已做首轮图像精修，表格已升级为保留语义的 `table` blocks
+- 当前聚焦：`agent/` 服务的 OCR 预处理链路落地与稳定化，PDF 薄框 bbox 已做首轮图像精修，表格已升级为保留语义的 `table` blocks，正在继续清理页外/页脚噪声 text blocks
 - 主模块：`ocr_processor`（预处理/OCR）与 `file_extraction_agent`（抽取，待完善）
 - 主链路：`raw file -> ocr_processor -> ProcessResult(blocks) -> file_extraction_agent`
 - 当前支持：`pdf`、`docx`；`doc` 明确未实现
@@ -99,6 +99,7 @@
 - 当前发现问题：Docling 高层 `document.texts[*].prov.bbox` 在扫描 PDF 上常出现“高度接近 0 的细框”，直接用于高亮效果较差
 - 当前进展：第 1 页“横线框”已明显改善；第 2 页表格页现已验证可输出单个 table block，并在原页叠框图中显示为整表红框
 - 当前实测：`source-page-2.pdf` 处理结果为 `1` 个 table block + `38` 个表外 text blocks；表格 Markdown 已导出到 `agent/output/processor_checks/pdf-page-002-table-001.md`
+- 当前 TDD：正在补页外垃圾框、页脚/印章短噪声框和表格边缘 spillover text 的失败测试，目标是继续减少真实 PDF 叠框图中的多余 text 框
 
 ## 5) 最近提交（与当前上下文相关）
 

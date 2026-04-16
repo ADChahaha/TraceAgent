@@ -151,3 +151,68 @@ def test_build_blocks_suppresses_text_nested_inside_table_bbox():
         "| Col |\n| --- |\n| Value |",
         "outside table",
     }
+
+
+def test_build_blocks_suppresses_text_touching_table_with_bottom_margin():
+    document = SimpleNamespace(
+        texts=[
+            SimpleNamespace(
+                text="table spillover",
+                prov=[_build_provenance(page_no=1, bbox=(20.0, 96.0, 90.0, 126.0))],
+            )
+        ],
+        tables=[
+            _FakeTableItem(
+                markdown="| Col |\n| --- |\n| Value |",
+                page_no=1,
+                bbox=(10.0, 10.0, 100.0, 100.0),
+                row_count=2,
+                col_count=1,
+            )
+        ],
+        pages={
+            1: SimpleNamespace(
+                size=SimpleNamespace(width=300.0, height=300.0)
+            )
+        },
+    )
+    conversion_result = SimpleNamespace(document=document)
+
+    blocks = docling_adapter.build_blocks_from_docling_result(conversion_result)
+
+    assert len(blocks) == 1
+    assert blocks[0].kind == "table"
+
+
+def test_build_blocks_discards_out_of_page_and_footer_noise():
+    document = SimpleNamespace(
+        texts=[
+            SimpleNamespace(
+                text="15",
+                prov=[_build_provenance(page_no=1, bbox=(40.0, -20.0, 50.0, -10.0))],
+            ),
+            SimpleNamespace(
+                text="Y",
+                prov=[_build_provenance(page_no=1, bbox=(260.0, 260.0, 270.0, 280.0))],
+            ),
+            SimpleNamespace(
+                text="附件",
+                prov=[_build_provenance(page_no=1, bbox=(20.0, 20.0, 60.0, 44.0))],
+            ),
+            SimpleNamespace(
+                text="正文内容",
+                prov=[_build_provenance(page_no=1, bbox=(40.0, 80.0, 180.0, 120.0))],
+            ),
+        ],
+        tables=[],
+        pages={
+            1: SimpleNamespace(
+                size=SimpleNamespace(width=300.0, height=300.0)
+            )
+        },
+    )
+    conversion_result = SimpleNamespace(document=document)
+
+    blocks = docling_adapter.build_blocks_from_docling_result(conversion_result)
+
+    assert [block.text for block in blocks] == ["附件", "正文内容"]
