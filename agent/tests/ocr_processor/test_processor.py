@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from io import BytesIO
 
+import pytest
+from PIL import Image, ImageDraw, ImageFont
+from reportlab.lib.utils import ImageReader
 from ocr_processor import FileType, ProcessResult, process
 from ocr_processor.impl import docling_adapter
 from reportlab.lib.pagesizes import letter
@@ -22,6 +25,28 @@ def build_pdf_bytes(text: str) -> bytes:
     pdf.drawString(72, 720, text)
     pdf.save()
     return buffer.getvalue()
+
+
+def build_scanned_pdf_bytes(text: str) -> bytes:
+    font_path = "/System/Library/Fonts/Supplemental/Arial.ttf"
+    try:
+        font = ImageFont.truetype(font_path, 120)
+    except OSError:
+        pytest.skip(f"Required OCR test font was not found: {font_path}")
+
+    image = Image.new("RGB", (1400, 500), "white")
+    draw = ImageDraw.Draw(image)
+    draw.text((100, 140), text, fill="black", font=font)
+
+    image_buffer = BytesIO()
+    image.save(image_buffer, format="PNG")
+    image_buffer.seek(0)
+
+    pdf_buffer = BytesIO()
+    pdf = canvas.Canvas(pdf_buffer, pagesize=letter)
+    pdf.drawImage(ImageReader(image_buffer), 36, 400, width=540, height=190)
+    pdf.save()
+    return pdf_buffer.getvalue()
 
 
 def build_docx_bytes(paragraphs: list[str]) -> bytes:
@@ -113,3 +138,29 @@ def test_process_allows_explicit_type_override():
     assert result.file_type == FileType.PDF
     assert result.processor_name == "pdf_processor"
     assert result.blocks
+
+
+def test_process_extracts_bbox_from_scanned_pdf():
+    artifacts_path = docling_adapter.resolve_docling_artifacts_path()
+    if artifacts_path is None or not artifacts_path.exists():
+        pytest.skip("Docling PDF artifacts are not available for scanned PDF testing.")
+
+    pdf_bytes = build_scanned_pdf_bytes("Hello Scan PDF")
+    file_obj = DummyUploadFile(
+        filename="scan.pdf",
+        content=pdf_bytes,
+        content_type="application/pdf",
+    )
+
+    result = process(file_obj)
+
+    assert result.file_type == FileType.PDF
+    assert result.meta_info["engine"] == "docling_rapidocr"
+    assert result.blocks
+    assert any("Hello" in block.text for block in result.blocks)
+
+    first_block = result.blocks[0]
+    assert first_block.page_no == 1
+    assert first_block.bbox is not None
+    assert first_block.bbox.x1 > first_block.bbox.x0
+    assert first_block.bbox.y1 > first_block.bbox.y0
