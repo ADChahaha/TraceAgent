@@ -6,10 +6,7 @@ from typing import Any
 from ocr_processor.schemas import BoundingBox, ContentBlock
 
 _FILTERED_LABELS = {
-    "caption",
     "document_index",
-    "footnote",
-    "formula",
     "marker",
     "page_footer",
     "page_header",
@@ -18,7 +15,7 @@ _FILTERED_LABELS = {
 _HEADING_LABELS = {"field_heading", "section_header", "title"}
 _LIST_LABELS = {"list_item"}
 _TABLE_LABELS = {"table"}
-_TEXT_LABELS = {"paragraph", "text"}
+_TEXT_LABELS = {"caption", "footnote", "formula", "paragraph", "text"}
 
 
 def build_blocks_from_docling_document(document: Any) -> list[ContentBlock]:
@@ -183,16 +180,29 @@ def _normalize_text(text: str) -> str:
 
 def _dedupe_adjacent_blocks(blocks: list[ContentBlock]) -> list[ContentBlock]:
     deduped: list[ContentBlock] = []
-    previous_signature: tuple[str, str] | None = None
+    previous_signature: tuple[Any, ...] | None = None
 
     for block in blocks:
-        signature = (block.kind, block.text)
+        signature = (
+            block.kind,
+            block.text,
+            block.page_no,
+            _bbox_signature(block.bbox),
+            block.meta_info.get("docling_ref"),
+            tuple(block.meta_info.get("charspan", [])),
+        )
         if signature == previous_signature:
             continue
         deduped.append(block)
         previous_signature = signature
 
     return deduped
+
+
+def _bbox_signature(bbox: BoundingBox | None) -> tuple[float, float, float, float] | None:
+    if bbox is None:
+        return None
+    return (bbox.x0, bbox.y0, bbox.x1, bbox.y1)
 
 
 def _resolve_page_height(document: Any, page_no: int | None) -> float | None:
