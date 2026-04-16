@@ -21,6 +21,7 @@ _DEFAULT_DOCLING_ARTIFACTS_PATH = (
 )
 _THIN_TEXT_BBOX_THRESHOLD = 6.0
 _PAGE_RENDER_SCALE = 2.0
+_TABLE_OVERLAP_THRESHOLD = 0.8
 
 
 @dataclass(slots=True)
@@ -63,11 +64,12 @@ def _get_default_converter() -> DocumentConverter:
 
 @lru_cache(maxsize=2)
 def _get_pdf_converter(artifacts_path: str) -> DocumentConverter:
+    artifacts_root = Path(artifacts_path)
     pipeline_options = PdfPipelineOptions(
-        artifacts_path=Path(artifacts_path),
+        artifacts_path=artifacts_root,
         do_ocr=True,
         ocr_options=RapidOcrOptions(backend="torch"),
-        do_table_structure=False,
+        do_table_structure=_has_table_structure_artifacts(artifacts_root),
         do_code_enrichment=False,
         do_formula_enrichment=False,
         do_picture_classification=False,
@@ -91,9 +93,37 @@ def build_blocks_from_docling_result(
 ) -> list[ContentBlock]:
     document = conversion_result.document
     page_renders = _render_pdf_page_images(pdf_bytes) if pdf_bytes else {}
+    table_blocks = _build_table_blocks(document)
+    text_blocks = _build_text_blocks(document, page_renders=page_renders)
+    table_regions = [
+        (block.page_no, block.bbox) for block in table_blocks if block.page_no and block.bbox
+    ]
+    filtered_text_blocks = [
+        block
+        for block in text_blocks
+        if not _is_text_block_nested_in_table(block, table_regions)
+    ]
+
+    blocks = table_blocks + filtered_text_blocks
+    blocks.sort(
+        key=lambda block: (
+            block.page_no if block.page_no is not None else 0,
+            block.bbox.y0 if block.bbox is not None else float("inf"),
+            block.bbox.x0 if block.bbox is not None else float("inf"),
+            0 if block.kind == "table" else 1,
+        )
+    )
+    return blocks
+
+
+def _build_text_blocks(
+    document: Any,
+    *,
+    page_renders: dict[int, _PageRender],
+) -> list[ContentBlock]:
     blocks: list[ContentBlock] = []
 
-    for text_item in document.texts:
+    for text_item in getattr(document, "texts", []):
         text = getattr(text_item, "text", "").strip()
         if not text:
             continue
@@ -129,6 +159,83 @@ def build_blocks_from_docling_result(
         )
 
     return blocks
+
+
+def _build_table_blocks(document: Any) -> list[ContentBlock]:
+    blocks: list[ContentBlock] = []
+
+    for table_item in getattr(document, "tables", []):
+        markdown = _export_table_markdown(table_item, document)
+        if not markdown:
+            continue
+
+        provenance = getattr(table_item, "prov", None) or []
+        first_prov = provenance[0] if provenance else None
+        page_no = (
+            getattr(first_prov, "page_no", None) if first_prov is not None else None
+        )
+        page_height = _resolve_page_height(document=document, page_no=page_no)
+        bbox = _build_bbox(first_prov, page_height=page_height)
+        table_data = getattr(table_item, "data", None)
+
+        blocks.append(
+            ContentBlock(
+                text=markdown,
+                page_no=page_no,
+                bbox=bbox,
+                kind="table",
+                meta_info={
+                    "row_count": getattr(table_data, "num_rows", None),
+                    "column_count": getattr(table_data, "num_cols", None),
+                    "format": "markdown",
+                },
+            )
+        )
+
+    return blocks
+
+
+def _export_table_markdown(table_item: Any, document: Any) -> str:
+    export_to_markdown = getattr(table_item, "export_to_markdown", None)
+    if export_to_markdown is None:
+        return ""
+
+    markdown = export_to_markdown(document)
+    return markdown.strip() if isinstance(markdown, str) else ""
+
+
+def _is_text_block_nested_in_table(
+    block: ContentBlock,
+    table_regions: list[tuple[int, BoundingBox]],
+) -> bool:
+    if block.kind != "text" or block.page_no is None or block.bbox is None:
+        return False
+
+    for table_page_no, table_bbox in table_regions:
+        if table_page_no != block.page_no:
+            continue
+        if _overlap_ratio(block.bbox, table_bbox) >= _TABLE_OVERLAP_THRESHOLD:
+            return True
+
+    return False
+
+
+def _overlap_ratio(inner_bbox: BoundingBox, outer_bbox: BoundingBox) -> float:
+    overlap_width = min(inner_bbox.x1, outer_bbox.x1) - max(inner_bbox.x0, outer_bbox.x0)
+    overlap_height = min(inner_bbox.y1, outer_bbox.y1) - max(inner_bbox.y0, outer_bbox.y0)
+    if overlap_width <= 0 or overlap_height <= 0:
+        return 0.0
+
+    overlap_area = overlap_width * overlap_height
+    inner_area = (inner_bbox.x1 - inner_bbox.x0) * (inner_bbox.y1 - inner_bbox.y0)
+    if inner_area <= 0:
+        return 0.0
+
+    return overlap_area / inner_area
+
+
+def _has_table_structure_artifacts(artifacts_path: Path) -> bool:
+    return any(artifacts_path.glob("**/tableformer/*/tm_config.json"))
 
 
 def _resolve_page_height(document: Any, page_no: int | None) -> float | None:

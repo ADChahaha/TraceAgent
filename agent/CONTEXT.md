@@ -6,12 +6,12 @@
 ## 0) 项目总览
 
 - 项目名：`agent_gate`
-- 当前聚焦：`agent/` 服务的 OCR 预处理链路落地与稳定化，PDF 薄框 bbox 已做首轮图像精修，正在把表格升级为保留语义的 `table` blocks
+- 当前聚焦：`agent/` 服务的 OCR 预处理链路落地与稳定化，PDF 薄框 bbox 已做首轮图像精修，表格已升级为保留语义的 `table` blocks
 - 主模块：`ocr_processor`（预处理/OCR）与 `file_extraction_agent`（抽取，待完善）
 - 主链路：`raw file -> ocr_processor -> ProcessResult(blocks) -> file_extraction_agent`
 - 当前支持：`pdf`、`docx`；`doc` 明确未实现
 - PDF 默认模型路径：`agent/ocr_processor/impl/pdf/artifacts/docling-models`
-- 当前状态：`ocr_processor` 关键用例可跑通，PDF `bbox` 可提取且已修正明显薄框，`docx` 在 Docling 失败时可回退到 zip/xml 文本抽取
+- 当前状态：`ocr_processor` 关键用例可跑通，PDF `bbox` 可提取且已修正明显薄框，PDF 表格会输出 `kind="table"` + Markdown，`docx` 在 Docling 失败时可回退到 zip/xml 文本抽取
 
 ## 1) 当前目标与边界
 
@@ -69,6 +69,9 @@
 - 首选：Docling + RapidOCR（`meta_info["engine"] = "docling_rapidocr"`）
 - 回退：pdfplumber（`meta_info["engine"] = "pdfplumber_fallback"`）
 - 当 Docling 返回的高层文本框高度异常小时，会基于页面图像做一次局部 bbox 精修
+- 如果本地 Docling artifacts 中包含 table structure 模型，则会开启表格结构分析，并把整表输出成 `kind="table"` block
+- table block 的 `text` 直接使用 Markdown，`meta_info` 中会补 `row_count` / `column_count`
+- 当前默认会压掉落在 table bbox 内的普通 text blocks，避免前端高亮时出现“整表大框 + 表内碎框”双重噪声
 
 ### DOC/DOCX 处理链路
 
@@ -82,10 +85,10 @@
 - 命令：`conda run -n agent-gate pytest tests/ocr_processor/test_processor.py -q`
 - 结果：`6 passed`
 
-新增 bbox 精修单测：
+新增 `docling_adapter` 单测：
 
 - 命令：`conda run -n agent-gate pytest tests/ocr_processor/test_docling_adapter.py -q`
-- 结果：`2 passed`
+- 结果：`4 passed`
 
 并且已验证 PDF 可产出 bbox（含扫描 PDF 场景）。
 
@@ -94,8 +97,8 @@
 - 用户提供的 `实验报告-模板.docx` 会触发 Docling `SimplePipeline` 失败，但当前已能通过 zip/xml fallback 成功提取文本块
 - 用户提供的扫描 PDF 第 1 页已成功输出 OCR blocks，并生成原页叠框图用于人工检查
 - 当前发现问题：Docling 高层 `document.texts[*].prov.bbox` 在扫描 PDF 上常出现“高度接近 0 的细框”，直接用于高亮效果较差
-- 当前进展：第 1 页“横线框”已明显改善；第 2 页这类表格页仍存在碎框/噪声框
-- 当前 TDD：正在补 `docling_adapter` 的失败测试，目标是让 PDF 表格输出 `kind="table"` + Markdown，并默认压掉表格区域里的碎文本框
+- 当前进展：第 1 页“横线框”已明显改善；第 2 页表格页现已验证可输出单个 table block，并在原页叠框图中显示为整表红框
+- 当前实测：`source-page-2.pdf` 处理结果为 `1` 个 table block + `38` 个表外 text blocks；表格 Markdown 已导出到 `agent/output/processor_checks/pdf-page-002-table-001.md`
 
 ## 5) 最近提交（与当前上下文相关）
 
@@ -110,6 +113,7 @@
 - `981e119` `test(agent): define docx fallback on docling failure`
 - `eea2f70` `fix(agent): add docx fallback for docling failures`
 - `114bdf4` `test(agent): define pdf bbox image refinement behavior`
+- `21fe8fb` `test(agent): define table block extraction behavior`
 
 ## 6) 当前工作区状态（需要注意）
 
@@ -126,9 +130,9 @@
 
 ## 7) 下一个建议动作（按优先级）
 
-1. **接入表格语义输出**：让 PDF processor 产出 `kind="table"` block，`text` 直接使用 Markdown。
-2. **抑制表格内碎文本**：默认不再输出落在表格区域内的普通 text blocks，改善前端高亮与下游语义。
-3. **继续清理非表格碎框**：对过小框、单字符噪声框或同一行碎片框做聚合/过滤。
+1. **继续清理非表格碎框**：对过小框、单字符噪声框或同一行碎片框做聚合/过滤。
+2. **评估表格细粒度结构**：如果后续需要单元格级交互，可继续补 cell/row 级 bbox 映射。
+3. **规划 legacy `.doc` 策略**：若要支持，优先选非平台专属的转换方案。
 
 ## 8) 快速上手命令
 
