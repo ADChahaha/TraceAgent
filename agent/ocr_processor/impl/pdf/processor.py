@@ -19,30 +19,34 @@ class PdfProcessor(Processor):
     ) -> ProcessResult:
         safe_filename = filename or "document.pdf"
         try:
-            conversion_result = docling_adapter.convert_with_docling(content, safe_filename)
+            conversion_result = docling_adapter.convert_pdf_with_docling(content, safe_filename)
             blocks = docling_adapter.build_blocks_from_docling_result(conversion_result)
-            warnings: list[str] = []
-            if not blocks:
-                warnings.append("No text blocks were extracted from the PDF.")
-            return ProcessResult(
-                processor_name="pdf_processor",
-                file_type=self.file_type,
-                filename=filename,
-                blocks=blocks,
-                meta_info={
-                    "byte_size": len(content),
-                    "source": "pdf",
-                    "block_count": len(blocks),
-                    "engine": "docling",
-                },
-                warnings=warnings,
-            )
+            if blocks:
+                return ProcessResult(
+                    processor_name="pdf_processor",
+                    file_type=self.file_type,
+                    filename=filename,
+                    blocks=blocks,
+                    meta_info={
+                        "byte_size": len(content),
+                        "source": "pdf",
+                        "block_count": len(blocks),
+                        "engine": "docling_rapidocr",
+                    },
+                    warnings=[],
+                )
         except Exception as exc:
             return self._process_with_pdfplumber(
                 content=content,
                 filename=filename,
                 fallback_reason=str(exc),
             )
+
+        return self._process_with_pdfplumber(
+            content=content,
+            filename=filename,
+            fallback_reason="Docling PDF pipeline returned no text blocks.",
+        )
 
     def _process_with_pdfplumber(
         self,

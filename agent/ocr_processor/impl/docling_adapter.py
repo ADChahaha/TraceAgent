@@ -1,17 +1,72 @@
 from __future__ import annotations
 
+import os
+from functools import lru_cache
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
-from docling.datamodel.base_models import DocumentStream
-from docling.document_converter import DocumentConverter
+from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
+from docling.datamodel.base_models import DocumentStream, InputFormat
+from docling.datamodel.pipeline_options import PdfPipelineOptions, RapidOcrOptions
+from docling.document_converter import DocumentConverter, PdfFormatOption
 
 from ..schemas import BoundingBox, ContentBlock
 
+_AGENT_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_DOCLING_ARTIFACTS_PATH = _AGENT_ROOT / "artifacts" / "docling-models"
+
 
 def convert_with_docling(content: bytes, filename: str) -> Any:
-    converter = DocumentConverter()
+    converter = _get_default_converter()
     return converter.convert(DocumentStream(name=filename, stream=BytesIO(content)))
+
+
+def convert_pdf_with_docling(content: bytes, filename: str) -> Any:
+    artifacts_path = resolve_docling_artifacts_path()
+    if artifacts_path is None or not artifacts_path.exists():
+        raise FileNotFoundError(
+            "Docling artifacts were not found. Expected models under "
+            f"{_DEFAULT_DOCLING_ARTIFACTS_PATH}"
+        )
+
+    converter = _get_pdf_converter(str(artifacts_path))
+    return converter.convert(DocumentStream(name=filename, stream=BytesIO(content)))
+
+
+def resolve_docling_artifacts_path() -> Path | None:
+    env_value = os.getenv("DOCLING_ARTIFACTS_PATH")
+    if env_value:
+        return Path(env_value).expanduser()
+    return _DEFAULT_DOCLING_ARTIFACTS_PATH
+
+
+@lru_cache(maxsize=1)
+def _get_default_converter() -> DocumentConverter:
+    return DocumentConverter()
+
+
+@lru_cache(maxsize=2)
+def _get_pdf_converter(artifacts_path: str) -> DocumentConverter:
+    pipeline_options = PdfPipelineOptions(
+        artifacts_path=Path(artifacts_path),
+        do_ocr=True,
+        ocr_options=RapidOcrOptions(backend="torch"),
+        do_table_structure=False,
+        do_code_enrichment=False,
+        do_formula_enrichment=False,
+        do_picture_classification=False,
+        do_picture_description=False,
+        do_chart_extraction=False,
+    )
+    return DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(
+                pipeline_options=pipeline_options,
+                backend=PyPdfiumDocumentBackend,
+            ),
+        }
+    )
 
 
 def build_blocks_from_docling_result(conversion_result: Any) -> list[ContentBlock]:
@@ -25,8 +80,9 @@ def build_blocks_from_docling_result(conversion_result: Any) -> list[ContentBloc
 
         provenance = getattr(text_item, "prov", None) or []
         first_prov = provenance[0] if provenance else None
-        bbox = _build_bbox(first_prov)
         page_no = getattr(first_prov, "page_no", None) if first_prov is not None else None
+        page_height = _resolve_page_height(document=document, page_no=page_no)
+        bbox = _build_bbox(first_prov, page_height=page_height)
 
         block_meta: dict[str, Any] = {}
         if first_prov is not None:
@@ -47,13 +103,48 @@ def build_blocks_from_docling_result(conversion_result: Any) -> list[ContentBloc
     return blocks
 
 
-def _build_bbox(provenance_item: Any) -> BoundingBox | None:
+def _resolve_page_height(document: Any, page_no: int | None) -> float | None:
+    if page_no is None:
+        return None
+
+    pages = getattr(document, "pages", None)
+    if pages is None:
+        return None
+
+    page = pages.get(page_no)
+    if page is None:
+        return None
+
+    size = getattr(page, "size", None)
+    if size is None:
+        return None
+
+    height = getattr(size, "height", None)
+    return float(height) if height is not None else None
+
+
+def _build_bbox(provenance_item: Any, *, page_height: float | None) -> BoundingBox | None:
     if provenance_item is None:
         return None
 
     source_bbox = getattr(provenance_item, "bbox", None)
     if source_bbox is None:
         return None
+
+    coord_origin = getattr(source_bbox, "coord_origin", None)
+    origin_name = (
+        getattr(coord_origin, "value", str(coord_origin)).lower()
+        if coord_origin is not None
+        else None
+    )
+
+    if origin_name == "bottomleft" and page_height is not None:
+        return BoundingBox(
+            x0=float(source_bbox.l),
+            y0=float(page_height - source_bbox.t),
+            x1=float(source_bbox.r),
+            y1=float(page_height - source_bbox.b),
+        )
 
     return BoundingBox(
         x0=float(source_bbox.l),
