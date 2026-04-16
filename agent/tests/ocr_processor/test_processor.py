@@ -126,6 +126,38 @@ def test_process_infers_docx_type_from_filename(monkeypatch):
     assert result.meta_info["byte_size"] == len(docx_bytes)
 
 
+def test_process_falls_back_when_docling_docx_conversion_fails(monkeypatch):
+    def raise_docling_failure(content, filename):
+        raise RuntimeError("docling docx conversion failed")
+
+    monkeypatch.setattr(docling_adapter, "convert_with_docling", raise_docling_failure)
+
+    docx_bytes = build_docx_bytes(["First paragraph", "Second paragraph"])
+    file_obj = DummyUploadFile(
+        filename="sample.docx",
+        content=docx_bytes,
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+
+    result = process(file_obj)
+
+    assert isinstance(result, ProcessResult)
+    assert result.file_type == FileType.DOCX
+    assert result.processor_name == "doc_processor"
+    assert result.filename == "sample.docx"
+    assert result.blocks
+    assert [block.text for block in result.blocks] == ["First paragraph", "Second paragraph"]
+    assert all(block.page_no is None for block in result.blocks)
+    assert all(block.bbox is None for block in result.blocks)
+    assert result.meta_info["source"] == "docx"
+    assert result.meta_info["byte_size"] == len(docx_bytes)
+    assert result.meta_info["engine"] == "zip_xml_fallback"
+    assert result.warnings == [
+        "Docling DOCX pipeline failed; used zip/xml fallback.",
+        "docling docx conversion failed",
+    ]
+
+
 def test_process_reports_legacy_doc_as_unimplemented():
     doc_bytes = b"legacy-doc-placeholder"
     file_obj = DummyUploadFile(
