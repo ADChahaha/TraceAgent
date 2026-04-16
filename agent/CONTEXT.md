@@ -19,6 +19,7 @@
 
 - `ocr_processor`：文档预处理/OCR，输出统一 `ProcessResult(blocks + md_list + markdown)`
 - `file_extraction_agent`：消费预处理结果做抽取（后续完善）
+- `ocr_processor/README.md` 已明确写出安装方式、PDF artifacts 前提，以及 `.doc` 当前不支持
 
 系统职责边界：
 

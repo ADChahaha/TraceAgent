@@ -15,8 +15,11 @@
 当前设计上支持：
 
 - `pdf`
-- `doc`
 - `docx`
+
+当前不支持：
+
+- `doc`
 
 输入形式优先为**文件对象**，而不是路径。
 
@@ -68,6 +71,59 @@ agent/ocr_processor/
 - 该目录被 `.gitignore` 忽略，用户需要自行准备 Docling PDF artifacts
 - 也可以通过环境变量 `DOCLING_ARTIFACTS_PATH` 指向自己安装好的模型目录
 
+## 安装与运行前提
+
+建议在 `agent-gate` 对应环境中运行。
+
+### 安装包
+
+在仓库根目录下执行：
+
+```bash
+cd ./agent/ocr_processor
+pip install -e .
+```
+
+如果需要测试依赖：
+
+```bash
+cd ./agent/ocr_processor
+pip install -e ".[dev]"
+```
+
+最小依赖包括：
+
+- `docling`
+- `pdfplumber`
+- `python-docx`
+
+其中：
+
+- `pdf` 主链路依赖 Docling PDF artifacts
+- `docx` 在 Docling 失败时会回退到 `python-docx`
+- `.doc` 当前不支持
+
+如果需要启用 PDF 的 Docling 主链路，请确保本地已准备好模型目录：
+
+- 默认路径：`agent/ocr_processor/impl/pdf/artifacts/docling-models`
+- 或环境变量：`DOCLING_ARTIFACTS_PATH=/your/path/to/docling-models`
+
+官方推荐的预下载方式如下：
+
+```bash
+cd ./agent/ocr_processor
+docling-tools models download -o ./impl/pdf/artifacts/docling-models
+```
+
+或者下载到任意自定义目录，再通过环境变量指定：
+
+```bash
+docling-tools models download -o /your/path/to/docling-models
+export DOCLING_ARTIFACTS_PATH=/your/path/to/docling-models
+```
+
+如果不做预下载，Docling 会在首次使用时自行拉取模型；但对这个包来说，更推荐显式预下载并固定 `artifacts_path`，这样更适合离线环境、部署环境和可重复实验。
+
 ## 处理方式
 
 这一层内部采用“类型分发”的方式。
@@ -78,6 +134,61 @@ agent/ocr_processor/
 from ocr_processor.processor import process
 
 result = process(file_obj)
+```
+
+## 用法
+
+### 1. 处理 FastAPI `UploadFile`
+
+```python
+from ocr_processor.processor import process
+
+result = process(upload_file)
+```
+
+### 2. 处理普通文件对象
+
+```python
+from pathlib import Path
+
+from ocr_processor.processor import process
+
+with Path("sample.pdf").open("rb") as f:
+    result = process(f, "pdf")
+```
+
+### 3. 处理内存中的文件对象
+
+```python
+from io import BytesIO
+from types import SimpleNamespace
+
+from ocr_processor.processor import process
+
+content = BytesIO(pdf_bytes)
+file_obj = SimpleNamespace(
+    filename="sample.pdf",
+    content_type="application/pdf",
+    file=content,
+)
+
+result = process(file_obj)
+```
+
+### 4. 读取处理结果
+
+```python
+result = process(file_obj)
+
+print(result.file_type)
+print(result.filename)
+print(result.md_list)
+print(result.markdown)
+print(result.meta_info)
+print(result.warnings)
+
+for block in result.blocks:
+    print(block.kind, block.text)
 ```
 
 默认情况下，`process(file_obj)` 会根据文件对象中的信息自动判断类型并分发。
@@ -93,7 +204,8 @@ result = process(file_obj)
 当前设计可以理解为：
 
 - `pdf -> PdfProcessor`
-- `doc/docx -> DocProcessor`
+- `docx -> DocProcessor`
+- `doc -> DocProcessor（当前明确返回 unsupported）`
 
 这样做的好处是：
 
@@ -117,6 +229,27 @@ result = process(file_obj)
 - `warnings`
 
 其中最重要的是 `blocks`、`md_list` 和 `markdown`。
+
+一个典型结果对象大致如下：
+
+```python
+ProcessResult(
+    file_type=...,
+    filename="sample.pdf",
+    md_list=[...],
+    markdown="...",
+    blocks=[...],
+    meta_info={
+        "engine": "...",
+        "fallback_used": False,
+        "block_count": 9,
+        "md_item_count": 9,
+        "has_table": True,
+        "kind_counts": {...},
+    },
+    warnings=[...],
+)
+```
 
 ## Content Block
 
@@ -199,11 +332,11 @@ ContentBlock(
 
 - `agent/ocr_processor/impl/pdf/artifacts/docling-models`
 
-仓库不会提交这套模型；需要用户自行安装到上述目录，或通过环境变量 `DOCLING_ARTIFACTS_PATH` 覆盖到自己的模型路径。
+仓库不会提交这套模型；需要用户通过 `docling-tools models download` 自行安装到上述目录，或通过环境变量 `DOCLING_ARTIFACTS_PATH` 覆盖到自己的模型路径。
 
 ### DOC / DOCX
 
-对于 `doc` 或 `docx`，可以先保证：
+对于 `docx`，可以先保证：
 
 - `text`
 - `meta_info`
@@ -213,15 +346,15 @@ ContentBlock(
 - `page_no = None`
 - `bbox = None`
 
-也就是说，PDF 的定位能力更强，DOC/DOCX 则先以文本为主。
+也就是说，PDF 的定位能力更强，DOCX 则先以文本为主。
 
 当前实现中：
 
 - `docx` 默认使用 `Docling`
 - 如果 `docx` 的 Docling 管线失败，或成功但未产出任何 block，则回退到 python-docx 结构抽取
 - `pdf` 使用 `Docling + PyPdfium + RapidOCR`
-- `doc` 老格式当前未实现，返回空块和 warning
-- `docx` fallback 和 `doc` 当前都不提供稳定的页码和几何位置信息，因此返回 `page_no = None`、`bbox = None`
+- `doc` 老格式当前不支持，返回空块和 warning
+- `docx` fallback 当前不提供稳定的页码和几何位置信息，因此返回 `page_no = None`、`bbox = None`
 
 ## Docling Block 转换
 
