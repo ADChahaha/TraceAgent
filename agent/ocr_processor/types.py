@@ -43,6 +43,10 @@ def infer_file_type(file_obj: Any) -> FileType:
     if filename:
         return _infer_from_filename(str(filename))
 
+    direct_name = getattr(file_obj, "name", None)
+    if direct_name:
+        return _infer_from_filename(str(direct_name))
+
     inner_file = getattr(file_obj, "file", None)
     inner_name = getattr(inner_file, "name", None)
     if inner_name:

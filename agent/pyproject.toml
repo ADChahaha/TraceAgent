@@ -8,10 +8,10 @@ version = "0.1.0"
 description = "Agent service for OCR preprocessing and document extraction."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["docling>=2.88.0", "pdfplumber>=0.11"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "reportlab>=4.0", "python-docx>=1.1"]
 
 [tool.setuptools.packages.find]
 where = ["."]

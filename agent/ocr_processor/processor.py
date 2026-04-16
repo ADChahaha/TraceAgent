@@ -13,7 +13,7 @@ def process(file_obj, file_type: str | FileType | None = None) -> ProcessResult:
     Public convenience entrypoint.
 
     Typical usage:
-        from agent.ocr_processor.processor import process
+        from ocr_processor.processor import process
         result = process(file_obj)
     """
 
