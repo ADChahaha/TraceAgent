@@ -277,6 +277,12 @@ cd ./agent/ocr_processor
 pip install -e ".[dev]"
 ```
 
+当前 `dev` 依赖至少包括：
+
+- `pytest`
+- `Pillow`
+- `reportlab`
+
 最小依赖包括：
 
 - `docling`

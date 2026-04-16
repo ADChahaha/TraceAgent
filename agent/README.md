@@ -126,6 +126,19 @@ cd ./agent
 python -m uvicorn main:app --reload --port 8000
 ```
 
+如果要运行 `agent/tests/` 下的测试，建议安装开发依赖：
+
+```bash
+cd ./agent
+pip install -e ".[dev]"
+```
+
+当前测试依赖至少包括：
+
+- `pytest`
+- `Pillow`
+- `reportlab`
+
 ## 设计原则
 
 - 预处理和抽取分开

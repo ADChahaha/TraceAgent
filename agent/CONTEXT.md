@@ -44,6 +44,7 @@
 - `ocr_processor` 根包不再导出 `build_markdown_from_blocks` 这类内部 helper
 - `agent/pyproject.toml` 现已补齐 `fastapi` / `python-multipart` / `uvicorn`，`agent-gate` 环境已通过 editable install 安装 `agent-service` 与 `ocr-processor`
 - `agent-service` 当前同时声明 `docling` / `pdfplumber` / `python-docx` 依赖，并把 `main.py` 与 `ocr_processor` 一起纳入构建产物，避免单独安装后缺包
+- `agent/pyproject.toml` 与 `ocr_processor/pyproject.toml` 现在都显式声明测试开发依赖，至少包括 `pytest` / `Pillow` / `reportlab`，避免测试收集时因缺包直接失败
 
 ### PDF artifacts 路径归属
 
