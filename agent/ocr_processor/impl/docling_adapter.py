@@ -14,7 +14,9 @@ from docling.document_converter import DocumentConverter, PdfFormatOption
 from ..schemas import BoundingBox, ContentBlock
 
 _AGENT_ROOT = Path(__file__).resolve().parents[2]
-_DEFAULT_DOCLING_ARTIFACTS_PATH = _AGENT_ROOT / "artifacts" / "docling-models"
+_DEFAULT_DOCLING_ARTIFACTS_PATH = (
+    _AGENT_ROOT / "ocr_processor" / "impl" / "pdf" / "artifacts" / "docling-models"
+)
 
 
 def convert_with_docling(content: bytes, filename: str) -> Any:
@@ -80,7 +82,9 @@ def build_blocks_from_docling_result(conversion_result: Any) -> list[ContentBloc
 
         provenance = getattr(text_item, "prov", None) or []
         first_prov = provenance[0] if provenance else None
-        page_no = getattr(first_prov, "page_no", None) if first_prov is not None else None
+        page_no = (
+            getattr(first_prov, "page_no", None) if first_prov is not None else None
+        )
         page_height = _resolve_page_height(document=document, page_no=page_no)
         bbox = _build_bbox(first_prov, page_height=page_height)
 
@@ -123,7 +127,9 @@ def _resolve_page_height(document: Any, page_no: int | None) -> float | None:
     return float(height) if height is not None else None
 
 
-def _build_bbox(provenance_item: Any, *, page_height: float | None) -> BoundingBox | None:
+def _build_bbox(
+    provenance_item: Any, *, page_height: float | None
+) -> BoundingBox | None:
     if provenance_item is None:
         return None
 

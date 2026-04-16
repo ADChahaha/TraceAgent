@@ -147,7 +147,7 @@ ContentBlock(
 
 当前 PDF 处理默认使用本地 `Docling` artifacts，约定路径为：
 
-- `agent/artifacts/docling-models`
+- `agent/ocr_processor/impl/pdf/artifacts/docling-models`
 
 也可以通过环境变量 `DOCLING_ARTIFACTS_PATH` 覆盖。
 
