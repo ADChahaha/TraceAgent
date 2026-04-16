@@ -6,10 +6,10 @@
 ## 0) 项目总览
 
 - 项目名：`agent_gate`
-- 当前聚焦：`agent/` 服务的 OCR 预处理链路落地与稳定化
+- 当前聚焦：`agent/` 服务的 OCR 预处理链路落地与稳定化，legacy `.doc` 文本提取已完成首版接入
 - 主模块：`ocr_processor`（预处理/OCR）与 `file_extraction_agent`（抽取，待完善）
 - 主链路：`raw file -> ocr_processor -> ProcessResult(blocks) -> file_extraction_agent`
-- 当前支持：`pdf`、`docx`（`doc` 暂未实现）
+- 当前支持：`pdf`、`docx`、`doc`
 - PDF 默认模型路径：`agent/ocr_processor/impl/pdf/artifacts/docling-models`
 - 当前状态：`ocr_processor` 关键用例可跑通，PDF `bbox` 可提取，测试通过
 
@@ -72,36 +72,40 @@
 ### DOC/DOCX 处理链路
 
 - `docx`：Docling
-- `doc`：当前未实现，返回空 blocks + warning，`engine = "unimplemented"`
+- `doc`：已接入 `textutil` 提取文本，输出 text-only blocks（`page_no/bbox = None`）
 
 ## 4) 测试状态（已验证）
 
 在 `agent-gate` conda 环境下，`ocr_processor` 测试通过：
 
 - 命令：`conda run -n agent-gate pytest tests/ocr_processor/test_processor.py -q`
-- 结果：`4 passed`
+- 结果：`5 passed`
 
-并且已验证 PDF 可产出 bbox（含扫描 PDF 场景）。
+并且已验证 PDF 可产出 bbox（含扫描 PDF 场景），legacy `.doc` 可提取文本块。
 
 ## 5) 最近提交（与当前上下文相关）
 
 - `ef12230` `fix(ocr): move docling artifacts path under impl/pdf`
 - `e976b18` `docs(ocr): align README with current pdf artifacts layout`
+- `ce96674` `test(agent): cover scanned pdf bbox extraction`
+- `6857f1b` `test(agent): define legacy doc extraction behavior`
+- `fdd9389` `feat(agent): support legacy doc extraction via textutil`
 
 ## 6) 当前工作区状态（需要注意）
 
-仓库根目录当前有未提交内容（非本文件引入）：
+仓库根目录当前有未提交内容：
 
-- 修改：`agent/tests/ocr_processor/test_processor.py`
-- 未跟踪：`backend/`、`frontend/`
+- 修改：`agent/CONTEXT.md`
+- 修改：`agent/ocr_processor/README.md`
+- 未跟踪：`AGENT.md`、`backend/`、`frontend/`
 
 进行下一次提交时，建议只按目标文件精确 `git add`，避免误带无关改动。
 
 ## 7) 下一个建议动作（按优先级）
 
-1. **可选兼容性增强**：在 `docling_adapter` 增加旧路径回退（新路径不存在时尝试旧路径），降低同事本地切分支失败概率。
-2. **补充运行文档**：在 `ocr_processor/README.md` 增加“本地模型检查清单”（目录存在性、环境变量、快速自检命令）。
-3. **决定 tests 变更归属**：`agent/tests/ocr_processor/test_processor.py` 当前有改动，确认是否独立提交。
+1. **补充失败路径测试**：覆盖 `textutil` 缺失或转换失败时的 warning/engine 行为。
+2. **评估跨平台策略**：如果后续要跑在非 macOS 环境，需要为 legacy `.doc` 增加 `antiword` 或 LibreOffice 方案。
+3. **可选兼容性增强**：在 `docling_adapter` 增加旧路径回退（新路径不存在时尝试旧路径），降低同事本地切分支失败概率。
 
 ## 8) 快速上手命令
 

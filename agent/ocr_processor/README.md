@@ -176,7 +176,10 @@ ContentBlock(
 
 - `docx` 使用 `Docling`
 - `pdf` 使用 `Docling + PyPdfium + RapidOCR`
-- `doc` 老格式暂时未实现，会返回空块和 warning（`engine = "unimplemented"`）
+- `doc` 老格式当前使用系统 `textutil` 提取纯文本块（`engine = "textutil"`）
+- `doc` 当前不提供稳定的页码和几何位置信息，因此返回 `page_no = None`、`bbox = None`
+- 如果当前环境缺少 `textutil`，会返回空块和 warning（`engine = "textutil_unavailable"`）
+- 如果 `textutil` 执行失败，会返回空块和 warning（`engine = "textutil_failed"`）
 
 ## 为什么不拆成两套 API
 
