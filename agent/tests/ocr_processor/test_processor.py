@@ -95,6 +95,15 @@ def build_structured_docx_bytes() -> bytes:
     return buffer.getvalue()
 
 
+def build_repeated_docx_bytes() -> bytes:
+    buffer = BytesIO()
+    document = Document()
+    document.add_paragraph("N/A")
+    document.add_paragraph("N/A")
+    document.save(buffer)
+    return buffer.getvalue()
+
+
 class FakeDoclingTextItem:
     def __init__(self, text: str):
         self.text = text
@@ -288,6 +297,28 @@ def test_process_docx_fallback_detects_generic_headings(monkeypatch):
     assert "# Project Proposal" in result.markdown
     assert "# Overview" in result.markdown
     assert "This is the first body paragraph." in result.markdown
+
+
+def test_process_docx_fallback_preserves_adjacent_repeated_blocks(monkeypatch):
+    monkeypatch.setattr(
+        doc_docling_adapter,
+        "convert_with_docling",
+        lambda content, filename: FakeDoclingConversionResult([]),
+    )
+
+    docx_bytes = build_repeated_docx_bytes()
+    file_obj = DummyUploadFile(
+        filename="repeated.docx",
+        content=docx_bytes,
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+
+    result = process(file_obj)
+
+    assert result.file_type == FileType.DOCX
+    assert [block.text for block in result.blocks] == ["N/A", "N/A"]
+    assert result.md_list == ["N/A", "N/A"]
+    assert result.markdown == "N/A\n\nN/A"
 
 
 def test_process_reports_legacy_doc_as_unimplemented():

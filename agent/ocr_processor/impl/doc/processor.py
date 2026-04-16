@@ -119,7 +119,7 @@ class DocProcessor(Processor):
 
             blocks.append(content_block)
 
-        return self._dedupe_adjacent_blocks(blocks)
+        return blocks
 
     def _iter_document_blocks(self, document: DocumentObject):
         for child in document.element.body.iterchildren():
@@ -220,19 +220,6 @@ class DocProcessor(Processor):
             lines.append("| " + " | ".join(row) + " |")
 
         return "\n".join(lines)
-
-    def _dedupe_adjacent_blocks(self, blocks: list[ContentBlock]) -> list[ContentBlock]:
-        deduped: list[ContentBlock] = []
-        previous_signature: tuple[str, str] | None = None
-
-        for block in blocks:
-            signature = (block.kind, block.text)
-            if signature == previous_signature:
-                continue
-            deduped.append(block)
-            previous_signature = signature
-
-        return deduped
 
     def _is_explicit_heading_style(self, style_name: str) -> bool:
         return any(keyword in style_name for keyword in ("heading", "title", "标题"))
