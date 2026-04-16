@@ -6,7 +6,7 @@
 ## 0) 项目总览
 
 - 项目名：`agent_gate`
-- 当前聚焦：`agent/` 服务的 OCR 预处理链路落地与稳定化，PDF 薄框 bbox 已做首轮图像精修，表格已升级为保留语义的 `table` blocks，正在继续清理页外/页脚噪声 text blocks
+- 当前聚焦：`agent/` 服务的 OCR 预处理链路落地与稳定化，PDF 薄框 bbox 已做首轮图像精修，表格已升级为保留语义的 `table` blocks，并已增加页外/页脚噪声 text 过滤
 - 主模块：`ocr_processor`（预处理/OCR）与 `file_extraction_agent`（抽取，待完善）
 - 主链路：`raw file -> ocr_processor -> ProcessResult(blocks) -> file_extraction_agent`
 - 当前支持：`pdf`、`docx`；`doc` 明确未实现
@@ -99,7 +99,7 @@
 - 当前发现问题：Docling 高层 `document.texts[*].prov.bbox` 在扫描 PDF 上常出现“高度接近 0 的细框”，直接用于高亮效果较差
 - 当前进展：第 1 页“横线框”已明显改善；第 2 页表格页现已验证可输出单个 table block，并在原页叠框图中显示为整表红框
 - 当前实测：`source-page-2.pdf` 处理结果为 `1` 个 table block + `38` 个表外 text blocks；表格 Markdown 已导出到 `agent/output/processor_checks/pdf-page-002-table-001.md`
-- 当前 TDD：正在补页外垃圾框、页脚/印章短噪声框和表格边缘 spillover text 的失败测试，目标是继续减少真实 PDF 叠框图中的多余 text 框
+- 当前进展：页外负坐标垃圾框、页脚/印章短噪声框、表格底部 spillover text 已做首轮过滤；真实样本整本 PDF 当前压缩到 `15` 个 blocks（`8 text + 7 table`）
 
 ## 5) 最近提交（与当前上下文相关）
 
@@ -115,6 +115,7 @@
 - `eea2f70` `fix(agent): add docx fallback for docling failures`
 - `114bdf4` `test(agent): define pdf bbox image refinement behavior`
 - `21fe8fb` `test(agent): define table block extraction behavior`
+- `1bf2a8f` `test(agent): define pdf noise filtering behavior`
 
 ## 6) 当前工作区状态（需要注意）
 
@@ -131,7 +132,7 @@
 
 ## 7) 下一个建议动作（按优先级）
 
-1. **继续清理非表格碎框**：对过小框、单字符噪声框或同一行碎片框做聚合/过滤。
+1. **继续校准正文 bbox**：第一页等非表格页的正文框已够用，但仍可继续收紧标题/长段落的贴合度。
 2. **评估表格细粒度结构**：如果后续需要单元格级交互，可继续补 cell/row 级 bbox 映射。
 3. **规划 legacy `.doc` 策略**：若要支持，优先选非平台专属的转换方案。
 

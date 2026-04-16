@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from io import BytesIO
@@ -21,7 +22,15 @@ _DEFAULT_DOCLING_ARTIFACTS_PATH = (
 )
 _THIN_TEXT_BBOX_THRESHOLD = 6.0
 _PAGE_RENDER_SCALE = 2.0
-_TABLE_OVERLAP_THRESHOLD = 0.8
+_TABLE_OVERLAP_THRESHOLD = 0.5
+_TABLE_TOP_MARGIN = 12.0
+_TABLE_SIDE_MARGIN = 8.0
+_TABLE_BOTTOM_MARGIN_MIN = 24.0
+_TABLE_BOTTOM_MARGIN_RATIO = 0.25
+_FOOTER_NOISE_MARGIN = 200.0
+_SHORT_NOISE_TEXT_MAX_LEN = 3
+_SMALL_NOISE_BOX_MAX_WIDTH = 40.0
+_SMALL_NOISE_BOX_MAX_HEIGHT = 40.0
 
 
 @dataclass(slots=True)
@@ -133,7 +142,8 @@ def _build_text_blocks(
         page_no = (
             getattr(first_prov, "page_no", None) if first_prov is not None else None
         )
-        page_height = _resolve_page_height(document=document, page_no=page_no)
+        page_size = _resolve_page_size(document=document, page_no=page_no)
+        page_height = page_size[1] if page_size is not None else None
         bbox = _build_bbox(first_prov, page_height=page_height)
         if bbox is not None and page_no is not None:
             bbox = _refine_bbox_from_page_image(
@@ -141,6 +151,11 @@ def _build_text_blocks(
                 text=text,
                 page_render=page_renders.get(page_no),
             )
+            bbox = _normalize_bbox_to_page(bbox, page_size=page_size)
+            if bbox is None:
+                continue
+            if _is_noise_text_block(text=text, bbox=bbox, page_size=page_size):
+                continue
 
         block_meta: dict[str, Any] = {}
         if first_prov is not None:
@@ -214,7 +229,8 @@ def _is_text_block_nested_in_table(
     for table_page_no, table_bbox in table_regions:
         if table_page_no != block.page_no:
             continue
-        if _overlap_ratio(block.bbox, table_bbox) >= _TABLE_OVERLAP_THRESHOLD:
+        expanded_table_bbox = _expand_table_bbox(table_bbox)
+        if _overlap_ratio(block.bbox, expanded_table_bbox) >= _TABLE_OVERLAP_THRESHOLD:
             return True
 
     return False
@@ -238,7 +254,91 @@ def _has_table_structure_artifacts(artifacts_path: Path) -> bool:
     return any(artifacts_path.glob("**/tableformer/*/tm_config.json"))
 
 
+def _normalize_bbox_to_page(
+    bbox: BoundingBox,
+    *,
+    page_size: tuple[float, float] | None,
+) -> BoundingBox | None:
+    if page_size is None:
+        return bbox
+
+    page_width, page_height = page_size
+    if bbox.x1 <= 0 or bbox.y1 <= 0 or bbox.x0 >= page_width or bbox.y0 >= page_height:
+        return None
+
+    normalized_bbox = BoundingBox(
+        x0=max(0.0, min(page_width, bbox.x0)),
+        y0=max(0.0, min(page_height, bbox.y0)),
+        x1=max(0.0, min(page_width, bbox.x1)),
+        y1=max(0.0, min(page_height, bbox.y1)),
+    )
+    if normalized_bbox.x1 <= normalized_bbox.x0 or normalized_bbox.y1 <= normalized_bbox.y0:
+        return None
+
+    return normalized_bbox
+
+
+def _is_noise_text_block(
+    *,
+    text: str,
+    bbox: BoundingBox,
+    page_size: tuple[float, float] | None,
+) -> bool:
+    if page_size is None:
+        return False
+
+    normalized_text = re.sub(r"\s+", "", text)
+    if not normalized_text:
+        return True
+
+    if len(normalized_text) > _SHORT_NOISE_TEXT_MAX_LEN:
+        return False
+
+    width = bbox.x1 - bbox.x0
+    height = bbox.y1 - bbox.y0
+    if width > _SMALL_NOISE_BOX_MAX_WIDTH or height > _SMALL_NOISE_BOX_MAX_HEIGHT:
+        return False
+
+    if _looks_like_meaningful_short_text(normalized_text):
+        return False
+
+    _, page_height = page_size
+    return bbox.y0 >= page_height - _FOOTER_NOISE_MARGIN
+
+
+def _looks_like_meaningful_short_text(text: str) -> bool:
+    if re.search(r"[\u4e00-\u9fff]{2,}", text):
+        return True
+    if re.search(r"[A-Za-z]{3,}", text):
+        return True
+    if re.search(r"\d{4,}", text):
+        return True
+    return bool(re.search(r"第\d+页", text))
+
+
+def _expand_table_bbox(table_bbox: BoundingBox) -> BoundingBox:
+    table_height = table_bbox.y1 - table_bbox.y0
+    bottom_margin = max(_TABLE_BOTTOM_MARGIN_MIN, table_height * _TABLE_BOTTOM_MARGIN_RATIO)
+    return BoundingBox(
+        x0=table_bbox.x0 - _TABLE_SIDE_MARGIN,
+        y0=max(0.0, table_bbox.y0 - _TABLE_TOP_MARGIN),
+        x1=table_bbox.x1 + _TABLE_SIDE_MARGIN,
+        y1=table_bbox.y1 + bottom_margin,
+    )
+
+
 def _resolve_page_height(document: Any, page_no: int | None) -> float | None:
+    page_size = _resolve_page_size(document=document, page_no=page_no)
+    if page_size is None:
+        return None
+
+    return page_size[1]
+
+
+def _resolve_page_size(
+    document: Any,
+    page_no: int | None,
+) -> tuple[float, float] | None:
     if page_no is None:
         return None
 
@@ -254,8 +354,12 @@ def _resolve_page_height(document: Any, page_no: int | None) -> float | None:
     if size is None:
         return None
 
+    width = getattr(size, "width", None)
     height = getattr(size, "height", None)
-    return float(height) if height is not None else None
+    if width is None or height is None:
+        return None
+
+    return float(width), float(height)
 
 
 def _build_bbox(
