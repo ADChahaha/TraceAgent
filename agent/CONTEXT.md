@@ -6,10 +6,10 @@
 ## 0) 项目总览
 
 - 项目名：`agent_gate`
-- 当前聚焦：`agent/` 服务的 OCR 预处理链路落地与稳定化，正在用 TDD 回滚 legacy `.doc` 的平台依赖方案
+- 当前聚焦：`agent/` 服务的 OCR 预处理链路落地与稳定化，legacy `.doc` 已回退为明确未实现
 - 主模块：`ocr_processor`（预处理/OCR）与 `file_extraction_agent`（抽取，待完善）
 - 主链路：`raw file -> ocr_processor -> ProcessResult(blocks) -> file_extraction_agent`
-- 当前支持：`pdf`、`docx`；`doc` 正在回退为明确未实现
+- 当前支持：`pdf`、`docx`；`doc` 明确未实现
 - PDF 默认模型路径：`agent/ocr_processor/impl/pdf/artifacts/docling-models`
 - 当前状态：`ocr_processor` 关键用例可跑通，PDF `bbox` 可提取，测试通过
 
@@ -72,7 +72,7 @@
 ### DOC/DOCX 处理链路
 
 - `docx`：Docling
-- `doc`：正在回滚 `textutil` 方案，目标改为显式返回 `unimplemented`
+- `doc`：显式返回空 blocks + warning，`engine = "unimplemented"`
 
 ## 4) 测试状态（已验证）
 
@@ -96,7 +96,7 @@
 
 仓库根目录当前有未提交内容：
 
-- 修改：`agent/tests/ocr_processor/test_processor.py`（red：legacy `.doc` 目标行为改为 `unimplemented`）
+- 修改：`agent/ocr_processor/impl/doc/processor.py`（green：移除 `textutil`，`.doc` 回退为 `unimplemented`）
 - 修改：`agent/CONTEXT.md`
 - 未跟踪：`backend/`、`frontend/`
 
@@ -104,8 +104,8 @@
 
 ## 7) 下一个建议动作（按优先级）
 
-1. **完成 green 回退**：删除当前 `textutil` 实现，让 `.doc` 再次稳定返回 `unimplemented`。
-2. **用真实文件验证**：对用户提供的 PDF 和 DOCX 跑 processor，并为 PDF 输出原页框选图。
+1. **用真实文件验证**：对用户提供的 PDF 和 DOCX 跑 processor，并为 PDF 输出原页框选图。
+2. **同步 README**：删除 `textutil` 相关说明，恢复 `.doc` 当前状态描述。
 3. **评估跨平台策略**：如果后续继续做 legacy `.doc`，优先考虑 LibreOffice/antiword 等非平台专属方案。
 
 ## 8) 快速上手命令
