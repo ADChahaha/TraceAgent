@@ -43,6 +43,7 @@ agent/ocr_processor/
     ├── __init__.py
     ├── base.py
     ├── dispatcher.py
+    ├── docling_adapter.py
     ├── doc/
     │   ├── __init__.py
     │   └── processor.py
@@ -60,7 +61,7 @@ agent/ocr_processor/
 对外则提供一个统一入口：
 
 ```python
-from agent.ocr_processor.processor import process
+from ocr_processor.processor import process
 
 result = process(file_obj)
 ```
@@ -142,6 +143,8 @@ ContentBlock(
 
 这样前端可以根据页码和边界框做高亮定位。
 
+当前实现优先使用 `Docling` 做转换；如果当前环境下 `Docling` 的 PDF 管线不可用，则回退到 `pdfplumber` 提取行级文本和边界框。
+
 ### DOC / DOCX
 
 对于 `doc` 或 `docx`，可以先保证：
@@ -155,6 +158,11 @@ ContentBlock(
 - `bbox = None`
 
 也就是说，PDF 的定位能力更强，DOC/DOCX 则先以文本为主。
+
+当前实现中：
+
+- `docx` 使用 `Docling`
+- `doc` 老格式暂时未实现，会返回空块和 warning
 
 ## 为什么不拆成两套 API
 
@@ -183,7 +191,7 @@ ContentBlock(
 - 返回统一的 `ProcessResult`
 - `block` 至少有 `text / page_no / bbox / meta_info`
 
-后续如果引入 Docling 或其他解析器，再把底层输出映射到这套结果结构上。
+当前已经使用 `Docling` 作为主要解析器，并在必要时对底层输出做映射和兜底。
 
 ## 当前处理链路
 
