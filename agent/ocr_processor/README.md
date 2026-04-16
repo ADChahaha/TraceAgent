@@ -174,12 +174,11 @@ ContentBlock(
 
 当前实现中：
 
-- `docx` 使用 `Docling`
+- `docx` 默认使用 `Docling`
+- 如果 `docx` 的 Docling 管线失败，则回退到 zip/xml 文本抽取（`engine = "zip_xml_fallback"`）
 - `pdf` 使用 `Docling + PyPdfium + RapidOCR`
-- `doc` 老格式当前使用系统 `textutil` 提取纯文本块（`engine = "textutil"`）
-- `doc` 当前不提供稳定的页码和几何位置信息，因此返回 `page_no = None`、`bbox = None`
-- 如果当前环境缺少 `textutil`，会返回空块和 warning（`engine = "textutil_unavailable"`）
-- 如果 `textutil` 执行失败，会返回空块和 warning（`engine = "textutil_failed"`）
+- `doc` 老格式当前未实现，返回空块和 warning（`engine = "unimplemented"`）
+- `docx` fallback 和 `doc` 当前都不提供稳定的页码和几何位置信息，因此返回 `page_no = None`、`bbox = None`
 
 ## 为什么不拆成两套 API
 
