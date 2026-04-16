@@ -48,6 +48,8 @@ agent/ocr_processor/
     │   ├── __init__.py
     │   └── processor.py
     └── pdf/
+        ├── artifacts/
+        │   └── docling-models/
         ├── __init__.py
         └── processor.py
 ```
@@ -145,6 +147,11 @@ ContentBlock(
 
 当前实现优先使用 `Docling` 做转换；如果当前环境下 `Docling` 的 PDF 管线不可用，则回退到 `pdfplumber` 提取行级文本和边界框。
 
+返回结果中的 `meta_info["engine"]` 用于标识当前实际使用的处理链路：
+
+- `docling_rapidocr`：Docling PDF 管线可用
+- `pdfplumber_fallback`：Docling 不可用或未提取到文本时的回退链路
+
 当前 PDF 处理默认使用本地 `Docling` artifacts，约定路径为：
 
 - `agent/ocr_processor/impl/pdf/artifacts/docling-models`
@@ -169,7 +176,7 @@ ContentBlock(
 
 - `docx` 使用 `Docling`
 - `pdf` 使用 `Docling + PyPdfium + RapidOCR`
-- `doc` 老格式暂时未实现，会返回空块和 warning
+- `doc` 老格式暂时未实现，会返回空块和 warning（`engine = "unimplemented"`）
 
 ## 为什么不拆成两套 API
 
