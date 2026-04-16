@@ -108,17 +108,24 @@ pip install -e ".[dev]"
 - 默认路径：`agent/ocr_processor/impl/pdf/artifacts/docling-models`
 - 或环境变量：`DOCLING_ARTIFACTS_PATH=/your/path/to/docling-models`
 
-官方推荐的预下载方式如下：
+如果环境里已经有 `docling-tools`，可以用 CLI 方式预下载：
 
 ```bash
 cd ./agent/ocr_processor
 docling-tools models download -o ./impl/pdf/artifacts/docling-models
 ```
 
+如果没有 `docling-tools` 命令，可以直接使用 Docling 自带的 Python 下载接口：
+
+```bash
+cd ./agent/ocr_processor
+python -c "from pathlib import Path; from docling.utils.model_downloader import download_models; download_models(output_dir=Path('./impl/pdf/artifacts/docling-models'))"
+```
+
 或者下载到任意自定义目录，再通过环境变量指定：
 
 ```bash
-docling-tools models download -o /your/path/to/docling-models
+python -c "from pathlib import Path; from docling.utils.model_downloader import download_models; download_models(output_dir=Path('/your/path/to/docling-models'))"
 export DOCLING_ARTIFACTS_PATH=/your/path/to/docling-models
 ```
 
