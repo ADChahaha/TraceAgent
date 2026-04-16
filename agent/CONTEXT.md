@@ -76,6 +76,7 @@
 
 - 支持：`pdf` / `doc` / `docx`
 - 业务入口：`ocr_processor.processor.process(file_obj, file_type=None)`
+- 显式传入 `file_type="docx"` 时，分发层现在会把已归一化的类型继续传给 `DocProcessor`，不再因为缺少文件名而误判成 `.doc`
 
 ### API 层
 

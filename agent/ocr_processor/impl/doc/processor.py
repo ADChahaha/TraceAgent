@@ -24,6 +24,9 @@ from ocr_processor.types import FileType
 class DocProcessor(Processor):
     file_type = FileType.DOC
 
+    def __init__(self, resolved_type: FileType | None = None):
+        self._resolved_type = resolved_type
+
     def _process_content(
         self,
         *,
@@ -90,6 +93,8 @@ class DocProcessor(Processor):
         )
 
     def _resolve_doc_type(self, filename: str | None) -> FileType:
+        if self._resolved_type is not None:
+            return self._resolved_type
         if filename and filename.lower().endswith(".docx"):
             return FileType.DOCX
         return FileType.DOC

@@ -39,7 +39,7 @@ class ProcessorDispatcher:
                     "ocr_processor.impl.doc.processor",
                     "DocProcessor",
                 )
-                return processor_cls()
+                return processor_cls(resolved_type=file_type)
             case _:
                 raise UnsupportedFileTypeError(f"Unsupported file type: {file_type}")
 

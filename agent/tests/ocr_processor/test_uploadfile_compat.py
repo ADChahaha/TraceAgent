@@ -30,6 +30,11 @@ class FakeDoclingConversionResult:
         self.document = FakeDoclingDocument(texts)
 
 
+class DummyStreamOnlyFile:
+    def __init__(self, content: bytes):
+        self.file = BytesIO(content)
+
+
 def _build_docx_bytes(paragraphs: list[str]) -> bytes:
     buffer = BytesIO()
     document = Document()
@@ -57,6 +62,23 @@ def test_process_accepts_starlette_upload_file(monkeypatch):
     assert result.filename == "upload.docx"
     assert result.md_list == ["Hello UploadFile"]
     assert result.markdown == "Hello UploadFile"
+
+
+def test_process_respects_explicit_docx_type_without_filename(monkeypatch):
+    monkeypatch.setattr(
+        doc_docling_adapter,
+        "convert_with_docling",
+        lambda content, filename: FakeDoclingConversionResult([FakeDoclingTextItem("Hello DOCX World")]),
+    )
+
+    file_obj = DummyStreamOnlyFile(_build_docx_bytes(["First paragraph"]))
+
+    result = process(file_obj, file_type="docx")
+
+    assert result.file_type == FileType.DOCX
+    assert result.blocks
+    assert result.blocks[0].text == "Hello DOCX World"
+    assert result.warnings == []
 
 
 def test_root_package_does_not_export_internal_markdown_helper():
