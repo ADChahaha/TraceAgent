@@ -140,18 +140,7 @@
 - 命令：`conda run -n agent-gate pytest tests/ocr_processor/test_docling_blocks.py -q`
 - 结果：`1 passed`
 
-新增真实文件文档测试：
-
-- 命令：`conda run -n agent-gate pytest tests/ocr_processor/test_sample_documents.py -q`
-- 结果：`2 passed`
-
 并且已验证 PDF 可产出 bbox（含扫描 PDF 场景）。
-
-真实样本验证（2026-04-16）：
-
-- `实验报告-模板.docx` 当前输出包含 `md_list` 和 `meta_info`，样本上因 Docling 失败会回退到 `python-docx`
-- `daa1d114-5c04-45d2-82b3-16bb8dc57206.pdf` 当前可稳定产出 Docling-based blocks，实测约 `9` 个 blocks、`9` 个 md items、`1695` 字符 Markdown，并保留教师名单表格的 Markdown 结构
-- PDF `bbox` 能力仍保留，但当前主展示方向已转为 Markdown 优先
 
 ## 5) 最近提交（与当前上下文相关）
 
@@ -223,7 +212,6 @@
 - 新增：`agent/tests/ocr_processor/test_pdf_docling_adapter.py`
 - 修改：`agent/tests/ocr_processor/test_docling_blocks.py`
 - 修改：`agent/tests/test_api.py`
-- 新增：`agent/tests/ocr_processor/test_sample_documents.py`
 - 未跟踪：`agent/output/`（真实样本验证输出）
 - 未跟踪：`backend/`、`frontend/`
 
