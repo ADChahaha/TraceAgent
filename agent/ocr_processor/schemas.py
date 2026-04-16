@@ -33,6 +33,8 @@ class ProcessResult:
 
     file_type: FileType
     filename: str | None
+    md_list: list[str] = field(default_factory=list)
     markdown: str = ""
     blocks: list[ContentBlock] = field(default_factory=list)
+    meta_info: dict[str, Any] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)

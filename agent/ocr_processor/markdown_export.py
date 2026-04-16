@@ -1,19 +1,45 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from ocr_processor.schemas import ContentBlock
 
 
+def build_markdown_items_from_blocks(blocks: list[ContentBlock]) -> list[str]:
+    items: list[str] = []
+
+    for index, block in enumerate(blocks):
+        item = _build_markdown_fragment(block)
+        block.meta_info["block_id"] = f"blk_{index + 1:04d}"
+        block.meta_info["md"] = item
+        items.append(item)
+
+    return items
+
+
 def build_markdown_from_blocks(blocks: list[ContentBlock]) -> str:
-    fragments: list[str] = []
+    return "\n\n".join(item for item in build_markdown_items_from_blocks(blocks) if item).strip()
 
+
+def build_meta_info_from_blocks(
+    blocks: list[ContentBlock],
+    *,
+    engine: str,
+    fallback_used: bool,
+) -> dict[str, Any]:
+    kind_counts: dict[str, int] = {}
     for block in blocks:
-        fragment = _build_markdown_fragment(block)
-        if fragment:
-            fragments.append(fragment)
+        kind_counts[block.kind] = kind_counts.get(block.kind, 0) + 1
 
-    return "\n\n".join(fragments).strip()
+    return {
+        "engine": engine,
+        "fallback_used": fallback_used,
+        "block_count": len(blocks),
+        "md_item_count": len(blocks),
+        "has_table": kind_counts.get("table", 0) > 0,
+        "kind_counts": kind_counts,
+    }
 
 
 def _build_markdown_fragment(block: ContentBlock) -> str:

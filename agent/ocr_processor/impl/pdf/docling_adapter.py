@@ -14,6 +14,7 @@ from docling.datamodel.pipeline_options import PdfPipelineOptions, RapidOcrOptio
 from docling.document_converter import DocumentConverter, PdfFormatOption
 import pypdfium2 as pdfium
 
+from ocr_processor.docling_blocks import build_blocks_from_docling_document
 from ocr_processor.schemas import BoundingBox, ContentBlock
 
 _AGENT_ROOT = Path(__file__).resolve().parents[3]
@@ -92,121 +93,103 @@ def build_blocks_from_docling_result(
 ) -> list[ContentBlock]:
     document = conversion_result.document
     page_renders = _render_pdf_page_images(pdf_bytes) if pdf_bytes else {}
-    table_blocks = _build_table_blocks(document)
-    text_blocks = _build_text_blocks(document, page_renders=page_renders)
-    table_regions = [
-        (block.page_no, block.bbox) for block in table_blocks if block.page_no and block.bbox
-    ]
-    filtered_text_blocks = [
-        block
-        for block in text_blocks
-        if not _is_text_block_nested_in_table(block, table_regions)
-    ]
+    docling_blocks = build_blocks_from_docling_document(document)
+    finalized_table_blocks: dict[int, ContentBlock] = {}
+    table_regions: list[tuple[int, BoundingBox]] = []
 
-    blocks = table_blocks + filtered_text_blocks
-    blocks.sort(
-        key=lambda block: (
-            block.page_no if block.page_no is not None else 0,
-            block.bbox.y0 if block.bbox is not None else float("inf"),
-            block.bbox.x0 if block.bbox is not None else float("inf"),
-            0 if block.kind == "table" else 1,
+    for index, block in enumerate(docling_blocks):
+        if block.kind != "table":
+            continue
+        finalized = _finalize_table_block(block, document=document)
+        if finalized is None:
+            continue
+        finalized_table_blocks[index] = finalized
+        if finalized.page_no is not None and finalized.bbox is not None:
+            table_regions.append((finalized.page_no, finalized.bbox))
+
+    blocks: list[ContentBlock] = []
+    for index, block in enumerate(docling_blocks):
+        if block.kind == "table":
+            finalized_table = finalized_table_blocks.get(index)
+            if finalized_table is not None:
+                blocks.append(finalized_table)
+            continue
+
+        finalized_text = _finalize_text_like_block(
+            block,
+            document=document,
+            page_renders=page_renders,
         )
-    )
+        if finalized_text is None:
+            continue
+        if _is_text_block_nested_in_table(finalized_text, table_regions):
+            continue
+        blocks.append(finalized_text)
+
     return blocks
 
 
-def _build_text_blocks(
-    document: Any,
+def _finalize_text_like_block(
+    block: ContentBlock,
     *,
+    document: Any,
     page_renders: dict[int, _PageRender],
-) -> list[ContentBlock]:
-    blocks: list[ContentBlock] = []
+) -> ContentBlock | None:
+    if block.kind not in {"heading", "list_item", "text"}:
+        return None
 
-    for text_item in getattr(document, "texts", []):
-        text = getattr(text_item, "text", "").strip()
-        if not text:
-            continue
+    text = block.text.strip()
+    if not text:
+        return None
 
-        provenance = getattr(text_item, "prov", None) or []
-        first_prov = provenance[0] if provenance else None
-        page_no = (
-            getattr(first_prov, "page_no", None) if first_prov is not None else None
+    page_no = block.page_no
+    page_size = _resolve_page_size(document=document, page_no=page_no)
+    bbox = block.bbox
+    if bbox is not None and page_no is not None:
+        bbox = _refine_bbox_from_page_image(
+            bbox=bbox,
+            text=text,
+            page_render=page_renders.get(page_no),
         )
-        page_size = _resolve_page_size(document=document, page_no=page_no)
-        page_height = page_size[1] if page_size is not None else None
-        bbox = _build_bbox(first_prov, page_height=page_height)
-        if bbox is not None and page_no is not None:
-            bbox = _refine_bbox_from_page_image(
-                bbox=bbox,
-                text=text,
-                page_render=page_renders.get(page_no),
-            )
-            bbox = _normalize_bbox_to_page(bbox, page_size=page_size)
-            if bbox is None:
-                continue
-            if _is_noise_text_block(text=text, bbox=bbox, page_size=page_size):
-                continue
+        bbox = _normalize_bbox_to_page(bbox, page_size=page_size)
+        if bbox is None:
+            return None
+        if _is_noise_text_block(text=text, bbox=bbox, page_size=page_size):
+            return None
 
-        block_meta: dict[str, Any] = {}
-        if first_prov is not None:
-            charspan = getattr(first_prov, "charspan", None)
-            if charspan is not None:
-                block_meta["charspan"] = list(charspan)
+    return ContentBlock(
+        text=text,
+        page_no=page_no,
+        bbox=bbox,
+        kind=block.kind,
+        meta_info=dict(block.meta_info),
+    )
 
-        blocks.append(
-            ContentBlock(
-                text=text,
-                page_no=page_no,
-                bbox=bbox,
-                kind="text",
-                meta_info=block_meta,
-            )
+
+def _finalize_table_block(
+    block: ContentBlock,
+    *,
+    document: Any,
+) -> ContentBlock | None:
+    if block.kind != "table":
+        return None
+
+    bbox = block.bbox
+    if bbox is not None and block.page_no is not None:
+        bbox = _normalize_bbox_to_page(
+            bbox,
+            page_size=_resolve_page_size(document=document, page_no=block.page_no),
         )
+        if bbox is None:
+            return None
 
-    return blocks
-
-
-def _build_table_blocks(document: Any) -> list[ContentBlock]:
-    blocks: list[ContentBlock] = []
-
-    for table_item in getattr(document, "tables", []):
-        markdown = _export_table_markdown(table_item, document)
-        if not markdown:
-            continue
-
-        provenance = getattr(table_item, "prov", None) or []
-        first_prov = provenance[0] if provenance else None
-        page_no = (
-            getattr(first_prov, "page_no", None) if first_prov is not None else None
-        )
-        page_height = _resolve_page_height(document=document, page_no=page_no)
-        bbox = _build_bbox(first_prov, page_height=page_height)
-        table_data = getattr(table_item, "data", None)
-
-        blocks.append(
-            ContentBlock(
-                text=markdown,
-                page_no=page_no,
-                bbox=bbox,
-                kind="table",
-                meta_info={
-                    "row_count": getattr(table_data, "num_rows", None),
-                    "column_count": getattr(table_data, "num_cols", None),
-                    "format": "markdown",
-                },
-            )
-        )
-
-    return blocks
-
-
-def _export_table_markdown(table_item: Any, document: Any) -> str:
-    export_to_markdown = getattr(table_item, "export_to_markdown", None)
-    if export_to_markdown is None:
-        return ""
-
-    markdown = export_to_markdown(document)
-    return markdown.strip() if isinstance(markdown, str) else ""
+    return ContentBlock(
+        text=block.text,
+        page_no=block.page_no,
+        bbox=bbox,
+        kind=block.kind,
+        meta_info=dict(block.meta_info),
+    )
 
 
 def _is_text_block_nested_in_table(

@@ -13,7 +13,10 @@ from docx.text.paragraph import Paragraph
 
 from ocr_processor.impl.base import Processor
 from ocr_processor.impl.doc import docling_adapter
-from ocr_processor.markdown_export import build_markdown_from_blocks
+from ocr_processor.markdown_export import (
+    build_markdown_items_from_blocks,
+    build_meta_info_from_blocks,
+)
 from ocr_processor.schemas import ContentBlock, ProcessResult
 from ocr_processor.types import FileType
 
@@ -32,23 +35,35 @@ class DocProcessor(Processor):
             return ProcessResult(
                 file_type=resolved_type,
                 filename=filename,
+                md_list=[],
                 markdown="",
                 blocks=[],
+                meta_info=build_meta_info_from_blocks(
+                    [],
+                    engine="unsupported_doc",
+                    fallback_used=False,
+                ),
                 warnings=["Legacy .doc processing is not implemented yet."],
             )
 
         safe_filename = filename or "document.docx"
         warnings: list[str] = []
+        engine = "docling"
+        fallback_used = False
         try:
             conversion_result = docling_adapter.convert_with_docling(content, safe_filename)
             blocks = docling_adapter.build_blocks_from_docling_result(conversion_result)
             if not blocks:
                 blocks = self._build_docx_blocks_from_python_docx(content)
+                engine = "python_docx_fallback"
+                fallback_used = True
                 warnings.append(
                     "Docling DOCX pipeline returned no blocks; used python-docx fallback."
                 )
         except Exception as exc:
             blocks = self._build_docx_blocks_from_python_docx(content)
+            engine = "python_docx_fallback"
+            fallback_used = True
             warnings.extend(
                 [
                     "Docling DOCX pipeline failed; used python-docx fallback.",
@@ -59,11 +74,18 @@ class DocProcessor(Processor):
         if not blocks:
             warnings.append("No text blocks were extracted from the DOCX file.")
 
+        md_list = build_markdown_items_from_blocks(blocks)
         return ProcessResult(
             file_type=resolved_type,
             filename=filename,
-            markdown=build_markdown_from_blocks(blocks),
+            md_list=md_list,
+            markdown="\n\n".join(item for item in md_list if item).strip(),
             blocks=blocks,
+            meta_info=build_meta_info_from_blocks(
+                blocks,
+                engine=engine,
+                fallback_used=fallback_used,
+            ),
             warnings=warnings,
         )
 

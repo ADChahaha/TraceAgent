@@ -8,16 +8,16 @@
 - 项目名：`agent_gate`
 - 当前聚焦：`agent/` 服务的 OCR 预处理链路落地与稳定化，输出契约开始向 Markdown 优先的最小可用结构收敛
 - 主模块：`ocr_processor`（预处理/OCR）与 `file_extraction_agent`（抽取，待完善）
-- 主链路：`raw file -> ocr_processor -> ProcessResult(blocks + markdown) -> file_extraction_agent`
+- 主链路：`raw file -> ocr_processor -> ProcessResult(blocks + md_list + markdown) -> file_extraction_agent`
 - 当前支持：`pdf`、`docx`；`doc` 明确未实现
 - PDF 默认模型路径：`agent/ocr_processor/impl/pdf/artifacts/docling-models`
-- 当前状态：`ocr_processor` 关键用例可跑通，返回契约已收敛到 Markdown 优先的最小可用字段，PDF 表格会输出 `kind="table"` + Markdown，`docx` 在 Docling 失败时可回退到 zip/xml 文本抽取
+- 当前状态：`ocr_processor` 关键用例可跑通，返回契约已扩展到 `blocks + md_list + markdown + meta_info`，PDF 表格会输出 `kind="table"` + Markdown，`docx` 在 Docling 失败时可回退到 python-docx
 
 ## 1) 当前目标与边界
 
 `agent` 负责文档处理链路，分为两段：
 
-- `ocr_processor`：文档预处理/OCR，输出统一 `ProcessResult(blocks + markdown)`
+- `ocr_processor`：文档预处理/OCR，输出统一 `ProcessResult(blocks + md_list + markdown)`
 - `file_extraction_agent`：消费预处理结果做抽取（后续完善）
 
 系统职责边界：
@@ -40,6 +40,12 @@
 已确认并落地：PDF 的 Docling 本地模型目录按模块归属放在：
 
 - `agent/ocr_processor/impl/pdf/artifacts/docling-models`
+
+补充约定：
+
+- 该目录是本地安装位置，不随仓库提交
+- `agent/.gitignore` 已忽略 `artifacts/`
+- 运行方需要自行准备 Docling PDF artifacts，或设置 `DOCLING_ARTIFACTS_PATH`
 
 对应代码默认路径：
 
@@ -67,20 +73,23 @@
 
 - `file_type`
 - `filename`
+- `md_list`（按 block 切分的 Markdown 列表）
 - `markdown`（整篇标准化 Markdown，供前端展示）
 - `blocks`（每块至少 `text/page_no/bbox/meta_info`）
+- `meta_info`（`engine / fallback_used / kind_counts / has_table` 等摘要信息）
 - `warnings`
 
 当前这轮按 TDD 推进：
 
 - `red`：先新增最小字段契约测试，确认旧结构因 `processor_name/meta_info` 失败
-- `green`：移除顶层冗余字段，保留 `file_type / filename / markdown / blocks / warnings`
-- `refactor`：补齐 README、AGENT 协作约定、真实文件验证测试
+- `green`：移除顶层冗余字段，并补齐 `md_list / meta_info`
+- `refactor`：补齐 README、AGENT 协作约定、Docling block 转换层、真实文件验证测试
 
 ### PDF 处理链路
 
 - 首选：Docling + RapidOCR
 - 回退：pdfplumber
+- Docling item 会先转换成统一 `ContentBlock`，再做 PDF 专属 bbox 精修和噪声过滤
 - 当 Docling 返回的高层文本框高度异常小时，会基于页面图像做一次局部 bbox 精修
 - 如果本地 Docling artifacts 中包含 table structure 模型，则会开启表格结构分析，并把整表输出成 `kind="table"` block
 - table block 的 `text` 直接使用 Markdown，`meta_info` 中会补 `row_count` / `column_count`
@@ -88,15 +97,16 @@
 
 ### DOC/DOCX 处理链路
 
-- `docx`：默认 Docling；若 Docling 失败则回退到 zip/xml 文本抽取（text-only）
+- `docx`：默认 Docling；若 Docling 失败则回退到 python-docx 结构抽取
 - `doc`：显式返回空 blocks + warning
+- `docx` 在 Docling 成功时与 `pdf` 共用一套 Docling item -> block 转换逻辑
 
 ## 4) 测试状态（已验证）
 
 在 `agent-gate` conda 环境下，`ocr_processor` 测试通过：
 
 - 命令：`conda run -n agent-gate pytest tests/ocr_processor/test_processor.py -q`
-- 结果：`8 passed`
+- 结果：`10 passed`
 
 新增 PDF `docling_adapter` 单测：
 
@@ -108,6 +118,11 @@
 - 命令：`conda run -n agent-gate pytest tests/ocr_processor/test_markdown_export.py -q`
 - 结果：`2 passed`
 
+新增 Docling block 转换单测：
+
+- 命令：`conda run -n agent-gate pytest tests/ocr_processor/test_docling_blocks.py -q`
+- 结果：`1 passed`
+
 新增真实文件文档测试：
 
 - 命令：`conda run -n agent-gate pytest tests/ocr_processor/test_sample_documents.py -q`
@@ -117,8 +132,8 @@
 
 真实样本验证（2026-04-16）：
 
-- `实验报告-模板.docx` 当前可稳定产出 Markdown，实测约 `21` 个 blocks、`143` 字符 Markdown，包含“杭州电子科技大学”“实验报告”等模板标题
-- `daa1d114-5c04-45d2-82b3-16bb8dc57206.pdf` 当前可稳定产出 Markdown，实测约 `11` 个 blocks、`1701` 字符 Markdown，并保留教师名单表格的 Markdown 结构
+- `实验报告-模板.docx` 当前输出包含 `md_list` 和 `meta_info`，样本上因 Docling 失败会回退到 `python-docx`
+- `daa1d114-5c04-45d2-82b3-16bb8dc57206.pdf` 当前可稳定产出 Docling-based blocks，实测约 `9` 个 blocks、`9` 个 md items、`1695` 字符 Markdown，并保留教师名单表格的 Markdown 结构
 - PDF `bbox` 能力仍保留，但当前主展示方向已转为 Markdown 优先
 
 ## 5) 最近提交（与当前上下文相关）
@@ -145,6 +160,7 @@
 - 修改：`agent/README.md`
 - 修改：`agent/pyproject.toml`
 - 新增：`agent/ocr_processor/pyproject.toml`
+- 新增：`agent/ocr_processor/docling_blocks.py`
 - 修改：`agent/ocr_processor/impl/pdf/docling_adapter.py`
 - 新增：`agent/ocr_processor/impl/doc/docling_adapter.py`
 - 新增：`agent/ocr_processor/markdown_export.py`
@@ -155,6 +171,7 @@
 - 修改：`agent/tests/ocr_processor/test_processor.py`
 - 新增：`agent/tests/ocr_processor/test_markdown_export.py`
 - 新增：`agent/tests/ocr_processor/test_pdf_docling_adapter.py`
+- 新增：`agent/tests/ocr_processor/test_docling_blocks.py`
 - 新增：`agent/tests/ocr_processor/test_sample_documents.py`
 - 未跟踪：`agent/output/`（真实样本验证输出）
 - 未跟踪：`backend/`、`frontend/`
@@ -164,7 +181,7 @@
 ## 7) 下一个建议动作（按优先级）
 
 1. **细化 block 语义**：把 `heading / paragraph / list_item / table` 判别做稳，提升 Markdown 质量。
-2. **规划前端消费契约**：优先按 `markdown` 展示，`blocks` 作为抽取和辅助定位输入。
+2. **规划前端消费契约**：优先按 `md_list` 展示和高亮，`blocks` 作为抽取和辅助定位输入。
 3. **规划 legacy `.doc` 策略**：若要支持，优先选非平台专属的转换方案。
 
 ## 8) 快速上手命令

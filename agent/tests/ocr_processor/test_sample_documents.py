@@ -38,11 +38,14 @@ def test_sample_docx_exports_structured_markdown():
 
     assert result.file_type == FileType.DOCX
     assert len(result.blocks) >= 10
+    assert len(result.md_list) == len(result.blocks)
     assert len(result.markdown) >= 100
     assert "杭州电子科技大学" in result.markdown
     assert "实验报告" in result.markdown
     assert "| 题 目 |  |" in result.markdown
     assert "22\n\n2\n\n2" not in result.markdown
+    assert any(item.startswith("# ") for item in result.md_list)
+    assert result.meta_info["fallback_used"] is True
 
 
 def test_sample_pdf_renders_markdown_with_table_content():
@@ -52,6 +55,8 @@ def test_sample_pdf_renders_markdown_with_table_content():
 
     assert result.file_type == FileType.PDF
     assert len(result.blocks) >= 5
+    assert len(result.md_list) == len(result.blocks)
     assert len(result.markdown) >= 1000
     assert "优秀指导教师名单" in result.markdown
     assert "|   序号 | 学院" in result.markdown
+    assert result.meta_info["has_table"] is True

@@ -115,8 +115,10 @@ def test_process_result_exposes_minimal_public_fields():
     assert [field.name for field in fields(ProcessResult)] == [
         "file_type",
         "filename",
+        "md_list",
         "markdown",
         "blocks",
+        "meta_info",
         "warnings",
     ]
 
@@ -135,10 +137,14 @@ def test_process_infers_pdf_type_from_filename():
     assert result.file_type == FileType.PDF
     assert result.filename == "sample.pdf"
     assert result.blocks
+    assert result.md_list
+    assert result.md_list[0] == result.blocks[0].meta_info["md"]
     assert result.blocks[0].page_no == 1
     assert result.blocks[0].bbox is not None
     assert "Hello" in result.blocks[0].text
     assert "Hello PDF World" in result.markdown
+    assert result.meta_info["block_count"] == len(result.blocks)
+    assert result.meta_info["engine"] in {"docling_rapidocr", "pdfplumber_fallback"}
     assert hasattr(result, "warnings")
 
 
@@ -162,11 +168,14 @@ def test_process_infers_docx_type_from_filename(monkeypatch):
     assert result.file_type == FileType.DOCX
     assert result.filename == "sample.docx"
     assert result.blocks
+    assert result.md_list
     assert result.blocks[0].kind == "text"
     assert result.blocks[0].page_no is None
     assert result.blocks[0].bbox is None
     assert result.blocks[0].text == "Hello DOCX World"
+    assert result.md_list == ["Hello DOCX World"]
     assert result.markdown == "Hello DOCX World"
+    assert result.meta_info["block_count"] == len(result.blocks)
 
 
 def test_process_falls_back_when_docling_docx_conversion_fails(monkeypatch):
@@ -191,7 +200,9 @@ def test_process_falls_back_when_docling_docx_conversion_fails(monkeypatch):
     assert [block.text for block in result.blocks] == ["First paragraph", "Second paragraph"]
     assert all(block.page_no is None for block in result.blocks)
     assert all(block.bbox is None for block in result.blocks)
+    assert result.md_list == ["First paragraph", "Second paragraph"]
     assert result.markdown == "First paragraph\n\nSecond paragraph"
+    assert result.meta_info["fallback_used"] is True
     assert result.warnings == [
         "Docling DOCX pipeline failed; used python-docx fallback.",
         "docling docx conversion failed",
@@ -220,7 +231,9 @@ def test_process_falls_back_when_docling_docx_returns_no_blocks(monkeypatch):
     assert [block.text for block in result.blocks] == ["First paragraph", "Second paragraph"]
     assert all(block.page_no is None for block in result.blocks)
     assert all(block.bbox is None for block in result.blocks)
+    assert result.md_list == ["First paragraph", "Second paragraph"]
     assert result.markdown == "First paragraph\n\nSecond paragraph"
+    assert result.meta_info["fallback_used"] is True
     assert result.warnings == [
         "Docling DOCX pipeline returned no blocks; used python-docx fallback."
     ]
@@ -250,6 +263,7 @@ def test_process_docx_fallback_preserves_table_as_markdown(monkeypatch):
 
     assert result.file_type == FileType.DOCX
     assert "实验报告" in result.markdown
+    assert any(item.startswith("# ") for item in result.md_list)
     assert "| 题目 |  |" in result.markdown
     assert "| 姓名 | 张三 |" in result.markdown
 
@@ -290,7 +304,9 @@ def test_process_reports_legacy_doc_as_unimplemented():
     assert result.file_type == FileType.DOC
     assert result.filename == "sample.doc"
     assert result.blocks == []
+    assert result.md_list == []
     assert result.markdown == ""
+    assert result.meta_info["block_count"] == 0
     assert result.warnings == ["Legacy .doc processing is not implemented yet."]
 
 
@@ -305,6 +321,7 @@ def test_process_allows_explicit_type_override():
 
     assert result.file_type == FileType.PDF
     assert result.blocks
+    assert result.md_list
 
 
 def test_process_extracts_bbox_from_scanned_pdf():

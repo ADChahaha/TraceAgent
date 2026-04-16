@@ -6,7 +6,10 @@ import pdfplumber
 
 from ocr_processor.impl.base import Processor
 from ocr_processor.impl.pdf import docling_adapter
-from ocr_processor.markdown_export import build_markdown_from_blocks
+from ocr_processor.markdown_export import (
+    build_markdown_items_from_blocks,
+    build_meta_info_from_blocks,
+)
 from ocr_processor.schemas import BoundingBox, ContentBlock, ProcessResult
 from ocr_processor.types import FileType
 
@@ -28,11 +31,18 @@ class PdfProcessor(Processor):
                 pdf_bytes=content,
             )
             if blocks:
+                md_list = build_markdown_items_from_blocks(blocks)
                 return ProcessResult(
                     file_type=self.file_type,
                     filename=filename,
-                    markdown=build_markdown_from_blocks(blocks),
+                    md_list=md_list,
+                    markdown="\n\n".join(item for item in md_list if item).strip(),
                     blocks=blocks,
+                    meta_info=build_meta_info_from_blocks(
+                        blocks,
+                        engine="docling_rapidocr",
+                        fallback_used=False,
+                    ),
                     warnings=[],
                 )
         except Exception as exc:
@@ -84,11 +94,18 @@ class PdfProcessor(Processor):
         if not blocks:
             warnings.append("No text blocks were extracted from the PDF.")
 
+        md_list = build_markdown_items_from_blocks(blocks)
         return ProcessResult(
             file_type=self.file_type,
             filename=filename,
-            markdown=build_markdown_from_blocks(blocks),
+            md_list=md_list,
+            markdown="\n\n".join(item for item in md_list if item).strip(),
             blocks=blocks,
+            meta_info=build_meta_info_from_blocks(
+                blocks,
+                engine="pdfplumber_fallback",
+                fallback_used=True,
+            ),
             warnings=warnings,
         )
 

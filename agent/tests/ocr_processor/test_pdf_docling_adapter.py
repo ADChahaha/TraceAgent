@@ -111,11 +111,10 @@ def test_build_blocks_emits_table_block_with_markdown():
     assert table_block.text == markdown
     assert table_block.page_no == 2
     assert table_block.bbox == BoundingBox(x0=10.0, y0=20.0, x1=210.0, y1=120.0)
-    assert table_block.meta_info == {
-        "row_count": 2,
-        "column_count": 2,
-        "format": "markdown",
-    }
+    assert table_block.meta_info["row_count"] == 2
+    assert table_block.meta_info["column_count"] == 2
+    assert table_block.meta_info["format"] == "markdown"
+    assert table_block.meta_info["docling_label"] == "table"
 
 
 def test_build_blocks_suppresses_text_nested_inside_table_bbox():
