@@ -152,6 +152,12 @@ ContentBlock(
 - `docling_rapidocr`：Docling PDF 管线可用
 - `pdfplumber_fallback`：Docling 不可用或未提取到文本时的回退链路
 
+当前 PDF 映射中还做了一层轻量 bbox 修正：
+
+- 如果 Docling 返回的文本框高度异常小，会在对应页面图像中局部搜索深色像素，重新收缩出更接近真实文字区域的矩形框
+- 这一步主要改善扫描 PDF 上“框压在文字中线”的情况
+- 对表格页和碎片化 OCR，当前仍可能出现过碎的框，后续可继续做聚合/过滤
+
 当前 PDF 处理默认使用本地 `Docling` artifacts，约定路径为：
 
 - `agent/ocr_processor/impl/pdf/artifacts/docling-models`
