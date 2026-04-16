@@ -69,7 +69,7 @@ def test_process_infers_pdf_type_from_filename():
     assert "Hello" in result.blocks[0].text
     assert result.meta_info["source"] == "pdf"
     assert result.meta_info["byte_size"] == len(pdf_bytes)
-    assert result.meta_info["engine"] in {"docling", "pdfplumber_fallback"}
+    assert result.meta_info["engine"] in {"docling_rapidocr", "pdfplumber_fallback"}
 
 
 def test_process_infers_docx_type_from_filename(monkeypatch):

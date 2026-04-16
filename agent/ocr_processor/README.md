@@ -145,6 +145,12 @@ ContentBlock(
 
 当前实现优先使用 `Docling` 做转换；如果当前环境下 `Docling` 的 PDF 管线不可用，则回退到 `pdfplumber` 提取行级文本和边界框。
 
+当前 PDF 处理默认使用本地 `Docling` artifacts，约定路径为：
+
+- `agent/artifacts/docling-models`
+
+也可以通过环境变量 `DOCLING_ARTIFACTS_PATH` 覆盖。
+
 ### DOC / DOCX
 
 对于 `doc` 或 `docx`，可以先保证：
@@ -162,6 +168,7 @@ ContentBlock(
 当前实现中：
 
 - `docx` 使用 `Docling`
+- `pdf` 使用 `Docling + PyPdfium + RapidOCR`
 - `doc` 老格式暂时未实现，会返回空块和 warning
 
 ## 为什么不拆成两套 API
