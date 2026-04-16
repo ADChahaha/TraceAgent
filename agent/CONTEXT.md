@@ -6,7 +6,7 @@
 ## 0) 项目总览
 
 - 项目名：`agent_gate`
-- 当前聚焦：`agent/` 服务的 OCR 预处理链路落地与稳定化，PDF 薄框 bbox 已做首轮图像精修
+- 当前聚焦：`agent/` 服务的 OCR 预处理链路落地与稳定化，PDF 薄框 bbox 已做首轮图像精修，正在把表格升级为保留语义的 `table` blocks
 - 主模块：`ocr_processor`（预处理/OCR）与 `file_extraction_agent`（抽取，待完善）
 - 主链路：`raw file -> ocr_processor -> ProcessResult(blocks) -> file_extraction_agent`
 - 当前支持：`pdf`、`docx`；`doc` 明确未实现
@@ -95,6 +95,7 @@
 - 用户提供的扫描 PDF 第 1 页已成功输出 OCR blocks，并生成原页叠框图用于人工检查
 - 当前发现问题：Docling 高层 `document.texts[*].prov.bbox` 在扫描 PDF 上常出现“高度接近 0 的细框”，直接用于高亮效果较差
 - 当前进展：第 1 页“横线框”已明显改善；第 2 页这类表格页仍存在碎框/噪声框
+- 当前 TDD：正在补 `docling_adapter` 的失败测试，目标是让 PDF 表格输出 `kind="table"` + Markdown，并默认压掉表格区域里的碎文本框
 
 ## 5) 最近提交（与当前上下文相关）
 
@@ -125,9 +126,9 @@
 
 ## 7) 下一个建议动作（按优先级）
 
-1. **继续清理表格页碎框**：对过小框、单字符噪声框或同一行碎片框做聚合/过滤。
-2. **评估 fallback 粒度**：如果后续需要更强保真度，可继续补 header/footer/表格/文本框的抽取策略。
-3. **规划 legacy `.doc` 策略**：若要支持，优先选非平台专属的转换方案。
+1. **接入表格语义输出**：让 PDF processor 产出 `kind="table"` block，`text` 直接使用 Markdown。
+2. **抑制表格内碎文本**：默认不再输出落在表格区域内的普通 text blocks，改善前端高亮与下游语义。
+3. **继续清理非表格碎框**：对过小框、单字符噪声框或同一行碎片框做聚合/过滤。
 
 ## 8) 快速上手命令
 
