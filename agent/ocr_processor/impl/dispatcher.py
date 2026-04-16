@@ -1,9 +1,8 @@
 from __future__ import annotations
 
+from importlib import import_module
 from typing import Any
 
-from ocr_processor.impl.doc import DocProcessor
-from ocr_processor.impl.pdf import PdfProcessor
 from ocr_processor.schemas import ProcessResult
 from ocr_processor.types import FileType, UnsupportedFileTypeError, infer_file_type
 
@@ -30,8 +29,21 @@ class ProcessorDispatcher:
     def _select_processor(self, file_type: FileType):
         match file_type:
             case FileType.PDF:
-                return PdfProcessor()
+                processor_cls = _import_processor(
+                    "ocr_processor.impl.pdf.processor",
+                    "PdfProcessor",
+                )
+                return processor_cls()
             case FileType.DOC | FileType.DOCX:
-                return DocProcessor()
+                processor_cls = _import_processor(
+                    "ocr_processor.impl.doc.processor",
+                    "DocProcessor",
+                )
+                return processor_cls()
             case _:
                 raise UnsupportedFileTypeError(f"Unsupported file type: {file_type}")
+
+
+def _import_processor(module_name: str, class_name: str):
+    module = import_module(module_name)
+    return getattr(module, class_name)

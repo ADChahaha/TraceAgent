@@ -38,13 +38,23 @@ agent/
 └── file_extraction_agent/
 ```
 
-当前 `agent/pyproject.toml` 只服务 `file_extraction_agent`；`ocr_processor` 作为独立包使用自己的 `ocr_processor/pyproject.toml`。模块内部除 `__init__.py` 外统一使用绝对导入，避免相对导入层级扩散。
+当前 `agent/pyproject.toml` 负责 `agent` 这一层的 FastAPI 入口和 `routes/`，并且为了让 `agent-service` 单独安装后也能启动，当前会一并打包 `ocr_processor`。`ocr_processor` 仍保留自己的 `ocr_processor/pyproject.toml`，便于独立开发与测试。模块内部除 `__init__.py` 外统一使用绝对导入，避免相对导入层级扩散。
 
 其中：
 
 - `ocr_processor.processor.process(...)` 是业务接口
 - `routes/ocr_processor.py` 是 HTTP 适配层
 - `agent/main.py` 只负责创建 FastAPI app 并挂载 router
+- `docling` 相关依赖已改成按需加载，服务启动和基础健康检查不会因为 PDF OCR 依赖缺失而直接崩掉
+
+`agent` 根层运行时依赖当前由 [pyproject.toml](./agent/pyproject.toml) 管理，至少包括：
+
+- `docling`
+- `fastapi`
+- `pdfplumber`
+- `python-docx`
+- `python-multipart`
+- `uvicorn`
 
 ## 模块职责
 
@@ -99,6 +109,22 @@ agent/
 可以理解为：
 
 `raw file -> ocr_processor -> normalized markdown + blocks -> file_extraction_agent -> extraction result`
+
+## 启动方式
+
+在 `agent` 目录下可以直接启动 FastAPI 服务：
+
+```bash
+python -m uvicorn main:app --reload --port 8000
+```
+
+如果使用 conda 环境，建议先进入已安装依赖的环境，例如：
+
+```bash
+conda activate agent-gate
+cd ./agent
+python -m uvicorn main:app --reload --port 8000
+```
 
 ## 设计原则
 

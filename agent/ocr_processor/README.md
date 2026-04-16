@@ -46,7 +46,9 @@
 - route 层不反向定义业务层返回结构
 - 业务层不依赖 FastAPI 或 Pydantic
 - Python 调用方优先直接使用业务接口，HTTP 调用方通过 `agent/routes/` 访问
-- `ocr_processor/__init__.py` 只导出公共业务接口；内部实现模块放在 `impl/`，并通过惰性导出避免 import-time 拉起整条 OCR 依赖链
+- `ocr_processor/__init__.py` 只导出公共业务接口；内部实现模块放在 `impl/`
+- 包根目录不再导出 `build_markdown_from_blocks` 这类内部 helper
+- `docling` 相关模块按需加载，避免服务启动、`/healthz` 或基础导入阶段被 OCR 依赖阻塞
 
 ## Pipeline
 

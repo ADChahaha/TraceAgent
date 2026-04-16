@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
@@ -9,8 +10,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from ocr_processor.impl.base import InvalidFileObjectError
-from ocr_processor.impl.pdf import docling_adapter as pdf_docling_adapter
-from ocr_processor.processor import process as process_document
 from ocr_processor.types import FileType, UnsupportedFileTypeError
 
 router = APIRouter(tags=["ocr-processor"])
@@ -72,7 +71,7 @@ async def healthz() -> HealthResponse:
 
 @router.get("/v1/ocr/capabilities", response_model=CapabilitiesResponse)
 async def get_capabilities() -> CapabilitiesResponse:
-    artifacts_path = pdf_docling_adapter.resolve_docling_artifacts_path()
+    artifacts_path = _resolve_docling_artifacts_path()
     return CapabilitiesResponse(
         supported_file_types=[item.value for item in FileType],
         implemented_file_types=[FileType.PDF.value, FileType.DOCX.value],
@@ -93,7 +92,7 @@ async def process_ocr(
         file=file.file,
     )
     try:
-        result = await run_in_threadpool(process_document, file_proxy, file_type)
+        result = await run_in_threadpool(_process_document, file_proxy, file_type)
     except (InvalidFileObjectError, UnsupportedFileTypeError) as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -107,6 +106,16 @@ def _stringify_path(path: Path | None) -> str | None:
     if path is None:
         return None
     return str(path)
+
+
+def _resolve_docling_artifacts_path() -> Path | None:
+    pdf_docling_adapter = import_module("ocr_processor.impl.pdf.docling_adapter")
+    return pdf_docling_adapter.resolve_docling_artifacts_path()
+
+
+def _process_document(file_obj, file_type: str | None):
+    process_document = import_module("ocr_processor.processor").process
+    return process_document(file_obj, file_type)
 
 
 def _build_process_response(result) -> ProcessResponse:

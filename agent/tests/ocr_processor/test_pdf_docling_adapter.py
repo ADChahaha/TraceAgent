@@ -54,6 +54,43 @@ def test_refine_bbox_keeps_regular_box_without_adjustment():
     assert refined == regular_bbox
 
 
+def test_convert_pdf_with_docling_accepts_full_module_tuple(monkeypatch, tmp_path):
+    created_streams = []
+
+    class FakeDocumentStream:
+        def __init__(self, *, name: str, stream):
+            self.name = name
+            self.stream = stream
+            created_streams.append(self)
+
+    class FakeConverter:
+        def convert(self, document_stream):
+            return document_stream
+
+    monkeypatch.setattr(docling_adapter, "resolve_docling_artifacts_path", lambda: tmp_path)
+    monkeypatch.setattr(
+        docling_adapter,
+        "_load_docling_pdf_modules",
+        lambda: (
+            FakeDocumentStream,
+            object(),
+            object(),
+            object(),
+            object(),
+            object(),
+            object(),
+        ),
+    )
+    monkeypatch.setattr(docling_adapter, "_get_pdf_converter", lambda _: FakeConverter())
+
+    result = docling_adapter.convert_pdf_with_docling(b"%PDF-1.4", "sample.pdf")
+
+    assert len(created_streams) == 1
+    assert created_streams[0].name == "sample.pdf"
+    assert created_streams[0].stream.read() == b"%PDF-1.4"
+    assert result is created_streams[0]
+
+
 def _build_provenance(*, page_no: int, bbox: tuple[float, float, float, float]):
     return SimpleNamespace(
         page_no=page_no,

@@ -34,12 +34,16 @@
 
 - 除 `__init__.py` 外，模块内部统一使用绝对导入
 - `ocr_processor` 使用独立的 `agent/ocr_processor/pyproject.toml`
-- `agent/pyproject.toml` 仅保留 `file_extraction_agent`
+- `agent/pyproject.toml` 负责 `agent` 层 FastAPI 入口依赖与 `routes` 打包，并同步打包 `ocr_processor`，保证 `agent-service` 单独安装时也能启动
 - `ocr_processor` 的 FastAPI 入口移到包外的 `agent/routes/`，避免把 HTTP 层塞回业务包
 - `docling_blocks.py` 和 `markdown_export.py` 已收进 `ocr_processor/impl/`，明确它们属于内部实现逻辑
 - `ocr_processor` 同时保留两套并行接口：业务层 `process(...)` 和 route 层 `routes/ocr_processor.py`
 - route 层只负责请求/响应映射，不直接把业务 dataclass 当成 HTTP 契约
 - `ocr_processor/__init__.py` 改为惰性导出，避免 import 内部小模块时被迫加载整条 OCR 处理链和 `docling` 依赖
+- `processor/dispatcher/docling_adapter` 现在统一按需导入 `docling`，保证 `main`、route 层和健康检查不被 OCR 依赖劫持
+- `ocr_processor` 根包不再导出 `build_markdown_from_blocks` 这类内部 helper
+- `agent/pyproject.toml` 现已补齐 `fastapi` / `python-multipart` / `uvicorn`，`agent-gate` 环境已通过 editable install 安装 `agent-service` 与 `ocr-processor`
+- `agent-service` 当前同时声明 `docling` / `pdfplumber` / `python-docx` 依赖，并把 `main.py` 与 `ocr_processor` 一起纳入构建产物，避免单独安装后缺包
 
 ### PDF artifacts 路径归属
 
@@ -177,7 +181,17 @@
 - 删除：`ocr_processor/docling_blocks.py`
 - 删除：`ocr_processor/markdown_export.py`
 - 调整：`main.py` 改为从 `routes` 挂载路由
+- 调整：`agent/pyproject.toml` 增加 `fastapi` / `python-multipart` 依赖，并把 `routes` 纳入打包
+- 调整：`agent/pyproject.toml` 进一步增加 `uvicorn` 依赖，用于直接启动本地 API 服务
+- 调整：`agent/pyproject.toml` 把 `ocr_processor`、其子包和 `main.py` 一并纳入 `agent-service` 构建产物
+- 调整：`agent/pyproject.toml` 补齐 `docling` / `pdfplumber` / `python-docx` 依赖，保证 `agent-service` 单独安装即可运行 OCR 链路
 - 调整：`ocr_processor/pyproject.toml` 去掉不再需要的 `api` extra
+- 调整：`processor.py`、`impl/dispatcher.py`、`impl/doc|pdf/__init__.py` 改为懒导入，切断启动时对 `docling` 的硬依赖
+- 调整：`impl/doc/docling_adapter.py`、`impl/pdf/docling_adapter.py` 改为函数内导入 `docling`
+- 调整：`routes/ocr_processor.py` 不再在模块加载时直接 import OCR 主链路或 PDF Docling adapter
+- 调整：`ocr_processor/__init__.py` 去掉内部 markdown helper 的公共导出
+- 修复：`impl/pdf/docling_adapter.py` 中 `convert_pdf_with_docling()` 对 `_load_docling_pdf_modules()` 的错误解包，恢复 Docling PDF 主链路
+- 新增：`tests/ocr_processor/test_pdf_docling_adapter.py` 回归测试，覆盖 `convert_pdf_with_docling()` 可接受完整模块元组返回值
 - 调整：`routes/ocr_processor.py` 通过显式适配函数把业务结果转换为 HTTP response，不直接复用业务 dataclass 作为接口契约
 - 调整：`ocr_processor/README.md` 目录结构和安装说明
 - 调整：`ocr_processor` 内部对 `docling_blocks` / `markdown_export` 的引用切到 `impl/`
@@ -212,6 +226,29 @@
 - 新增：`agent/tests/ocr_processor/test_sample_documents.py`
 - 未跟踪：`agent/output/`（真实样本验证输出）
 - 未跟踪：`backend/`、`frontend/`
+
+本轮针对 P1/P3 的附加验证：
+
+- 命令：`python -c "import main; print('main import ok without docling')"`
+- 结果：通过，证明在无 `docling` 环境下服务入口仍可导入
+- 命令：`pytest tests/test_api.py -q`
+- 结果：`4 passed`
+- 命令：`pytest tests/ocr_processor/test_uploadfile_compat.py -q`
+- 结果：`2 passed`
+
+本轮针对 PDF Docling 回归的附加验证：
+
+- 命令：`conda run -n agent-gate pytest tests/ocr_processor/test_pdf_docling_adapter.py -q`
+- 结果：`7 passed`
+- 命令：`conda run -n agent-gate pytest tests/test_api.py -q`
+- 结果：`4 passed`
+
+本轮针对 `agent-service` 打包完整性的附加验证：
+
+- 命令：`python -m pip install ./agent --no-deps --no-build-isolation -t /tmp/agent_service_pkg_test`
+- 结果：通过，可构建并安装 `agent-service` wheel
+- 命令：`PYTHONPATH=/tmp/agent_service_pkg_test python -c "import main; import routes.ocr_processor; import ocr_processor; print('installed package import ok')"`
+- 结果：通过，说明 `main/routes/ocr_processor/ocr_processor` 已随 `agent-service` 一起打包
 
 进行下一次提交时，建议只按目标文件精确 `git add`，避免误带无关改动。
 

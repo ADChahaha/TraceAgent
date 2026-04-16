@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from importlib import import_module
 
-from ocr_processor.impl.markdown_export import build_markdown_from_blocks
 from ocr_processor.schemas import BoundingBox, ContentBlock, ProcessResult
 from ocr_processor.types import FileType
 
@@ -17,19 +16,18 @@ __all__ = [
     "Processor",
     "ProcessorDispatcher",
     "UnsupportedFileTypeError",
-    "build_markdown_from_blocks",
     "infer_file_type",
     "process",
 ]
 
 _LAZY_EXPORTS = {
-    "DocProcessor": ("ocr_processor.processor", "DocProcessor"),
-    "InvalidFileObjectError": ("ocr_processor.processor", "InvalidFileObjectError"),
-    "PdfProcessor": ("ocr_processor.processor", "PdfProcessor"),
-    "Processor": ("ocr_processor.processor", "Processor"),
-    "ProcessorDispatcher": ("ocr_processor.processor", "ProcessorDispatcher"),
-    "UnsupportedFileTypeError": ("ocr_processor.processor", "UnsupportedFileTypeError"),
-    "infer_file_type": ("ocr_processor.processor", "infer_file_type"),
+    "DocProcessor": ("ocr_processor.impl.doc.processor", "DocProcessor"),
+    "InvalidFileObjectError": ("ocr_processor.impl.base", "InvalidFileObjectError"),
+    "PdfProcessor": ("ocr_processor.impl.pdf.processor", "PdfProcessor"),
+    "Processor": ("ocr_processor.impl.base", "Processor"),
+    "ProcessorDispatcher": ("ocr_processor.impl.dispatcher", "ProcessorDispatcher"),
+    "UnsupportedFileTypeError": ("ocr_processor.types", "UnsupportedFileTypeError"),
+    "infer_file_type": ("ocr_processor.types", "infer_file_type"),
     "process": ("ocr_processor.processor", "process"),
 }
 

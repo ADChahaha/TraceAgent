@@ -4,15 +4,10 @@ import os
 import re
 from dataclasses import dataclass
 from functools import lru_cache
+from importlib import import_module
 from io import BytesIO
 from pathlib import Path
 from typing import Any
-
-from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
-from docling.datamodel.base_models import DocumentStream, InputFormat
-from docling.datamodel.pipeline_options import PdfPipelineOptions, RapidOcrOptions
-from docling.document_converter import DocumentConverter, PdfFormatOption
-import pypdfium2 as pdfium
 
 from ocr_processor.impl.docling_blocks import build_blocks_from_docling_document
 from ocr_processor.schemas import BoundingBox, ContentBlock
@@ -44,6 +39,7 @@ class _PageRender:
 
 
 def convert_pdf_with_docling(content: bytes, filename: str) -> Any:
+    document_stream_cls, *_ = _load_docling_pdf_modules()
     artifacts_path = resolve_docling_artifacts_path()
     if artifacts_path is None or not artifacts_path.exists():
         raise FileNotFoundError(
@@ -52,7 +48,7 @@ def convert_pdf_with_docling(content: bytes, filename: str) -> Any:
         )
 
     converter = _get_pdf_converter(str(artifacts_path))
-    return converter.convert(DocumentStream(name=filename, stream=BytesIO(content)))
+    return converter.convert(document_stream_cls(name=filename, stream=BytesIO(content)))
 
 
 def resolve_docling_artifacts_path() -> Path | None:
@@ -63,12 +59,21 @@ def resolve_docling_artifacts_path() -> Path | None:
 
 
 @lru_cache(maxsize=2)
-def _get_pdf_converter(artifacts_path: str) -> DocumentConverter:
+def _get_pdf_converter(artifacts_path: str):
+    (
+        _document_stream_cls,
+        input_format_cls,
+        pdf_pipeline_options_cls,
+        rapid_ocr_options_cls,
+        document_converter_cls,
+        pdf_format_option_cls,
+        pypdfium_backend_cls,
+    ) = _load_docling_pdf_modules()
     artifacts_root = Path(artifacts_path)
-    pipeline_options = PdfPipelineOptions(
+    pipeline_options = pdf_pipeline_options_cls(
         artifacts_path=artifacts_root,
         do_ocr=True,
-        ocr_options=RapidOcrOptions(backend="torch"),
+        ocr_options=rapid_ocr_options_cls(backend="torch"),
         do_table_structure=_has_table_structure_artifacts(artifacts_root),
         do_code_enrichment=False,
         do_formula_enrichment=False,
@@ -76,11 +81,11 @@ def _get_pdf_converter(artifacts_path: str) -> DocumentConverter:
         do_picture_description=False,
         do_chart_extraction=False,
     )
-    return DocumentConverter(
+    return document_converter_cls(
         format_options={
-            InputFormat.PDF: PdfFormatOption(
+            input_format_cls.PDF: pdf_format_option_cls(
                 pipeline_options=pipeline_options,
-                backend=PyPdfiumDocumentBackend,
+                backend=pypdfium_backend_cls,
             ),
         }
     )
@@ -369,6 +374,7 @@ def _build_bbox(
 
 
 def _render_pdf_page_images(pdf_bytes: bytes) -> dict[int, _PageRender]:
+    pdfium = import_module("pypdfium2")
     pdf_document = pdfium.PdfDocument(BytesIO(pdf_bytes))
     page_renders: dict[int, _PageRender] = {}
 
@@ -385,6 +391,23 @@ def _render_pdf_page_images(pdf_bytes: bytes) -> dict[int, _PageRender]:
         )
 
     return page_renders
+
+
+@lru_cache(maxsize=1)
+def _load_docling_pdf_modules():
+    base_models_module = import_module("docling.datamodel.base_models")
+    pipeline_options_module = import_module("docling.datamodel.pipeline_options")
+    document_converter_module = import_module("docling.document_converter")
+    pypdfium_backend_module = import_module("docling.backend.pypdfium2_backend")
+    return (
+        getattr(base_models_module, "DocumentStream"),
+        getattr(base_models_module, "InputFormat"),
+        getattr(pipeline_options_module, "PdfPipelineOptions"),
+        getattr(pipeline_options_module, "RapidOcrOptions"),
+        getattr(document_converter_module, "DocumentConverter"),
+        getattr(document_converter_module, "PdfFormatOption"),
+        getattr(pypdfium_backend_module, "PyPdfiumDocumentBackend"),
+    )
 
 
 def _refine_bbox_from_page_image(
