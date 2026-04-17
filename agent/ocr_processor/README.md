@@ -102,7 +102,7 @@ file_obj
 
 ### 2. PDF pipeline
 
-PDF 当前优先走 Docling，失败时回退到 `pdfplumber`。
+PDF 当前只走 Docling，不再回退到 `pdfplumber`。
 
 ```text
 pdf bytes
@@ -116,25 +116,13 @@ pdf bytes
   -> ProcessResult
 ```
 
-如果 Docling 异常或没有返回文本块，则回退到：
-
-```text
-pdf bytes
-  -> pdfplumber.open(...)
-  -> extract_words(...)
-  -> 按行聚合
-  -> 生成 ContentBlock
-  -> markdown_export.*
-  -> ProcessResult(warnings + fallback_used=True)
-```
-
 当前 PDF 链路的几个关键行为：
 
 - 主链路引擎标记为 `docling_rapidocr`
-- fallback 引擎标记为 `pdfplumber_fallback`
 - 如果存在表格结构模型，表格会以 `kind="table"` + Markdown 形式输出
 - 对落在表格区域内的普通文本块会做抑制，减少重复噪声
 - 会尽量保留 `page_no + bbox`
+- 如果 Docling 异常或没有返回文本块，PDF 处理会直接失败，不再静默回退到其他 OCR 实现
 
 ### 3. DOCX pipeline
 

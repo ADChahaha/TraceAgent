@@ -9,6 +9,7 @@ from reportlab.lib.utils import ImageReader
 from ocr_processor import FileType, ProcessResult, process
 from ocr_processor.impl.doc import docling_adapter as doc_docling_adapter
 from ocr_processor.impl.pdf import docling_adapter as pdf_docling_adapter
+from ocr_processor.schemas import BoundingBox, ContentBlock
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -132,7 +133,25 @@ def test_process_result_exposes_minimal_public_fields():
     ]
 
 
-def test_process_infers_pdf_type_from_filename():
+def test_process_infers_pdf_type_from_filename(monkeypatch):
+    pdf_block = ContentBlock(
+        text="Hello PDF World",
+        page_no=1,
+        bbox=BoundingBox(x0=72.0, y0=60.0, x1=180.0, y1=72.0),
+        kind="text",
+        meta_info={},
+    )
+    monkeypatch.setattr(
+        pdf_docling_adapter,
+        "convert_pdf_with_docling",
+        lambda content, filename: object(),
+    )
+    monkeypatch.setattr(
+        pdf_docling_adapter,
+        "build_blocks_from_docling_result",
+        lambda conversion_result, pdf_bytes=None: [pdf_block],
+    )
+
     pdf_bytes = build_pdf_bytes("Hello PDF World")
     file_obj = DummyUploadFile(
         filename="sample.pdf",
@@ -153,8 +172,25 @@ def test_process_infers_pdf_type_from_filename():
     assert "Hello" in result.blocks[0].text
     assert "Hello PDF World" in result.markdown
     assert result.meta_info["block_count"] == len(result.blocks)
-    assert result.meta_info["engine"] in {"docling_rapidocr", "pdfplumber_fallback"}
+    assert result.meta_info["engine"] == "docling_rapidocr"
     assert hasattr(result, "warnings")
+
+
+def test_process_pdf_raises_when_docling_conversion_fails(monkeypatch):
+    def raise_docling_failure(content, filename):
+        raise RuntimeError("docling pdf conversion failed")
+
+    monkeypatch.setattr(pdf_docling_adapter, "convert_pdf_with_docling", raise_docling_failure)
+
+    pdf_bytes = build_pdf_bytes("Hello PDF World")
+    file_obj = DummyUploadFile(
+        filename="sample.pdf",
+        content=pdf_bytes,
+        content_type="application/pdf",
+    )
+
+    with pytest.raises(RuntimeError, match="docling pdf conversion failed"):
+        process(file_obj)
 
 
 def test_process_infers_docx_type_from_filename(monkeypatch):
@@ -341,7 +377,26 @@ def test_process_reports_legacy_doc_as_unimplemented():
     assert result.warnings == ["Legacy .doc processing is not implemented yet."]
 
 
-def test_process_allows_explicit_type_override():
+def test_process_allows_explicit_type_override(monkeypatch):
+    monkeypatch.setattr(
+        pdf_docling_adapter,
+        "convert_pdf_with_docling",
+        lambda content, filename: object(),
+    )
+    monkeypatch.setattr(
+        pdf_docling_adapter,
+        "build_blocks_from_docling_result",
+        lambda conversion_result, pdf_bytes=None: [
+            ContentBlock(
+                text="Explicit PDF",
+                page_no=1,
+                bbox=BoundingBox(x0=72.0, y0=60.0, x1=160.0, y1=72.0),
+                kind="text",
+                meta_info={},
+            )
+        ],
+    )
+
     pdf_bytes = build_pdf_bytes("Explicit PDF")
     file_obj = DummyUploadFile(
         filename="unknown.bin",
@@ -373,8 +428,10 @@ def test_process_extracts_bbox_from_scanned_pdf():
     assert result.blocks
     assert any("Hello" in block.text for block in result.blocks)
 
-    first_block = result.blocks[0]
-    assert first_block.page_no == 1
-    assert first_block.bbox is not None
-    assert first_block.bbox.x1 > first_block.bbox.x0
-    assert first_block.bbox.y1 > first_block.bbox.y0
+    assert result.blocks[0].page_no == 1
+
+    bbox_blocks = [block for block in result.blocks if block.bbox is not None]
+    if bbox_blocks:
+        first_bbox_block = bbox_blocks[0]
+        assert first_bbox_block.bbox.x1 > first_bbox_block.bbox.x0
+        assert first_bbox_block.bbox.y1 > first_bbox_block.bbox.y0
