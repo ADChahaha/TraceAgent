@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "document-processor"
+version = "0.1.0"
+description = "Document normalization package for agent_gate."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["docling>=2.88.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "Pillow>=10.0", "reportlab>=4.0", "python-docx>=1.1"]
+
+[tool.setuptools]
+packages = [
+    "document_processor",
+    "document_processor.impl",
+    "document_processor.impl.doc",
+    "document_processor.impl.pdf",
+]
+
+[tool.setuptools.package-dir]
+document_processor = "."
+"document_processor.impl" = "impl"
+"document_processor.impl.doc" = "impl/doc"
+"document_processor.impl.pdf" = "impl/pdf"
