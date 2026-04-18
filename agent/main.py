@@ -1,16 +1,21 @@
-"""提供 OCR 处理和文档抽取相关 API。"""
+"""Build the agent service FastAPI app.
+
+Purpose: assemble the HTTP routers exposed by the agent service.
+Input/Output: takes no runtime input and returns a configured `FastAPI` app.
+How to use: import `app` for ASGI serving or call `create_app()` in tests/startup code.
+"""
 
 from fastapi import FastAPI
 
-from routes import ocr_processor_router
+from routes import document_processor_router
 
 
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Agent Service",
-        description="OCR 处理和文档抽取相关 API。",
+        description="文档处理和文档抽取相关 API。",
     )
-    app.include_router(ocr_processor_router)
+    app.include_router(document_processor_router)
     return app
 
 

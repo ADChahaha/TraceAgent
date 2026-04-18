@@ -6,6 +6,24 @@ Agent Gate 是一个文档处理系统，计划拆分为前端、后端和 agent
 
 它用于承接文档上传、任务处理、结果查看、人工复核和处理留痕，形成一套职责清晰、方便扩展的服务结构。
 
+## Quickstart
+
+开始前，建议先在本地创建一个名为 `agent-gate` 的 Conda 环境，并在后续开发或运行时始终使用它：
+
+```bash
+conda create -n agent-gate python=3.11 -y
+conda activate agent-gate
+```
+
+进入仓库后，再按需要安装对应子项目依赖。
+
+例如启动 `agent service` 前：
+
+```bash
+cd agent
+pip install -e ".[dev]"
+```
+
 ## 系统架构
 
 ### 前端 `frontend`

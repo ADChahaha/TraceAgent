@@ -60,6 +60,7 @@ file_obj
   - 文件类型分发
 - `impl/pdf/`
   - PDF 处理和 Docling 适配
+  - 缺少本地 Docling artifacts 时负责触发首次自动下载
 - `impl/doc/`
   - DOCX 的 Docling 处理
 - `impl/docling_blocks.py`
