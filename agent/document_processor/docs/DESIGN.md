@@ -54,13 +54,44 @@ file_obj
 - `impl/` 内部固定接口类
 - 抽象基类
 - 注册机制
+- `PDF -> docling -> markdown + blocks` 的真实处理链路
 - `DOCX -> python-docx -> markdown + blocks` 的真实处理链路
 
-后续再补的部分是：
+后续还可以继续细化的部分是：
 
-- `pdf` 的真实解析算法
-- block 标准化细节
+- `pdf` block 标准化细节
+- `pdf` 表格、图片等特殊节点的归一化策略
 - markdown 导出细节
+
+## PDF 实现
+
+当前 `PDF` 已经落地为单一路径实现，入口在 `impl/pdf/processor.py`。
+
+实现步骤：
+
+```text
+调用方传入 pdf file_obj
+  -> `document_processor.process(...)` 先校验 read() 并解析出 FileType.PDF
+  -> `InternalProcessorInterface` 从默认注册表里拿到 `PdfProcessor`
+  -> `PdfProcessor` 先检查 `DOCLING_CACHE_DIR` / `RAPIDOCR_MODEL_ROOT` / `HF_HOME` 一类环境变量；如果调用方没配，就自动落到 `impl/pdf/models/` 下的模型目录
+  -> `PdfProcessor` 再延迟导入 docling 运行时，避免 import 阶段就绑定到开发者本机默认缓存路径
+  -> 初始化 `DocumentConverter` 时显式配置 `RapidOcrOptions(backend="torch", lang=["chinese", "english"], rapidocr_params={"Global.model_root_dir": ...})`，把中文 PDF 的文字抽取固定到同一条 OCR 路径，并把 RapidOCR 模型下载到 `impl/pdf/models/rapidocr`
+  -> `PdfProcessor` 读取 file_obj 的二进制内容，并从 filename/name 推出输出文件名，没有就回退成 `document.pdf`
+  -> 把二进制包装成 `DocumentStream(name, BytesIO(...))`
+  -> 调用 `docling.document_converter.DocumentConverter.convert(...)`
+  -> 从 `conversion_result.document.export_to_markdown()` 提取整篇 markdown
+  -> 遍历 `document.iterate_items()`，把 title/section_header/text/table 等节点压平成 `ContentBlock`
+  -> 从 provenance 提取 page_no 和 bbox
+  -> 返回 `ProcessResult(file_type, filename, md_list, markdown, blocks, meta_info)`
+```
+
+这里的设计约束是：
+
+- `PDF` 只走 `docling` 这一条解析链路
+- 如果 `docling` 失败，就直接向上抛错，不做任何兜底解析
+- 如果调用方没有显式配置模型目录，默认把 docling / Hugging Face / RapidOCR 相关下载产物都放到 `impl/pdf/models/` 下
+- PDF 文字抽取当前显式使用 `RapidOCR`，不再依赖 `docling` 的自动 OCR 选择
+- 当前 block 归一化优先保留文本、页码和 bbox，不在这一层扩展额外业务字段
 
 ## DOCX 实现
 
@@ -104,7 +135,8 @@ file_obj
   - 具体文件处理器继承 `BaseDocumentProcessor`
   - 由内部固定接口类自己维护处理器注册机制
 - `impl/pdf/`
-  - 预留给 PDF 真实处理器实现
+  - `processor.py`：基于 `docling` 的 PDF 处理器
+  - 只负责 `PDF` 的二进制读取、`DocumentStream` 包装、docling 调用和 block 归一化
 - `impl/docx/`
   - `processor.py`：基于 `python-docx` 的 DOCX 处理器
   - 只负责 `DOCX` 的二进制读取、段落/表格遍历、markdown 导出和 block 归一化

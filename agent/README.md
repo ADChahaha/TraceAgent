@@ -24,6 +24,36 @@ conda activate agent-gate
 pip install -e .
 ```
 
+### PDF 模型目录
+
+`document_processor` 的 PDF 路径默认使用 `docling + RapidOCR`。为了让模型下载产物跟 `impl/pdf` 这块能力放在一起，同时避免散落到每台机器自己的默认用户目录，当前实现会在运行时自动把目录收口到 [`agent/document_processor/impl/pdf/models`](./agent/document_processor/impl/pdf/models)：
+
+```text
+./agent/document_processor/impl/pdf/models
+  -> docling/
+  -> huggingface/
+  -> rapidocr/
+```
+
+对应逻辑是：
+
+```text
+首次创建 `PdfProcessor`
+  -> 先检查调用方是否显式设置了 `DOCLING_CACHE_DIR`
+  -> 再检查是否显式设置了 `RAPIDOCR_MODEL_ROOT`
+  -> 再检查是否显式设置了 `HF_HOME` / `HF_HUB_CACHE` / `HUGGINGFACE_HUB_CACHE`
+  -> 如果都没设置，就自动把模型目录指到 `impl/pdf/models/`
+  -> 然后才延迟导入 docling 并初始化 `DocumentConverter`
+```
+
+如果你要覆盖默认位置，可以在启动前自己设置环境变量：
+
+```bash
+export DOCLING_CACHE_DIR=/your/path/docling
+export RAPIDOCR_MODEL_ROOT=/your/path/rapidocr
+export HF_HOME=/your/path/huggingface
+```
+
 ### Usage
 
 在 `agent/` 目录下执行：

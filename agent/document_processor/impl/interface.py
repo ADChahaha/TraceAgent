@@ -19,7 +19,6 @@ from __future__ import annotations
 from typing import Callable
 
 from document_processor.impl.base import BaseDocumentProcessor
-from document_processor.schemas import ProcessResult
 from document_processor.types import FileType
 
 
@@ -89,27 +88,10 @@ class InternalProcessorInterface:
         if cls._defaults_registered:
             return
 
-        class _PlaceholderStructuredProcessor(BaseDocumentProcessor):
-            file_type: FileType
-
-            def _process(self, file_obj):
-                filename = getattr(file_obj, "filename", None) or getattr(
-                    file_obj, "name", None
-                )
-                return ProcessResult(
-                    file_type=self.file_type.value,
-                    filename=filename,
-                    warnings=[
-                        f"{self.file_type.value} processor is registered, but the concrete parsing backend is not implemented yet."
-                    ],
-                )
-
-        @cls.register(FileType.PDF, replace=False)
-        class PdfProcessor(_PlaceholderStructuredProcessor):
-            file_type = FileType.PDF
-
         from document_processor.impl.docx.processor import DocxProcessor
+        from document_processor.impl.pdf.processor import PdfProcessor
 
+        cls.register(FileType.PDF, replace=False)(PdfProcessor)
         cls.register(FileType.DOCX, replace=False)(DocxProcessor)
 
         cls._defaults_registered = True

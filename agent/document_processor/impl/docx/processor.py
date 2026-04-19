@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+from pathlib import Path
 
 from docx import Document
 from docx.table import Table
@@ -72,7 +73,7 @@ class DocxProcessor(BaseDocumentProcessor):
     def _resolve_filename(file_obj) -> str:
         filename = getattr(file_obj, "filename", None) or getattr(file_obj, "name", None)
         if filename:
-            return str(filename)
+            return Path(str(filename)).name
         return "document.docx"
 
     @staticmethod
