@@ -41,32 +41,51 @@
 ```text
 file_obj
   -> document_processor.process(...)
-  -> ProcessorDispatcher
-  -> PdfProcessor / DocProcessor
-  -> normalized ContentBlock list
-  -> markdown export
+  -> 外层完成输入校验和文件类型推断
+  -> impl/ 内部固定接口类 `InternalProcessorInterface`
+  -> 接口类内部注册表按 FileType 选择处理器
+  -> `BaseDocumentProcessor` 子类
   -> ProcessResult
 ```
+
+当前已经落地到代码里的部分是：
+
+- 外层 `process(...)`
+- `impl/` 内部固定接口类
+- 抽象基类
+- 注册机制
+
+后续再补的部分是：
+
+- `pdf/docx` 的真实解析算法
+- block 标准化细节
+- markdown 导出细节
 
 ## 目录职责
 
 - `processor.py`
   - 对外统一入口
+  - 负责外层编排
+  - 负责输入校验和文件类型推断
+  - 把处理请求转交给 `impl/` 内部固定接口类
 - `schemas.py`
   - 统一结果结构
 - `types.py`
   - 文件类型和推断逻辑
-- `impl/dispatcher.py`
-  - 文件类型分发
+- `impl/`
+  - `base.py`：具体文件处理器的抽象基类
+  - `interface.py`：内部固定接口类和注册机制
+  - 固定接口类只负责按已确定的 `FileType` 查找处理器并调用
+  - 具体文件处理器继承 `BaseDocumentProcessor`
+  - 由内部固定接口类自己维护处理器注册机制
 - `impl/pdf/`
-  - PDF 处理和 Docling 适配
-  - 缺少本地 Docling artifacts 时负责触发首次自动下载
+  - 预留给 PDF 真实处理器实现
 - `impl/doc/`
-  - DOCX 的 Docling 处理
+  - 预留给 DOCX 真实处理器实现
 - `impl/docling_blocks.py`
-  - Docling 文档到统一 block 的转换
+  - 预留给 block 标准化转换
 - `impl/markdown_export.py`
-  - block 到 markdown 的导出
+  - 预留给 markdown 导出
 
 ## 重命名说明
 

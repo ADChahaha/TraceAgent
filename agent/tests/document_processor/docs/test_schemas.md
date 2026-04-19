@@ -1,5 +1,15 @@
 # `test_schemas.py`
 
+## 基本实现思路
+
+`document_processor.schemas` 这一层本质上是在定义文档标准化链路里的公共数据契约，不做业务流程控制，也不直接依赖 FastAPI 之类的协议层。它主要做三件事：
+
+1. 用 `BoundingBox` 表达块级内容的定位范围。
+2. 用 `ContentBlock` 表达一段标准化后的内容块，以及页码、类型和附加元数据。
+3. 用 `ProcessResult` 把整个文档处理结果收口起来，统一暴露 `markdown`、`md_list`、`blocks`、`meta_info` 和 `warnings`。
+
+也就是说，这一层的重点不是“怎么处理文档”，而是“处理完以后结果长什么样”。下面这些测试就是在固定这个结果契约，避免后续实现把数据结构改坏。
+
 一句话：这个文件用来钉住 `document_processor.schemas` 的数据结构，不让后面改着改着把返回格式改坏。
 
 ## 测什么
@@ -50,7 +60,7 @@
 
 ## 为什么有它
 
-`document_processor` 后面会被 route 和抽取流程一起消费。这个测试文件先把最基础的 schema 契约固定住，后面补 `processor.py`、`types.py` 时不容易把输出结构带偏。
+`document_processor` 后面会被 route 和抽取流程一起消费。这个测试文件先把最基础的 schema 契约固定住，后面继续补 `processor.py` 的注册式入口和具体处理器时不容易把输出结构带偏。
 
 ## 怎么跑
 
