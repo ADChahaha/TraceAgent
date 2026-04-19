@@ -33,7 +33,7 @@ packages = [
     "file_extraction_agent.impl",
     "document_processor",
     "document_processor.impl",
-    "document_processor.impl.doc",
+    "document_processor.impl.docx",
     "document_processor.impl.pdf",
     "routes",
 ]

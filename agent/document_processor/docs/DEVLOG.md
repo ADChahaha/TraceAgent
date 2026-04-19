@@ -1,4 +1,31 @@
-last updated: 2026-04-19 18:03:00 CST
+last updated: 2026-04-19 19:05:10 CST
+
+## 2026-04-19 19:05:10 CST
+- completed work:
+  - 把 `impl/docx/processor.py` 的 `DOCX` 主实现从 `docling` 切换为 `python-docx`，直接遍历正文段落和表格并生成统一的 `markdown`、`md_list`、`blocks` 和 `meta_info`。
+  - 删除了 `DOCX` 解析对 `docling` 和本机 LibreOffice 的运行时依赖，避免模板页脚文本框一类对象触发外部桌面程序转换。
+  - 补齐 `tests/document_processor/test_docx_processor.py` 及对应文档，固定“当前实现使用 `python-docx`、不再暴露 `DocumentConverter`、默认文件名兜底”这几个约束。
+  - 实际拿 `示例 DOCX 文件` 运行 `DocxProcessor`，成功输出解析结果，并写入 `agent/output/实验报告-模板.parsed.md`。
+  - 在 `agent-gate` 环境中验证 `python -m pytest tests/document_processor/test_docx_processor.py -q` 和 `python -m pytest tests/document_processor -q`，共 `23 passed`。
+- current progress:
+  - `document_processor` 的 `DOCX` 链路已经稳定切换到 `python-docx`，可以直接处理当前实验报告模板这类文档。
+- encountered problems:
+  - 中途尝试保留 `docling` 并做 header/footer 预清洗，但这种方案仍然容易受 Word 内部 XML 细节影响，最终改为直接使用 `python-docx` 实现整条 `DOCX` 处理链路。
+- next step:
+  - 继续补 `PDF` 的真实处理器实现，并视需要细化 `DOCX` 标题识别、表格导出和 block 结构表达。
+
+## 2026-04-19 18:23:36 CST
+- completed work:
+  - 新增 `impl/doc/processor.py`，落地 `DocxProcessor`，把 `DOCX` 文件对象交给 `docling` 解析，并统一产出 `markdown`、`md_list`、`blocks` 和 `meta_info`。
+  - 调整 `impl/interface.py` 的默认注册逻辑，让 `FileType.DOCX` 指向新的 `DocxProcessor`，不再返回“未实现”的占位 warning。
+  - 为 `tests/document_processor/test_processor.py` 增加真实 `DOCX -> docling` 解析测试，以及 `docling` 失败时直接抛错、没有回退逻辑的约束测试；同步更新测试文档和 `docs/DESIGN.md`。
+  - 在 `agent-gate` 环境中验证 `python -m pytest tests/document_processor/test_processor.py -q` 和 `python -m pytest tests/document_processor -q`，共 `22 passed`。
+- current progress:
+  - `document_processor` 现在已经有可运行的 `DOCX` 真实处理链路，策略固定为“只走 `docling`，失败直接报错”。
+- encountered problems:
+  - 起始范围只允许改 `impl/doc/...`，但运行时默认注册入口还在 `impl/interface.py`，后续补齐最小必要范围后才让新处理器真正接入。
+- next step:
+  - 继续补 `PDF` 的真实处理器实现，并根据需要细化 block 标准化和 markdown 导出规则。
 
 ## 2026-04-19 18:03:00 CST
 - completed work:

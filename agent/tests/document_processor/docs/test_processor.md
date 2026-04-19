@@ -10,6 +10,8 @@
 2. 在 `impl/interface.py` 里定义一个固定内部接口类，由它自己维护注册机制，把 `pdf/docx` 这类具体处理器和 `FileType` 绑定起来。
 3. 暴露统一的 `process(...)` 入口，让外部不需要知道内部具体是哪一个处理器类在工作。
 
+当前默认 `docx` 真实处理器位于 `impl/docx/processor.py`，目录名已经明确对应 `DOCX`，避免和老式 `.doc` 概念混淆。
+
 ## 测什么
 
 - 基类会统一校验 file-like 输入并把真正处理逻辑委托给子类
@@ -20,6 +22,8 @@
 - 顶层 `process(...)` 会继续抛出不支持的文件类型错误
 - 内部接口类的注册器会拒绝不是处理器子类的类
 - `process(...)` 会通过内部接口类从注册表中取出已注册的处理器类并调用
+- 默认 `docx` 处理器会真正调用 `docling` 生成 markdown 和 blocks
+- `docling` 解析失败时不会走任何回退逻辑，而是直接把异常抛出来
 
 ## 每个函数在干什么
 
@@ -69,9 +73,21 @@
 - 调用顶层 `process(...)`。
 - 检查内部接口类会从自己的注册表里构造处理器实例并完成调用。
 
+`test_process_docx_uses_docling_to_generate_markdown_and_blocks`
+
+- 用真实 `.docx` 样本构造一个包含标题和两段正文的文件对象。
+- 直接走默认 `docx` 处理链路。
+- 检查返回结果里不再出现“未实现”的 warning，而是有真实 markdown、`md_list` 和按 docling 节点生成的 `blocks`。
+
+`test_process_docx_propagates_docling_errors_without_fallback`
+
+- 针对 `DocxProcessor._convert_with_docling(...)` 打桩，让它抛出异常。
+- 调用顶层 `process(...)` 处理 `.docx`。
+- 检查异常会直接向外传播，说明当前实现没有偷偷切换到其他解析方案。
+
 ## 为什么有它
 
-这个测试文件把新的“外层编排入口 + `impl/` 固定接口类 + 抽象基类 + 注册表 + 多态入口”结构固定下来，确保以后继续补 `impl/` 下真实算法类时，外部调用方式仍然保持简单，内部扩展方式也不会退回到手写分支分发。
+这个测试文件把新的“外层编排入口 + `impl/` 固定接口类 + 抽象基类 + 注册表 + 多态入口”结构固定下来，并额外把 `DOCX` 默认实现已经切到 `docling`、且失败时不允许回退这两个约束钉住，确保后面继续补算法细节时不会把当前处理策略改松。
 
 ## 怎么跑
 

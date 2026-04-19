@@ -54,12 +54,37 @@ file_obj
 - `impl/` 内部固定接口类
 - 抽象基类
 - 注册机制
+- `DOCX -> python-docx -> markdown + blocks` 的真实处理链路
 
 后续再补的部分是：
 
-- `pdf/docx` 的真实解析算法
+- `pdf` 的真实解析算法
 - block 标准化细节
 - markdown 导出细节
+
+## DOCX 实现
+
+当前 `DOCX` 已经落地为单一路径实现，入口在 `impl/docx/processor.py`。
+
+实现步骤：
+
+```text
+调用方传入 docx file_obj
+  -> `document_processor.process(...)` 先校验 read() 并解析出 FileType.DOCX
+  -> `InternalProcessorInterface` 从默认注册表里拿到 `DocxProcessor`
+  -> `DocxProcessor` 读取 file_obj 的二进制内容，并从 filename/name 推出输出文件名
+  -> 用 `python-docx` 的 `Document(BytesIO(...))` 直接打开文档
+  -> 按 body 的真实顺序遍历 paragraph/table
+  -> heading 段落转标题 markdown，普通段落转正文 markdown，表格转简单 markdown table
+  -> 同时把标题、正文、表格行归一化成 `ContentBlock`
+  -> 返回 `ProcessResult(file_type, filename, md_list, markdown, blocks, meta_info)`
+```
+
+这里的设计约束是：
+
+- `DOCX` 解析固定走 `python-docx`
+- 处理器不依赖本机 LibreOffice 之类的外部桌面应用
+- 当前 block 主要保留段落样式名、表格行文本这类结构信息，不依赖坐标系
 
 ## 目录职责
 
@@ -80,8 +105,9 @@ file_obj
   - 由内部固定接口类自己维护处理器注册机制
 - `impl/pdf/`
   - 预留给 PDF 真实处理器实现
-- `impl/doc/`
-  - 预留给 DOCX 真实处理器实现
+- `impl/docx/`
+  - `processor.py`：基于 `python-docx` 的 DOCX 处理器
+  - 只负责 `DOCX` 的二进制读取、段落/表格遍历、markdown 导出和 block 归一化
 - `impl/docling_blocks.py`
   - 预留给 block 标准化转换
 - `impl/markdown_export.py`

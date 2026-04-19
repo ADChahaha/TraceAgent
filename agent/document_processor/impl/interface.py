@@ -108,8 +108,8 @@ class InternalProcessorInterface:
         class PdfProcessor(_PlaceholderStructuredProcessor):
             file_type = FileType.PDF
 
-        @cls.register(FileType.DOCX, replace=False)
-        class DocProcessor(_PlaceholderStructuredProcessor):
-            file_type = FileType.DOCX
+        from document_processor.impl.docx.processor import DocxProcessor
+
+        cls.register(FileType.DOCX, replace=False)(DocxProcessor)
 
         cls._defaults_registered = True
