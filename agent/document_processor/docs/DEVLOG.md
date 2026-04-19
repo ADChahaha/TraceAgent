@@ -1,4 +1,21 @@
-last updated: 2026-04-19 19:15:53 CST
+last updated: 2026-04-19 21:37:53 CST
+
+## 2026-04-19 21:37:53 CST
+- completed work:
+  - 新增 `impl/pdf/processor.py` 和 `impl/pdf/__init__.py`，落地 `PDF -> docling + RapidOCR -> markdown + blocks` 的真实处理链路。
+  - 把 `PDF` 默认 OCR 从 `OcrAutoOptions` 切换为显式 `RapidOcrOptions(backend="torch", lang=["chinese", "english"])`，并兼容需要 `document` 参数的节点 `export_to_markdown(...)`。
+  - 把 `docling`、Hugging Face 和 `RapidOCR` 的默认模型目录统一收口到 `agent/document_processor/impl/pdf/models/`，同时增加 `.gitignore`，避免下载产物被直接提交进仓库。
+  - 补齐 `tests/document_processor/test_pdf_processor.py`、`tests/document_processor/test_integration.py` 及对应文档，并加入真实 `pdf/docx` fixture。
+  - 同步更新 `agent/README.md`、`document_processor/docs/DESIGN.md` 和相关测试文档。
+  - 在 `agent-gate` 环境中验证 `python -m pytest tests/document_processor -q`，共 `34 passed`。
+- current progress:
+  - `document_processor` 的 `PDF` 路径已经可处理真实中文通知 PDF，默认模型目录固定在 `impl/pdf/models/`，不再依赖本机用户缓存路径。
+- encountered problems:
+  - `docling` 默认 OCR 对真实中文 PDF 效果很差，初始结果几乎只有图片占位；切到 `RapidOCR` 后正文和表格文本才恢复出来。
+  - `RapidOCR` 和 Hugging Face 的下载产物一开始分别落在 `site-packages` 与用户缓存目录，后续通过显式模型目录和本地迁移才统一到包内 `models/`。
+  - 使用非 `agent-gate` 解释器运行测试时，会看到旧代码路径和旧依赖行为，容易误判为当前实现仍然失败。
+- next step:
+  - 如果后续继续优化 `PDF` 效果，可优先从 OCR 质量、表格结构归一化和图片占位去除策略三条线继续细化。
 
 ## 2026-04-19 19:15:53 CST
 - completed work:
