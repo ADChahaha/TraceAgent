@@ -30,9 +30,16 @@ For any non-trivial task, follow this order:
 - MUST verify in `red` that the failing test fails for the intended behavior, not environment noise.
 - MUST verify in `green` that related tests pass with the minimum implementation needed.
 - MUST verify after `refactor` that behavior is unchanged and tests still pass.
+- MUST keep generated or updated documentation concise and focused on key points; record the essentials rather than exhaustively describing every item unless the user explicitly asks for full detail.
 - MUST update the corresponding `docs/DESIGN.md` if the change affects module boundaries, processing flow, directory structure, responsibility split, key design decisions, or cross-module dependencies.
 - MUST evaluate whether the corresponding `DEVLOG.md` should be updated if the change affects behavior, implementation logic, interfaces, tests, processing flow, important problems, tradeoffs, or next steps.
 - MUST ask the user for approval before editing any `DEVLOG.md`.
+- MUST place test-facing documentation for changes under `agent/` inside `agent/tests/<target>/docs/` when such documentation is needed.
+- MUST keep `agent/` test documentation separate from development docs such as `docs/DESIGN.md` and `DEVLOG.md`.
+- MUST write `agent/` test documentation as one concise doc file per test source file when such documentation is requested or needed.
+- MUST name `agent/` test documentation files so they map clearly to the corresponding test file, for example `test_schemas.py -> docs/test_schemas.md`.
+- MUST make `agent/` test documentation easy to scan and understand at a glance.
+- MUST include a brief explanation for each documented test function, so a reader can understand what it verifies without reading the test code first.
 - MUST treat tests, `docs/DESIGN.md`, and `DEVLOG.md` as part of task completion when required by the change.
 
 ## 3. MUST NOT
@@ -45,6 +52,10 @@ For any non-trivial task, follow this order:
 - MUST NOT declare a task complete if doc-sync evaluation was skipped.
 - MUST NOT skip tests or docs because of a "single-file change" preference.
 - MUST NOT edit `DEVLOG.md` without explicit user approval.
+- MUST NOT turn routine documentation into exhaustive per-item narration unless the user asks for that level of detail.
+- MUST NOT write `agent/` test documentation into development doc directories such as `agent/<module>/docs/`.
+- MUST NOT combine multiple unrelated `agent/` test files into a single shared test-doc file when one-file-per-test-file documentation is expected.
+- MUST NOT use a generic `README.md` in place of a file-matched test doc when the intent is to document a specific test file.
 - MUST NOT treat "implementation finished" as "task finished".
 
 ## 4. TDD Rules
