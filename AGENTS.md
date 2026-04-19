@@ -119,7 +119,7 @@ If approved, keep `DEVLOG.md` concise.
 Required format:
 
 - maintain a top-level "last updated" field
-- append entries in time blocks, for example `## 2026-04-17 21:30:00`
+- write the newest time block immediately below `last updated`, for example `## 2026-04-17 21:30:00`
 - prioritize these items:
   - completed work
   - current progress
