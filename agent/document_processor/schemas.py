@@ -1,9 +1,15 @@
-"""Core data structures for normalized document output.
+"""标准化文档输出的共享结果结构。
 
-Purpose: define business-layer result objects shared by processors and adapters.
-Input/Output: processors construct these dataclasses; route layer reads attributes
-from them and converts them to HTTP responses.
-How to use: create ``ProcessResult`` with normalized ``ContentBlock`` instances.
+实现步骤：
+
+```text
+文档处理器拿到解析后的内容
+  -> 如果某段内容有页面坐标，就先用 BoundingBox 保存 x0/y0/x1/y1
+  -> 再把一段文本、页码、bbox、块类型、附加信息组装成 ContentBlock
+  -> 一个文档里的全部块、markdown、元信息、warning 再汇总成 ProcessResult
+  -> route 层、后续抽取流程、调试代码都只读取这套 dataclass
+  -> 不管底层是 PDF 处理器还是 DOCX 处理器，最终都必须产出同一种结果形状
+```
 """
 
 from __future__ import annotations

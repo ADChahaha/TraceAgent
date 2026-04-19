@@ -1,160 +1,225 @@
-# AGENT RULES
+# AGENT 规则
 
-This file is written for AI agents working in this repository.
-Treat every `MUST` / `MUST NOT` rule as a hard constraint.
+这个文件写给在本仓库中工作的 AI agent。
+所有 `MUST` / `MUST NOT` 规则都必须视为硬约束。
 
-## 0. Scope
+## 0. 作用范围
 
-- Applies to the entire repository and all services/subpackages under it.
-- If a deeper directory has a more specific agent/collaboration doc, follow the deeper doc first.
-- The rule "read the nearest `docs/DESIGN.md` before development" always remains in force.
+- 适用于整个仓库，以及其下所有服务和子包。
+- 如果更深层目录里有更具体的 agent / collaboration 文档，优先遵循更深层文档。
+- “开发前先读最近的 `docs/DESIGN.md`” 这条规则始终有效。
 
-## 1. Mandatory Workflow
+## 1. 强制工作流
 
-For any non-trivial task, follow this order:
+对于任何非平凡任务，按下面顺序执行：
 
-1. Identify the target service and target directory.
-2. Read the nearest applicable `docs/DESIGN.md`.
-3. Decide what tests define the target behavior.
-4. Run TDD in order: `red -> green -> refactor`.
-5. After implementation, evaluate whether `docs/DESIGN.md` must be updated.
-6. After implementation, evaluate whether `DEVLOG.md` must be updated.
-7. Do not declare the task complete until all required code, tests, and docs are synchronized.
+1. 确认目标服务和目标目录。
+2. 阅读最近适用的 `docs/DESIGN.md`。
+3. 明确哪些测试定义了目标行为。
+4. 按 `red -> green -> refactor` 执行 TDD。
+5. 实现后评估是否需要更新 `docs/DESIGN.md`。
+6. 实现后评估是否需要更新 `DEVLOG.md`。
+7. 在代码、测试、文档全部同步之前，不得宣布任务完成。
 
 ## 2. MUST
 
-- MUST identify the target service and change scope before editing code.
-- MUST identify the exact file or files explicitly specified by the user before making any edit.
-- MUST only modify the specific file or files explicitly requested by the user, unless the user explicitly approves additional file changes or the extra files are strictly required for minimal test coverage or required documentation synchronization.
-- MUST read the nearest applicable `docs/DESIGN.md` before editing code, tests, or structural docs.
-- MUST continue reading deeper `docs/DESIGN.md` files when the change goes deeper into subdirectories.
-- MUST use TDD for all behavior-changing work: `red -> green -> refactor`.
-- MUST verify in `red` that the failing test fails for the intended behavior, not environment noise.
-- MUST verify in `green` that related tests pass with the minimum implementation needed.
-- MUST verify after `refactor` that behavior is unchanged and tests still pass.
-- MUST keep generated or updated documentation concise and focused on key points; record the essentials rather than exhaustively describing every item unless the user explicitly asks for full detail.
-- MUST put the basic implementation idea or working principle near the beginning of the corresponding documentation when documenting a module, component, or test file, so readers can understand how it works before reading the detailed cases.
-- MUST update the corresponding `docs/DESIGN.md` if the change affects module boundaries, processing flow, directory structure, responsibility split, key design decisions, or cross-module dependencies.
-- MUST evaluate whether the corresponding `DEVLOG.md` should be updated if the change affects behavior, implementation logic, interfaces, tests, processing flow, important problems, tradeoffs, or next steps.
-- MUST ask the user for approval before editing any `DEVLOG.md`.
-- MUST place test-facing documentation for changes under the corresponding `tests/docs/` directory when tests are added or changed.
-- MUST keep test documentation separate from development docs such as `docs/DESIGN.md` and `DEVLOG.md`.
-- MUST write test documentation as one concise doc file per test source file whenever tests are added or changed.
-- MUST name test documentation files so they map clearly to the corresponding test file, for example `test_schemas.py -> docs/test_schemas.md`.
-- MUST make `agent/` test documentation easy to scan and understand at a glance.
-- MUST include a brief explanation for each documented test function, so a reader can understand what it verifies without reading the test code first.
-- MUST create or update the corresponding test doc immediately after writing or changing a test file.
-- MUST treat tests, `docs/DESIGN.md`, and `DEVLOG.md` as part of task completion when required by the change.
+- MUST 在修改代码前确认目标服务和改动范围。
+- MUST 在做任何修改前确认用户明确指定的目标文件。
+- MUST 只修改用户明确要求的文件，除非用户明确批准扩展范围，或者额外文件是最小测试覆盖或必要文档同步所必需的。
+- MUST 在修改代码、测试或结构性文档前，先阅读最近适用的 `docs/DESIGN.md`。
+- MUST 当修改继续深入子目录时，继续阅读更深层最近的 `docs/DESIGN.md`。
+- MUST 对所有行为变更使用 TDD：`red -> green -> refactor`。
+- MUST 在 `red` 阶段确认失败测试失败的是目标行为，而不是环境噪声。
+- MUST 在 `green` 阶段确认以最小实现让相关测试通过。
+- MUST 在 `refactor` 阶段确认行为不变且测试仍然通过。
+- MUST 让新增或更新的文档保持简洁、聚焦关键点；除非用户明确要求详细展开，否则只记录必要信息。
+- MUST 在对应文档靠前位置写清楚基础实现思路或工作原理，让读者在看细节之前先知道“这个东西是怎么工作的”。
+- MUST 默认使用中文撰写仓库内新增或更新的说明性文档、代码注释、模块级 docstring 和面向阅读者的解释性文字；除非用户明确要求英文，或某段内容必须保留英文术语原文才不会造成歧义。
+- MUST 在需要解释实现时，给出清晰的实现步骤，并优先写成 pipeline、步骤链路或文本流程图，而不是只给零散描述。
+- MUST 把实现步骤写到“读者即使不看代码，也能知道这个文件具体在做什么”的程度，至少写清楚输入来源、预处理/校验、关键分支或路由、实际调用的对象或模块、输出结果，以及可能抛出的关键异常。
+- MUST 在改动影响模块边界、处理流程、目录结构、职责拆分、关键设计决策或跨模块依赖时，同步更新对应的 `docs/DESIGN.md`。
+- MUST 评估对应的 `DEVLOG.md` 是否需要更新；评估范围包括行为、实现逻辑、接口、测试、处理流程、重要问题、权衡或下一步。
+- MUST 在编辑任何 `DEVLOG.md` 之前先获得用户批准。
+- MUST 在新增或修改测试时，把对应测试文档放到对应的 `tests/docs/` 目录下。
+- MUST 让测试文档与开发文档（如 `docs/DESIGN.md`、`DEVLOG.md`）分离。
+- MUST 在新增或修改测试时，为每个测试源文件维护一份一一对应的简洁说明文档。
+- MUST 让测试文档文件名与测试文件清晰对应，例如 `test_schemas.py -> docs/test_schemas.md`。
+- MUST 让测试文档易于快速扫描和理解。
+- MUST 为文档中提到的每个测试函数提供简短解释，让读者不先读测试代码也能明白它在验证什么。
+- MUST 在新增或修改测试文件后，立即创建或更新对应测试文档。
+- MUST 在需要说明某个模块、组件或文件如何工作时，优先采用下面这种“实现步骤 / pipeline”表达方式。
+
+### 实现步骤写法
+
+推荐格式：
+
+1. 输入是什么
+2. 先做什么校验或预处理
+3. 中间如何归一化、分流或转换
+4. 最后输出什么结果
+5. 失败时会在哪里以什么异常结束
+
+推荐写成这种 pipeline：
+
+```text
+输入
+  -> 预处理 / 校验
+  -> 类型归一化 / 路由
+  -> 核心处理
+  -> 输出结果
+```
+
+如果是更具体的模块，可以写成：
+
+```text
+file_obj
+  -> 校验输入是否可读
+  -> 推断或解析 file_type
+  -> 按 file_type 选择对应处理器
+  -> processor.process(file_obj)
+  -> ProcessResult
+```
+
+不要写成过于空泛的版本，例如：
+
+```text
+输入
+  -> 预处理 / 校验
+  -> 类型归一化 / 路由
+  -> 核心处理
+  -> 输出结果
+```
+
+这种写法只有骨架，没有信息量，不足以让读者脱离代码理解实现。
+
+应当写成至少包含真实对象名和分支细节的版本，例如：
+
+```text
+调用方传入 file_obj，可选再传 file_type
+  -> 先检查 file_obj 是否有可调用的 read()
+  -> 如果没有，抛出 InvalidFileObjectError
+  -> 如果传了 file_type，就优先解析它；否则从 filename/name 提取后缀
+  -> 归一化成 FileType.PDF 或 FileType.DOCX
+  -> 先从 self.processors 查找已注入处理器
+  -> 找不到就按类型动态导入 PdfProcessor 或 DocProcessor
+  -> 调用对应处理器的 process(file_obj)
+  -> 返回处理器产出的结果对象
+```
+
+- MUST 把测试、`docs/DESIGN.md` 和 `DEVLOG.md` 视为任务完成条件的一部分，只要该变更需要它们，就不能跳过。
 
 ## 3. MUST NOT
 
-- MUST NOT edit code before reading the applicable `docs/DESIGN.md`.
-- MUST NOT propose or start implementation before understanding the design doc context.
-- MUST NOT modify files beyond those explicitly specified by the user unless the user has explicitly approved the expanded scope or the extra files are strictly required for minimal test coverage or required doc synchronization.
-- MUST NOT skip TDD for behavior changes.
-- MUST NOT write the implementation first and add tests later.
-- MUST NOT enter `green` before a meaningful failing test exists, except for docs-only, comment-only, or pure rename tasks with no behavior change.
-- MUST NOT declare a task complete if doc-sync evaluation was skipped.
-- MUST NOT skip tests or docs because of a "single-file change" preference.
-- MUST NOT edit `DEVLOG.md` without explicit user approval.
-- MUST NOT turn routine documentation into exhaustive per-item narration unless the user asks for that level of detail.
-- MUST NOT write documentation that jumps straight into test cases or field lists without first explaining the basic implementation idea when that idea is needed to understand the module or test target.
-- MUST NOT write test documentation into development doc directories such as `docs/` or module design-doc directories.
-- MUST NOT combine multiple unrelated test files into a single shared test-doc file when one-file-per-test-file documentation is expected.
-- MUST NOT use a generic `README.md` in place of a file-matched test doc when the intent is to document a specific test file.
-- MUST NOT finish test work without adding or updating the corresponding documentation file under the matching `tests/docs/` directory.
-- MUST NOT treat "implementation finished" as "task finished".
+- MUST NOT 在阅读适用的 `docs/DESIGN.md` 之前编辑代码。
+- MUST NOT 在理解设计文档上下文之前提出或开始实现。
+- MUST NOT 在没有用户明确批准、或没有最小测试覆盖/必要文档同步理由的情况下修改用户未指定的文件。
+- MUST NOT 跳过行为变更的 TDD。
+- MUST NOT 先写实现、后补测试。
+- MUST NOT 在没有有意义失败测试的情况下进入 `green`，除非任务属于纯文档、纯注释或无行为变化的纯重命名。
+- MUST NOT 在没有完成文档同步评估时宣布任务完成。
+- MUST NOT 因为“单文件偏好”而跳过必要的测试或文档。
+- MUST NOT 在没有用户明确批准的情况下编辑 `DEVLOG.md`。
+- MUST NOT 在用户未要求详述时，把常规文档写成穷举式流水账。
+- MUST NOT 在文档中一上来就只列测试点、字段或接口清单，而不先解释理解该模块所需的基本实现思路。
+- MUST NOT 默认使用英文来写仓库内的说明性文档、注释或 docstring，除非用户明确要求，或该英文表述本身是不可替代的标准术语。
+- MUST NOT 只给结论式描述而不说明关键实现步骤，尤其是在解释模块工作原理时。
+- MUST NOT 只写抽象骨架式 pipeline，而不写真实输入、关键分支、实际调用关系和输出结果。
+- MUST NOT 把测试文档写进开发文档目录，比如 `docs/` 或模块设计文档目录。
+- MUST NOT 把多个无关测试文件合并成一个共享测试文档，当预期是一文件一文档时。
+- MUST NOT 在本应对应某个具体测试文件时，用泛化 `README.md` 代替匹配的测试文档。
+- MUST NOT 在没有为对应测试文件补齐 `tests/docs/` 下文档的情况下结束测试相关工作。
+- MUST NOT 把“实现写完了”当成“任务完成了”。
 
-## 4. TDD Rules
+## 4. TDD 规则
 
-Use TDD unless the task is one of these exceptions:
+除以下例外情况外，都要使用 TDD：
 
-- docs-only change
-- comment-only change
-- pure rename with no behavior change
+- 纯文档改动
+- 纯注释改动
+- 无行为变化的纯重命名
 
-For TDD tasks:
+对于需要 TDD 的任务：
 
-- `red`: add or change tests first; confirm they fail for the target behavior.
-- `green`: make the minimum change required to pass.
-- `refactor`: improve structure without changing behavior; keep tests passing.
+- `red`：先加或改测试，并确认它们因目标行为而失败。
+- `green`：做最小实现让测试通过。
+- `refactor`：在不改变行为的前提下改善结构，并保持测试通过。
 
-If the task involves real documents, real samples, or real input formats, add at least one validation test or doc test based on a real sample when practical.
+如果任务涉及真实文档、真实样本或真实输入格式，在可行时至少增加一个基于真实样本的验证测试或文档测试。
 
-## 5. Design Doc Rules
+## 5. 设计文档规则
 
-`docs/DESIGN.md` is the first entry point for understanding structure and boundaries.
-It explains high-level design, not detailed implementation.
+`docs/DESIGN.md` 是理解结构和边界的第一入口。
+它解释的是高层设计，而不是实现细节。
 
-When choosing which design doc to read:
+选择要读哪个设计文档时：
 
-1. Prefer the target directory's own `docs/DESIGN.md`.
-2. If missing, walk upward to the nearest parent that has one.
-3. If the change reaches a deeper subdirectory, also read the deeper nearest design doc for that area.
+1. 优先读目标目录自己的 `docs/DESIGN.md`。
+2. 如果没有，就向上找最近的父级设计文档。
+3. 如果改动继续深入到更深子目录，也要继续读那个区域最近的更深层设计文档。
 
-Examples:
+例如：
 
-- Change in `agent/`: read `agent/docs/DESIGN.md`
-- Change in `agent/ocr_processor/`: read `agent/docs/DESIGN.md`, then `agent/ocr_processor/docs/DESIGN.md`
-- Change in `backend/`: read `backend/docs/DESIGN.md` if present
-- Change in `frontend/`: read `frontend/docs/DESIGN.md` if present
+- 改 `agent/`：读 `agent/docs/DESIGN.md`
+- 改 `agent/ocr_processor/`：先读 `agent/docs/DESIGN.md`，再读 `agent/ocr_processor/docs/DESIGN.md`
+- 改 `backend/`：如果存在，就读 `backend/docs/DESIGN.md`
+- 改 `frontend/`：如果存在，就读 `frontend/docs/DESIGN.md`
 
-## 6. File Change Rule
+## 6. 文件改动规则
 
-Default rule:
+默认规则：
 
-- Change only the file or files explicitly specified by the user.
+- 只改用户明确指定的文件。
 
-Exception:
+例外：
 
-- If the task inherently requires multiple files, explain the scope and risk to the user first and get approval.
-- Files required for the same task's minimal test coverage do count as valid required files.
-- Required sync updates to `docs/DESIGN.md` and `DEVLOG.md` do not count against the one-file preference.
-- Required test documentation files corresponding to changed test files do not count against the user-specified-file preference.
+- 如果任务天然需要多个文件，先向用户说明范围和风险，再获得批准。
+- 同一任务最小测试覆盖所必需的文件，属于允许改动的必要文件。
+- 必要的 `docs/DESIGN.md` 和 `DEVLOG.md` 同步更新，不算违反用户指定文件偏好。
+- 与被改测试文件一一对应的测试文档，也不算违反用户指定文件偏好。
 
-Do not use the user-specified-file preference as a reason to skip necessary tests or docs.
+不要把“用户指定文件偏好”当成跳过必要测试或文档的理由。
 
-## 7. DEVLOG Rules
+## 7. DEVLOG 规则
 
-Before editing `DEVLOG.md`, ask the user and state:
+在编辑 `DEVLOG.md` 前，必须告诉用户：
 
-- which `DEVLOG.md` you want to update
-- what you plan to record
-- what format you will use
+- 你要更新的是哪个 `DEVLOG.md`
+- 你准备记录什么
+- 你会采用什么格式
 
-If approved, keep `DEVLOG.md` concise.
+获得批准后，再进行编辑，并保持 `DEVLOG.md` 简洁。
 
-Required format:
+强制格式：
 
-- maintain a top-level "last updated" field
-- write the newest time block immediately below `last updated`, for example `## 2026-04-17 21:30:00`
-- prioritize these items:
-  - completed work
-  - current progress
-  - encountered problems
-  - next step
+- 维护一个顶层 `last updated` 字段
+- 最新时间块紧跟在 `last updated` 下方，例如 `## 2026-04-17 21:30:00`
+- 优先记录这些内容：
+  - 已完成工作
+  - 当前进展
+  - 遇到的问题
+  - 下一步
 
-## 8. Done Criteria
+## 8. 完成标准
 
-Do not report completion until all applicable items below are true:
+在满足下面所有适用项之前，不得报告完成：
 
-- target service identified
-- target directory identified
-- user-specified target file or files identified
-- applicable `docs/DESIGN.md` read
-- TDD `red` completed, or a valid exception applies
-- TDD `green` completed, or a valid exception applies
-- TDD `refactor` completed, or a valid exception applies
-- for every added or changed test file, the corresponding doc under the matching `tests/docs/` location has been added or updated
-- design doc sync evaluated
-- devlog sync evaluated
-- user approval obtained before any `DEVLOG.md` edit
-- all required code, tests, and docs are synchronized
+- 已识别目标服务
+- 已识别目标目录
+- 已识别用户指定的目标文件
+- 已阅读适用的 `docs/DESIGN.md`
+- 已完成 TDD `red`，或满足合法例外
+- 已完成 TDD `green`，或满足合法例外
+- 已完成 TDD `refactor`，或满足合法例外
+- 对于每个新增或修改的测试文件，都已在匹配的 `tests/docs/` 位置补齐对应文档
+- 已评估设计文档同步
+- 已评估 devlog 同步
+- 在任何 `DEVLOG.md` 编辑前都已获得用户批准
+- 所有必需的代码、测试和文档都已同步
 
-## 9. Short Reminder For Agents
+## 9. 给 Agent 的简短提醒
 
-Read design first.
-Test first.
-Implementation second.
-Doc sync before completion.
-No unauthorized `DEVLOG.md` edits.
+先读设计。
+先写测试。
+再写实现。
+完成前做文档同步。
+未经批准不要改 `DEVLOG.md`。
