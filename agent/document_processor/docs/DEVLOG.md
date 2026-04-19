@@ -1,4 +1,14 @@
-last updated: 2026-04-19 19:05:10 CST
+last updated: 2026-04-19 19:15:53 CST
+
+## 2026-04-19 19:15:53 CST
+- completed work:
+  - 清理 `docs/DESIGN.md` 中已经与当前代码不一致的预留结构说明，删除 `impl/docling_blocks.py` 和 `impl/markdown_export.py` 两个未落地模块条目。
+- current progress:
+  - `document_processor` 的设计文档已和当前实现对齐，不再暗示存在尚未落地的 block 标准化 / markdown 导出公共模块。
+- encountered problems:
+  - 无。
+- next step:
+  - 继续在真实实现落地后再决定是否需要抽出共享的 block 标准化或 markdown 导出层。
 
 ## 2026-04-19 19:05:10 CST
 - completed work:

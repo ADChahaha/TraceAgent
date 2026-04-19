@@ -108,10 +108,6 @@ file_obj
 - `impl/docx/`
   - `processor.py`：基于 `python-docx` 的 DOCX 处理器
   - 只负责 `DOCX` 的二进制读取、段落/表格遍历、markdown 导出和 block 归一化
-- `impl/docling_blocks.py`
-  - 预留给 block 标准化转换
-- `impl/markdown_export.py`
-  - 预留给 markdown 导出
 
 ## 重命名说明
 
