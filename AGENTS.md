@@ -24,6 +24,8 @@ For any non-trivial task, follow this order:
 ## 2. MUST
 
 - MUST identify the target service and change scope before editing code.
+- MUST identify the exact file or files explicitly specified by the user before making any edit.
+- MUST only modify the specific file or files explicitly requested by the user, unless the user explicitly approves additional file changes or the extra files are strictly required for minimal test coverage or required documentation synchronization.
 - MUST read the nearest applicable `docs/DESIGN.md` before editing code, tests, or structural docs.
 - MUST continue reading deeper `docs/DESIGN.md` files when the change goes deeper into subdirectories.
 - MUST use TDD for all behavior-changing work: `red -> green -> refactor`.
@@ -34,18 +36,20 @@ For any non-trivial task, follow this order:
 - MUST update the corresponding `docs/DESIGN.md` if the change affects module boundaries, processing flow, directory structure, responsibility split, key design decisions, or cross-module dependencies.
 - MUST evaluate whether the corresponding `DEVLOG.md` should be updated if the change affects behavior, implementation logic, interfaces, tests, processing flow, important problems, tradeoffs, or next steps.
 - MUST ask the user for approval before editing any `DEVLOG.md`.
-- MUST place test-facing documentation for changes under `agent/` inside `agent/tests/<target>/docs/` when such documentation is needed.
-- MUST keep `agent/` test documentation separate from development docs such as `docs/DESIGN.md` and `DEVLOG.md`.
-- MUST write `agent/` test documentation as one concise doc file per test source file when such documentation is requested or needed.
-- MUST name `agent/` test documentation files so they map clearly to the corresponding test file, for example `test_schemas.py -> docs/test_schemas.md`.
+- MUST place test-facing documentation for changes under the corresponding `tests/docs/` directory when tests are added or changed.
+- MUST keep test documentation separate from development docs such as `docs/DESIGN.md` and `DEVLOG.md`.
+- MUST write test documentation as one concise doc file per test source file whenever tests are added or changed.
+- MUST name test documentation files so they map clearly to the corresponding test file, for example `test_schemas.py -> docs/test_schemas.md`.
 - MUST make `agent/` test documentation easy to scan and understand at a glance.
 - MUST include a brief explanation for each documented test function, so a reader can understand what it verifies without reading the test code first.
+- MUST create or update the corresponding test doc immediately after writing or changing a test file.
 - MUST treat tests, `docs/DESIGN.md`, and `DEVLOG.md` as part of task completion when required by the change.
 
 ## 3. MUST NOT
 
 - MUST NOT edit code before reading the applicable `docs/DESIGN.md`.
 - MUST NOT propose or start implementation before understanding the design doc context.
+- MUST NOT modify files beyond those explicitly specified by the user unless the user has explicitly approved the expanded scope or the extra files are strictly required for minimal test coverage or required doc synchronization.
 - MUST NOT skip TDD for behavior changes.
 - MUST NOT write the implementation first and add tests later.
 - MUST NOT enter `green` before a meaningful failing test exists, except for docs-only, comment-only, or pure rename tasks with no behavior change.
@@ -53,9 +57,10 @@ For any non-trivial task, follow this order:
 - MUST NOT skip tests or docs because of a "single-file change" preference.
 - MUST NOT edit `DEVLOG.md` without explicit user approval.
 - MUST NOT turn routine documentation into exhaustive per-item narration unless the user asks for that level of detail.
-- MUST NOT write `agent/` test documentation into development doc directories such as `agent/<module>/docs/`.
-- MUST NOT combine multiple unrelated `agent/` test files into a single shared test-doc file when one-file-per-test-file documentation is expected.
+- MUST NOT write test documentation into development doc directories such as `docs/` or module design-doc directories.
+- MUST NOT combine multiple unrelated test files into a single shared test-doc file when one-file-per-test-file documentation is expected.
 - MUST NOT use a generic `README.md` in place of a file-matched test doc when the intent is to document a specific test file.
+- MUST NOT finish test work without adding or updating the corresponding documentation file under the matching `tests/docs/` directory.
 - MUST NOT treat "implementation finished" as "task finished".
 
 ## 4. TDD Rules
@@ -96,15 +101,16 @@ Examples:
 
 Default rule:
 
-- Change one file only.
+- Change only the file or files explicitly specified by the user.
 
 Exception:
 
 - If the task inherently requires multiple files, explain the scope and risk to the user first and get approval.
 - Files required for the same task's minimal test coverage do count as valid required files.
 - Required sync updates to `docs/DESIGN.md` and `DEVLOG.md` do not count against the one-file preference.
+- Required test documentation files corresponding to changed test files do not count against the user-specified-file preference.
 
-Do not use the one-file preference as a reason to skip necessary tests or docs.
+Do not use the user-specified-file preference as a reason to skip necessary tests or docs.
 
 ## 7. DEVLOG Rules
 
@@ -132,10 +138,12 @@ Do not report completion until all applicable items below are true:
 
 - target service identified
 - target directory identified
+- user-specified target file or files identified
 - applicable `docs/DESIGN.md` read
 - TDD `red` completed, or a valid exception applies
 - TDD `green` completed, or a valid exception applies
 - TDD `refactor` completed, or a valid exception applies
+- for every added or changed test file, the corresponding doc under the matching `tests/docs/` location has been added or updated
 - design doc sync evaluated
 - devlog sync evaluated
 - user approval obtained before any `DEVLOG.md` edit
