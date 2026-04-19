@@ -33,6 +33,7 @@ For any non-trivial task, follow this order:
 - MUST verify in `green` that related tests pass with the minimum implementation needed.
 - MUST verify after `refactor` that behavior is unchanged and tests still pass.
 - MUST keep generated or updated documentation concise and focused on key points; record the essentials rather than exhaustively describing every item unless the user explicitly asks for full detail.
+- MUST put the basic implementation idea or working principle near the beginning of the corresponding documentation when documenting a module, component, or test file, so readers can understand how it works before reading the detailed cases.
 - MUST update the corresponding `docs/DESIGN.md` if the change affects module boundaries, processing flow, directory structure, responsibility split, key design decisions, or cross-module dependencies.
 - MUST evaluate whether the corresponding `DEVLOG.md` should be updated if the change affects behavior, implementation logic, interfaces, tests, processing flow, important problems, tradeoffs, or next steps.
 - MUST ask the user for approval before editing any `DEVLOG.md`.
@@ -57,6 +58,7 @@ For any non-trivial task, follow this order:
 - MUST NOT skip tests or docs because of a "single-file change" preference.
 - MUST NOT edit `DEVLOG.md` without explicit user approval.
 - MUST NOT turn routine documentation into exhaustive per-item narration unless the user asks for that level of detail.
+- MUST NOT write documentation that jumps straight into test cases or field lists without first explaining the basic implementation idea when that idea is needed to understand the module or test target.
 - MUST NOT write test documentation into development doc directories such as `docs/` or module design-doc directories.
 - MUST NOT combine multiple unrelated test files into a single shared test-doc file when one-file-per-test-file documentation is expected.
 - MUST NOT use a generic `README.md` in place of a file-matched test doc when the intent is to document a specific test file.
