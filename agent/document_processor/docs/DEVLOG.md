@@ -1,4 +1,16 @@
-last updated: 2026-04-19 21:37:53 CST
+last updated: 2026-04-19 21:55:00 CST
+
+## 2026-04-19 21:55:00 CST
+- completed work:
+  - 复核 `document_processor` 与 `agent/routes/document_processor.py` 的当前接线状态，确认 FastAPI 已挂载 `/healthz`、`/v1/ocr/capabilities`、`/v1/ocr/process`。
+  - 在 `agent-gate` 环境里实际验证 route 行为，确认 `document_processor` 的 Python 入口可用，但 route 侧当前不可用。
+- current progress:
+  - `document_processor` 当前应先视为“Python 入口可用、HTTP route 暂不可用”的状态，外部联调先不要依赖 `routes/document_processor.py`。
+- encountered problems:
+  - `POST /v1/ocr/process` 当前把 FastAPI `UploadFile` 包成不具备 `read()` 的代理对象，传入 `document_processor.process(...)` 后会在入口校验阶段返回 422，尚未真正接入处理链路。
+  - `GET /v1/ocr/capabilities` 当前依赖不存在的 `document_processor.impl.pdf.docling_adapter`，不能作为稳定能力声明接口使用。
+- next step:
+  - 当前先不处理 route，后续如果要恢复外部 HTTP 接入，再单独按 TDD 修正协议适配层和相关测试。
 
 ## 2026-04-19 21:37:53 CST
 - completed work:
