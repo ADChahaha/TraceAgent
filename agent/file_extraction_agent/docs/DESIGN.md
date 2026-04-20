@@ -33,8 +33,9 @@
 
 ```text
 backend 聚合后的 documents + task_spec
+  -> 独立输入适配文件完成输入校验与协议适配
   -> file_extraction_agent.processor.extract(...)
-  -> 输入归一化，组装 GraphInput
+  -> task spec 加载 + GraphInput 组装
   -> broad extraction
   -> broad output 校验与标准化
   -> field resolution
@@ -44,10 +45,10 @@ backend 聚合后的 documents + task_spec
 展开后可以理解成：
 
 ```text
-调用方传入 backend 聚合后的 session 级 documents、task_spec_name 或 task_spec
-  -> processor.extract(...) 先校验顶层是否带 session_id，且 documents 是否带有 document_id、markdown / md_list / blocks 这类标准化内容
-  -> 如果只传了 task_spec_name，就从 task_specs/*.json 加载固定 schema
-  -> impl/normalization.py 把多文档输入整理成符合 schemas.py 约束的 GraphInput
+调用方先把 backend 聚合后的 session 输入交给独立输入适配文件，例如 input_adapter.py
+  -> input_adapter.py 负责 session 级输入校验、协议适配，并产出内部可消费的已校验输入
+  -> processor.extract(...) 消费已校验输入，负责 task spec 加载，不再负责顶层输入校验或原始 payload 协议兜底
+  -> impl/normalization.py 把已校验输入和 task spec 整理成符合 schemas.py 约束的 GraphInput
   -> impl/graph.py 从 GraphInput 开始驱动两阶段流程
   -> impl/broad_extraction.py 生成每个字段的候选、证据、局部状态
   -> impl/validation.py 对 broad output 做字段级校验、归一化和缺失/歧义标记
@@ -62,6 +63,7 @@ backend 聚合后的 documents + task_spec
 ```text
 file_extraction_agent/
 ├── __init__.py
+├── input_adapter.py
 ├── processor.py
 ├── schemas.py
 ├── extractor_client.py
@@ -83,8 +85,10 @@ file_extraction_agent/
 
 各层职责如下：
 
+- `input_adapter.py`
+  独立负责外部输入进入 `file_extraction_agent` 之前的第一层处理：校验 session 级 payload、做协议适配，并把原始 payload 收敛成内部可消费的已校验输入。这一层必须单开文件，不应混进 `processor.py`、`graph.py` 或 route。
 - `processor.py`
-  对外统一入口，负责输入校验、task spec 加载、调用 normalization 组装 GraphInput、再调用 graph，并返回最终结果。
+  对外统一入口，消费外部已经校验好的输入，负责 task spec 加载、调用 normalization 组装 `GraphInput`、再调用 graph，并返回最终结果。
 - `schemas.py`
   定义数据契约，包括 session 级 `GraphInput`、文档级 `NormalizedDocument`、broad extraction / resolution / result aggregation 的结构化对象。
 - `extractor_client.py`
@@ -100,7 +104,7 @@ file_extraction_agent/
 - `impl/prompts.py`
   定义 broad extraction 和 field resolution 两阶段的指令文本组装逻辑，是内部执行策略，不作为外部注入点暴露。
 - `impl/normalization.py`
-  把外部 documents 归一化成 `schemas.py` 中定义的 `GraphInput`，这是 graph 之外的预处理步骤，不是 graph 内部节点。
+  接收 `input_adapter.py` 已经整理好的中间输入和 `processor.py` 提供的 task spec，继续做进入 graph 前的内部归一化，产出 `schemas.py` 中定义的 `GraphInput`；它不是第一层外部 payload 校验入口。
 - `impl/validation.py`
   做候选清洗、字段类型归一化、局部规则校验和状态归类。
 - `impl/broad_extraction.py`
@@ -126,7 +130,13 @@ file_extraction_agent/
 - 它们不是公开 API
 - 调用方只和 `processor.extract(...)`、`schemas.py` 暴露的结果对象打交道
 
-`normalization.py` 也保留在 `impl/`，但原因和 `state.py` 不完全一样。它虽然不属于 graph 内部节点，却仍然属于模块内部预处理逻辑，而不是对外公开契约。它的职责是把外部输入整理成 `schemas.py` 里定义好的 `GraphInput`，让 `graph.py` 从一开始就只处理标准化后的输入，而不用承担外部输入整形和协议适配。
+`normalization.py` 也保留在 `impl/`，但原因和 `state.py` 不完全一样。它虽然不属于 graph 内部节点，却仍然属于模块内部预处理逻辑，而不是对外公开契约。这里要特别和 `input_adapter.py`、`processor.py` 分开看：
+
+- `input_adapter.py` 负责第一层外部输入校验和协议适配
+- `processor.py` 负责 task spec 加载和流程编排
+- `impl/normalization.py` 负责把已经过第一层收敛的输入连同 task spec 一起整理成 `schemas.py` 里定义好的 `GraphInput`
+
+这样 `graph.py` 从一开始就只处理标准化后的输入，而不用承担外部输入整形、缺字段兜底或协议适配。
 
 ## `extractor_client.py` 与 `model_client_config.json` 的分工
 

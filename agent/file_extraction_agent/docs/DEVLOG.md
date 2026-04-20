@@ -1,4 +1,85 @@
-last updated: 2026-04-20 16:15:33 CST
+last updated: 2026-04-20 16:45:20 CST
+
+## 2026-04-20 16:45:20
+
+### 已完成工作
+
+- 更新了 `file_extraction_agent/docs/DESIGN.md`，把 `input_adapter.py` 的职责从“校验 + task spec 加载 + GraphInput 组装”收紧成“只负责输入校验和协议适配”。
+- 明确 `processor.py` 继续负责 `task spec` 加载和流程编排，不把这部分职责前移到独立输入适配文件。
+- 明确 `impl/normalization.py` 的输入改成“已校验输入 + task spec”，它负责内部归一化并组装 `GraphInput`，而不是承担第一层外部输入适配。
+
+### 当前进展
+
+- `file_extraction_agent` 入口前的职责现在拆成了三段：
+  - `input_adapter.py` 负责外部 payload 校验和协议适配
+  - `processor.py` 负责 `task spec` 加载和流程编排
+  - `impl/normalization.py` 负责把已收敛输入组装成 `GraphInput`
+- 这样后续实现时，外部边界问题和模块内部编排问题不会继续混在同一个文件里。
+
+### 遇到的问题
+
+- 之前把 `input_adapter.py` 写得过宽，连 `task spec` 加载都放了进去，会让“外部输入适配”和“业务流程编排”再次耦合。
+- 如果不把这层职责及时收紧，后续实现 `processor.py` 时容易出现入口文件和编排入口之间的职责争抢。
+
+### 下一步
+
+- 后续写 `input_adapter.py` 时，只围绕输入校验、协议适配和类型收敛建模，不再把 `task spec` 加载塞进去。
+- 再按这条边界继续落地 `processor.py` 与 `impl/normalization.py` 的实现和测试。
+
+## 2026-04-20 16:35:46
+
+### 已完成工作
+
+- 更新了 `agent/docs/DESIGN.md` 和 `file_extraction_agent/docs/DESIGN.md`，把 `processor.py` 的职责从“负责输入校验”收口成“只接收外部已校验输入并做流程编排”。
+- 明确 `file_extraction_agent` 不负责对外部原始 payload 做第一层必填校验或协议兜底，这一步应由外部层先完成。
+- 同步把 `impl/normalization.py` 的职责改写成“处理已校验输入的内部归一化”，避免后续实现时把坏输入兜底逻辑重新塞回模块内部。
+
+### 当前进展
+
+- `file_extraction_agent` 的边界现在更清楚了：
+  - 外部层负责 session 输入校验和协议适配
+  - `processor.py` 负责 task spec 加载、`GraphInput` 组装和 graph 编排
+  - `normalization.py` 负责已校验输入到内部契约的转换
+- 这样后续真正写 `processor.py` 时，可以直接围绕“已校验 typed input”建模，而不是一边编排一边做原始 payload 防御式校验。
+
+### 遇到的问题
+
+- 之前文档把 `processor.py` 写成“对外统一入口并负责输入校验”，容易把外部协议校验职责和模块内部编排职责混在一起。
+- 如果不先把这个边界写死，后续实现时很容易出现 route、backend 聚合层、`processor.py` 三处重复校验同一份输入的问题。
+
+### 下一步
+
+- 后续实现 `processor.py` 时，直接按“输入已经在外部校验完成”的前提设计入口签名和内部流程。
+- 再根据这条边界继续收敛 `normalization.py`、`graph.py` 和对应测试的输入模型。
+
+## 2026-04-20 16:25:47
+
+### 已完成工作
+
+- 补齐了 `file_extraction_agent/extractor_client.py`，现在会从环境变量读取 `BASE_URL`、`OPENAI_API_KEY`、`MODEL`，并构造真正可调用的结构化抽取客户端。
+- 新增了 `file_extraction_agent/model_client_config.json`，把结构化输出策略从连接配置中拆开，单独管理 `json_schema`、`tool_call`、`auto` 和 fallback 顺序。
+- 在 `extractor_client.py` 中加入结构化输出协议回退逻辑：优先尝试 `json_schema`，兼容接口不支持时再退到 `tool_call`；内部把 `tool_call` 映射到 LangChain 的 `function_calling`。
+- 补齐了 `tests/file_extraction_agent/test_extractor_client.py` 和对应的 `tests/file_extraction_agent/docs/test_extractor_client.md`。
+- 同步更新了 `agent/docs/DESIGN.md` 和 `file_extraction_agent/docs/DESIGN.md`，把连接配置与策略配置的分工、以及结构化输出 fallback pipeline 写清楚。
+
+### 当前进展
+
+- `file_extraction_agent` 这一层现在已经有了可直接复用的模型客户端入口，后续 `processor.py`、`broad_extraction.py` 和 `resolution.py` 可以直接依赖这个 client，而不用各自关心 OpenAI 兼容接口的差异。
+- 模型配置职责已经拆开：
+  - 环境变量负责服务地址、密钥和模型名
+  - `model_client_config.json` 负责结构化输出协议和请求参数
+- 新增的客户端测试已经覆盖固定 `json_schema`、固定 `tool_call`、以及 `auto` 回退三种主要路径。
+
+### 遇到的问题
+
+- 一开始把结构化输出固定写死成 `json_schema`，但 OpenAI 兼容接口对这一协议的支持并不稳定，容易在切换供应商或代理层时直接失败。
+- LangChain 真实接口里对应的方法名不是仓库内部更直观的 `tool_call`，而是 `function_calling`，因此需要在 `extractor_client.py` 里做一层映射，避免配置语义和底层 SDK 术语耦合。
+- 顺手回归时发现 `tests/file_extraction_agent/test_schemas.py` 当前依赖一个现存不一致：它导入了 `NormalizedBlock`，但当前 `schemas.py` 里没有这个符号；这不是这次 client 改动引入的问题。
+
+### 下一步
+
+- 在 `processor.py` 或后续 graph 节点实现中接入 `build_extractor_client_from_env(...)`，把这层客户端真正串进 broad extraction 和 field resolution 流程。
+- 等 `schemas.py` 与 `test_schemas.py` 的现存不一致单独收敛后，再做更完整的 file extraction agent 回归验证。
 
 ## 2026-04-20 16:15:33
 

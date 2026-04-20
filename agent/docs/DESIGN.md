@@ -68,6 +68,8 @@ agent/
 
 - 负责消费多文档 block/markdown 输入，完成字段候选生成与字段定案
 - 不负责原始文件解析
+- 不负责对外部原始 payload 做第一层必填校验或协议兜底；这一层默认接收外部已经校验好的输入
+- 进入这一层前，外部必须先通过独立文件完成 session 输入校验与协议适配，不应把这部分逻辑混进 `processor.py`
 
 当前业务入口包括：
 
@@ -79,7 +81,23 @@ agent/
 1. broad extraction：一次读取全部 block，为每个 schema 字段生成候选列表
 2. field resolution：读取所有字段候选，再按字段逐个定案
 
-两阶段都使用严格结构化输出。LangGraph 负责编排阶段流转，模型调用层当前使用 `langchain_openai.ChatOpenAI(...).with_structured_output(..., method="json_schema", strict=True)` 返回 Pydantic 结果。
+两阶段都使用结构化输出，但不再假设所有 OpenAI 兼容接口都支持同一种结构化协议。LangGraph 负责编排阶段流转，模型调用层当前由 `file_extraction_agent/extractor_client.py` 统一处理：
+
+```text
+部署环境提供 BASE_URL / OPENAI_API_KEY / MODEL
+  -> extractor_client 读取 model_client_config.json 里的 structured_output.strategy 和 fallback_order
+  -> 用 env 配置创建 langchain_openai.ChatOpenAI(...)
+  -> 如果 strategy=json_schema，就用 with_structured_output(..., method="json_schema", strict=True)
+  -> 如果 strategy=tool_call，就改用 with_structured_output(..., method="function_calling", strict=True)
+  -> 如果 strategy=auto，就按 fallback_order 先试 json_schema，再在不支持时回退到 tool_call
+  -> broad extraction / field resolution 继续收到同样的 Pydantic 结构化结果
+```
+
+这样把“连哪个模型服务”和“结构化输出协议怎么选”拆开管理：
+
+- 环境变量负责连接信息和密钥
+- `model_client_config.json` 负责结构化输出策略与请求参数
+- `extractor_client.py` 负责把两者合并成统一可调用 agent
 
 两层结构化输出当前分别由不同的 Pydantic schema 控制：
 
@@ -110,7 +128,7 @@ raw file
 3. 交给 `document_processor` 做文档标准化。
 4. 得到 Markdown 优先的标准化结果。
 5. `backend` 按 session 聚合多个文档的 block list。
-6. 将聚合结果交给 `file_extraction_agent`。
+6. 先由外部独立输入适配文件完成 session 输入校验和协议适配，再将已校验聚合结果交给 `file_extraction_agent`。
 7. 输出字段候选和字段最终结果。
 8. 将结果回传给 `backend`。
 
