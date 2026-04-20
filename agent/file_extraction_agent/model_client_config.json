@@ -1,0 +1,9 @@
+{
+  "structured_output": {
+    "strategy": "auto",
+    "fallback_order": ["json_schema", "tool_call"]
+  },
+  "request_options": {
+    "temperature": 0
+  }
+}
