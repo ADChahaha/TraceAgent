@@ -27,14 +27,14 @@
 
 ## 模块边界
 
-`file_extraction_agent` 的输入必须是 `document_processor` 已经标准化好的结果，不直接接收原始 `pdf/docx` 文件对象。
+`file_extraction_agent` 的输入不是 `document_processor` 的原始直接返回值，而是 **backend 在 session 维度聚合后的标准化结果**。也就是说，进入这一层前，backend 需要先把标准化内容和业务标识补齐，不直接接收原始 `pdf/docx` 文件对象。
 
 主链路是：
 
 ```text
 backend 聚合后的 documents + task_spec
   -> file_extraction_agent.processor.extract(...)
-  -> 输入归一化
+  -> 输入归一化，组装 GraphInput
   -> broad extraction
   -> broad output 校验与标准化
   -> field resolution
@@ -44,11 +44,11 @@ backend 聚合后的 documents + task_spec
 展开后可以理解成：
 
 ```text
-调用方传入 documents、task_spec_name 或 task_spec
-  -> processor.extract(...) 先校验 documents 是否带有 markdown / md_list / blocks 这类标准化内容
+调用方传入 backend 聚合后的 session 级 documents、task_spec_name 或 task_spec
+  -> processor.extract(...) 先校验顶层是否带 session_id，且 documents 是否带有 document_id、markdown / md_list / blocks 这类标准化内容
   -> 如果只传了 task_spec_name，就从 task_specs/*.json 加载固定 schema
-  -> impl/normalization.py 把多文档输入整理成 GraphInput
-  -> impl/graph.py 驱动两阶段流程
+  -> impl/normalization.py 把多文档输入整理成符合 schemas.py 约束的 GraphInput
+  -> impl/graph.py 从 GraphInput 开始驱动两阶段流程
   -> impl/broad_extraction.py 生成每个字段的候选、证据、局部状态
   -> impl/validation.py 对 broad output 做字段级校验、归一化和缺失/歧义标记
   -> impl/resolution.py 针对每个目标字段读取全局 broad output，必要时做一次定向 extra lookup，再输出 resolved / failed
@@ -65,6 +65,7 @@ file_extraction_agent/
 ├── processor.py
 ├── schemas.py
 ├── extractor_client.py
+├── model_client_config.json
 ├── task_specs/
 │   └── *.json
 ├── impl/
@@ -83,11 +84,13 @@ file_extraction_agent/
 各层职责如下：
 
 - `processor.py`
-  对外统一入口，只负责输入校验、task spec 加载、调用 graph，并返回最终结果。
+  对外统一入口，负责输入校验、task spec 加载、调用 normalization 组装 GraphInput、再调用 graph，并返回最终结果。
 - `schemas.py`
-  定义对外输入输出契约，以及 broad extraction / resolution / result aggregation 的结构化对象。
+  定义数据契约，包括 session 级 `GraphInput`、文档级 `NormalizedDocument`、broad extraction / resolution / result aggregation 的结构化对象。
 - `extractor_client.py`
-  负责构造抽取执行客户端，例如从环境变量读取运行配置，并返回结构化输出执行器。
+  负责构造抽取执行客户端：先从环境变量读取 `BASE_URL`、`OPENAI_API_KEY`、`MODEL` 这些连接信息，再结合 `model_client_config.json` 里的结构化输出策略，返回真正可调用的结构化输出执行器。
+- `model_client_config.json`
+  保存模型客户端策略配置，例如优先走 `json_schema`、直接走 `tool_call`，还是按 fallback 顺序自动回退，以及 `temperature` 之类的请求参数。
 - `task_specs/*.json`
   保存固定 schema、字段类型、关键字段标记、局部校验规则、cross-field hints、lookup hints。
 - `impl/graph.py`
@@ -97,7 +100,7 @@ file_extraction_agent/
 - `impl/prompts.py`
   定义 broad extraction 和 field resolution 两阶段的指令文本组装逻辑，是内部执行策略，不作为外部注入点暴露。
 - `impl/normalization.py`
-  把外部 documents 压缩成图执行需要的统一输入。
+  把外部 documents 归一化成 `schemas.py` 中定义的 `GraphInput`，这是 graph 之外的预处理步骤，不是 graph 内部节点。
 - `impl/validation.py`
   做候选清洗、字段类型归一化、局部规则校验和状态归类。
 - `impl/broad_extraction.py`
@@ -105,7 +108,7 @@ file_extraction_agent/
 - `impl/resolution.py`
   按字段逐个定案，吸收全局字段输出，必要时执行一次定向补查询。
 
-## 为什么 `state.py` 和 `prompts.py` 放在 `impl/`
+## 为什么 `state.py`、`prompts.py` 和 `normalization.py` 放在 `impl/`
 
 当前设计下，`state.py` 不是模块级公共契约，而是流程内部执行态。它主要由：
 
@@ -123,6 +126,30 @@ file_extraction_agent/
 - 它们不是公开 API
 - 调用方只和 `processor.extract(...)`、`schemas.py` 暴露的结果对象打交道
 
+`normalization.py` 也保留在 `impl/`，但原因和 `state.py` 不完全一样。它虽然不属于 graph 内部节点，却仍然属于模块内部预处理逻辑，而不是对外公开契约。它的职责是把外部输入整理成 `schemas.py` 里定义好的 `GraphInput`，让 `graph.py` 从一开始就只处理标准化后的输入，而不用承担外部输入整形和协议适配。
+
+## `extractor_client.py` 与 `model_client_config.json` 的分工
+
+这一层现在故意把“连接配置”和“调用策略”拆开，而不是全部堆进环境变量。
+
+可以按下面的 pipeline 理解：
+
+```text
+部署环境提供 BASE_URL / OPENAI_API_KEY / MODEL
+  -> extractor_client 先检查这三个连接变量是否齐全；缺任一项就直接报配置错误
+  -> 再读取 model_client_config.json，拿到 structured_output.strategy、fallback_order、request_options
+  -> 用 BASE_URL / OPENAI_API_KEY / MODEL 创建 ChatOpenAI(base_url=..., api_key=..., model=..., ...)
+  -> 如果 strategy=json_schema，就固定使用 json_schema 结构化输出
+  -> 如果 strategy=tool_call，就改走 tool calling；内部映射成 LangChain 的 function_calling
+  -> 如果 strategy=auto，就按 fallback_order 先试 json_schema，再在兼容接口不支持时退到 tool_call
+  -> broad extraction 和 field resolution 只收到统一的结构化 runnable，不需要关心底层用了哪种协议
+```
+
+这样拆分的目的有两点：
+
+- 环境变量只负责部署相关的差异，例如服务地址、密钥、默认模型名。
+- `model_client_config.json` 只负责代码行为差异，例如结构化输出协议和回退顺序，便于随仓库一起版本管理。
+
 ## 两阶段执行设计
 
 ### 第一阶段：broad extraction
@@ -131,7 +158,7 @@ file_extraction_agent/
 
 输入：
 
-- 归一化后的多文档内容
+- `GraphInput.documents`
 - 固定 task spec / schema
 
 处理过程：
@@ -203,14 +230,15 @@ GraphInput.documents
 
 ## Graph 输入与内部状态
 
-`impl/graph.py` 不建议接收大量松散参数，而是只接收一个归一化后的图输入对象和一个抽取执行客户端：
+`impl/graph.py` 不建议接收大量松散参数，而是只接收一个已经由 `normalization.py` 组装好的图输入对象和一个抽取执行客户端：
 
 ```python
 run_extraction_graph(graph_input, extractor_client) -> ExtractionResult
 ```
 
-推荐把图入口固定成一个 `GraphInput` 类型，至少包含：
+推荐把图入口固定成一个在 `schemas.py` 中定义的 `GraphInput` 类型，至少包含：
 
+- `session_id`
 - `documents`
 - `task_spec`
 - `run_config`
@@ -218,14 +246,18 @@ run_extraction_graph(graph_input, extractor_client) -> ExtractionResult
 
 其中：
 
+- `session_id`
+  是 backend 在 session 聚合后补齐的顶层业务标识，用来说明这批文档属于同一次抽取会话。
 - `documents`
-  是归一化后的多文档输入，每个文档至少带 `document_id`、`markdown`、`md_list`、`blocks`
+  是 backend 聚合后的多文档输入，每个文档至少带 `document_id`、`markdown`、`md_list`、`blocks`
 - `task_spec`
   是当前任务的固定 schema 定义
 - `run_config`
   是流程执行策略，例如是否允许 extra lookup、每字段最多 lookup 次数、是否保留详细 trace
 - `metadata`
   是可选任务标签、session 信息或调试信息
+
+`GraphInput` 属于流程入口前就确定好的数据契约，因此放在 `schemas.py`，供 `normalization.py` 负责组装，供 `graph.py` 负责消费。
 
 对应地，`impl/state.py` 定义图内部中间态，例如：
 
