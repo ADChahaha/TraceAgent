@@ -9,7 +9,7 @@
 这一层当前只负责两件事：
 
 1. broad extraction：围绕固定 schema，为每个字段生成候选、证据和局部状态。
-2. field resolution：针对单个目标字段，读取全局字段候选并完成最终定案或失败收口。
+2. field resolution：读取 broad extraction 的全字段候选结果，一次性完成全字段最终定案或失败收口。
 
 也就是说，这一层解决的是：
 
@@ -54,8 +54,7 @@ backend 聚合后的 documents + task_spec
   -> 如果只传了 task_spec_name，就从 task_specs/*.json 加载固定 schema
   -> impl/graph.py 从 GraphInput 开始驱动两阶段流程
   -> impl/broad_extraction.py 生成每个字段的候选、证据、局部状态
-  -> impl/validation.py 对 broad output 做字段级校验、归一化和缺失/歧义标记
-  -> impl/resolution.py 针对每个目标字段读取全局 broad output，必要时做一次定向 extra lookup，再输出 resolved / failed
+  -> impl/resolution.py 直接读取 broad extraction 的全量输出，结合字段间关系一次性输出全字段 resolved / failed
   -> processor.extract(...) 汇总成 ExtractionResult 返回给上层
 ```
 
@@ -98,19 +97,17 @@ file_extraction_agent/
 - `model_client_config.json`
   保存模型客户端策略配置，例如优先走 `json_schema`、直接走 `tool_call`，还是按 fallback 顺序自动回退，以及 `temperature` 之类的请求参数。
 - `task_specs/*.json`
-  保存固定 schema、字段类型、关键字段标记、局部校验规则、cross-field hints、lookup hints。
+  保存固定 schema、字段类型、关键字段标记、局部校验规则和 cross-field hints。
 - `impl/graph.py`
   只负责编排节点流转，不直接定义对外 API。
 - `impl/state.py`
   定义流程内部执行态，只给 graph、broad extraction 和 resolution 这些节点共享。
 - `impl/prompts.py`
   定义 broad extraction 和 field resolution 两阶段的指令文本组装逻辑，是内部执行策略，不作为外部注入点暴露。
-- `impl/validation.py`
-  做候选清洗、字段类型归一化、局部规则校验和状态归类。
 - `impl/broad_extraction.py`
   调用字段抽取执行器生成字段级候选集合。
 - `impl/resolution.py`
-  按字段逐个定案，吸收全局字段输出，必要时执行一次定向补查询。
+  读取全量 broad output，一次性完成全字段最终定案。
 
 ## 为什么 `state.py` 和 `prompts.py` 放在 `impl/`
 
@@ -170,7 +167,7 @@ GraphInput.documents
   -> 选择适合放进抽取输入的 markdown / block 摘要
   -> 根据 task spec 展开所有目标字段
   -> 调用字段抽取执行器一次返回所有字段的 BroadExtractionOutput
-  -> validation.py 清洗空候选、归一化证据位置、补局部状态和局部校验结果
+  -> broad output 直接作为 resolution 阶段的输入
 ```
 
 输出对象至少要保留：
@@ -194,40 +191,30 @@ GraphInput.documents
 
 ### 第二阶段：field resolution
 
-这一阶段不是把整份文档一次性融合出最终答案，而是 **针对单个目标字段逐个定案**。
+这一阶段会读取 broad extraction 的全字段候选结果，并 **一次性输出所有字段的最终结果**。
 
 输入：
 
-- 当前目标字段的 broad extraction 输出
-- 所有字段的 broad extraction 输出摘要
-- 当前字段的 schema 约束和校验规则
+- 完整的 `BroadExtractionOutput`
+- 全量字段 schema 约束和 cross-field hints
 - 归一化后的文档内容
 
 处理过程：
 
 ```text
-当前 target field
-  -> 读取它自己的候选、证据、局部状态
+完整 broad_output
+  -> 逐字段读取候选、证据、局部状态
   -> 同时读取其他字段输出作为 cross-field hints
-  -> 判断能否直接 resolved
-  -> 如果证据不足但仍有收敛空间，就做一次定向 extra lookup
-  -> 基于补查询结果再次判断
-  -> 输出 resolved 或 failed
+  -> 做全局一致性判断和字段级收口
+  -> 一次性输出全字段 resolved / failed
 ```
 
-这里的 extra lookup 不是整份文档重跑，而是围绕当前字段做一次定向再确认，例如：
-
-- 重新筛选当前字段相关的 block
-- 重新检查关键表达
-- 对两个相近候选做语义区分
-
-输出只针对当前字段，至少要包含：
+输出中的每个字段至少要包含：
 
 - `field_name`
 - `status`
 - `final_value`
 - `used_field_outputs`
-- `extra_lookup_used`
 - `reason` 或 `failure_reason`
 
 ## Graph 输入与内部状态
@@ -266,9 +253,17 @@ run_extraction_graph(graph_input, extractor_client) -> ExtractionResult
 - `graph_input`
 - `broad_output`
 - `resolved_fields`
-- `current_field`
-- `lookup_trace`
 - `warnings`
+
+当前已落地的 graph 编排顺序是：
+
+```text
+GraphInput + extractor_client
+  -> build_graph_state(graph_input)
+  -> run_broad_extraction(state, extractor_client)
+  -> run_resolution(state)
+  -> ExtractionResult
+```
 
 也就是说：
 
@@ -318,7 +313,7 @@ run_extraction_graph(graph_input, extractor_client) -> ExtractionResult
 - `resolved_fields`
 - `run_trace`
 
-其中 `run_trace` 记录执行轮次、extra lookup 痕迹、warnings 和其他辅助审计信息。
+其中 `run_trace` 如果保留，应只作为轻量调试或审计附加信息，而不是主流程状态中心。
 
 ## task spec 设计
 
@@ -386,8 +381,7 @@ run_extraction_graph(graph_input, extractor_client) -> ExtractionResult
 - 输入归一化与 task spec 加载
 - broad extraction 结构化输出解析
 - 局部校验和候选清洗
-- 按字段逐个 resolution
-- extra lookup 最多一次且只针对当前字段
+- resolve 读取 broad 全量结果并一次性输出全字段最终结果
 - 最终结果可追踪到候选、证据和使用过的字段输出
 
 ## 文档同步要求
