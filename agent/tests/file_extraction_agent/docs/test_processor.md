@@ -2,7 +2,7 @@
 
 ## 基本实现思路
 
-`file_extraction_agent.processor` 是这个模块的对外总入口。它不再自己承担外部输入适配，而是把抽取 pipeline 串起来：接住 session 级输入，转交给 `input_adapter.build_graph_input(...)` 组装 `GraphInput`，调用 extractor client 产出 broad extraction，再把字段结果收口成 `ExtractionResult`。
+`file_extraction_agent.processor` 是这个模块的对外总入口。它不再自己承担外部输入适配，也不再自己手写 broad extraction / resolution 编排，而是接住 session 级输入，转交给 `input_adapter.build_graph_input(...)` 组装 `GraphInput`，再准备好 `ExtractorClient`，最后把这两个对象交给 `impl/graph.py` 返回 `ExtractionResult`。
 
 这层当前按下面的 pipeline 理解：
 
@@ -11,18 +11,19 @@
   -> processor.extract(...)
   -> 先把 session 级输入转交给 input_adapter.build_graph_input(...)
   -> input_adapter 负责选择 task_spec，并组装 GraphInput
-  -> 调用 extractor_client.invoke(..., output_schema=BroadExtractionOutput) 获取字段候选
-  -> 按 task_spec.fields 的顺序对每个字段做最小定案：单一候选就 resolved，空候选就 failed，多候选冲突也 failed
-  -> 返回 broad_output + resolved_fields + run_trace 组成的 ExtractionResult
+  -> 如果调用方没传 extractor_client，就先构造默认 ExtractorClient
+  -> 调用 impl/graph.run_extraction_graph(graph_input, extractor_client)
+  -> graph 内部继续驱动 broad extraction 和 resolution
+  -> 返回 graph 汇总好的 ExtractionResult
 ```
 
 ## 测什么
 
 - `processor` 会从 `session_id + documents + task_spec` 组装 pipeline 入口
 - `processor` 会把 session 级输入委托给 `input_adapter`
+- `processor` 会把 `GraphInput + ExtractorClient` 委托给 `graph`
 - `processor` 支持通过 `task_spec_name` 从 `task_specs/*.json` 加载 schema
-- broad extraction 没有候选值时，会在最终结果里收口成 `failed`
-- broad extraction 缺少某个字段输出时，会按 `task_spec.fields` 顺序补一个失败结果，而不是丢字段
+- `processor` 不再自己补字段结果，而是直接返回 graph 的结果
 - 缺少 `task_spec` 和 `task_spec_name` 时会拒绝继续执行
 
 ## 每个函数在干什么
@@ -30,25 +31,25 @@
 `test_extract_delegates_graph_input_building_to_input_adapter`
 
 - 用假的 `build_graph_input(...)` 返回一份已经适配好的 `GraphInput`。
-- 再让假的 extractor client 读取这份适配后的 session 内容。
-- 确认 `processor.extract(...)` 会把原始 session 参数先交给 `input_adapter`，而不是自己绕过适配层组装图输入。
+- 再用假的 `run_extraction_graph(...)` 接住 `GraphInput` 和 extractor client。
+- 确认 `processor.extract(...)` 会把原始 session 参数先交给 `input_adapter`，再把适配后的 `GraphInput` 交给 graph。
 
-`test_extract_builds_graph_input_from_prevalidated_documents_and_task_spec`
+`test_extract_delegates_execution_to_graph_with_built_client`
 
 - 直接构造一份合法的 `session_id + documents + task_spec`。
-- 用假的 extractor client 返回一个单候选 broad extraction。
-- 确认 `processor.extract(...)` 经过 `input_adapter` 收敛输入后，能把单候选 broad extraction 收口成 `resolved`。
+- 用假的 `run_extraction_graph(...)` 返回一份完整的 `ExtractionResult`。
+- 确认 `processor.extract(...)` 会把已经准备好的 extractor client 和 `GraphInput` 一起交给 graph，而不是自己直接调模型客户端。
 
 `test_extract_loads_task_spec_from_task_spec_name`
 
 - 在临时目录里写一份 `task_specs/invoice.json`。
 - 只传 `task_spec_name`，不直接传 `task_spec`。
-- 确认 `processor` 会先加载 task spec，再把空候选收口成 `failed`。
+- 确认 `processor` 会先加载 task spec，再把组装好的 `GraphInput` 交给 graph。
 
-`test_extract_uses_task_spec_order_to_fill_missing_field_outputs`
+`test_extract_returns_graph_result_without_reimplementing_field_fill`
 
-- 构造一个有两个字段的 `TaskSpec`，但让 broad extraction 只返回其中一个字段。
-- 确认 `processor` 会按 task spec 顺序补齐最终结果，让缺失字段显式变成 `failed`。
+- 让假的 `run_extraction_graph(...)` 直接返回两字段结果，其中一个失败。
+- 确认 `processor` 不会自己重做字段补齐或重算，而是直接返回 graph 已经汇总好的结果。
 
 `test_extract_rejects_missing_task_spec_and_task_spec_name`
 

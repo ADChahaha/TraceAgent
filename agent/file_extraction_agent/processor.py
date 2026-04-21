@@ -8,11 +8,9 @@
   -> input_adapter 负责选择 task_spec：显式传入就直接用；否则按 task_spec_name 从 task_specs/*.json 加载
   -> input_adapter 再用 session_id / documents / task_spec / run_config / metadata 组装 GraphInput
   -> 如果没传 extractor_client，就调用 build_extractor_client_from_env() 构造默认客户端
-  -> 把 GraphInput 压成给 broad extraction 使用的 messages
-  -> 调用 extractor_client.invoke(..., output_schema=BroadExtractionOutput)
-  -> 调用 impl/resolution.py 按 task_spec.fields 顺序收口 broad output
-  -> resolution 阶段对每个字段做候选去重：单一候选值 resolved，没有候选值 failed，多候选冲突也 failed
-  -> 返回 ExtractionResult(broad_output, resolved_fields, run_trace)
+  -> 把 GraphInput 和 ExtractorClient 交给 impl/graph.py
+  -> graph 依次驱动 broad extraction 和 resolution
+  -> 返回 graph 汇总后的 ExtractionResult
 ```
 """
 
@@ -22,15 +20,12 @@ from typing import Any
 
 from file_extraction_agent.extractor_client import build_extractor_client_from_env
 from file_extraction_agent import input_adapter
-from file_extraction_agent.impl.prompts import build_broad_extraction_messages
-from file_extraction_agent.impl.resolution import resolve_fields
+from file_extraction_agent.impl.graph import run_extraction_graph
 from file_extraction_agent.input_adapter import build_graph_input
 from file_extraction_agent.schemas import (
-    BroadExtractionOutput,
     ExtractionResult,
     NormalizedDocument,
     RunConfig,
-    RunTrace,
     TaskSpec,
 )
 
@@ -65,16 +60,7 @@ def extract(
         if extractor_client is not None
         else build_extractor_client_from_env()
     )
-    broad_output = client.invoke(
-        output_schema=BroadExtractionOutput,
-        messages=build_broad_extraction_messages(graph_input),
-    )
-    resolved_fields = resolve_fields(
-        task_spec=graph_input.task_spec,
-        broad_output=broad_output,
-    )
-    return ExtractionResult(
-        broad_output=broad_output,
-        resolved_fields=resolved_fields,
-        run_trace=RunTrace(rounds=1),
+    return run_extraction_graph(
+        graph_input=graph_input,
+        extractor_client=client,
     )

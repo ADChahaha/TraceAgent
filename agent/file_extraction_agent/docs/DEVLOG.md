@@ -1,4 +1,29 @@
-last updated: 2026-04-21 18:42:35 CST
+last updated: 2026-04-21 19:04:05 CST
+
+## 2026-04-21 19:04:05
+
+### 已完成工作
+
+- 修改了 `file_extraction_agent/processor.py`，让 `extract(...)` 继续负责外部输入适配和 `ExtractorClient` 准备，但不再自己直接调用模型或手工收口字段结果，而是把 `GraphInput + ExtractorClient` 统一交给 `impl/graph.py`。
+- 更新 `tests/file_extraction_agent/test_processor.py`，把入口测试改成校验 `processor` 必须委托 `run_extraction_graph(...)`，并确认它不会自己重复做字段补齐或结果重算。
+- 同步更新 `tests/file_extraction_agent/docs/test_processor.md`，把当前入口 pipeline、职责边界和各测试函数说明改成“input_adapter + extractor_client + graph”这条真实链路。
+
+### 当前进展
+
+- `file_extraction_agent` 当前入口边界已经收口成三段：
+  - `input_adapter.py` 负责 session 输入校验、task spec 解析和 `GraphInput` 组装
+  - `extractor_client.py` 负责模型连接配置、structured output 策略和统一 `invoke(...)` 封装
+  - `impl/graph.py` 负责 broad extraction 与 resolution 的内部节点编排
+- `processor.py` 现在只负责把这三层串起来，不再自己承担内部节点执行细节。
+
+### 遇到的问题
+
+- 之前 `processor.py` 一边负责入口参数适配，一边直接调用 extractor client、拼 broad extraction prompt、再自己做 resolution 收口，导致“入口层”“模型调用封装层”和“内部图编排层”三者边界混在一起。
+
+### 下一步
+
+- 后续如果继续扩展 `file_extraction_agent`，优先把行为落到 `impl/graph.py` 或内部节点中，不再把阶段逻辑回灌到 `processor.py`。
+- 如果需要补更多入口回归，优先围绕“processor 是否只负责组装和委托”这个边界继续加测试。
 
 ## 2026-04-21 18:42:35
 
