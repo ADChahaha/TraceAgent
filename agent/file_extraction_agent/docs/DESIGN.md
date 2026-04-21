@@ -70,7 +70,6 @@ file_extraction_agent/
 ├── processor.py
 ├── schemas.py
 ├── extractor_client.py
-├── model_client_config.json
 ├── task_specs/
 │   └── *.json
 ├── impl/
@@ -94,9 +93,7 @@ file_extraction_agent/
 - `schemas.py`
   定义数据契约，包括 session 级 `GraphInput`、文档级 `NormalizedDocument`、broad extraction / resolution / result aggregation 的结构化对象。
 - `extractor_client.py`
-  负责构造抽取执行客户端：先从环境变量读取 `BASE_URL`、`OPENAI_API_KEY`、`MODEL` 这些连接信息，再结合调用方显式传入的结构化输出策略，返回真正可调用的结构化输出执行器。
-- `model_client_config.json`
-  只保存与请求参数相关的默认配置，例如 `temperature`；不再负责结构化输出策略选择。
+  负责构造抽取执行客户端：先从环境变量读取 `BASE_URL`、`OPENAI_API_KEY`、`MODEL` 这些连接信息，再结合调用方显式传入的结构化输出策略和代码内默认请求参数，返回真正可调用的结构化输出执行器。
 - `task_specs/*.json`
   保存固定 schema、字段类型、关键字段标记、局部校验规则和 cross-field hints。
 - `impl/graph.py`
@@ -128,9 +125,9 @@ file_extraction_agent/
 - 它们不是公开 API
 - 调用方只和 `processor.extract(...)`、`schemas.py` 暴露的结果对象打交道
 
-## `processor.py`、`extractor_client.py` 与 `model_client_config.json` 的分工
+## `processor.py` 与 `extractor_client.py` 的分工
 
-这一层现在故意把“连接配置”“调用策略”和“请求参数默认值”拆开，而不是全部堆进环境变量或配置文件。
+这一层现在故意把“连接配置”和“调用策略”拆开，而不是全部堆进环境变量。
 
 可以按下面的 pipeline 理解：
 
@@ -139,8 +136,8 @@ file_extraction_agent/
   -> processor 明确指定这次调用是 json_schema / tool_call / auto
   -> 部署环境提供 BASE_URL / OPENAI_API_KEY / MODEL
   -> extractor_client 先检查这三个连接变量是否齐全；缺任一项就直接报配置错误
-  -> 再读取 model_client_config.json，拿到 request_options 这类默认请求参数
-  -> 用 BASE_URL / OPENAI_API_KEY / MODEL 创建 ChatOpenAI(base_url=..., api_key=..., model=..., ...)
+  -> 再使用代码内默认请求参数，例如 temperature=0
+  -> 用 BASE_URL / OPENAI_API_KEY / MODEL 创建 ChatOpenAI(base_url=..., api_key=..., model=..., temperature=0)
   -> 如果 structured_output_strategy=json_schema，就固定使用 json_schema 结构化输出
   -> 如果 structured_output_strategy=tool_call，就改走 tool calling；内部映射成 LangChain 的 function_calling
   -> 如果 structured_output_strategy=auto，就按代码内的默认顺序先试 json_schema，再在兼容接口不支持时退到 tool_call
@@ -151,7 +148,6 @@ file_extraction_agent/
 
 - 环境变量只负责部署相关的差异，例如服务地址、密钥、默认模型名。
 - `processor.extract(...)` 负责本次调用真正想走哪种结构化输出协议，因为这是业务调用面的显式选择，不应该藏在配置文件里。
-- `model_client_config.json` 只负责默认请求参数这类运行时细节，便于随仓库一起版本管理。
 
 ## 两阶段执行设计
 

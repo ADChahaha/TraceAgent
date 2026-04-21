@@ -1,4 +1,31 @@
-last updated: 2026-04-21 19:04:05 CST
+last updated: 2026-04-21 19:39:18 CST
+
+## 2026-04-21 19:39:18
+
+### 已完成工作
+
+- 修改了 `file_extraction_agent/processor.py`，把结构化输出策略显式收口到 `extract(..., structured_output_strategy=...)` 接口中，不再让调用方通过配置文件间接指定 `json_schema` / `tool_call` / `auto`。
+- 修改了 `file_extraction_agent/extractor_client.py`，让运行时只依赖 `BASE_URL`、`OPENAI_API_KEY`、`MODEL` 这三个环境变量，再配合代码内默认 `temperature=0` 构造客户端；不再读取 `model_client_config.json`，也不再保留旧入口兼容层。
+- 按你的删除意图收口了 `model_client_config.json`：当前提交链路把这个文件视为已删除状态，不再让代码对它存在运行时依赖。
+- 更新 `tests/file_extraction_agent/test_extractor_client.py` 和 `tests/file_extraction_agent/test_processor.py`，把测试目标改成“结构化输出策略由 processor / extractor_client 显式参数决定”，并删掉旧兼容入口相关测试。
+- 同步更新 `tests/file_extraction_agent/docs/test_extractor_client.md`、`tests/file_extraction_agent/docs/test_processor.md` 和 `file_extraction_agent/docs/DESIGN.md`，让文档与当前接口边界一致。
+
+### 当前进展
+
+- `file_extraction_agent` 当前调用边界已经收口成：
+  - `processor.extract(...)` 显式决定 structured output strategy
+  - `extractor_client.py` 只负责环境变量连接配置和结构化调用封装
+  - `graph.py` 继续负责 broad extraction 与 resolution 编排
+- 当前 `extractor_client` 运行时不再依赖仓库内本地 JSON 配置文件。
+
+### 遇到的问题
+
+- 中间有一轮改动只把“结构化输出策略”从配置文件里挪走了，但仍残留了对 `model_client_config.json` 的请求参数读取依赖；在你明确指出“那个 json 被我删掉了”后，才继续把这层残留依赖彻底删干净。
+
+### 下一步
+
+- 如果后续需要继续清理历史提交记录，再单独处理已经写进 git 历史里的中间态提交，避免让“短暂依赖过已删除文件”的记录继续留在分支线上。
+- 如果要继续联调真实模型代理，再优先围绕当前显式 `structured_output_strategy` 接口去定位代理兼容性问题。
 
 ## 2026-04-21 19:04:05
 

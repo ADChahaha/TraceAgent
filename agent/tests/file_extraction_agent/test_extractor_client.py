@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-
 from pydantic import BaseModel
 
 from file_extraction_agent import extractor_client as extractor_client_module
@@ -27,19 +25,7 @@ def test_build_extractor_client_from_env_requires_all_runtime_variables(monkeypa
         raise AssertionError("缺少环境变量时应拒绝构造 extractor client")
 
 
-def test_build_extractor_client_from_env_uses_json_schema_strategy_from_config(
-    monkeypatch, tmp_path
-):
-    config_path = tmp_path / "model_client_config.json"
-    config_path.write_text(
-        json.dumps(
-            {
-                "request_options": {"temperature": 0},
-            }
-        ),
-        encoding="utf-8",
-    )
-
+def test_build_extractor_client_from_env_uses_json_schema_strategy_argument(monkeypatch):
     created_kwargs: dict[str, object] = {}
 
     class FakeRunnable:
@@ -64,8 +50,7 @@ def test_build_extractor_client_from_env_uses_json_schema_strategy_from_config(
     monkeypatch.setattr(extractor_client_module, "ChatOpenAI", FakeChatOpenAI)
 
     client = extractor_client_module.build_extractor_client_from_env(
-        config_path=config_path,
-        structured_output_strategy="json_schema",
+        structured_output_strategy="json_schema"
     )
     result = client.invoke(
         output_schema=DummyOutput,
@@ -80,15 +65,7 @@ def test_build_extractor_client_from_env_uses_json_schema_strategy_from_config(
     assert result.answer == "可调用"
 
 
-def test_build_extractor_client_from_env_uses_tool_call_strategy_from_config(
-    monkeypatch, tmp_path
-):
-    config_path = tmp_path / "model_client_config.json"
-    config_path.write_text(
-        json.dumps({"request_options": {"temperature": 0}}),
-        encoding="utf-8",
-    )
-
+def test_build_extractor_client_from_env_uses_tool_call_strategy_argument(monkeypatch):
     seen_methods: list[tuple[str, bool | None]] = []
 
     class FakeRunnable:
@@ -112,8 +89,7 @@ def test_build_extractor_client_from_env_uses_tool_call_strategy_from_config(
     monkeypatch.setattr(extractor_client_module, "ChatOpenAI", FakeChatOpenAI)
 
     client = extractor_client_module.build_extractor_client_from_env(
-        config_path=config_path,
-        structured_output_strategy="tool_call",
+        structured_output_strategy="tool_call"
     )
     result = client.invoke(
         output_schema=DummyOutput,
@@ -126,14 +102,8 @@ def test_build_extractor_client_from_env_uses_tool_call_strategy_from_config(
 
 
 def test_build_extractor_client_from_env_falls_back_to_tool_call_when_json_schema_is_unsupported(
-    monkeypatch, tmp_path
+    monkeypatch,
 ):
-    config_path = tmp_path / "model_client_config.json"
-    config_path.write_text(
-        json.dumps({"request_options": {"temperature": 0}}),
-        encoding="utf-8",
-    )
-
     seen_methods: list[tuple[str, bool | None]] = []
 
     class FakeRunnable:
@@ -159,8 +129,7 @@ def test_build_extractor_client_from_env_falls_back_to_tool_call_when_json_schem
     monkeypatch.setattr(extractor_client_module, "ChatOpenAI", FakeChatOpenAI)
 
     client = extractor_client_module.build_extractor_client_from_env(
-        config_path=config_path,
-        structured_output_strategy="auto",
+        structured_output_strategy="auto"
     )
     result = client.invoke(
         output_schema=DummyOutput,
@@ -173,21 +142,14 @@ def test_build_extractor_client_from_env_falls_back_to_tool_call_when_json_schem
 
 
 def test_build_extractor_client_from_env_rejects_unknown_structured_output_strategy_argument(
-    monkeypatch, tmp_path
+    monkeypatch,
 ):
-    config_path = tmp_path / "model_client_config.json"
-    config_path.write_text(
-        json.dumps({"request_options": {"temperature": 0}}),
-        encoding="utf-8",
-    )
-
     monkeypatch.setenv("BASE_URL", "https://llm.example.com/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("MODEL", "gpt-compatible")
 
     try:
         extractor_client_module.build_extractor_client_from_env(
-            config_path=config_path,
             structured_output_strategy="unsupported",  # type: ignore[arg-type]
         )
     except extractor_client_module.ExtractorClientConfigError as exc:

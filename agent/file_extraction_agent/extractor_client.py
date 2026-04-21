@@ -3,12 +3,11 @@
 实现步骤：
 
 ```text
-调用方进入 build_extractor_client_from_env(config_path, structured_output_strategy)
+调用方进入 build_extractor_client_from_env(structured_output_strategy)
   -> 先从 os.environ 读取 BASE_URL、OPENAI_API_KEY、MODEL
   -> 如果缺任何一个，就抛 ExtractorClientConfigError 并指出缺失变量名
-  -> 再读取 model_client_config.json，只拿 request_options 这类默认请求参数
   -> 校验 structured_output_strategy 是否是 json_schema / tool_call / auto
-  -> 用 env 和 request_options 创建 ChatOpenAI(base_url=..., api_key=..., model=..., ...)
+  -> 用 env 和代码内默认请求参数创建 ChatOpenAI(base_url=..., api_key=..., model=..., temperature=0)
   -> 返回 ExtractorClient，让 broad extraction / resolution 后续按 schema 取结构化 runnable
   -> 调用 ExtractorClient.invoke(...) 时，先把 json_schema / tool_call 映射到 LangChain 的 json_schema / function_calling
   -> 如果 structured_output_strategy=auto，就按代码内固定顺序先试 json_schema，再在不支持时退到 tool_call
@@ -18,10 +17,8 @@
 
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Literal, TypeVar
 
 from langchain_openai import ChatOpenAI
@@ -35,8 +32,6 @@ LangChainStructuredOutputMethod = Literal["json_schema", "function_calling"]
 
 REQUIRED_ENV_VARS = ("BASE_URL", "OPENAI_API_KEY", "MODEL")
 SUPPORTED_STRATEGIES = {"json_schema", "tool_call", "auto"}
-SUPPORTED_METHODS = {"json_schema", "tool_call"}
-DEFAULT_CONFIG_PATH = Path(__file__).with_name("model_client_config.json")
 DEFAULT_AUTO_METHODS: tuple[StructuredOutputMethod, ...] = ("json_schema", "tool_call")
 LANGCHAIN_METHOD_MAP: dict[StructuredOutputMethod, LangChainStructuredOutputMethod] = {
     "json_schema": "json_schema",
@@ -85,19 +80,16 @@ class ExtractorClient:
 
 def build_extractor_client_from_env(
     *,
-    config_path: str | Path | None = None,
     structured_output_strategy: StructuredOutputStrategy = "auto",
 ) -> ExtractorClient:
     runtime_config = _load_runtime_config_from_env()
-    request_options = dict(_load_client_config(config_path=config_path)["request_options"])
-    request_options.setdefault("temperature", 0)
     methods = _resolve_structured_output_methods(structured_output_strategy)
 
     model = ChatOpenAI(
         base_url=runtime_config["BASE_URL"],
         api_key=runtime_config["OPENAI_API_KEY"],
         model=runtime_config["MODEL"],
-        **request_options,
+        temperature=0,
     )
     return ExtractorClient(
         model=model,
@@ -117,34 +109,6 @@ def _load_runtime_config_from_env() -> dict[str, str]:
         )
 
     return {name: os.environ[name] for name in REQUIRED_ENV_VARS}
-
-
-def _load_client_config(
-    *, config_path: str | Path | None = None
-) -> dict[str, dict[str, Any]]:
-    raw_config = _read_json_config(config_path=config_path)
-    request_options = raw_config.get("request_options", {})
-
-    if not isinstance(request_options, dict):
-        raise ExtractorClientConfigError("request_options must be an object")
-
-    return {
-        "request_options": request_options,
-    }
-
-
-def _read_json_config(*, config_path: str | Path | None = None) -> dict[str, Any]:
-    resolved_path = Path(config_path) if config_path is not None else DEFAULT_CONFIG_PATH
-    try:
-        return json.loads(resolved_path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise ExtractorClientConfigError(
-            f"model client config not found: {resolved_path}"
-        ) from exc
-    except json.JSONDecodeError as exc:
-        raise ExtractorClientConfigError(
-            f"invalid model client config json: {resolved_path}"
-        ) from exc
 
 
 def _resolve_structured_output_methods(
