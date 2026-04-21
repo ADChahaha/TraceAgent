@@ -11,6 +11,7 @@
   -> processor.extract(...)
   -> 先把 session 级输入转交给 input_adapter.build_graph_input(...)
   -> input_adapter 负责选择 task_spec，并组装 GraphInput
+  -> processor 再显式决定 structured_output_strategy，例如 json_schema / tool_call / auto
   -> 如果调用方没传 extractor_client，就先构造默认 ExtractorClient
   -> 调用 impl/graph.run_extraction_graph(graph_input, extractor_client)
   -> graph 内部继续驱动 broad extraction 和 resolution
@@ -21,6 +22,7 @@
 
 - `processor` 会从 `session_id + documents + task_spec` 组装 pipeline 入口
 - `processor` 会把 session 级输入委托给 `input_adapter`
+- `processor` 会把 structured_output_strategy 显式传给 extractor client builder
 - `processor` 会把 `GraphInput + ExtractorClient` 委托给 `graph`
 - `processor` 支持通过 `task_spec_name` 从 `task_specs/*.json` 加载 schema
 - `processor` 不再自己补字段结果，而是直接返回 graph 的结果
@@ -39,6 +41,12 @@
 - 直接构造一份合法的 `session_id + documents + task_spec`。
 - 用假的 `run_extraction_graph(...)` 返回一份完整的 `ExtractionResult`。
 - 确认 `processor.extract(...)` 会把已经准备好的 extractor client 和 `GraphInput` 一起交给 graph，而不是自己直接调模型客户端。
+
+`test_extract_passes_structured_output_strategy_to_client_builder`
+
+- 不直接传 extractor client，只替换默认 builder。
+- 显式调用 `processor.extract(..., structured_output_strategy="json_schema")`。
+- 确认 `processor` 会把这个策略参数传给 `build_extractor_client_from_env(...)`，而不是让 builder 自己去配置文件里猜。
 
 `test_extract_loads_task_spec_from_task_spec_name`
 

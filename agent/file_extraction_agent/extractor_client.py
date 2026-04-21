@@ -3,15 +3,15 @@
 实现步骤：
 
 ```text
-调用方进入 build_extractor_client_from_env(config_path)
+调用方进入 build_extractor_client_from_env(config_path, structured_output_strategy)
   -> 先从 os.environ 读取 BASE_URL、OPENAI_API_KEY、MODEL
   -> 如果缺任何一个，就抛 ExtractorClientConfigError 并指出缺失变量名
-  -> 再读取 model_client_config.json，拿到 structured_output.strategy、fallback_order 和 request_options
-  -> 校验 strategy 是否是 json_schema / tool_call / auto，校验 fallback_order 只包含支持的方法
+  -> 再读取 model_client_config.json，只拿 request_options 这类默认请求参数
+  -> 校验 structured_output_strategy 是否是 json_schema / tool_call / auto
   -> 用 env 和 request_options 创建 ChatOpenAI(base_url=..., api_key=..., model=..., ...)
   -> 返回 ExtractorClient，让 broad extraction / resolution 后续按 schema 取结构化 runnable
-  -> 调用 ExtractorClient.invoke(...) 时，先把仓库里的 json_schema / tool_call 映射到 LangChain 的 json_schema / function_calling
-  -> 如果 strategy=auto，就按 fallback_order 依次尝试；如果前一种不支持，再退到下一种
+  -> 调用 ExtractorClient.invoke(...) 时，先把 json_schema / tool_call 映射到 LangChain 的 json_schema / function_calling
+  -> 如果 structured_output_strategy=auto，就按代码内固定顺序先试 json_schema，再在不支持时退到 tool_call
   -> 成功后把 messages 交给 runnable.invoke(...)，返回 Pydantic 结构化结果；全部失败时抛 ExtractorClientInvocationError
 ```
 """
@@ -37,6 +37,7 @@ REQUIRED_ENV_VARS = ("BASE_URL", "OPENAI_API_KEY", "MODEL")
 SUPPORTED_STRATEGIES = {"json_schema", "tool_call", "auto"}
 SUPPORTED_METHODS = {"json_schema", "tool_call"}
 DEFAULT_CONFIG_PATH = Path(__file__).with_name("model_client_config.json")
+DEFAULT_AUTO_METHODS: tuple[StructuredOutputMethod, ...] = ("json_schema", "tool_call")
 LANGCHAIN_METHOD_MAP: dict[StructuredOutputMethod, LangChainStructuredOutputMethod] = {
     "json_schema": "json_schema",
     "tool_call": "function_calling",
@@ -83,12 +84,14 @@ class ExtractorClient:
 
 
 def build_extractor_client_from_env(
-    *, config_path: str | Path | None = None
+    *,
+    config_path: str | Path | None = None,
+    structured_output_strategy: StructuredOutputStrategy = "auto",
 ) -> ExtractorClient:
     runtime_config = _load_runtime_config_from_env()
-    client_config = _load_client_config(config_path=config_path)
-    request_options = dict(client_config["request_options"])
+    request_options = dict(_load_client_config(config_path=config_path)["request_options"])
     request_options.setdefault("temperature", 0)
+    methods = _resolve_structured_output_methods(structured_output_strategy)
 
     model = ChatOpenAI(
         base_url=runtime_config["BASE_URL"],
@@ -100,19 +103,9 @@ def build_extractor_client_from_env(
         model=model,
         model_name=runtime_config["MODEL"],
         base_url=runtime_config["BASE_URL"],
-        structured_output_strategy=client_config["strategy"],
-        structured_output_methods=tuple(client_config["methods"]),
+        structured_output_strategy=structured_output_strategy,
+        structured_output_methods=methods,
     )
-
-
-def build_model_client_from_env(
-    *, config_path: str | Path | None = None
-) -> ExtractorClient:
-    """兼容旧入口名，避免上层调用点立刻失效。"""
-
-    if config_path is None:
-        return build_extractor_client_from_env()
-    return build_extractor_client_from_env(config_path=config_path)
 
 
 def _load_runtime_config_from_env() -> dict[str, str]:
@@ -128,41 +121,14 @@ def _load_runtime_config_from_env() -> dict[str, str]:
 
 def _load_client_config(
     *, config_path: str | Path | None = None
-) -> dict[str, StructuredOutputStrategy | list[StructuredOutputMethod] | dict[str, Any]]:
+) -> dict[str, dict[str, Any]]:
     raw_config = _read_json_config(config_path=config_path)
-    structured_output = raw_config.get("structured_output", {})
     request_options = raw_config.get("request_options", {})
 
-    if not isinstance(structured_output, dict):
-        raise ExtractorClientConfigError("structured_output must be an object")
     if not isinstance(request_options, dict):
         raise ExtractorClientConfigError("request_options must be an object")
 
-    strategy = structured_output.get("strategy", "auto")
-    if strategy not in SUPPORTED_STRATEGIES:
-        supported = ", ".join(sorted(SUPPORTED_STRATEGIES))
-        raise ExtractorClientConfigError(
-            f"unsupported structured_output.strategy: {strategy}. supported: {supported}"
-        )
-
-    raw_fallback_order = structured_output.get(
-        "fallback_order", ["json_schema", "tool_call"]
-    )
-    if not isinstance(raw_fallback_order, list) or not raw_fallback_order:
-        raise ExtractorClientConfigError(
-            "structured_output.fallback_order must be a non-empty list"
-        )
-
-    fallback_order = _validate_method_list(raw_fallback_order)
-    methods = (
-        fallback_order
-        if strategy == "auto"
-        else _validate_method_list([strategy], field_name="structured_output.strategy")
-    )
-
     return {
-        "strategy": strategy,
-        "methods": methods,
         "request_options": request_options,
     }
 
@@ -181,15 +147,16 @@ def _read_json_config(*, config_path: str | Path | None = None) -> dict[str, Any
         ) from exc
 
 
-def _validate_method_list(
-    raw_methods: list[Any], *, field_name: str = "structured_output.fallback_order"
-) -> list[StructuredOutputMethod]:
-    validated: list[StructuredOutputMethod] = []
-    for method in raw_methods:
-        if method not in SUPPORTED_METHODS:
-            supported = ", ".join(sorted(SUPPORTED_METHODS))
-            raise ExtractorClientConfigError(
-                f"unsupported {field_name} item: {method}. supported: {supported}"
-            )
-        validated.append(method)
-    return validated
+def _resolve_structured_output_methods(
+    structured_output_strategy: StructuredOutputStrategy | str,
+) -> tuple[StructuredOutputMethod, ...]:
+    if structured_output_strategy not in SUPPORTED_STRATEGIES:
+        supported = ", ".join(sorted(SUPPORTED_STRATEGIES))
+        raise ExtractorClientConfigError(
+            "unsupported structured_output_strategy: "
+            f"{structured_output_strategy}. supported: {supported}"
+        )
+
+    if structured_output_strategy == "auto":
+        return DEFAULT_AUTO_METHODS
+    return (structured_output_strategy,)

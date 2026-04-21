@@ -34,10 +34,6 @@ def test_build_extractor_client_from_env_uses_json_schema_strategy_from_config(
     config_path.write_text(
         json.dumps(
             {
-                "structured_output": {
-                    "strategy": "json_schema",
-                    "fallback_order": ["json_schema", "tool_call"],
-                },
                 "request_options": {"temperature": 0},
             }
         ),
@@ -68,7 +64,8 @@ def test_build_extractor_client_from_env_uses_json_schema_strategy_from_config(
     monkeypatch.setattr(extractor_client_module, "ChatOpenAI", FakeChatOpenAI)
 
     client = extractor_client_module.build_extractor_client_from_env(
-        config_path=config_path
+        config_path=config_path,
+        structured_output_strategy="json_schema",
     )
     result = client.invoke(
         output_schema=DummyOutput,
@@ -88,15 +85,7 @@ def test_build_extractor_client_from_env_uses_tool_call_strategy_from_config(
 ):
     config_path = tmp_path / "model_client_config.json"
     config_path.write_text(
-        json.dumps(
-            {
-                "structured_output": {
-                    "strategy": "tool_call",
-                    "fallback_order": ["tool_call"],
-                },
-                "request_options": {"temperature": 0},
-            }
-        ),
+        json.dumps({"request_options": {"temperature": 0}}),
         encoding="utf-8",
     )
 
@@ -123,7 +112,8 @@ def test_build_extractor_client_from_env_uses_tool_call_strategy_from_config(
     monkeypatch.setattr(extractor_client_module, "ChatOpenAI", FakeChatOpenAI)
 
     client = extractor_client_module.build_extractor_client_from_env(
-        config_path=config_path
+        config_path=config_path,
+        structured_output_strategy="tool_call",
     )
     result = client.invoke(
         output_schema=DummyOutput,
@@ -140,15 +130,7 @@ def test_build_extractor_client_from_env_falls_back_to_tool_call_when_json_schem
 ):
     config_path = tmp_path / "model_client_config.json"
     config_path.write_text(
-        json.dumps(
-            {
-                "structured_output": {
-                    "strategy": "auto",
-                    "fallback_order": ["json_schema", "tool_call"],
-                },
-                "request_options": {"temperature": 0},
-            }
-        ),
+        json.dumps({"request_options": {"temperature": 0}}),
         encoding="utf-8",
     )
 
@@ -177,7 +159,8 @@ def test_build_extractor_client_from_env_falls_back_to_tool_call_when_json_schem
     monkeypatch.setattr(extractor_client_module, "ChatOpenAI", FakeChatOpenAI)
 
     client = extractor_client_module.build_extractor_client_from_env(
-        config_path=config_path
+        config_path=config_path,
+        structured_output_strategy="auto",
     )
     result = client.invoke(
         output_schema=DummyOutput,
@@ -189,20 +172,12 @@ def test_build_extractor_client_from_env_falls_back_to_tool_call_when_json_schem
     assert result.answer == "fallback"
 
 
-def test_build_extractor_client_from_env_rejects_unknown_structured_output_strategy(
+def test_build_extractor_client_from_env_rejects_unknown_structured_output_strategy_argument(
     monkeypatch, tmp_path
 ):
     config_path = tmp_path / "model_client_config.json"
     config_path.write_text(
-        json.dumps(
-            {
-                "structured_output": {
-                    "strategy": "unsupported",
-                    "fallback_order": ["json_schema"],
-                },
-                "request_options": {"temperature": 0},
-            }
-        ),
+        json.dumps({"request_options": {"temperature": 0}}),
         encoding="utf-8",
     )
 
@@ -211,28 +186,11 @@ def test_build_extractor_client_from_env_rejects_unknown_structured_output_strat
     monkeypatch.setenv("MODEL", "gpt-compatible")
 
     try:
-        extractor_client_module.build_extractor_client_from_env(config_path=config_path)
+        extractor_client_module.build_extractor_client_from_env(
+            config_path=config_path,
+            structured_output_strategy="unsupported",  # type: ignore[arg-type]
+        )
     except extractor_client_module.ExtractorClientConfigError as exc:
         assert "unsupported" in str(exc)
     else:
         raise AssertionError("未知 structured output 策略应被拒绝")
-
-
-def test_build_model_client_from_env_aliases_extractor_builder(monkeypatch):
-    monkeypatch.setenv("BASE_URL", "https://llm.example.com/v1")
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("MODEL", "gpt-compatible")
-
-    sentinel = object()
-
-    def fake_builder(**kwargs):
-        assert kwargs == {}
-        return sentinel
-
-    monkeypatch.setattr(
-        extractor_client_module,
-        "build_extractor_client_from_env",
-        fake_builder,
-    )
-
-    assert extractor_client_module.build_model_client_from_env() is sentinel

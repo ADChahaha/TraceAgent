@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from file_extraction_agent.extractor_client import build_extractor_client_from_env
 from file_extraction_agent import input_adapter
@@ -32,6 +32,7 @@ from file_extraction_agent.schemas import (
 
 TASK_SPECS_DIR = input_adapter.TASK_SPECS_DIR
 TaskSpecNotFoundError = input_adapter.TaskSpecNotFoundError
+StructuredOutputStrategy = Literal["json_schema", "tool_call", "auto"]
 
 
 def extract(
@@ -42,6 +43,7 @@ def extract(
     task_spec_name: str | None = None,
     run_config: RunConfig | None = None,
     metadata: dict[str, Any] | None = None,
+    structured_output_strategy: StructuredOutputStrategy = "auto",
     extractor_client: Any | None = None,
 ) -> ExtractionResult:
     """消费外部已校验好的输入，执行最小可用的字段抽取收口流程。"""
@@ -58,7 +60,9 @@ def extract(
     client = (
         extractor_client
         if extractor_client is not None
-        else build_extractor_client_from_env()
+        else build_extractor_client_from_env(
+            structured_output_strategy=structured_output_strategy
+        )
     )
     return run_extraction_graph(
         graph_input=graph_input,

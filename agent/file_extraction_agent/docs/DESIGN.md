@@ -52,6 +52,7 @@ backend 聚合后的 documents + task_spec
   -> processor.extract(...) 先把这组外部参数转交给 input_adapter.build_graph_input(...)
   -> input_adapter 先做 session 输入校验、协议适配和 GraphInput 组装
   -> 如果只传了 task_spec_name，就从 task_specs/*.json 加载固定 schema
+  -> processor.extract(...) 再显式决定本次调用使用 json_schema / tool_call / auto 哪种结构化输出策略
   -> impl/graph.py 从 GraphInput 开始驱动两阶段流程
   -> impl/broad_extraction.py 生成每个字段的候选、证据、局部状态
   -> impl/resolution.py 直接读取 broad extraction 的全量输出，结合字段间关系一次性输出全字段 resolved / failed
@@ -89,13 +90,13 @@ file_extraction_agent/
 - `input_adapter.py`
   负责外部 session 输入校验、协议适配和 `GraphInput` 组装；这一层只解决“外面传进来的数据能不能进入 agent 内部契约”，不负责任何抽取流程编排。
 - `processor.py`
-  对外统一入口，负责接住 session 级调用参数，把外部输入转交给 `input_adapter.py`，再调用后续抽取流程并返回最终结果。
+  对外统一入口，负责接住 session 级调用参数，把外部输入转交给 `input_adapter.py`，显式决定本次调用的结构化输出策略，再调用后续抽取流程并返回最终结果。
 - `schemas.py`
   定义数据契约，包括 session 级 `GraphInput`、文档级 `NormalizedDocument`、broad extraction / resolution / result aggregation 的结构化对象。
 - `extractor_client.py`
-  负责构造抽取执行客户端：先从环境变量读取 `BASE_URL`、`OPENAI_API_KEY`、`MODEL` 这些连接信息，再结合 `model_client_config.json` 里的结构化输出策略，返回真正可调用的结构化输出执行器。
+  负责构造抽取执行客户端：先从环境变量读取 `BASE_URL`、`OPENAI_API_KEY`、`MODEL` 这些连接信息，再结合调用方显式传入的结构化输出策略，返回真正可调用的结构化输出执行器。
 - `model_client_config.json`
-  保存模型客户端策略配置，例如优先走 `json_schema`、直接走 `tool_call`，还是按 fallback 顺序自动回退，以及 `temperature` 之类的请求参数。
+  只保存与请求参数相关的默认配置，例如 `temperature`；不再负责结构化输出策略选择。
 - `task_specs/*.json`
   保存固定 schema、字段类型、关键字段标记、局部校验规则和 cross-field hints。
 - `impl/graph.py`
@@ -127,27 +128,30 @@ file_extraction_agent/
 - 它们不是公开 API
 - 调用方只和 `processor.extract(...)`、`schemas.py` 暴露的结果对象打交道
 
-## `extractor_client.py` 与 `model_client_config.json` 的分工
+## `processor.py`、`extractor_client.py` 与 `model_client_config.json` 的分工
 
-这一层现在故意把“连接配置”和“调用策略”拆开，而不是全部堆进环境变量。
+这一层现在故意把“连接配置”“调用策略”和“请求参数默认值”拆开，而不是全部堆进环境变量或配置文件。
 
 可以按下面的 pipeline 理解：
 
 ```text
-部署环境提供 BASE_URL / OPENAI_API_KEY / MODEL
+调用方进入 processor.extract(..., structured_output_strategy=...)
+  -> processor 明确指定这次调用是 json_schema / tool_call / auto
+  -> 部署环境提供 BASE_URL / OPENAI_API_KEY / MODEL
   -> extractor_client 先检查这三个连接变量是否齐全；缺任一项就直接报配置错误
-  -> 再读取 model_client_config.json，拿到 structured_output.strategy、fallback_order、request_options
+  -> 再读取 model_client_config.json，拿到 request_options 这类默认请求参数
   -> 用 BASE_URL / OPENAI_API_KEY / MODEL 创建 ChatOpenAI(base_url=..., api_key=..., model=..., ...)
-  -> 如果 strategy=json_schema，就固定使用 json_schema 结构化输出
-  -> 如果 strategy=tool_call，就改走 tool calling；内部映射成 LangChain 的 function_calling
-  -> 如果 strategy=auto，就按 fallback_order 先试 json_schema，再在兼容接口不支持时退到 tool_call
+  -> 如果 structured_output_strategy=json_schema，就固定使用 json_schema 结构化输出
+  -> 如果 structured_output_strategy=tool_call，就改走 tool calling；内部映射成 LangChain 的 function_calling
+  -> 如果 structured_output_strategy=auto，就按代码内的默认顺序先试 json_schema，再在兼容接口不支持时退到 tool_call
   -> broad extraction 和 field resolution 只收到统一的结构化 runnable，不需要关心底层用了哪种协议
 ```
 
 这样拆分的目的有两点：
 
 - 环境变量只负责部署相关的差异，例如服务地址、密钥、默认模型名。
-- `model_client_config.json` 只负责代码行为差异，例如结构化输出协议和回退顺序，便于随仓库一起版本管理。
+- `processor.extract(...)` 负责本次调用真正想走哪种结构化输出协议，因为这是业务调用面的显式选择，不应该藏在配置文件里。
+- `model_client_config.json` 只负责默认请求参数这类运行时细节，便于随仓库一起版本管理。
 
 ## 两阶段执行设计
 

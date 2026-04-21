@@ -163,6 +163,54 @@ def test_extract_delegates_execution_to_graph_with_built_client():
     assert result.resolved_fields[0].used_field_outputs == ["invoice_no"]
 
 
+def test_extract_passes_structured_output_strategy_to_client_builder(monkeypatch):
+    seen_builder_call: dict[str, object] = {}
+    fake_client = object()
+
+    def fake_builder(*, structured_output_strategy):
+        seen_builder_call["structured_output_strategy"] = structured_output_strategy
+        return fake_client
+
+    def fake_run_extraction_graph(*, graph_input, extractor_client):
+        assert graph_input.session_id == "session-structured-output"
+        assert extractor_client is fake_client
+        return ExtractionResult(
+            broad_output=BroadExtractionOutput(fields=[]),
+            resolved_fields=[],
+            run_trace=RunTrace(rounds=1),
+        )
+
+    monkeypatch.setattr(
+        processor_module,
+        "build_extractor_client_from_env",
+        fake_builder,
+    )
+    monkeypatch.setattr(
+        processor_module,
+        "run_extraction_graph",
+        fake_run_extraction_graph,
+        raising=False,
+    )
+
+    processor_module.extract(
+        session_id="session-structured-output",
+        documents=[NormalizedDocument(document_id="doc-1", markdown="内容")],
+        task_spec=TaskSpec(
+            task_name="invoice",
+            fields=[
+                FieldDefinition(
+                    field_name="invoice_no",
+                    display_name="发票号",
+                    type="string",
+                )
+            ],
+        ),
+        structured_output_strategy="json_schema",
+    )
+
+    assert seen_builder_call["structured_output_strategy"] == "json_schema"
+
+
 def test_extract_loads_task_spec_from_task_spec_name(monkeypatch, tmp_path):
     task_spec_dir = tmp_path / "task_specs"
     task_spec_dir.mkdir()
