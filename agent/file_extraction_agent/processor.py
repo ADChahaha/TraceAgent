@@ -10,7 +10,8 @@
   -> 如果没传 extractor_client，就调用 build_extractor_client_from_env() 构造默认客户端
   -> 把 GraphInput 压成给 broad extraction 使用的 messages
   -> 调用 extractor_client.invoke(..., output_schema=BroadExtractionOutput)
-  -> 按 task_spec.fields 顺序收口 broad output：单一候选值 resolved，没有候选值 failed，多候选冲突也 failed
+  -> 调用 impl/resolution.py 按 task_spec.fields 顺序收口 broad output
+  -> resolution 阶段对每个字段做候选去重：单一候选值 resolved，没有候选值 failed，多候选冲突也 failed
   -> 返回 ExtractionResult(broad_output, resolved_fields, run_trace)
 ```
 """
@@ -22,13 +23,12 @@ from typing import Any
 from file_extraction_agent.extractor_client import build_extractor_client_from_env
 from file_extraction_agent import input_adapter
 from file_extraction_agent.impl.prompts import build_broad_extraction_messages
+from file_extraction_agent.impl.resolution import resolve_fields
 from file_extraction_agent.input_adapter import build_graph_input
 from file_extraction_agent.schemas import (
-    BroadExtractionFieldOutput,
     BroadExtractionOutput,
     ExtractionResult,
     NormalizedDocument,
-    ResolvedFieldOutput,
     RunConfig,
     RunTrace,
     TaskSpec,
@@ -69,7 +69,7 @@ def extract(
         output_schema=BroadExtractionOutput,
         messages=build_broad_extraction_messages(graph_input),
     )
-    resolved_fields = _resolve_fields(
+    resolved_fields = resolve_fields(
         task_spec=graph_input.task_spec,
         broad_output=broad_output,
     )
@@ -77,62 +77,4 @@ def extract(
         broad_output=broad_output,
         resolved_fields=resolved_fields,
         run_trace=RunTrace(rounds=1),
-    )
-
-
-def _resolve_fields(
-    *,
-    task_spec: TaskSpec,
-    broad_output: BroadExtractionOutput,
-) -> list[ResolvedFieldOutput]:
-    broad_output_by_field = {
-        field_output.field_name: field_output for field_output in broad_output.fields
-    }
-    resolved_fields: list[ResolvedFieldOutput] = []
-    for field in task_spec.fields:
-        field_output = broad_output_by_field.get(field.field_name)
-        resolved_fields.append(
-            _resolve_single_field(
-                field_name=field.field_name,
-                field_output=field_output,
-            )
-        )
-    return resolved_fields
-
-
-def _resolve_single_field(
-    *,
-    field_name: str,
-    field_output: BroadExtractionFieldOutput | None,
-) -> ResolvedFieldOutput:
-    if field_output is None or not field_output.candidate_values:
-        return ResolvedFieldOutput(
-            field_name=field_name,
-            status="failed",
-            used_field_outputs=[field_name] if field_output is not None else [],
-            extra_lookup_used=False,
-            failure_reason="未找到可用候选值",
-        )
-
-    normalized_candidates: list[Any] = []
-    for candidate in field_output.candidate_values:
-        if candidate not in normalized_candidates:
-            normalized_candidates.append(candidate)
-
-    if len(normalized_candidates) == 1:
-        return ResolvedFieldOutput(
-            field_name=field_name,
-            status="resolved",
-            final_value=normalized_candidates[0],
-            used_field_outputs=[field_name],
-            extra_lookup_used=False,
-            reason="候选值唯一，可直接定案",
-        )
-
-    return ResolvedFieldOutput(
-        field_name=field_name,
-        status="failed",
-        used_field_outputs=[field_name],
-        extra_lookup_used=False,
-        failure_reason="候选值冲突，暂时无法定案",
     )

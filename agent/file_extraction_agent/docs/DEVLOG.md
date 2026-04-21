@@ -1,4 +1,29 @@
-last updated: 2026-04-21 11:07:00 CST
+last updated: 2026-04-21 18:42:35 CST
+
+## 2026-04-21 18:42:35
+
+### 已完成工作
+
+- 新增了 `file_extraction_agent/impl/resolution.py`，把 field resolution 第二阶段落成独立内部节点，并提供按 `task_spec.fields` 顺序收口 broad output 的实现。
+- 修改 `file_extraction_agent/processor.py`，不再内联维护字段定案逻辑，改为复用 `impl/resolution.py` 的收口函数。
+- 新增 `tests/file_extraction_agent/test_resolution.py`，覆盖缺失字段补失败、重复候选去重、多候选冲突失败，以及 `run_resolution(...)` 写回 `GraphState` 的行为。
+- 同步补齐 `tests/file_extraction_agent/docs/test_resolution.md`，说明 resolution 节点的处理链路和每个测试函数的验证目标。
+
+### 当前进展
+
+- `file_extraction_agent` 的两阶段内部节点现在已经同时具备：
+  - `impl/broad_extraction.py` 负责第一阶段候选抽取
+  - `impl/resolution.py` 负责第二阶段字段定案
+- 当前 `processor.py` 已经改为直接复用这两个阶段中的 resolution 收口逻辑，后续如果继续落地 `impl/graph.py`，可以在不改定案规则的前提下把编排进一步迁移到图节点层。
+
+### 遇到的问题
+
+- 当前工作区里还有本次任务之外的未提交改动和未跟踪目录，因此提交时需要只 stage resolution 相关文件，避免把不相关内容混入本次提交。
+
+### 下一步
+
+- 继续落地 `impl/graph.py`，把 broad extraction 和 resolution 通过统一 graph state 串起来。
+- 等 graph 落地后，再评估 `processor.py` 是否进一步收口成只负责输入适配、client 准备和 graph 调用。
 
 ## 2026-04-21 11:07:00
 
