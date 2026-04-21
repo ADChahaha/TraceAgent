@@ -1,4 +1,26 @@
-last updated: 2026-04-21 10:33:03 CST
+last updated: 2026-04-21 11:07:00 CST
+
+## 2026-04-21 11:07:00
+
+### 已完成工作
+
+- 新增了 `file_extraction_agent/impl/broad_extraction.py`，把 broad extraction 第一阶段落成独立内部节点。
+- 新增 `tests/file_extraction_agent/test_broad_extraction.py`，覆盖 broad extraction 节点调用客户端、请求 `BroadExtractionOutput` 并写回状态的行为。
+- 同步补齐 `tests/file_extraction_agent/docs/test_broad_extraction.md`，说明该测试文件对应的节点链路和覆盖点。
+
+### 当前进展
+
+- broad extraction 内部节点已先落地，但 `processor.py` 仍按当前入口边界直接持有 extractor client 并调用结构化抽取。
+- 后续 `impl/graph.py` 落地后，可以再评估是否把 `processor.py` 的 broad extraction 调用迁移到图节点编排中。
+- 当前 `tests/file_extraction_agent` 全量通过。
+
+### 遇到的问题
+
+- 当前 `processor.py` 仍保留直接 broad extraction 调用和最小字段收口逻辑，真正的 `impl/graph.py` / `impl/resolution.py` 尚未落地。
+
+### 下一步
+
+- 继续按同一模式落地 `impl/graph.py` 和 `impl/resolution.py`，再决定是否由 graph 统一接管 broad extraction 与 resolution 编排。
 
 ## 2026-04-21 10:33:03
 

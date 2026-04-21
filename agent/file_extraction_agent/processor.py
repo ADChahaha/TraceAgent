@@ -17,17 +17,16 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from file_extraction_agent.extractor_client import build_extractor_client_from_env
 from file_extraction_agent import input_adapter
+from file_extraction_agent.impl.prompts import build_broad_extraction_messages
 from file_extraction_agent.input_adapter import build_graph_input
 from file_extraction_agent.schemas import (
     BroadExtractionFieldOutput,
     BroadExtractionOutput,
     ExtractionResult,
-    GraphInput,
     NormalizedDocument,
     ResolvedFieldOutput,
     RunConfig,
@@ -68,7 +67,7 @@ def extract(
     )
     broad_output = client.invoke(
         output_schema=BroadExtractionOutput,
-        messages=_build_extraction_messages(graph_input),
+        messages=build_broad_extraction_messages(graph_input),
     )
     resolved_fields = _resolve_fields(
         task_spec=graph_input.task_spec,
@@ -79,52 +78,6 @@ def extract(
         resolved_fields=resolved_fields,
         run_trace=RunTrace(rounds=1),
     )
-
-
-def _build_extraction_messages(graph_input: GraphInput) -> list[dict[str, str]]:
-    documents_summary = []
-    for document in graph_input.documents:
-        document_lines = [f"document_id={document.document_id}"]
-        if document.markdown:
-            document_lines.append(f"markdown={document.markdown}")
-        if document.md_list:
-            document_lines.append(f"md_list={document.md_list}")
-        if document.blocks:
-            block_texts = [block.text for block in document.blocks if block.text]
-            document_lines.append(f"blocks={block_texts}")
-        documents_summary.append("\n".join(document_lines))
-
-    field_summary = [
-        {
-            "field_name": field.field_name,
-            "display_name": field.display_name,
-            "type": field.type,
-            "required": field.required,
-        }
-        for field in graph_input.task_spec.fields
-    ]
-
-    return [
-        {
-            "role": "system",
-            "content": (
-                "你负责基于标准化文档内容输出字段级 broad extraction 结果，"
-                "返回值必须符合 BroadExtractionOutput。"
-            ),
-        },
-        {
-            "role": "user",
-            "content": json.dumps(
-                {
-                    "session_id": graph_input.session_id,
-                    "task_name": graph_input.task_spec.task_name,
-                    "fields": field_summary,
-                    "documents": documents_summary,
-                },
-                ensure_ascii=False,
-            ),
-        },
-    ]
 
 
 def _resolve_fields(
