@@ -29,13 +29,16 @@
 
 `file_extraction_agent` 的输入不是 `document_processor` 的原始直接返回值，而是 **backend 在 session 维度聚合后的标准化结果**。也就是说，进入这一层前，backend 需要先把标准化内容和业务标识补齐，不直接接收原始 `pdf/docx` 文件对象。
 
+在进入 `file_extraction_agent` 前，当前已经落地一层明确的外部输入适配层：`input_adapter.py`。这层不负责 broad extraction、field resolution 或 graph 编排，只负责把外部 session 级输入收敛成稳定的 `GraphInput`。
+
 主链路是：
 
 ```text
 backend 聚合后的 documents + task_spec
-  -> 独立输入适配文件完成输入校验与协议适配
+  -> 外部输入适配层（input_adapter.py）
+  -> session 输入校验 / 协议适配 / GraphInput 组装
   -> file_extraction_agent.processor.extract(...)
-  -> task spec 加载 + GraphInput 组装
+  -> task spec 加载
   -> broad extraction
   -> broad output 校验与标准化
   -> field resolution
@@ -45,10 +48,10 @@ backend 聚合后的 documents + task_spec
 展开后可以理解成：
 
 ```text
-调用方先把 backend 聚合后的 session 输入交给独立输入适配文件，例如 input_adapter.py
-  -> input_adapter.py 负责 session 级输入校验、协议适配，并产出内部可消费的已校验输入
-  -> processor.extract(...) 消费已校验输入，负责 task spec 加载，不再负责顶层输入校验或原始 payload 协议兜底
-  -> impl/normalization.py 把已校验输入和 task spec 整理成符合 schemas.py 约束的 GraphInput
+调用方传入 backend 聚合后的 session_id、documents、task_spec_name 或 task_spec
+  -> processor.extract(...) 先把这组外部参数转交给 input_adapter.build_graph_input(...)
+  -> input_adapter 先做 session 输入校验、协议适配和 GraphInput 组装
+  -> 如果只传了 task_spec_name，就从 task_specs/*.json 加载固定 schema
   -> impl/graph.py 从 GraphInput 开始驱动两阶段流程
   -> impl/broad_extraction.py 生成每个字段的候选、证据、局部状态
   -> impl/validation.py 对 broad output 做字段级校验、归一化和缺失/歧义标记
@@ -58,7 +61,7 @@ backend 聚合后的 documents + task_spec
 
 ## 当前目录设计
 
-建议目录保持下面这个结构：
+当前目录按下面这个结构组织：
 
 ```text
 file_extraction_agent/
@@ -74,7 +77,6 @@ file_extraction_agent/
 │   ├── graph.py
 │   ├── state.py
 │   ├── prompts.py
-│   ├── normalization.py
 │   ├── validation.py
 │   ├── broad_extraction.py
 │   └── resolution.py
@@ -86,9 +88,9 @@ file_extraction_agent/
 各层职责如下：
 
 - `input_adapter.py`
-  独立负责外部输入进入 `file_extraction_agent` 之前的第一层处理：校验 session 级 payload、做协议适配，并把原始 payload 收敛成内部可消费的已校验输入。这一层必须单开文件，不应混进 `processor.py`、`graph.py` 或 route。
+  负责外部 session 输入校验、协议适配和 `GraphInput` 组装；这一层只解决“外面传进来的数据能不能进入 agent 内部契约”，不负责任何抽取流程编排。
 - `processor.py`
-  对外统一入口，消费外部已经校验好的输入，负责 task spec 加载、调用 normalization 组装 `GraphInput`、再调用 graph，并返回最终结果。
+  对外统一入口，负责接住 session 级调用参数，把外部输入转交给 `input_adapter.py`，再调用后续抽取流程并返回最终结果。
 - `schemas.py`
   定义数据契约，包括 session 级 `GraphInput`、文档级 `NormalizedDocument`、broad extraction / resolution / result aggregation 的结构化对象。
 - `extractor_client.py`
@@ -103,8 +105,6 @@ file_extraction_agent/
   定义流程内部执行态，只给 graph、broad extraction 和 resolution 这些节点共享。
 - `impl/prompts.py`
   定义 broad extraction 和 field resolution 两阶段的指令文本组装逻辑，是内部执行策略，不作为外部注入点暴露。
-- `impl/normalization.py`
-  接收 `input_adapter.py` 已经整理好的中间输入和 `processor.py` 提供的 task spec，继续做进入 graph 前的内部归一化，产出 `schemas.py` 中定义的 `GraphInput`；它不是第一层外部 payload 校验入口。
 - `impl/validation.py`
   做候选清洗、字段类型归一化、局部规则校验和状态归类。
 - `impl/broad_extraction.py`
@@ -112,7 +112,7 @@ file_extraction_agent/
 - `impl/resolution.py`
   按字段逐个定案，吸收全局字段输出，必要时执行一次定向补查询。
 
-## 为什么 `state.py`、`prompts.py` 和 `normalization.py` 放在 `impl/`
+## 为什么 `state.py` 和 `prompts.py` 放在 `impl/`
 
 当前设计下，`state.py` 不是模块级公共契约，而是流程内部执行态。它主要由：
 
@@ -129,14 +129,6 @@ file_extraction_agent/
 - 它们服务于图执行细节
 - 它们不是公开 API
 - 调用方只和 `processor.extract(...)`、`schemas.py` 暴露的结果对象打交道
-
-`normalization.py` 也保留在 `impl/`，但原因和 `state.py` 不完全一样。它虽然不属于 graph 内部节点，却仍然属于模块内部预处理逻辑，而不是对外公开契约。这里要特别和 `input_adapter.py`、`processor.py` 分开看：
-
-- `input_adapter.py` 负责第一层外部输入校验和协议适配
-- `processor.py` 负责 task spec 加载和流程编排
-- `impl/normalization.py` 负责把已经过第一层收敛的输入连同 task spec 一起整理成 `schemas.py` 里定义好的 `GraphInput`
-
-这样 `graph.py` 从一开始就只处理标准化后的输入，而不用承担外部输入整形、缺字段兜底或协议适配。
 
 ## `extractor_client.py` 与 `model_client_config.json` 的分工
 
@@ -240,7 +232,7 @@ GraphInput.documents
 
 ## Graph 输入与内部状态
 
-`impl/graph.py` 不建议接收大量松散参数，而是只接收一个已经由 `normalization.py` 组装好的图输入对象和一个抽取执行客户端：
+`impl/graph.py` 不建议接收大量松散参数，而是只接收一个已经在外部输入适配层确定好的图输入对象和一个抽取执行客户端：
 
 ```python
 run_extraction_graph(graph_input, extractor_client) -> ExtractionResult
@@ -267,7 +259,7 @@ run_extraction_graph(graph_input, extractor_client) -> ExtractionResult
 - `metadata`
   是可选任务标签、session 信息或调试信息
 
-`GraphInput` 属于流程入口前就确定好的数据契约，因此放在 `schemas.py`，供 `normalization.py` 负责组装，供 `graph.py` 负责消费。
+`GraphInput` 属于流程入口前就确定好的数据契约，因此放在 `schemas.py`，由外部输入适配层一次性组装，随后由 `processor.py` / `graph.py` 直接消费。
 
 对应地，`impl/state.py` 定义图内部中间态，例如：
 

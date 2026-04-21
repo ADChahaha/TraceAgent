@@ -1,6 +1,69 @@
-last updated: 2026-04-20 16:45:20 CST
+last updated: 2026-04-21 10:33:03 CST
+
+## 2026-04-21 10:33:03
+
+### 已完成工作
+
+- 新增了 `file_extraction_agent/input_adapter.py`，把 `session_id`、`documents`、`task_spec` / `task_spec_name`、`run_config`、`metadata` 收敛成统一的 `GraphInput`。
+- 修改了 `file_extraction_agent/processor.py`，让 `extract(...)` 先委托 `input_adapter.build_graph_input(...)`，再继续执行 broad extraction 和字段收口。
+- 新增 `tests/file_extraction_agent/test_input_adapter.py`，覆盖“显式 `task_spec`”和“按 `task_spec_name` 加载”的两条输入适配路径。
+- 更新 `tests/file_extraction_agent/test_processor.py`，补充 `processor` 必须通过 `input_adapter` 组装图输入的回归测试。
+- 同步更新 `file_extraction_agent/docs/DESIGN.md`，把当前已落地的输入适配层、`processor` 职责边界和 `GraphInput` 组装链路写回设计文档。
+- 同步补齐 `tests/file_extraction_agent/docs/test_input_adapter.md` 与 `tests/file_extraction_agent/docs/test_processor.md`，让测试说明和当前实现保持一致。
+
+### 当前进展
+
+- `file_extraction_agent` 当前入口边界已经落地成两层：
+  - `input_adapter.py` 负责 session 输入校验、task spec 解析和 `GraphInput` 组装
+  - `processor.py` 负责接住外部调用参数、调用适配层并继续抽取流程
+- 相关测试已经覆盖了输入适配与入口委托这两个关键边界，当前 `tests/file_extraction_agent` 全量通过。
+
+### 遇到的问题
+
+- 现有 `processor` 测试里原本直接依赖 `TASK_SPECS_DIR` 挂在 `processor.py` 上；拆出 `input_adapter.py` 后，为了兼容现有测试与调用方式，需要在 `processor.py` 保留一个向后兼容别名。
+- 当前工作区里还有这次任务之外的未提交改动，因此提交时需要只 stage 本次相关文件，避免把别的内容混进来。
+
+### 下一步
+
+- 后续如果继续落地 `impl/graph.py`、`impl/broad_extraction.py` 和 `impl/resolution.py`，可以直接复用这次固定下来的 `GraphInput` 入口。
+- 如果后面要再收紧外部调用面，可以评估是否逐步减少 `processor.py` 对旧符号别名的兼容暴露范围。
+
+## 2026-04-21 10:16:36
+
+### 已完成工作
+
+- 更新了 `file_extraction_agent/docs/DESIGN.md`，删掉模块内部的 `impl/normalization.py` 设计层，不再保留“内层再做一次 GraphInput 归一化”的职责表述。
+- 在设计里新增外层 `input_adapter.py`，明确由外部输入适配层负责 session 输入校验、协议适配和 `GraphInput` 一次性组装。
+- 收紧 `processor.py` 的职责表述，改成消费已收敛的 `GraphInput`、加载 task spec 并编排 graph，不再和输入归一化层重复分工。
+
+### 当前进展
+
+- `file_extraction_agent` 当前的推荐边界已经收敛成：
+  - 外部 `input_adapter.py` 负责输入校验、协议适配、`GraphInput` 组装
+  - `processor.py` 负责 task spec 加载和流程编排
+  - `impl/graph.py` 从 `GraphInput` 直接开始 broad extraction / resolution
+- `GraphInput` 现在在设计上只允许组装一次，避免外层和模块内部重复归一化。
+
+### 遇到的问题
+
+- 之前设计里同时写了“`processor.py` 组装 `GraphInput`”和“`impl/normalization.py` 继续组装 `GraphInput`”，职责边界互相冲突。
+- 如果不把 `GraphInput` 的生产者固定到外层适配层，后续实现时很容易出现双重归一化和多处兜底。
+
+### 下一步
+
+- 后续实现时按这版边界补 `input_adapter.py`，让它成为 `GraphInput` 的唯一入口。
+- 再继续收敛 `processor.py` 的真实签名和 `impl/graph.py` 的调用方式，确保代码实现和当前设计一致。
 
 ## 2026-04-20 16:45:20
+
+## todo
+DESIGN.md有雷，
+- `impl/normalization.py`
+  接收 `processor.py` 已经收拢好的 session 级输入和 task spec，继续做进入 graph 前的内部归一化，产出 `schemas.py` 中定义的 `GraphInput`。
+- `impl/validation.py`
+  做候选清洗、字段类型归一化、局部规则校验和状态归类。
+不知道干嘛的。
+没有将processor.py的数据核验单开一个input_adapter.py来做
 
 ### 已完成工作
 
