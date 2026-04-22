@@ -2,29 +2,31 @@
 
 ## 基本实现思路
 
-`file_extraction_agent.schemas` 负责定义字段抽取阶段的公共数据契约。它不是执行图本身，也不直接访问模型，而是先把“后端聚合后的 session 级输入长什么样、broad extraction 要产出什么、field resolution 要产出什么、最终结果怎么聚合”固定下来。
+`file_extraction_agent.schemas` 负责定义字段抽取阶段的公共数据契约。它不是执行图本身，也不直接访问模型，而是先把“blocks 主输入长什么样、broad extraction 要产出什么、resolution 最终结果与 trace 怎么返回”固定下来。
 
-这层可以按下面的 pipeline 来理解：
+这层可以按下面的 pipeline 理解：
 
 ```text
-backend 先把 document_processor 结果按 session 聚合，并补上 session_id / document_id
-  -> 用 NormalizedDocument / TaskSpec / GraphInput 固定图入口输入
-  -> broad extraction 为每个字段产出候选值、证据文本、证据位置和局部状态
-  -> field resolution 再按字段输出 resolved 或 failed
-  -> processor 最后把 broad_output、resolved_fields、run_trace 汇总成 ExtractionResult
+调用方先把 document_processor 结果里的 blocks 摊平，并保留每个 block 上的 document_id
+  -> 用 NormalizedBlock / TaskSpec / GraphInput 固定图入口输入
+  -> broad extraction 为每个字段产出 evidence bundle，不产最终 candidate
+  -> resolution 产出纯业务结果 ResolvedFieldResult
+  -> 同时把 broad / cross / lookup / reason 收口进 FieldTraceRecord
+  -> processor 最后返回 ExtractionResult(result + trace)
 ```
 
-这个测试文件的目标就是把这套契约钉住，避免后面实现 graph、validation、resolution 时把输入输出结构改散了。
+这个测试文件的目标就是把这套契约钉住，避免后面实现 graph、tools、resolution 时把输入输出结构改散。
 
 ## 测什么
 
 - `TaskSpec` 不允许重复字段名
-- `GraphInput` 能接住带 `session_id` 的最小合法输入，并提供安全默认值
-- `GraphInput` 不允许缺少后端聚合得到的 `session_id`
-- `NormalizedDocument.blocks` 会把序列化后的块数据解析成结构化模型
-- broad extraction 字段输出能保留候选值和证据 bundle
-- `ResolvedFieldOutput` 的 `resolved/failed` 状态约束
-- `ExtractionResult` 的聚合结构
+- `GraphInput` 能接住以 `blocks` 为主输入的最小合法输入，并提供安全默认值
+- `GraphInput` 不允许缺少 blocks 主输入
+- `GraphInput.blocks` 会把序列化后的块数据解析成结构化模型
+- broad extraction 字段输出保留 evidence bundle，不依赖 `candidate_values`
+- `ResolvedFieldResult` 的 `resolved/failed` 状态约束
+- `FieldTraceRecord` 会按状态要求定案原因或失败原因
+- `ExtractionResult` 顶层拆成 `result` 与 `trace`
 - `RunConfig` 的关键执行限制
 
 ## 每个函数在干什么
@@ -36,39 +38,40 @@ backend 先把 document_processor 结果按 session 聚合，并补上 session_i
 
 `test_graph_input_accepts_normalized_documents_with_safe_defaults`
 
-- 构造带 `session_id` 的最小 `NormalizedDocument` 和 `TaskSpec`。
+- 构造最小 blocks 输入和 `TaskSpec`。
 - 检查 `GraphInput` 是否能正常接住。
-- 同时确认 `document_id`、结构化 `blocks`、`metadata`、`run_config` 这些默认值和关键标识安全可用。
+- 同时确认 `document_id`、结构化 `blocks`、备用 `md_list`、`metadata`、`run_config` 这些默认值和关键标识安全可用。
 
-`test_normalized_document_parses_serialized_blocks_into_structured_models`
+`test_graph_input_parses_serialized_blocks_into_structured_models`
 
-- 构造一份带序列化 block 字典的 `NormalizedDocument`。
+- 构造一份带序列化 block 字典的 `GraphInput`。
 - 确认 schema 会把它解析成明确的 `NormalizedBlock` / `NormalizedBoundingBox`，而不是保留成裸字典。
 
-`test_graph_input_requires_backend_session_id`
+`test_graph_input_requires_blocks`
 
-- 构造一个缺少 `session_id` 的 `GraphInput`。
-- 确认 schema 会拒绝这种“还没经过 backend session 聚合”的输入。
+- 构造一个缺少 blocks 的 `GraphInput`。
+- 确认 schema 会拒绝这种不完整的主输入。
 
-`test_broad_extraction_output_keeps_candidate_evidence_bundle`
+`test_field_evidence_bundle_keeps_relevant_blocks_and_evidence`
 
-- 构造一个 broad extraction 字段输出。
-- 检查候选值、证据文本、证据位置、局部说明会不会在模型里丢失。
+- 构造一个 broad evidence bundle。
+- 确认字段名、相关 block id、证据文本、证据位置和局部说明不会丢失。
+- 这个测试固定 broad 阶段“选材料，不定案”的契约。
 
-`test_resolved_field_output_rejects_failed_status_with_final_value`
+`test_resolved_field_result_rejects_failed_status_with_final_value`
 
 - 故意给 `failed` 状态塞一个 `final_value`。
-- 确认 schema 会拦住这种互相矛盾的结果。
+- 确认纯结果对象会拦住这种互相矛盾的结果。
 
-`test_resolved_field_output_requires_failure_reason_for_failed_status`
+`test_field_trace_record_requires_reason_or_failure_reason_by_status`
 
-- 构造一个没有 `failure_reason` 的 `failed` 输出。
-- 确认失败结果必须说明为什么失败，便于后续治理层审计。
+- 分别构造缺少 `reason` 的 `resolved` trace 和缺少 `failure_reason` 的 `failed` trace。
+- 确认 trace 层会要求每个字段给出定案或失败解释。
 
-`test_extraction_result_aggregates_broad_output_and_resolved_fields`
+`test_extraction_result_separates_result_and_trace`
 
-- 构造完整的 `ExtractionResult`。
-- 检查 broad output、resolved fields、run trace 能否一起稳定序列化。
+- 构造新的 `ExtractionResult(result + trace)`。
+- 确认纯结果与字段级 trace 会分开序列化。
 
 `test_run_config_rejects_non_positive_lookup_limit`
 

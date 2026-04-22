@@ -4,34 +4,27 @@ import json
 
 from file_extraction_agent.impl import prompts
 from file_extraction_agent.schemas import (
-    BroadExtractionFieldOutput,
     BroadExtractionOutput,
     FieldDefinition,
+    FieldEvidenceBundle,
     GraphInput,
     NormalizedBlock,
-    NormalizedDocument,
-    ResolvedFieldOutput,
     TaskSpec,
 )
 
 
-def test_build_broad_extraction_messages_includes_session_task_and_documents_summary():
+def test_build_broad_extraction_messages_includes_task_and_blocks_summary():
     graph_input = GraphInput(
-        session_id="session-1",
-        documents=[
-            NormalizedDocument(
+        blocks=[
+            NormalizedBlock(
                 document_id="doc-1",
-                markdown="发票号码：INV-001",
-                md_list=["发票号码：INV-001"],
-                blocks=[
-                    NormalizedBlock(
-                        text="发票号码：INV-001",
-                        page_no=1,
-                        meta_info={"block_id": "b-1"},
-                    )
-                ],
+                text="发票号码：INV-001",
+                page_no=1,
+                meta_info={"block_id": "b-1"},
             )
         ],
+        markdown="发票号码：INV-001",
+        md_list=["发票号码：INV-001"],
         task_spec=TaskSpec(
             task_name="invoice",
             fields=[
@@ -51,20 +44,16 @@ def test_build_broad_extraction_messages_includes_session_task_and_documents_sum
     assert messages[0]["role"] == "system"
     assert "BroadExtractionOutput" in messages[0]["content"]
     payload = json.loads(messages[1]["content"])
-    assert payload["session_id"] == "session-1"
     assert payload["task_name"] == "invoice"
     assert payload["metadata"] == {"source": "backend"}
-    assert payload["documents"][0]["document_id"] == "doc-1"
-    assert payload["documents"][0]["markdown"] == "发票号码：INV-001"
-    assert payload["documents"][0]["md_list"] == ["发票号码：INV-001"]
-    assert payload["documents"][0]["blocks"][0]["text"] == "发票号码：INV-001"
+    assert payload["blocks"][0]["document_id"] == "doc-1"
+    assert payload["blocks"][0]["text"] == "发票号码：INV-001"
     assert payload["fields"][0]["field_name"] == "invoice_no"
 
 
-def test_build_field_resolution_messages_focuses_on_target_field_and_candidates():
+def test_build_field_resolution_messages_focuses_on_target_field_and_evidence_bundle():
     graph_input = GraphInput(
-        session_id="session-2",
-        documents=[NormalizedDocument(document_id="doc-2", markdown="金额：100.00")],
+        blocks=[NormalizedBlock(document_id="doc-2", text="金额：100.00")],
         task_spec=TaskSpec(
             task_name="invoice",
             fields=[
@@ -75,17 +64,17 @@ def test_build_field_resolution_messages_focuses_on_target_field_and_candidates(
     )
     broad_output = BroadExtractionOutput(
         fields=[
-            BroadExtractionFieldOutput(
+            FieldEvidenceBundle(
                 field_name="amount",
-                candidate_values=["100.00"],
+                relevant_block_ids=["b-amount"],
                 evidence_texts=["金额：100.00"],
-                local_status="candidate_found",
+                local_status="evidence_found",
             ),
-            BroadExtractionFieldOutput(
+            FieldEvidenceBundle(
                 field_name="invoice_no",
-                candidate_values=["INV-002"],
+                relevant_block_ids=["b-invoice"],
                 evidence_texts=["发票号：INV-002"],
-                local_status="candidate_found",
+                local_status="evidence_found",
             ),
         ]
     )
@@ -97,14 +86,13 @@ def test_build_field_resolution_messages_focuses_on_target_field_and_candidates(
     )
 
     assert messages[0]["role"] == "system"
-    assert "ResolvedFieldOutput" in messages[0]["content"]
+    assert "result + trace" in messages[0]["content"]
     payload = json.loads(messages[1]["content"])
-    assert payload["session_id"] == "session-2"
     assert payload["target_field_name"] == "amount"
     assert payload["target_field"]["field_name"] == "amount"
-    assert payload["target_field"]["candidate_values"] == ["100.00"]
+    assert payload["target_field"]["relevant_block_ids"] == ["b-amount"]
     assert [field["field_name"] for field in payload["all_field_outputs"]] == [
         "amount",
         "invoice_no",
     ]
-
+    assert payload["blocks"][0]["document_id"] == "doc-2"

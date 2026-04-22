@@ -3,12 +3,12 @@
 实现步骤：
 
 ```text
-graph.py 或其他内部节点拿到已经组装好的 GraphInput
-  -> 调用 build_graph_state(graph_input)
-  -> 生成 GraphState(graph_input=..., broad_output=None, resolved_fields=[], warnings=[])
-  -> broad_extraction.py 后续把 broad_output 写回状态
-  -> resolution.py 基于 broad_output 一次性写回 resolved_fields
-  -> 最终所有节点共享同一个中间态对象完成流程接力
+GraphInput
+  -> build_graph_state(graph_input)
+  -> GraphState(graph_input=..., broad_output=None, result_fields=[], trace_fields=[])
+  -> broad_extraction.py 写回 broad_output
+  -> resolution.py 写回 result_fields 与 trace_fields
+  -> graph.py 汇总成 ExtractionResult(result + trace)
 ```
 """
 
@@ -18,8 +18,9 @@ from pydantic import BaseModel, Field
 
 from file_extraction_agent.schemas import (
     BroadExtractionOutput,
+    FieldTraceRecord,
     GraphInput,
-    ResolvedFieldOutput,
+    ResolvedFieldResult,
 )
 
 
@@ -28,7 +29,8 @@ class GraphState(BaseModel):
 
     graph_input: GraphInput
     broad_output: BroadExtractionOutput | None = None
-    resolved_fields: list[ResolvedFieldOutput] = Field(default_factory=list)
+    result_fields: list[ResolvedFieldResult] = Field(default_factory=list)
+    trace_fields: list[FieldTraceRecord] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
 

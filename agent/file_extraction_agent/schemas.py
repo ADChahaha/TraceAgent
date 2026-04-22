@@ -1,15 +1,19 @@
-"""file_extraction_agent 的共享数据契约。
+"""`file_extraction_agent` 的共享数据契约。
 
 这个模块只定义“接受什么输入、产出什么结果”，不描述具体执行流程。
 
-当前约束：
+实现链路可以按下面理解：
 
-- `GraphInput` 表示抽取图的入口输入，必须带 `session_id`、`documents`、`task_spec`
-- `NormalizedDocument` 表示 session 内的单份文档，至少带 `document_id`，并承载标准化后的 `markdown`、`md_list`、`blocks`
-- `NormalizedBlock` 表示单个块级内容，明确约束 `text`、`page_no`、`bbox`、`kind`、`meta_info`
-- `BroadExtractionOutput` / `BroadExtractionFieldOutput` 表示第一阶段的字段候选、证据和局部状态
-- `ResolvedFieldOutput` 表示单字段最终定案结果，只允许 `resolved` 或 `failed`
-- `ExtractionResult` 表示最终聚合结果，统一收口 broad output、resolved fields 和 run trace
+```text
+调用方传入 backend 聚合后的 blocks 和 task_spec
+  -> GraphInput 固定一次 extraction 会话的主输入
+  -> broad extraction 为每个字段产出 FieldEvidenceBundle
+  -> resolution 产出纯结果 ResolvedFieldResult
+  -> 同时把 broad / cross / lookup / reason 收口进 FieldTraceRecord
+  -> processor 返回 ExtractionResult(result + trace)
+```
+
+注意：broad 阶段只做证据预选，不再定义 `candidate_values`。
 """
 
 from __future__ import annotations
@@ -24,6 +28,8 @@ ResolvedStatus = Literal["resolved", "failed"]
 
 
 class FieldEvidenceRef(BaseModel):
+    """字段证据在原始文档中的定位信息，用于前端高亮和审计回溯。"""
+
     document_id: str
     page: int | None = None
     span: str | None = None
@@ -31,6 +37,8 @@ class FieldEvidenceRef(BaseModel):
 
 
 class FieldDefinition(BaseModel):
+    """固定 schema 中的单字段定义。"""
+
     field_name: str
     display_name: str
     type: FieldType
@@ -44,6 +52,8 @@ class FieldDefinition(BaseModel):
 
 
 class TaskSpec(BaseModel):
+    """一次抽取任务的固定 schema 定义。"""
+
     task_name: str | None = None
     fields: list[FieldDefinition]
 
@@ -65,6 +75,8 @@ class TaskSpec(BaseModel):
 
 
 class NormalizedBoundingBox(BaseModel):
+    """标准化 block 的坐标框。"""
+
     x0: float
     y0: float
     x1: float
@@ -72,6 +84,9 @@ class NormalizedBoundingBox(BaseModel):
 
 
 class NormalizedBlock(BaseModel):
+    """进入 extraction 阶段的标准化块结构。"""
+
+    document_id: str
     text: str
     page_no: int | None = None
     bbox: NormalizedBoundingBox | None = None
@@ -80,14 +95,17 @@ class NormalizedBlock(BaseModel):
 
 
 class NormalizedDocument(BaseModel):
+    """备用的文档级文本结构，不是当前主处理链路的一等输入。"""
+
     document_id: str
     markdown: str = ""
     md_list: list[str] = Field(default_factory=list)
-    blocks: list[NormalizedBlock] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class RunConfig(BaseModel):
+    """图执行阶段的运行配置。"""
+
     allow_extra_lookup: bool = True
     max_extra_lookups_per_field: int = 1
     keep_detailed_trace: bool = False
@@ -101,64 +119,122 @@ class RunConfig(BaseModel):
 
 
 class GraphInput(BaseModel):
-    session_id: str
-    documents: list[NormalizedDocument]
+    """抽取图的入口输入，由 `input_adapter.py` 统一组装。"""
+
+    blocks: list[NormalizedBlock]
+    markdown: str = ""
+    md_list: list[str] = Field(default_factory=list)
     task_spec: TaskSpec
     run_config: RunConfig = Field(default_factory=RunConfig)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class BroadExtractionFieldOutput(BaseModel):
-    field_name: str
-    candidate_values: list[Any] = Field(default_factory=list)
+class BroadTrace(BaseModel):
+    """broad 阶段的字段级证据预选痕迹。"""
+
+    relevant_block_ids: list[str] = Field(default_factory=list)
     evidence_texts: list[str] = Field(default_factory=list)
     evidence_refs: list[FieldEvidenceRef] = Field(default_factory=list)
     local_status: str
-    local_validation: dict[str, Any] = Field(default_factory=dict)
     local_notes: list[str] = Field(default_factory=list)
 
 
+class FieldEvidenceBundle(BaseModel):
+    """broad 阶段输出的字段级 evidence bundle。"""
+
+    field_name: str
+    relevant_block_ids: list[str] = Field(default_factory=list)
+    evidence_texts: list[str] = Field(default_factory=list)
+    evidence_refs: list[FieldEvidenceRef] = Field(default_factory=list)
+    local_status: str
+    local_notes: list[str] = Field(default_factory=list)
+
+    def to_broad_trace(self) -> BroadTrace:
+        """把 broad 输出投影成最终 trace 使用的 `broad_trace`。"""
+
+        return BroadTrace(
+            relevant_block_ids=list(self.relevant_block_ids),
+            evidence_texts=list(self.evidence_texts),
+            evidence_refs=list(self.evidence_refs),
+            local_status=self.local_status,
+            local_notes=list(self.local_notes),
+        )
+
+
 class BroadExtractionOutput(BaseModel):
-    fields: list[BroadExtractionFieldOutput]
+    """broad 阶段的整体输出。"""
+
+    fields: list[FieldEvidenceBundle]
 
 
-class ResolvedFieldOutput(BaseModel):
+class ResolvedFieldResult(BaseModel):
+    """`result` 中的单字段纯业务结果。"""
+
     field_name: str
     status: ResolvedStatus
     final_value: Any | None = None
-    used_field_outputs: list[str] = Field(default_factory=list)
-    extra_lookup_used: bool = False
-    reason: str | None = None
-    failure_reason: str | None = None
 
     @model_validator(mode="after")
-    def validate_status_shape(self) -> "ResolvedFieldOutput":
+    def validate_status_shape(self) -> "ResolvedFieldResult":
         if self.status == "failed":
             if self.final_value is not None:
                 raise ValueError("failed status must not include final_value")
-            if not self.failure_reason:
-                raise ValueError("failed status requires failure_reason")
         else:
             if self.final_value is None:
                 raise ValueError("resolved status requires final_value")
         return self
 
 
-class RunTrace(BaseModel):
-    rounds: int = 1
-    lookup_trace: list[dict[str, Any]] = Field(default_factory=list)
+class LookupTraceRecord(BaseModel):
+    """单次全局补查留下的字段级 trace。"""
+
+    target_field_name: str | None = None
+    lookup_reason: str
+    lookup_hints: list[str] = Field(default_factory=list)
+    returned_block_ids: list[str] = Field(default_factory=list)
+    returned_refs: list[FieldEvidenceRef] = Field(default_factory=list)
+    used_in_final_decision: bool = False
+
+
+class FieldTraceRecord(BaseModel):
+    """`trace` 中的单字段记录。"""
+
+    field_name: str
+    status: ResolvedStatus
+    broad_trace: BroadTrace
+    used_field_outputs: list[str] = Field(default_factory=list)
+    extra_lookup_used: bool = False
+    lookup_trace: list[LookupTraceRecord] = Field(default_factory=list)
+    reason: str | None = None
+    failure_reason: str | None = None
+
+    @model_validator(mode="after")
+    def validate_reason_shape(self) -> "FieldTraceRecord":
+        if self.status == "resolved":
+            if not self.reason:
+                raise ValueError("resolved trace requires reason")
+        else:
+            if not self.failure_reason:
+                raise ValueError("failed trace requires failure_reason")
+        return self
+
+
+class ExtractionContent(BaseModel):
+    """顶层 `result`：只保存最终字段业务结果。"""
+
+    fields: list[ResolvedFieldResult]
+
+
+class ExtractionTrace(BaseModel):
+    """顶层 `trace`：保存 broad / cross / lookup / reason 等留痕。"""
+
+    fields: list[FieldTraceRecord]
     warnings: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("rounds")
-    @classmethod
-    def validate_rounds(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError("rounds must be greater than 0")
-        return value
-
 
 class ExtractionResult(BaseModel):
-    broad_output: BroadExtractionOutput
-    resolved_fields: list[ResolvedFieldOutput]
-    run_trace: RunTrace = Field(default_factory=RunTrace)
+    """一次 extraction 运行的最终返回对象。"""
+
+    result: ExtractionContent
+    trace: ExtractionTrace

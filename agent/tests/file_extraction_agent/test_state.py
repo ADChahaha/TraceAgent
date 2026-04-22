@@ -2,19 +2,20 @@ from __future__ import annotations
 
 from file_extraction_agent.impl.state import GraphState, build_graph_state
 from file_extraction_agent.schemas import (
+    BroadTrace,
     BroadExtractionOutput,
     FieldDefinition,
+    FieldTraceRecord,
     GraphInput,
-    NormalizedDocument,
-    ResolvedFieldOutput,
+    NormalizedBlock,
+    ResolvedFieldResult,
     TaskSpec,
 )
 
 
 def test_build_graph_state_initializes_empty_execution_state():
     graph_input = GraphInput(
-        session_id="session-1",
-        documents=[NormalizedDocument(document_id="doc-1", markdown="内容")],
+        blocks=[NormalizedBlock(document_id="doc-1", text="内容")],
         task_spec=TaskSpec(
             task_name="invoice",
             fields=[
@@ -32,14 +33,14 @@ def test_build_graph_state_initializes_empty_execution_state():
     assert isinstance(state, GraphState)
     assert state.graph_input == graph_input
     assert state.broad_output is None
-    assert state.resolved_fields == []
+    assert state.result_fields == []
+    assert state.trace_fields == []
     assert state.warnings == []
 
 
 def test_graph_state_accepts_prepared_progress_payloads():
     graph_input = GraphInput(
-        session_id="session-2",
-        documents=[NormalizedDocument(document_id="doc-2", markdown="内容")],
+        blocks=[NormalizedBlock(document_id="doc-2", text="内容")],
         task_spec=TaskSpec(
             task_name="invoice",
             fields=[
@@ -55,11 +56,18 @@ def test_graph_state_accepts_prepared_progress_payloads():
     state = GraphState(
         graph_input=graph_input,
         broad_output=BroadExtractionOutput(fields=[]),
-        resolved_fields=[
-            ResolvedFieldOutput(
+        result_fields=[
+            ResolvedFieldResult(
                 field_name="amount",
                 status="resolved",
                 final_value="100.00",
+            )
+        ],
+        trace_fields=[
+            FieldTraceRecord(
+                field_name="amount",
+                status="resolved",
+                broad_trace=BroadTrace(local_status="evidence_found"),
                 used_field_outputs=["amount"],
                 reason="字段已定案",
             )
@@ -68,5 +76,6 @@ def test_graph_state_accepts_prepared_progress_payloads():
     )
 
     assert state.broad_output is not None
-    assert state.resolved_fields[0].field_name == "amount"
+    assert state.result_fields[0].field_name == "amount"
+    assert state.trace_fields[0].used_field_outputs == ["amount"]
     assert state.warnings == ["字段来源存在轻微歧义"]

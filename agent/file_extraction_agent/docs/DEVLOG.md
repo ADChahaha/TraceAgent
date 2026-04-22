@@ -1,4 +1,62 @@
-last updated: 2026-04-21 19:39:18 CST
+last updated: 2026-04-22 15:33:33 CST
+
+## 2026-04-22 15:33:33
+
+### 已完成工作
+
+- 重构了 `file_extraction_agent/schemas.py`，移除旧的 broad candidate 契约，不再定义 `candidate_values`，改为用 `FieldEvidenceBundle` 表达 broad 阶段的字段级证据预选结果。
+- 将最终返回对象收口成 `ExtractionResult(result + trace)`：`result` 只保存纯字段结果，`trace` 保存 broad 证据、字段参考、补查痕迹和定案原因。
+- 同步重构了 `impl/state.py`、`impl/graph.py`、`impl/resolution.py` 和 `impl/prompts.py`，让内部状态从旧的 `resolved_fields/run_trace` 迁移为 `result_fields/trace_fields`。
+- 更新了 `tests/file_extraction_agent/test_schemas.py`、`test_graph.py`、`test_resolution.py`、`test_state.py`、`test_processor.py`、`test_prompts.py` 以及对应测试说明文档，固定新的 result/trace 契约。
+- 同步更新了 `file_extraction_agent/docs/DESIGN.md`，明确 broad 只选证据，resolution 负责定案，最终由 backend 持久化 `result` 与 `trace`。
+
+### 当前进展
+
+- `file_extraction_agent` 当前 schema 主线已经变成：
+  - `GraphInput` 承载 blocks 主输入
+  - `BroadExtractionOutput.fields` 承载 `FieldEvidenceBundle`
+  - `ExtractionResult.result.fields` 承载 `ResolvedFieldResult`
+  - `ExtractionResult.trace.fields` 承载 `FieldTraceRecord`
+- 当前 `resolution.py` 仍是最小 deterministic 占位实现：有 `evidence_texts` 时先用第一条 evidence text 作为占位 final value，后续需要替换为真正的 resolution agent + tools。
+- 当前 `tests/file_extraction_agent` 全量通过。
+
+### 遇到的问题
+
+- 旧实现把 broad 的候选值、resolution 的定案结果和运行 trace 混在一起，导致“结果是什么”和“为什么得到这个结果”边界不清楚。
+- 这次按你的要求没有做旧结构兼容，而是直接重构，因此同步改了依赖旧 schema 的 graph/state/resolution/prompt 和测试。
+
+### 下一步
+
+- 下一步优先实现 `impl/tools.py`，把 `get_field_bundle(...)` 和 `lookup_blocks_for_field(...)` 作为 resolution 的内部工具落地。
+- 后续再把 `resolution.py` 的占位定案逻辑替换成真正的 resolution agent 调用，并把 tool 调用写入 `FieldTraceRecord.lookup_trace`。
+
+## 2026-04-21 20:28:34
+
+### 已完成工作
+
+- 修改了 `file_extraction_agent` 的主输入契约：当前 `GraphInput` 以 `blocks + task_spec` 作为主输入，不再强制要求 `session_id`，并把 `document_id` 固定下沉到每个 `NormalizedBlock` 上。
+- 修改了 `file_extraction_agent/input_adapter.py`、`processor.py` 和 `impl/prompts.py`，让入口适配、prompt 组装和后续流程都直接围绕 blocks 主输入工作，不再按 `documents` 列表或 session 级包装组织主链路。
+- 保留了 `markdown` / `md_list` 作为备用字段，但明确降级成非主处理链路输入；当前 broad extraction / resolution 的主上下文已经切到 blocks。
+- 更新了 `tests/file_extraction_agent/test_schemas.py`、`test_input_adapter.py`、`test_prompts.py`、`test_state.py`、`test_broad_extraction.py`、`test_resolution.py`、`test_graph.py`、`test_processor.py` 以及对应的测试说明文档，覆盖新的 blocks 主输入边界。
+- 同步更新了 `file_extraction_agent/docs/DESIGN.md`，把模块设计改写成“all_blocks + task_spec”主链路，并说明 `markdown` / `md_list` 仅作备用。
+
+### 当前进展
+
+- `file_extraction_agent` 当前抽取入口已经收口成：
+  - `blocks` 是主输入
+  - `task_spec` 定义抽取目标字段
+  - `document_id` 在 block 上承担跨文档来源标识
+  - `markdown` / `md_list` 只在必要时作为备用文本保留
+- 当前相关测试已经全部通过，说明 schema、适配层、prompt、graph 和 processor 这条链路在新契约下是一致的。
+
+### 遇到的问题
+
+- 中间实现阶段仍有不少旧的 `session_id + documents` 假设散落在 schema、prompt、processor 和测试里，需要一轮集中清理才能把 blocks 主输入真正落干净。
+
+### 下一步
+
+- 如果后续继续联调真实模型代理，优先把联调脚本也切到新的 `blocks + task_spec + 显式连接参数` 接口，避免脚本继续沿用旧输入形状。
+- 如果后续要进一步简化契约，可以再评估是否保留 `NormalizedDocument` 这个备用文档级结构，还是继续收口到纯 blocks 视图。
 
 ## 2026-04-21 19:39:18
 

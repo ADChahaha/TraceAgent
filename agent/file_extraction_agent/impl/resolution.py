@@ -1,39 +1,41 @@
 """file_extraction_agent 的 field resolution 节点。
 
-实现步骤：
+当前实现先做一个最小 deterministic 版本，让 schema 与 graph 先完成结构重构：
 
 ```text
 GraphState(graph_input=..., broad_output=...)
-  -> run_resolution(...) 先确认 state.broad_output 已存在
-  -> resolve_fields(...) 按 graph_input.task_spec.fields 建立最终输出顺序
-  -> 从 broad_output.fields 建 field_name -> field_output 索引
-  -> 每个字段先做候选去重
-  -> 空候选输出 failed；唯一候选输出 resolved；多个不同候选输出 failed
-  -> 把整批 ResolvedFieldOutput 写回 state.resolved_fields
-  -> 返回同一个 GraphState，交给后续汇总层继续使用
+  -> 按 task_spec.fields 保持字段输出顺序
+  -> 从 broad_output.fields 建 field_name -> evidence bundle 索引
+  -> 有 evidence_texts 的字段先用第一条 evidence_text 作为占位 final_value
+  -> 缺少 evidence bundle 或 evidence_texts 的字段输出 failed
+  -> 同时写回 result_fields 与 trace_fields
 ```
+
+后续真正接入 resolution agent 时，应替换这里的定案逻辑，但继续保持：
+
+- `result_fields` 只放纯业务结果
+- `trace_fields` 保存 broad / cross / lookup / reason
 """
 
 from __future__ import annotations
 
-from typing import Any
-
 from file_extraction_agent.impl.state import GraphState
 from file_extraction_agent.schemas import (
-    BroadExtractionFieldOutput,
     BroadExtractionOutput,
-    ResolvedFieldOutput,
+    FieldEvidenceBundle,
+    FieldTraceRecord,
+    ResolvedFieldResult,
     TaskSpec,
 )
 
 
 def run_resolution(*, state: GraphState) -> GraphState:
-    """执行第二阶段字段定案，并把结果写回图状态。"""
+    """执行第二阶段字段定案，并把 result 与 trace 写回图状态。"""
 
     if state.broad_output is None:
         raise ValueError("resolution requires broad_output before resolving fields")
 
-    state.resolved_fields = resolve_fields(
+    state.result_fields, state.trace_fields = resolve_fields(
         task_spec=state.graph_input.task_spec,
         broad_output=state.broad_output,
     )
@@ -44,60 +46,70 @@ def resolve_fields(
     *,
     task_spec: TaskSpec,
     broad_output: BroadExtractionOutput,
-) -> list[ResolvedFieldOutput]:
-    """按 task spec 顺序把 broad extraction 结果收口成最终字段结果。"""
+) -> tuple[list[ResolvedFieldResult], list[FieldTraceRecord]]:
+    """按 task spec 顺序把 broad evidence bundles 收口成 result + trace。"""
 
     broad_output_by_field = {
         field_output.field_name: field_output for field_output in broad_output.fields
     }
-    return [
-        resolve_single_field(
+    result_fields: list[ResolvedFieldResult] = []
+    trace_fields: list[FieldTraceRecord] = []
+
+    for field in task_spec.fields:
+        result_field, trace_field = resolve_single_field(
             field_name=field.field_name,
             field_output=broad_output_by_field.get(field.field_name),
         )
-        for field in task_spec.fields
-    ]
+        result_fields.append(result_field)
+        trace_fields.append(trace_field)
+
+    return result_fields, trace_fields
 
 
 def resolve_single_field(
     *,
     field_name: str,
-    field_output: BroadExtractionFieldOutput | None,
-) -> ResolvedFieldOutput:
-    """把单字段候选结果收口成 resolved 或 failed。"""
+    field_output: FieldEvidenceBundle | None,
+) -> tuple[ResolvedFieldResult, FieldTraceRecord]:
+    """把单字段 evidence bundle 收口成纯结果与字段 trace。"""
 
-    if field_output is None or not field_output.candidate_values:
-        return ResolvedFieldOutput(
+    if field_output is None or not field_output.evidence_texts:
+        result_field = ResolvedFieldResult(
             field_name=field_name,
             status="failed",
+        )
+        trace_field = FieldTraceRecord(
+            field_name=field_name,
+            status="failed",
+            broad_trace=(
+                field_output.to_broad_trace()
+                if field_output is not None
+                else _missing_broad_trace()
+            ),
             used_field_outputs=[field_name] if field_output is not None else [],
             extra_lookup_used=False,
-            failure_reason="未找到可用候选值",
+            failure_reason="未找到可用证据",
         )
+        return result_field, trace_field
 
-    normalized_candidates = _deduplicate_candidates(field_output.candidate_values)
-    if len(normalized_candidates) == 1:
-        return ResolvedFieldOutput(
-            field_name=field_name,
-            status="resolved",
-            final_value=normalized_candidates[0],
-            used_field_outputs=[field_name],
-            extra_lookup_used=False,
-            reason="候选值唯一，可直接定案",
-        )
-
-    return ResolvedFieldOutput(
+    result_field = ResolvedFieldResult(
         field_name=field_name,
-        status="failed",
+        status="resolved",
+        final_value=field_output.evidence_texts[0],
+    )
+    trace_field = FieldTraceRecord(
+        field_name=field_name,
+        status="resolved",
+        broad_trace=field_output.to_broad_trace(),
         used_field_outputs=[field_name],
         extra_lookup_used=False,
-        failure_reason="候选值冲突，暂时无法定案",
+        reason="当前最小实现使用第一条 evidence_text 作为占位定案结果",
     )
+    return result_field, trace_field
 
 
-def _deduplicate_candidates(candidate_values: list[Any]) -> list[Any]:
-    deduplicated: list[Any] = []
-    for candidate in candidate_values:
-        if candidate not in deduplicated:
-            deduplicated.append(candidate)
-    return deduplicated
+def _missing_broad_trace():
+    return FieldEvidenceBundle(
+        field_name="__missing__",
+        local_status="missing",
+    ).to_broad_trace()

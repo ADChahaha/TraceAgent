@@ -4,9 +4,9 @@
 
 ```text
 GraphInput / BroadExtractionOutput / target_field_name
-  -> 先把 documents、fields、run_config、metadata 收敛成稳定的可序列化摘要
-  -> broad extraction 阶段输出面向 BroadExtractionOutput 的系统指令
-  -> field resolution 阶段先从 task_spec 找到目标字段定义，再从 broad_output 找到对应候选 bundle
+  -> 先把 blocks、fields、run_config、metadata 收敛成稳定的可序列化摘要
+  -> broad extraction 阶段输出面向 FieldEvidenceBundle 的系统指令
+  -> field resolution 阶段先从 task_spec 找到目标字段定义，再从 broad_output 找到对应 evidence bundle
   -> 再把全局字段输出一并压成 JSON payload
   -> 返回 extractor client 可直接消费的 messages 列表
 ```
@@ -30,20 +30,20 @@ def build_broad_extraction_messages(graph_input: GraphInput) -> list[dict[str, s
         {
             "role": "system",
             "content": (
-                "你负责基于标准化文档内容输出字段级 broad extraction 结果。"
+                "你负责基于标准化文档内容输出字段级 evidence bundle。"
                 "返回值必须严格符合 BroadExtractionOutput；"
-                "每个字段都要给出 candidate_values、evidence_texts、"
-                "evidence_refs、local_status、local_validation、local_notes。"
+                "每个字段只做相关 blocks 和证据预选，不输出最终字段值；"
+                "每个字段都要给出 relevant_block_ids、evidence_texts、"
+                "evidence_refs、local_status、local_notes。"
             ),
         },
         {
             "role": "user",
             "content": json.dumps(
                 {
-                    "session_id": graph_input.session_id,
                     "task_name": graph_input.task_spec.task_name,
                     "fields": _serialize_task_fields(graph_input),
-                    "documents": _serialize_documents(graph_input),
+                    "blocks": _serialize_blocks(graph_input),
                     "run_config": graph_input.run_config.model_dump(),
                     "metadata": graph_input.metadata,
                 },
@@ -83,7 +83,7 @@ def build_field_resolution_messages(
             "role": "system",
             "content": (
                 "你负责对单个目标字段做 field resolution。"
-                "返回值必须严格符合 ResolvedFieldOutput；"
+                "返回值必须严格符合 result + trace 的字段级结构；"
                 "只能输出 resolved 或 failed，并解释定案或失败原因。"
             ),
         },
@@ -91,7 +91,6 @@ def build_field_resolution_messages(
             "role": "user",
             "content": json.dumps(
                 {
-                    "session_id": graph_input.session_id,
                     "task_name": graph_input.task_spec.task_name,
                     "target_field_name": target_field_name,
                     "target_field": (
@@ -106,17 +105,14 @@ def build_field_resolution_messages(
                             "cross_field_hints": target_field.cross_field_hints,
                             "lookup_hints": target_field.lookup_hints,
                             "enum_values": target_field.enum_values,
-                            "candidate_values": (
-                                target_output.candidate_values if target_output else []
+                            "relevant_block_ids": (
+                                target_output.relevant_block_ids if target_output else []
                             ),
                             "evidence_texts": (
                                 target_output.evidence_texts if target_output else []
                             ),
                             "local_status": (
                                 target_output.local_status if target_output else "missing"
-                            ),
-                            "local_validation": (
-                                target_output.local_validation if target_output else {}
                             ),
                             "local_notes": (
                                 target_output.local_notes if target_output else []
@@ -128,7 +124,7 @@ def build_field_resolution_messages(
                     "all_field_outputs": [
                         field_output.model_dump() for field_output in broad_output.fields
                     ],
-                    "documents": _serialize_documents(graph_input),
+                    "blocks": _serialize_blocks(graph_input),
                 },
                 ensure_ascii=False,
             ),
@@ -154,14 +150,5 @@ def _serialize_task_fields(graph_input: GraphInput) -> list[dict[str, Any]]:
     ]
 
 
-def _serialize_documents(graph_input: GraphInput) -> list[dict[str, Any]]:
-    return [
-        {
-            "document_id": document.document_id,
-            "markdown": document.markdown,
-            "md_list": document.md_list,
-            "blocks": [block.model_dump() for block in document.blocks],
-            "metadata": document.metadata,
-        }
-        for document in graph_input.documents
-    ]
+def _serialize_blocks(graph_input: GraphInput) -> list[dict[str, Any]]:
+    return [block.model_dump() for block in graph_input.blocks]

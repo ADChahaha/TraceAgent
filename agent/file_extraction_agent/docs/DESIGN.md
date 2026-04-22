@@ -1,67 +1,60 @@
 # File Extraction Agent Design
 
-这份文档面向开发者，说明 `file_extraction_agent` 在 `agent service` 里的职责边界、目录分层和主处理链路。它处理的是 **标准化后的文档内容上的字段抽取与字段定案**，不负责原始文件解析，也不直接负责写库或外层路由判定。
+这份文档面向开发者，说明 `file_extraction_agent` 在 `agent service` 中的代码结构、模块边界和主处理链路。它处理的是 **标准化后的文档 blocks 上的字段级证据预选与字段最终定案**，不负责原始文件解析，也不直接负责写库、外层 route policy 或人工审核流转。
 
 ## 目标
 
-`file_extraction_agent` 的目标不是“把整份文档一次性抽成最终 JSON”，而是把文档处理成一组 **字段级可治理对象**，供后续治理层决定这些结果是否允许进入数据库。
+`file_extraction_agent` 的目标不是“把整份文档一次性抽成最终 JSON”，而是把标准化文档加工成一组 **字段级可治理对象**，供后续治理层决定这些结果是否允许进入数据库。
 
-这一层当前只负责两件事：
+这一层当前要围绕下面这条代码主线组织：
 
-1. broad extraction：围绕固定 schema，为每个字段生成候选、证据和局部状态。
-2. field resolution：读取 broad extraction 的全字段候选结果，一次性完成全字段最终定案或失败收口。
+```text
+backend 聚合后的 all_blocks + task_spec
+  -> input_adapter.py
+  -> GraphInput
+  -> broad extraction
+  -> field evidence bundles
+  -> resolution agent
+      -> 默认先看当前字段 bundle
+      -> 必要时调用 field bundle tool
+      -> 必要时调用 global lookup tool
+  -> result.fields + trace.fields
+  -> ExtractionResult(result + trace)
+```
 
-也就是说，这一层解决的是：
+可以拆成三件事理解：
 
-- 当前字段有什么候选值
-- 这些候选来自哪里
-- 证据够不够
-- 当前字段最终能不能被可靠定案
+1. `broad extraction`
+   只为每个字段预选相关 blocks 和证据，不生成最终字段值。
+2. `resolution`
+   负责字段最终定案；当前字段能否 `resolved`，在这里决定。
+3. `tool`
+   只服务于 `resolution`，用于按需参考其他字段或做一次全局补查。
 
-它不直接解决：
+这层不直接解决：
 
-- 当前字段该 `pass`、`review`、`reject` 还是 `fallback`
+- 当前字段该 `pass`、`human_review`、`reject` 还是 `fallback`
 - 字段最终如何写数据库
+- 人工接管后如何审批或修正
 
 这些属于后续外层治理控制的职责。
 
 ## 模块边界
 
-`file_extraction_agent` 的输入不是 `document_processor` 的原始直接返回值，而是 **backend 在 session 维度聚合后的标准化结果**。也就是说，进入这一层前，backend 需要先把标准化内容和业务标识补齐，不直接接收原始 `pdf/docx` 文件对象。
+`file_extraction_agent` 的输入不是 `document_processor` 的原始直接返回值，而是 **backend 在 session 维度聚合后的标准化结果**。进入这一层前，外部应当已经完成：
 
-在进入 `file_extraction_agent` 前，当前已经落地一层明确的外部输入适配层：`input_adapter.py`。这层不负责 broad extraction、field resolution 或 graph 编排，只负责把外部 session 级输入收敛成稳定的 `GraphInput`。
+- 原始文件解析
+- `blocks` 标准化
+- `document_id`、页码、bbox 等定位信息补齐
+- 任务级 schema / task spec 确定
 
-主链路是：
+这一层不直接接收 `pdf/docx` 文件对象，只接收标准化后的 blocks 主输入。
 
-```text
-backend 聚合后的 documents + task_spec
-  -> 外部输入适配层（input_adapter.py）
-  -> session 输入校验 / 协议适配 / GraphInput 组装
-  -> file_extraction_agent.processor.extract(...)
-  -> task spec 加载
-  -> broad extraction
-  -> broad output 校验与标准化
-  -> field resolution
-  -> ExtractionResult
-```
+进入 `file_extraction_agent` 前，当前已经落地一层明确的外部输入适配层：`input_adapter.py`。这层不负责任何 broad / resolution / tool 编排，只负责把外部 session 级输入收敛成稳定的 `GraphInput`。
 
-展开后可以理解成：
+## 代码结构
 
-```text
-调用方传入 backend 聚合后的 session_id、documents、task_spec_name 或 task_spec
-  -> processor.extract(...) 先把这组外部参数转交给 input_adapter.build_graph_input(...)
-  -> input_adapter 先做 session 输入校验、协议适配和 GraphInput 组装
-  -> 如果只传了 task_spec_name，就从 task_specs/*.json 加载固定 schema
-  -> processor.extract(...) 再显式决定本次调用使用 json_schema / tool_call / auto 哪种结构化输出策略
-  -> impl/graph.py 从 GraphInput 开始驱动两阶段流程
-  -> impl/broad_extraction.py 生成每个字段的候选、证据、局部状态
-  -> impl/resolution.py 直接读取 broad extraction 的全量输出，结合字段间关系一次性输出全字段 resolved / failed
-  -> processor.extract(...) 汇总成 ExtractionResult 返回给上层
-```
-
-## 当前目录设计
-
-当前目录按下面这个结构组织：
+当前目录应按下面这个结构理解：
 
 ```text
 file_extraction_agent/
@@ -76,108 +69,139 @@ file_extraction_agent/
 │   ├── graph.py
 │   ├── state.py
 │   ├── prompts.py
-│   ├── validation.py
 │   ├── broad_extraction.py
-│   └── resolution.py
+│   ├── resolution.py
+│   └── tools.py
 └── docs/
     ├── DESIGN.md
     └── DEVLOG.md
 ```
 
+如果当前代码还没完全长成这个样子，应当把这份文档视为后续重构目标，而不是沿用旧的“broad 出 candidate，resolution 只去重”的职责划分。
+
 各层职责如下：
 
 - `input_adapter.py`
-  负责外部 session 输入校验、协议适配和 `GraphInput` 组装；这一层只解决“外面传进来的数据能不能进入 agent 内部契约”，不负责任何抽取流程编排。
+  - 负责外部 blocks 输入校验、协议适配和 `GraphInput` 组装
+  - 只解决“外面传进来的数据能不能进入 agent 内部契约”
+  - 不负责 broad / resolution / tool 调度
+
 - `processor.py`
-  对外统一入口，负责接住 session 级调用参数，把外部输入转交给 `input_adapter.py`，显式决定本次调用的结构化输出策略，再调用后续抽取流程并返回最终结果。
+  - 对外统一入口
+  - 接住 session 级调用参数
+  - 把外部输入转交给 `input_adapter.py`
+  - 再把 `GraphInput + extractor_client` 交给 `impl/graph.py`
+  - 返回最终 `ExtractionResult`
+
 - `schemas.py`
-  定义数据契约，包括 session 级 `GraphInput`、文档级 `NormalizedDocument`、broad extraction / resolution / result aggregation 的结构化对象。
+  - 定义数据契约
+  - 包括 `GraphInput`、字段级 evidence bundle、resolution 输出、tool 输入输出和最终聚合结果
+
 - `extractor_client.py`
-  负责构造抽取执行客户端：先从环境变量读取 `BASE_URL`、`OPENAI_API_KEY`、`MODEL` 这些连接信息，再结合调用方显式传入的结构化输出策略和代码内默认请求参数，返回真正可调用的结构化输出执行器。
+  - 负责构造真正可调用的结构化输出执行器
+  - broad 与 resolution 都通过它访问模型
+
 - `task_specs/*.json`
-  保存固定 schema、字段类型、关键字段标记、局部校验规则和 cross-field hints。
+  - 保存固定 schema、字段类型、关键字段标记、局部校验规则、cross-field hints、lookup hints
+
 - `impl/graph.py`
-  只负责编排节点流转，不直接定义对外 API。
+  - 只负责编排节点流转
+  - 不直接定义对外 API
+
 - `impl/state.py`
-  定义流程内部执行态，只给 graph、broad extraction 和 resolution 这些节点共享。
+  - 定义流程内部执行态
+  - 供 graph、broad、resolution、tools 共用
+
 - `impl/prompts.py`
-  定义 broad extraction 和 field resolution 两阶段的指令文本组装逻辑，是内部执行策略，不作为外部注入点暴露。
+  - 定义 broad extraction 与 resolution agent 的提示词组装逻辑
+  - 属于内部执行策略，不对外暴露 prompt override
+
 - `impl/broad_extraction.py`
-  调用字段抽取执行器生成字段级候选集合。
+  - 只负责字段级证据预选
+  - 不产最终字段值
+
 - `impl/resolution.py`
-  读取全量 broad output，一次性完成全字段最终定案。
+  - 负责字段最终定案
+  - 默认先看当前字段 broad bundle
+  - 必要时调用 tools
 
-## 为什么 `state.py` 和 `prompts.py` 放在 `impl/`
+- `impl/tools.py`
+  - 放 resolution 可调用的内部工具
+  - 当前至少包括：
+    - `get_field_bundle(...)`
+    - `lookup_blocks_for_field(...)`
 
-当前设计下，`state.py` 不是模块级公共契约，而是流程内部执行态。它主要由：
+## 主处理链路
 
-- `impl/graph.py`
-- `impl/broad_extraction.py`
-- `impl/resolution.py`
-
-这些内部节点共同读写。`processor.py` 不需要对外暴露 state，也不应该让调用方感知内部状态结构，因此把它放在 `impl/` 更符合语义。
-
-`prompts.py` 也属于内部执行策略，而不是外部扩展接口。它虽然会根据 schema、字段规则和阶段动态拼装指令文本，但这种拼装是模块内部行为，不建议让调用方直接传 `prompt_override` 一类自由文本，以免破坏抽取行为稳定性、结构化输出约束和实验对比可复现性。
-
-因此这两个文件都归入 `impl/`，表示：
-
-- 它们服务于图执行细节
-- 它们不是公开 API
-- 调用方只和 `processor.extract(...)`、`schemas.py` 暴露的结果对象打交道
-
-## `processor.py` 与 `extractor_client.py` 的分工
-
-这一层现在故意把“连接配置”和“调用策略”拆开，而不是全部堆进环境变量。
-
-可以按下面的 pipeline 理解：
+整体流程应当按下面这条 pipeline 落到代码里：
 
 ```text
-调用方进入 processor.extract(..., structured_output_strategy=...)
-  -> processor 明确指定这次调用是 json_schema / tool_call / auto
-  -> 部署环境提供 BASE_URL / OPENAI_API_KEY / MODEL
-  -> extractor_client 先检查这三个连接变量是否齐全；缺任一项就直接报配置错误
-  -> 再使用代码内默认请求参数，例如 temperature=0
-  -> 用 BASE_URL / OPENAI_API_KEY / MODEL 创建 ChatOpenAI(base_url=..., api_key=..., model=..., temperature=0)
-  -> 如果 structured_output_strategy=json_schema，就固定使用 json_schema 结构化输出
-  -> 如果 structured_output_strategy=tool_call，就改走 tool calling；内部映射成 LangChain 的 function_calling
-  -> 如果 structured_output_strategy=auto，就按代码内的默认顺序先试 json_schema，再在兼容接口不支持时退到 tool_call
-  -> broad extraction 和 field resolution 只收到统一的结构化 runnable，不需要关心底层用了哪种协议
+调用方传入 backend 聚合后的 all_blocks、task_spec_name 或 task_spec
+  -> processor.extract(...) 先把外部参数交给 input_adapter.build_graph_input(...)
+  -> input_adapter 负责 blocks 校验、协议适配和 GraphInput 组装
+  -> 如果没传 extractor_client，就要求调用方显式传入 base_url / openai_api_key / model
+  -> impl/graph.py 从 GraphInput 开始驱动 broad extraction
+  -> broad extraction 一次性为所有字段生成 evidence bundles
+  -> resolution 阶段读取全字段 evidence bundles
+  -> 对每个目标字段做最终定案
+  -> 定案时必要时调用 field bundle tool 或 global lookup tool
+  -> 汇总成 ExtractionResult 返回给上层
 ```
 
-这样拆分的目的有两点：
-
-- 环境变量只负责部署相关的差异，例如服务地址、密钥、默认模型名。
-- `processor.extract(...)` 负责本次调用真正想走哪种结构化输出协议，因为这是业务调用面的显式选择，不应该藏在配置文件里。
-
-## 两阶段执行设计
-
-### 第一阶段：broad extraction
-
-这一阶段的目标是让每个字段先产生“局部意见”，而不是直接拍板最终值。
-
-输入：
-
-- `GraphInput.documents`
-- 固定 task spec / schema
-
-处理过程：
+可以概括成：
 
 ```text
-GraphInput.documents
-  -> 选择适合放进抽取输入的 markdown / block 摘要
-  -> 根据 task spec 展开所有目标字段
-  -> 调用字段抽取执行器一次返回所有字段的 BroadExtractionOutput
-  -> broad output 直接作为 resolution 阶段的输入
+all_blocks
+  -> broad extraction
+  -> per-field evidence bundles
+  -> resolution
+  -> per-field resolved / failed
 ```
 
-输出对象至少要保留：
+## broad extraction 设计
+
+### broad 的职责
+
+`broad extraction` 的职责不是生成字段最终值，而是：
+
+```text
+all blocks
+  -> 为每个字段找最相关的 blocks / 证据片段
+  -> 组织成字段级 evidence bundle
+  -> 把 bundle 交给 resolution
+```
+
+因此 broad 更像：
+
+- 字段级证据召回器
+- 字段级局部上下文压缩器
+- 后续 resolution 的材料准备层
+
+而不是：
+
+- 字段最终定案器
+- 最终值生成器
+- 写库前裁决器
+
+### broad 的输入
+
+输入包括：
+
+- `GraphInput.blocks`
+- `task_spec`
+- 可选 `markdown / md_list`
+
+当前主输入应为 `blocks`。`markdown` / `md_list` 只作备用文本，不是主处理链路的一等输入。
+
+### broad 的输出结构
+
+broad 的结构化输出建议以字段为中心组织，每个字段对应一个 `FieldEvidenceBundle`。每个 bundle 至少包含：
 
 - `field_name`
-- `candidate_values`
+- `relevant_block_ids`
 - `evidence_texts`
 - `evidence_refs`
 - `local_status`
-- `local_validation`
 - `local_notes`
 
 其中 `evidence_refs` 应统一记录：
@@ -187,35 +211,219 @@ GraphInput.documents
 - `span`
 - `block_id`
 
-这样后续字段定案、复核和审计时，能追踪每条候选证据来自哪里。
+### broad 的约束
 
-### 第二阶段：field resolution
+- broad **不输出最终字段值**
+- broad **不输出用于直接写库的 candidate**
+- broad **不在这一层解决跨字段冲突**
 
-这一阶段会读取 broad extraction 的全字段候选结果，并 **一次性输出所有字段的最终结果**。
+如果后续需要保留局部猜测，也只能保留成非常弱语义的调试信息，不能把它设计成主流程依赖对象。主流程的 broad 输出不应包含 `candidate_values` 这类“半定案”结构。
+
+## resolution 设计
+
+### resolution 的职责
+
+`resolution` 是面向目标字段最终定案的执行层。它的职责不是简单去重，而是：
+
+```text
+目标字段 bundle
+  -> 判断当前字段证据是否足够
+  -> 若不足，参考其他字段 bundle
+  -> 若仍不足，执行一次全局补查
+  -> 结合 schema / cross hints / lookup 结果
+  -> 输出 resolved / failed
+```
+
+也就是说，这一层真正负责回答的是：
+
+- 当前字段能不能自动定案
+- 当前字段最终值是什么
+- 当前字段定案时参考了哪些字段
+- 当前字段是否执行过补查
+- 当前字段为什么成功或失败
+
+### resolution 的实现形式
+
+治理语义上，resolution 是“字段级定案”；实现上不强制必须“每字段单独一次外部模型调用”。
+
+代码层可接受两种落地方式：
+
+1. 在同一个 resolution 阶段内部，按字段逐个组织定案逻辑并返回字段级结果列表。
+2. 对少数字段做单独 resolution 调用，但这不是当前第一版的必需条件。
+
+无论采取哪种形式，都必须保证：
+
+- 输出是字段级的
+- `used_field_outputs` 可追踪
+- `extra_lookup_used` 可追踪
+- 每个字段单独有 `reason / failure_reason`
+
+## traceability 设计
+
+### 设计目标
+
+`file_extraction_agent` 相对“端到端直接输出最终字段”的主要优势，不在于“模型没有看全文”，而在于：
+
+```text
+系统虽然同样从全局 blocks 开始处理
+  -> 但会把字段相关证据预选
+  -> 字段间参考
+  -> 补查行为
+  -> 最终定案原因
+显式保存为可追踪对象
+```
+
+也就是说，这一层的 traceability 不是自然产生的，而是 **必须通过结构化留痕显式保存**。
+
+如果 broad、resolution、tool 之间只是内部传值，最后没有把这些中间痕迹挂到结果对象或 trace 对象上，那么即使流程分成了两阶段，trace 能力也不会明显强于端到端方案。
+
+### 必须保存的 trace 信息
+
+当前设计要求至少保存下面三层 trace。
+
+#### 第一层：证据选择 trace
+
+对于每个字段，broad 阶段必须显式保存：
+
+- 当前字段从全局 `all_blocks` 中预选出的 `relevant_block_ids`
+- 对应 `evidence_texts`
+- 对应 `evidence_refs`
+- 当前字段的 `local_status`
+- 当前字段的 `local_notes`
+
+这层 trace 的目的不是直接给最终答案，而是回答：
+
+- 当前字段相关材料来自哪里
+- broad 为什么认为这些 blocks 更值得进入后续 resolution
+- broad 是否已经暴露出缺失、歧义或弱证据状态
+
+#### 第二层：字段定案 trace
+
+对于每个字段，resolution 阶段必须显式保存：
+
+- 当前字段最终是否 `resolved / failed`
+- 当前字段最终的 `final_value`
+- 当前字段在定案时实际使用了哪些字段输出，即 `used_field_outputs`
+- 当前字段的 `reason / failure_reason`
+
+这层 trace 的目的，是回答：
+
+- 当前字段最后为什么是这个结果
+- 当前字段是否参考了其他字段
+- 如果参考了，是哪些字段参与了当前字段定案
+- 当前字段失败时，失败原因是什么
+
+#### 第三层：补查 trace
+
+如果当前字段在 resolution 阶段触发全局补查，系统必须显式保存：
+
+- 是否触发过补查，即 `extra_lookup_used`
+- 补查触发原因
+- 补查使用的 `lookup_hints`
+- 补查返回的 block 摘要或 block id
+- 补查结果是否真正参与了最终定案
+
+这层 trace 的目的，是回答：
+
+- 当前字段是否只靠 broad 就完成定案
+- 当前字段是否因为证据不足而进入了额外查询
+- 补查到底补回了什么材料
+
+### traceability 的代码落点
+
+为了让 traceability 不是口头设计而是代码结构约束，当前要求把 trace 信息分别落到下面这些对象里：
+
+- `BroadExtractionOutput`
+  - 保存字段级证据选择 trace
+- `FieldTraceRecord`
+  - 保存字段级定案 trace、cross-field reference 和 lookup trace
+- `ExtractionTrace`
+  - 汇总所有字段 trace、warnings 和附加元信息
+
+如果后续 broad、resolution 或 tool 增加了新的判断步骤，也应优先评估这些步骤是否需要新增 trace 字段，而不是仅仅把中间信息留在函数局部变量中。
+
+### 对外层治理的意义
+
+显式保存 trace 的意义不只是方便调试，更是为了支撑后续写库前治理。后续外层治理层至少需要利用这些 trace 回答：
+
+- 当前字段的证据来源是否足够清楚
+- 当前字段是否参考过其他字段
+- 当前字段是否经历过补查仍未定案
+- 当前字段失败时，失败属于缺失、冲突还是证据不足
+
+因此，traceability 在这里不是附加特性，而是当前架构成立的前提之一。
+
+## tools 设计
+
+`tool` 不是独立业务模块，而是 resolution 阶段的内部辅助能力。当前至少需要两个 tool。
+
+### Tool 1：`get_field_bundle(field_name)`
+
+作用：
+
+- 读取某个其他字段在 broad 阶段生成的 evidence bundle
 
 输入：
 
-- 完整的 `BroadExtractionOutput`
-- 全量字段 schema 约束和 cross-field hints
-- 归一化后的文档内容
+- `field_name`
 
-处理过程：
-
-```text
-完整 broad_output
-  -> 逐字段读取候选、证据、局部状态
-  -> 同时读取其他字段输出作为 cross-field hints
-  -> 做全局一致性判断和字段级收口
-  -> 一次性输出全字段 resolved / failed
-```
-
-输出中的每个字段至少要包含：
+输出：
 
 - `field_name`
-- `status`
-- `final_value`
-- `used_field_outputs`
-- `reason` 或 `failure_reason`
+- `relevant_block_ids`
+- `evidence_texts`
+- `evidence_refs`
+- `local_status`
+- `local_notes`
+
+用途：
+
+- 当前字段定案时需要 cross-field reference
+- 例如：
+  - `deadline` 参考 `application_period`
+  - `amount` 参考 `currency`
+  - `program_name` 参考 `degree_level`
+
+### Tool 2：`lookup_blocks_for_field(...)`
+
+作用：
+
+- 面向当前目标字段，从全局 `all_blocks` 中补充检索一小批更相关的 blocks
+
+输入建议至少包括：
+
+- `target_field_name`
+- `query_reason`
+- `lookup_hints`
+- `top_k`
+
+输出建议至少包括：
+
+- `matched_blocks`
+  - `block_id`
+  - `document_id`
+  - `page_no`
+  - `text`
+  - `score`
+- `applied_hints`
+- `lookup_reason`
+
+### tools 的使用顺序
+
+resolution 默认遵循下面这条顺序：
+
+```text
+先看当前字段 broad bundle
+  -> 若需要 cross，调 get_field_bundle(...)
+  -> 若 cross 后仍不足，调 lookup_blocks_for_field(...)
+  -> 再做最终 resolved / failed
+```
+
+也就是说：
+
+- 先利用已有局部证据
+- 再按需参考其他字段
+- 最后才做一次全局补查
 
 ## Graph 输入与内部状态
 
@@ -225,20 +433,17 @@ GraphInput.documents
 run_extraction_graph(graph_input, extractor_client) -> ExtractionResult
 ```
 
-推荐把图入口固定成一个在 `schemas.py` 中定义的 `GraphInput` 类型，至少包含：
+图入口固定成 `schemas.py` 中定义的 `GraphInput`，至少包含：
 
-- `session_id`
-- `documents`
+- `blocks`
 - `task_spec`
 - `run_config`
 - `metadata`
 
 其中：
 
-- `session_id`
-  是 backend 在 session 聚合后补齐的顶层业务标识，用来说明这批文档属于同一次抽取会话。
-- `documents`
-  是 backend 聚合后的多文档输入，每个文档至少带 `document_id`、`markdown`、`md_list`、`blocks`
+- `blocks`
+  是 backend 聚合后的多文档块级输入，每个 block 至少带 `document_id`、`text`、`page_no`、`bbox`、`kind`
 - `task_spec`
   是当前任务的固定 schema 定义
 - `run_config`
@@ -246,78 +451,207 @@ run_extraction_graph(graph_input, extractor_client) -> ExtractionResult
 - `metadata`
   是可选任务标签、session 信息或调试信息
 
-`GraphInput` 属于流程入口前就确定好的数据契约，因此放在 `schemas.py`，由外部输入适配层一次性组装，随后由 `processor.py` / `graph.py` 直接消费。
-
 对应地，`impl/state.py` 定义图内部中间态，例如：
 
 - `graph_input`
 - `broad_output`
-- `resolved_fields`
+- `result_fields`
+- `trace_fields`
 - `warnings`
 
-当前已落地的 graph 编排顺序是：
+推荐的 graph 编排顺序是：
 
 ```text
 GraphInput + extractor_client
   -> build_graph_state(graph_input)
   -> run_broad_extraction(state, extractor_client)
   -> run_resolution(state)
-  -> ExtractionResult
+  -> ExtractionResult(result + trace)
 ```
 
-也就是说：
-
-- `GraphInput` 是图的入口静态输入
-- `GraphState` 是图运行过程中的中间状态
+如果 resolution 内部触发 tool，它们也应当只修改当前 `GraphState` 中与 lookup / trace 相关的部分，不应反向修改 broad 的职责语义。
 
 ## 结构化 Schema 设计
 
-### broad extraction 输出
+### broad 输出
 
-第一层结构化输出建议由 `BroadExtractionOutput` 控制，并以字段为中心组织。每个字段对应一个候选 bundle，至少包含：
+第一层结构化输出由 `BroadExtractionOutput` 控制，并以字段为中心组织。每个字段对应一个 evidence bundle，至少包含：
 
 - `field_name`
-- `candidate_values`
+- `relevant_block_ids`
 - `evidence_texts`
 - `evidence_refs`
 - `local_status`
-- `local_validation`
 - `local_notes`
 
-这里允许一个字段存在多个候选，不要求这一层定唯一值。
+当前设计中，broad 输出 **不包含 `candidate_values`**。
 
-### field resolution 输出
+### resolution 输出
 
-第二层结构化输出建议由 `ResolvedFieldOutput` 控制，并且只允许两种结果：
+第二层结构化输出拆成纯结果与 trace 两部分。
+
+纯结果由 `ResolvedFieldResult` 控制，并且只允许两种结果：
 
 - `resolved`
 - `failed`
 
-对应字段至少包含：
+每个字段至少包含：
 
 - `field_name`
 - `status`
 - `final_value`
+
+字段级 trace 由 `FieldTraceRecord` 控制，至少包含：
+
+- `field_name`
+- `status`
+- `broad_trace`
 - `used_field_outputs`
 - `extra_lookup_used`
+- `lookup_trace`
 - `reason`
 - `failure_reason`
 
-第一版不依赖精细浮点置信度，可以先用离散风险或强弱等级辅助解释。
+这里的关键字段不是置信度，而是：
+
+- 当前字段最终是否定案成功
+- 定案过程中参考过哪些其他字段
+- 是否执行过补查
+- 为什么成功或失败
 
 ### 最终聚合输出
 
-`processor.extract(...)` 最终返回 `ExtractionResult`，建议包含：
+`processor.extract(...)` 最终不应只返回“字段结果列表”，而应返回一个同时包含 **纯结果** 与 **trace 内容** 的顶层对象：
 
-- `broad_output`
-- `resolved_fields`
-- `run_trace`
+```text
+ExtractionResult
+  -> result
+  -> trace
+```
 
-其中 `run_trace` 如果保留，应只作为轻量调试或审计附加信息，而不是主流程状态中心。
+这里要求：
+
+- `result`
+  只放最终业务结果，不混入 broad / lookup / reason 这类执行痕迹
+- `trace`
+  只放 broad、cross-field reference、lookup 和失败原因等留痕信息
+
+推荐结构如下：
+
+```text
+ExtractionResult
+  -> result: ExtractionContent
+       -> fields: ResolvedFieldResult[]
+  -> trace: ExtractionTrace
+       -> fields: FieldTraceRecord[]
+       -> warnings
+       -> metadata
+```
+
+#### `result` 的职责
+
+`result` 回答的是：
+
+- 当前最终字段结果是什么
+- 哪些字段 `resolved`
+- 哪些字段 `failed`
+- 当前字段最终值是什么
+
+因此 `result.fields` 中的单字段对象应尽量克制，只包含：
+
+- `field_name`
+- `status`
+- `final_value`
+
+也就是说，`result` 的目标是服务于：
+
+- 后续 route policy
+- 最终写库判断
+- 上层业务消费
+
+而不是承担审计或调试职责。
+
+#### `trace` 的职责
+
+`trace` 回答的是：
+
+- 当前字段 broad 预选了哪些 blocks
+- 当前字段定案时参考了哪些其他字段
+- 当前字段有没有触发补查
+- 当前字段为什么 resolved / failed
+
+因此 `trace.fields` 中的单字段 trace 对象建议包含：
+
+- `field_name`
+- `broad_trace`
+- `used_field_outputs`
+- `extra_lookup_used`
+- `lookup_trace`
+- `reason`
+- `failure_reason`
+
+其中：
+
+- `broad_trace`
+  保存 broad 阶段的字段级证据预选痕迹
+- `lookup_trace`
+  保存当前字段补查行为
+- `reason / failure_reason`
+  保存当前字段定案解释
+
+#### broad trace 的建议结构
+
+对于 `trace.fields[].broad_trace`，建议至少保存：
+
+- `relevant_block_ids`
+- `evidence_texts`
+- `evidence_refs`
+- `local_status`
+- `local_notes`
+
+这层结构应当直接对应 broad extraction 的主输出语义。
+
+#### lookup trace 的建议结构
+
+对于 `trace.fields[].lookup_trace`，建议每次补查都记录：
+
+- `lookup_reason`
+- `lookup_hints`
+- `returned_block_ids`
+- `returned_refs`
+- `used_in_final_decision`
+
+如果字段没有补查，则 `lookup_trace` 为空列表。
+
+#### 这样设计的原因
+
+采用 `result` / `trace` 双层结构的原因是：
+
+- 让最终业务结果保持干净
+- 让 trace 可单独扩展而不污染业务结果
+- 让 backend 能自然拆分成“结果持久化”和“trace 持久化”
+
+也就是说：
+
+```text
+agent 跑完整个流程
+  -> 返回 ExtractionResult(result + trace)
+  -> backend 决定如何持久化 result 与 trace
+```
+
+这里不建议让 `agent service` 直接持久化整个运行状态；更合理的方式是：
+
+- `agent service`
+  负责生成 `ExtractionResult`
+- `backend`
+  负责保存 `result`
+  负责保存 `trace`
+
+这样更符合当前仓库的职责边界。
 
 ## task spec 设计
 
-`task_specs/*.json` 负责表达固定 schema，而不是把字段规则硬编码到指令文本里。
+`task_specs/*.json` 负责表达固定 schema，而不是把字段规则硬编码到 prompt 里。
 
 每个字段至少定义：
 
@@ -339,7 +673,11 @@ GraphInput + extractor_client
 - `money`
 - `boolean`
 
-这样 broad extraction 和 resolution 两阶段都能围绕固定字段约束工作，而不是开放式抽任意信息。
+这样：
+
+- broad 可以围绕字段 hints 做证据预选
+- resolution 可以围绕字段约束做最终定案
+- tool 可以围绕字段 hints 做一次定向 lookup
 
 ## 与外层治理的关系
 
@@ -347,11 +685,10 @@ GraphInput + extractor_client
 
 因此它必须把这些材料准备完整：
 
-- 每个字段的候选
-- 候选证据文本
+- 每个字段的 evidence bundle
+- 证据文本
 - 证据位置
 - 局部状态
-- 局部校验结果
 - 定案时参考了哪些其他字段
 - 是否执行过 extra lookup
 - 最终定案原因或失败原因
@@ -359,7 +696,7 @@ GraphInput + extractor_client
 后续外层治理层再根据这些结果决定：
 
 - `pass`
-- `review`
+- `human_review`
 - `reject`
 - `fallback`
 
@@ -371,18 +708,19 @@ GraphInput + extractor_client
 
 - `tests/file_extraction_agent/test_schemas.py`
 - `tests/file_extraction_agent/test_processor.py`
-- `tests/file_extraction_agent/test_validation.py`
 - `tests/file_extraction_agent/test_broad_extraction.py`
 - `tests/file_extraction_agent/test_resolution.py`
+- `tests/file_extraction_agent/test_tools.py`
 - `tests/file_extraction_agent/test_integration.py`
 
 重点固定这些行为：
 
 - 输入归一化与 task spec 加载
-- broad extraction 结构化输出解析
-- 局部校验和候选清洗
-- resolve 读取 broad 全量结果并一次性输出全字段最终结果
-- 最终结果可追踪到候选、证据和使用过的字段输出
+- broad extraction 只返回 evidence bundles，不返回 candidate
+- resolution 能读取 broad 全量结果，并对字段级结果做最终收口
+- resolution 在需要时能调用 `get_field_bundle(...)`
+- resolution 在需要时能调用 `lookup_blocks_for_field(...)`
+- 最终结果可追踪到 evidence、used field outputs 和 lookup trace
 
 ## 文档同步要求
 

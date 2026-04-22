@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from file_extraction_agent.impl.state import build_graph_state
 from file_extraction_agent.schemas import (
-    BroadExtractionFieldOutput,
     BroadExtractionOutput,
     FieldDefinition,
+    FieldEvidenceBundle,
     GraphInput,
-    NormalizedDocument,
+    NormalizedBlock,
     TaskSpec,
 )
 
@@ -15,8 +15,7 @@ def test_run_broad_extraction_invokes_client_and_writes_output_to_state():
     from file_extraction_agent.impl.broad_extraction import run_broad_extraction
 
     graph_input = GraphInput(
-        session_id="session-broad",
-        documents=[NormalizedDocument(document_id="doc-1", markdown="发票号：INV-100")],
+        blocks=[NormalizedBlock(document_id="doc-1", text="发票号：INV-100")],
         task_spec=TaskSpec(
             task_name="invoice",
             fields=[
@@ -32,11 +31,11 @@ def test_run_broad_extraction_invokes_client_and_writes_output_to_state():
     state = build_graph_state(graph_input)
     broad_output = BroadExtractionOutput(
         fields=[
-            BroadExtractionFieldOutput(
+            FieldEvidenceBundle(
                 field_name="invoice_no",
-                candidate_values=["INV-100"],
+                relevant_block_ids=["b-1"],
                 evidence_texts=["发票号：INV-100"],
-                local_status="candidate_found",
+                local_status="evidence_found",
             )
         ]
     )
@@ -56,5 +55,4 @@ def test_run_broad_extraction_invokes_client_and_writes_output_to_state():
     assert returned_state is state
     assert state.broad_output is broad_output
     assert seen_call["output_schema"] is BroadExtractionOutput
-    assert "session-broad" in seen_call["messages"][1]["content"]
-
+    assert "invoice_no" in seen_call["messages"][1]["content"]
