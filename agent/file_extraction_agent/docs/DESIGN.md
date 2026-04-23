@@ -11,15 +11,15 @@
 ```text
 backend 聚合后的 all_blocks + task_spec
   -> input_adapter.py
-  -> GraphInput
+  -> impl/schemas.py 中的 ExtractionInput
   -> broad extraction
-  -> field evidence bundles
+  -> impl/schemas.py 中的 FieldEvidence[]
   -> resolution agent
-      -> 默认先看当前字段 bundle
+      -> 默认先看当前字段 evidence
       -> 必要时调用 field bundle tool
       -> 必要时调用 global lookup tool
-  -> result.fields + trace.fields
-  -> ExtractionResult(result + trace)
+  -> graph.py 把内部决策对象映射成对外 ExtractionResult
+  -> schemas.py 中的 ExtractionResult(result + trace)
 ```
 
 可以拆成三件事理解：
@@ -50,7 +50,7 @@ backend 聚合后的 all_blocks + task_spec
 
 这一层不直接接收 `pdf/docx` 文件对象，只接收标准化后的 blocks 主输入。
 
-进入 `file_extraction_agent` 前，当前已经落地一层明确的外部输入适配层：`input_adapter.py`。这层不负责任何 broad / resolution / tool 编排，只负责把外部 session 级输入收敛成稳定的 `GraphInput`。
+进入 `file_extraction_agent` 前，当前已经落地一层明确的外部输入适配层：`input_adapter.py`。这层不负责任何 broad / resolution / tool 编排，只负责把外部 session 级输入收敛成稳定的**内部图输入对象**。
 
 ## 代码结构
 
@@ -66,6 +66,7 @@ file_extraction_agent/
 ├── task_specs/
 │   └── *.json
 ├── impl/
+│   ├── schemas.py
 │   ├── graph.py
 │   ├── state.py
 │   ├── prompts.py
@@ -82,7 +83,7 @@ file_extraction_agent/
 各层职责如下：
 
 - `input_adapter.py`
-  - 负责外部 blocks 输入校验、协议适配和 `GraphInput` 组装
+  - 负责外部 blocks 输入校验、协议适配和内部 `ExtractionInput` 组装
   - 只解决“外面传进来的数据能不能进入 agent 内部契约”
   - 不负责 broad / resolution / tool 调度
 
@@ -90,23 +91,34 @@ file_extraction_agent/
   - 对外统一入口
   - 接住 session 级调用参数
   - 把外部输入转交给 `input_adapter.py`
-  - 再把 `GraphInput + extractor_client` 交给 `impl/graph.py`
+  - 再把内部 `ExtractionInput` 和模型调用依赖 `ExtractorClient` 交给 `impl/graph.py`
   - 返回最终 `ExtractionResult`
 
 - `schemas.py`
-  - 定义数据契约
-  - 包括 `GraphInput`、字段级 evidence bundle、resolution 输出、tool 输入输出和最终聚合结果
+  - 只定义**外部稳定契约**
+  - 包括调用方传入的稳定输入对象、task spec、标准化 block、最终 `ExtractionResult`
+  - 不直接暴露 `broad / resolution / lookup` 这些实现阶段名
 
 - `extractor_client.py`
   - 负责构造真正可调用的结构化输出执行器
-  - broad 与 resolution 都通过它访问模型
+  - 最后返回一个可以直接 `invoke(...)` 的模型调用器 `ExtractorClient`
+  - 只解决“如何按给定 schema 调模型并拿到结构化结果”
+  - broad 与 resolution 节点都通过这个可调用器访问模型
+  - 不负责 graph 编排，也不负责拼装 LangGraph 流程
 
 - `task_specs/*.json`
   - 保存固定 schema、字段类型、关键字段标记、局部校验规则、cross-field hints、lookup hints
 
+- `impl/schemas.py`
+  - 定义**内部流程契约**
+  - 包括 `RunOptions`、`ExtractionInput`、`FieldEvidence`、`EvidenceCollection`、`FieldDecision`、`LookupRecord`
+  - 这些对象服务于当前实现链路，不应直接当作外部长期稳定 API
+
 - `impl/graph.py`
   - 只负责编排节点流转
   - 不直接定义对外 API
+  - 负责把内部流程对象收口并映射成 `schemas.py` 中的最终返回
+  - 当前 broad / resolution 的串联顺序由它决定，而不是由 `ExtractorClient` 决定
 
 - `impl/state.py`
   - 定义流程内部执行态
@@ -131,6 +143,52 @@ file_extraction_agent/
     - `get_field_bundle(...)`
     - `lookup_blocks_for_field(...)`
 
+## 契约分层原则
+
+这一层后续重构时，必须把“对外稳定契约”和“当前实现专用契约”拆开。
+
+### `schemas.py` 应回答什么
+
+`schemas.py` 只回答下面两个问题：
+
+1. 调用方要按什么稳定格式把数据交给 `file_extraction_agent`
+2. `file_extraction_agent` 最终会按什么稳定格式把结果回给上层
+
+也就是说，`schemas.py` 应当优先承载：
+
+- `FieldDefinition`
+- `TaskSpec`
+- `NormalizedBoundingBox`
+- `NormalizedBlock`
+- `FieldEvidenceRef`
+- `ExtractionResult`
+- `ExtractionResult` 里真正面向上层消费的 `result` / `trace` 子对象
+
+这些对象的命名应避免直接泄漏当前 pipeline 阶段名。像 `BroadTrace`、`ResolvedFieldResult`、`LookupTraceRecord` 这种带实现步骤色彩的名字，不适合作为长期稳定外部契约。
+
+### `impl/schemas.py` 应回答什么
+
+`impl/schemas.py` 只回答下面这个问题：
+
+```text
+当前这版 broad -> resolution -> tool 流程
+  -> 每一步内部到底传什么对象
+  -> 每一步内部到底产什么对象
+  -> graph 最后怎么把它们映射成外部结果
+```
+
+因此，下面这类对象更适合下沉到 `impl/schemas.py`：
+
+- `RunOptions`
+- `ExtractionInput`
+- `FieldEvidence`
+- `EvidenceCollection`
+- `FieldDecision`
+- `LookupRecord`
+- 任何仅为内部编排存在的 trace 明细对象
+
+如果将来实现从 `broad -> resolution -> lookup` 换成别的链路，应该优先改 `impl/schemas.py`，而不是把 `schemas.py` 连同上层调用方一起拖着重命名。
+
 ## 主处理链路
 
 整体流程应当按下面这条 pipeline 落到代码里：
@@ -138,14 +196,16 @@ file_extraction_agent/
 ```text
 调用方传入 backend 聚合后的 all_blocks、task_spec_name 或 task_spec
   -> processor.extract(...) 先把外部参数交给 input_adapter.build_graph_input(...)
-  -> input_adapter 负责 blocks 校验、协议适配和 GraphInput 组装
-  -> 如果没传 extractor_client，就要求调用方显式传入 base_url / openai_api_key / model
-  -> impl/graph.py 从 GraphInput 开始驱动 broad extraction
+  -> input_adapter 负责 blocks 校验、协议适配和 impl/schemas.py::ExtractionInput 组装
+  -> 如果没传 extractor_client，就要求调用方显式传入 base_url / openai_api_key / model 来构造可 invoke 的模型调用器
+  -> impl/graph.py 从内部 ExtractionInput 开始驱动 broad extraction
+  -> broad / resolution 节点内部再通过 extractor_client 发起结构化模型调用
   -> broad extraction 一次性为所有字段生成 evidence bundles
   -> resolution 阶段读取全字段 evidence bundles
   -> 对每个目标字段做最终定案
   -> 定案时必要时调用 field bundle tool 或 global lookup tool
-  -> 汇总成 ExtractionResult 返回给上层
+  -> graph.py 把内部 broad / resolution / lookup 痕迹映射成外部 ExtractionResult
+  -> 返回给上层
 ```
 
 可以概括成：
@@ -187,7 +247,7 @@ all blocks
 
 输入包括：
 
-- `GraphInput.blocks`
+- `impl/schemas.py::ExtractionInput.blocks`
 - `task_spec`
 - 可选 `markdown / md_list`
 
@@ -195,7 +255,7 @@ all blocks
 
 ### broad 的输出结构
 
-broad 的结构化输出建议以字段为中心组织，每个字段对应一个 `FieldEvidenceBundle`。每个 bundle 至少包含：
+broad 的结构化输出建议以字段为中心组织，每个字段对应一个内部 `FieldEvidence`。每个对象至少包含：
 
 - `field_name`
 - `relevant_block_ids`
@@ -331,16 +391,23 @@ broad 的结构化输出建议以字段为中心组织，每个字段对应一�
 
 ### traceability 的代码落点
 
-为了让 traceability 不是口头设计而是代码结构约束，当前要求把 trace 信息分别落到下面这些对象里：
+为了让 traceability 不是口头设计而是代码结构约束，当前要求把 trace 信息分两层保存：
 
-- `BroadExtractionOutput`
-  - 保存字段级证据选择 trace
-- `FieldTraceRecord`
-  - 保存字段级定案 trace、cross-field reference 和 lookup trace
-- `ExtractionTrace`
-  - 汇总所有字段 trace、warnings 和附加元信息
+- `impl/schemas.py` 中的内部对象
+  - 保存 broad 阶段证据预选、resolution 决策和 lookup 明细
+  - 允许继续使用带阶段语义的对象名
+- `schemas.py` 中的 `ExtractionResult.trace`
+  - 汇总字段级审计摘要、warnings 和附加元信息
+  - 对外只暴露稳定的证据 / 参考字段 / action / reason 语义
 
-如果后续 broad、resolution 或 tool 增加了新的判断步骤，也应优先评估这些步骤是否需要新增 trace 字段，而不是仅仅把中间信息留在函数局部变量中。
+如果后续 broad、resolution 或 tool 增加了新的判断步骤，也应优先评估这些步骤：
+
+```text
+先落到 impl/schemas.py 的内部 trace 对象
+  -> 再决定是否需要映射成对外 trace.actions[] 或其他稳定字段
+```
+
+而不是把新的实现细节直接塞进 `schemas.py`。
 
 ### 对外层治理的意义
 
@@ -427,17 +494,17 @@ resolution 默认遵循下面这条顺序：
 
 ## Graph 输入与内部状态
 
-`impl/graph.py` 不建议接收大量松散参数，而是只接收一个已经在外部输入适配层确定好的图输入对象和一个抽取执行客户端：
+`impl/graph.py` 不建议接收大量松散参数，而是只接收一个已经在外部输入适配层确定好的**内部图输入对象**和一个模型调用依赖：
 
 ```python
 run_extraction_graph(graph_input, extractor_client) -> ExtractionResult
 ```
 
-图入口固定成 `schemas.py` 中定义的 `GraphInput`，至少包含：
+图入口固定成 `impl/schemas.py` 中定义的 `ExtractionInput`，至少包含：
 
 - `blocks`
 - `task_spec`
-- `run_config`
+- `options`
 - `metadata`
 
 其中：
@@ -446,7 +513,7 @@ run_extraction_graph(graph_input, extractor_client) -> ExtractionResult
   是 backend 聚合后的多文档块级输入，每个 block 至少带 `document_id`、`text`、`page_no`、`bbox`、`kind`
 - `task_spec`
   是当前任务的固定 schema 定义
-- `run_config`
+- `options`
   是流程执行策略，例如是否允许 extra lookup、每字段最多 lookup 次数、是否保留详细 trace
 - `metadata`
   是可选任务标签、session 信息或调试信息
@@ -462,8 +529,8 @@ run_extraction_graph(graph_input, extractor_client) -> ExtractionResult
 推荐的 graph 编排顺序是：
 
 ```text
-GraphInput + extractor_client
-  -> build_graph_state(graph_input)
+ExtractionInput + ExtractorClient
+  -> build_graph_state(extraction_input)
   -> run_broad_extraction(state, extractor_client)
   -> run_resolution(state)
   -> ExtractionResult(result + trace)
@@ -471,11 +538,132 @@ GraphInput + extractor_client
 
 如果 resolution 内部触发 tool，它们也应当只修改当前 `GraphState` 中与 lookup / trace 相关的部分，不应反向修改 broad 的职责语义。
 
-## 结构化 Schema 设计
+## 结构化契约设计
 
-### broad 输出
+这一层后续应明确分成两套契约：
 
-第一层结构化输出由 `BroadExtractionOutput` 控制，并以字段为中心组织。每个字段对应一个 evidence bundle，至少包含：
+1. `schemas.py`：对外稳定契约
+2. `impl/schemas.py`：内部流程契约
+
+### 对外稳定契约：`schemas.py`
+
+`schemas.py` 不应该直接暴露当前内部 pipeline 的步骤名。它应该只表达：
+
+```text
+调用方传什么
+  -> agent 最终回什么
+```
+
+因此，对外稳定契约建议保持下面这个方向：
+
+#### 输入侧
+
+- `FieldDefinition`
+- `TaskSpec`
+- `NormalizedBoundingBox`
+- `NormalizedBlock`
+- `FieldEvidenceRef`
+
+这些对象描述的是任务字段、标准化块和证据定位，本身不依赖当前 broad / resolution / lookup 的实现顺序。
+
+#### 输出侧
+
+顶层仍然建议保留：
+
+```text
+ExtractionResult
+  -> result
+  -> trace
+```
+
+但 `result` 和 `trace` 里的子对象命名与字段名，应当尽量避免直接暴露：
+
+- `BroadTrace`
+- `ResolvedFieldResult`
+- `LookupTraceRecord`
+- `FieldTraceRecord`
+
+这类带强实现色彩的名字。
+
+更稳定的外部输出语义应该是：
+
+```text
+ExtractionResult
+  -> result.fields[]
+       -> field_name
+       -> status
+       -> value
+  -> trace.fields[]
+       -> field_name
+       -> evidence
+       -> related_fields
+       -> actions
+       -> reason
+       -> failure_reason
+  -> trace.warnings
+  -> trace.metadata
+```
+
+这里的设计重点是：
+
+- `result.fields[]`
+  - 只表达最终业务结果
+  - 不携带 broad / lookup / resolution 的内部阶段对象
+- `trace.fields[]`
+  - 只表达“这个字段最终为什么得到这个结果”
+  - 可以保留证据、参考字段、动作列表和说明
+  - 但不强制把当前内部类名原样暴露出去
+
+#### `trace.actions[]` 的建议语义
+
+如果外层确实需要知道内部发生过什么，建议用**阶段无关的动作列表**表达，而不是直接把内部类名塞到 `schemas.py`。
+
+例如：
+
+- `action_type = "evidence_selection"`
+- `action_type = "field_reference"`
+- `action_type = "global_lookup"`
+
+每条 action 至少可以包含：
+
+- `action_type`
+- `message`
+- `refs`
+- `used_in_final_decision`
+
+这样外层能看到“做过什么”，但不会和当前内部类名强耦合。
+
+### 内部流程契约：`impl/schemas.py`
+
+`impl/schemas.py` 承载当前实现链路真正需要的细粒度对象。
+
+推荐把下面这些对象下沉到这一层：
+
+- `RunOptions`
+- `ExtractionInput`
+- `FieldEvidence`
+- `EvidenceCollection`
+- broad 阶段专用 trace 对象
+- `FieldDecision`
+- `LookupRecord`
+
+这一层允许显式带出当前 pipeline 阶段语义，因为它本来就是服务于内部实现。
+
+#### 内部流程的推荐链路
+
+```text
+processor.extract(...)
+  -> input_adapter.build_graph_input(...)
+  -> impl/schemas.py::ExtractionInput
+  -> broad_extraction.py 产出 FieldEvidence[]
+  -> resolution.py 读取 bundles 并生成内部决策对象
+  -> tools.py 按需补充 field reference / global lookup 记录
+  -> graph.py 把内部对象映射成 schemas.py::ExtractionResult
+```
+
+#### broad 输出在内部如何表达
+
+第一层结构化输出仍然以字段为中心组织，但它属于内部契约。每个内部 `FieldEvidence` 至少包含：
 
 - `field_name`
 - `relevant_block_ids`
@@ -486,168 +674,92 @@ GraphInput + extractor_client
 
 当前设计中，broad 输出 **不包含 `candidate_values`**。
 
-### resolution 输出
+#### resolution 在内部如何表达
 
-第二层结构化输出拆成纯结果与 trace 两部分。
+resolution 阶段内部需要回答的是：
 
-纯结果由 `ResolvedFieldResult` 控制，并且只允许两种结果：
-
-- `resolved`
-- `failed`
-
-每个字段至少包含：
-
-- `field_name`
-- `status`
-- `final_value`
-
-字段级 trace 由 `FieldTraceRecord` 控制，至少包含：
-
-- `field_name`
-- `status`
-- `broad_trace`
-- `used_field_outputs`
-- `extra_lookup_used`
-- `lookup_trace`
-- `reason`
-- `failure_reason`
-
-这里的关键字段不是置信度，而是：
-
-- 当前字段最终是否定案成功
-- 定案过程中参考过哪些其他字段
-- 是否执行过补查
-- 为什么成功或失败
-
-### 最终聚合输出
-
-`processor.extract(...)` 最终不应只返回“字段结果列表”，而应返回一个同时包含 **纯结果** 与 **trace 内容** 的顶层对象：
-
-```text
-ExtractionResult
-  -> result
-  -> trace
-```
-
-这里要求：
-
-- `result`
-  只放最终业务结果，不混入 broad / lookup / reason 这类执行痕迹
-- `trace`
-  只放 broad、cross-field reference、lookup 和失败原因等留痕信息
-
-推荐结构如下：
-
-```text
-ExtractionResult
-  -> result: ExtractionContent
-       -> fields: ResolvedFieldResult[]
-  -> trace: ExtractionTrace
-       -> fields: FieldTraceRecord[]
-       -> warnings
-       -> metadata
-```
-
-#### `result` 的职责
-
-`result` 回答的是：
-
-- 当前最终字段结果是什么
-- 哪些字段 `resolved`
-- 哪些字段 `failed`
+- 当前字段最终能否定案
 - 当前字段最终值是什么
-
-因此 `result.fields` 中的单字段对象应尽量克制，只包含：
-
-- `field_name`
-- `status`
-- `final_value`
-
-也就是说，`result` 的目标是服务于：
-
-- 后续 route policy
-- 最终写库判断
-- 上层业务消费
-
-而不是承担审计或调试职责。
-
-#### `trace` 的职责
-
-`trace` 回答的是：
-
-- 当前字段 broad 预选了哪些 blocks
 - 当前字段定案时参考了哪些其他字段
-- 当前字段有没有触发补查
-- 当前字段为什么 resolved / failed
+- 当前字段是否触发过补查
+- 当前字段为什么成功或失败
 
-因此 `trace.fields` 中的单字段 trace 对象建议包含：
+这些信息都可以先保留在内部决策对象里；最后再由 `graph.py` 按外部稳定契约收口。
 
-- `field_name`
-- `broad_trace`
-- `used_field_outputs`
-- `extra_lookup_used`
-- `lookup_trace`
+#### 内部契约的命名约束
+
+内部流程契约建议优先使用常见、短路径的名字，而不是把阶段词堆进类名。
+
+推荐命名方向：
+
+- `RunOptions`
+  - 表达执行选项，而不是 `RunConfig`
+- `ExtractionInput`
+  - 表达进入流程的输入，而不是 `GraphInput`
+- `FieldEvidence`
+  - 表达单字段证据，而不是 `FieldEvidenceBundle`
+- `EvidenceCollection`
+  - 表达整批证据结果，而不是 `BroadExtractionOutput`
+- `FieldDecision`
+  - 表达字段定案结果，而不是带 `resolved` 阶段词的对象名
+- `LookupRecord`
+  - 表达补查记录，而不是带 `trace record` 的长名字
+
+对应字段名也建议尽量使用常见词：
+
+- `field`
+- `value`
+- `status`
 - `reason`
-- `failure_reason`
+- `notes`
+- `refs`
+- `actions`
+- `options`
 
-其中：
+而不是优先使用：
 
 - `broad_trace`
-  保存 broad 阶段的字段级证据预选痕迹
-- `lookup_trace`
-  保存当前字段补查行为
-- `reason / failure_reason`
-  保存当前字段定案解释
+- `resolved_field_result`
+- `lookup_trace_record`
 
-#### broad trace 的建议结构
+这类把内部阶段信息直接写死在名字里的形式。
 
-对于 `trace.fields[].broad_trace`，建议至少保存：
+#### 为什么要这样拆
 
-- `relevant_block_ids`
-- `evidence_texts`
-- `evidence_refs`
-- `local_status`
-- `local_notes`
+采用这套拆法的原因是：
 
-这层结构应当直接对应 broad extraction 的主输出语义。
-
-#### lookup trace 的建议结构
-
-对于 `trace.fields[].lookup_trace`，建议每次补查都记录：
-
-- `lookup_reason`
-- `lookup_hints`
-- `returned_block_ids`
-- `returned_refs`
-- `used_in_final_decision`
-
-如果字段没有补查，则 `lookup_trace` 为空列表。
-
-#### 这样设计的原因
-
-采用 `result` / `trace` 双层结构的原因是：
-
-- 让最终业务结果保持干净
-- 让 trace 可单独扩展而不污染业务结果
-- 让 backend 能自然拆分成“结果持久化”和“trace 持久化”
+- 让 `schemas.py` 对上层保持稳定
+- 让 `impl/schemas.py` 能跟着实现自由演进
+- 让内部可以继续保留 broad / resolution / lookup 的细节
+- 避免把当前实现阶段名永久写进公共返回结构
 
 也就是说：
 
 ```text
-agent 跑完整个流程
-  -> 返回 ExtractionResult(result + trace)
-  -> backend 决定如何持久化 result 与 trace
+内部可以继续是 broad -> resolution -> lookup
+  -> 但对外只承诺 ExtractionResult 这类稳定结果语义
+  -> 将来内部改编排时，不需要强迫上层一起改名
 ```
 
-这里不建议让 `agent service` 直接持久化整个运行状态；更合理的方式是：
+### 最终聚合输出的职责边界
 
-- `agent service`
-  负责生成 `ExtractionResult`
-- `backend`
-  负责保存 `result`
-  负责保存 `trace`
+`processor.extract(...)` 最终仍然返回 `ExtractionResult(result + trace)`，但职责边界应收紧为：
 
-这样更符合当前仓库的职责边界。
+- `result`
+  - 服务于 route policy、写库判断和上层业务消费
+  - 不直接挂内部流程对象
+- `trace`
+  - 服务于审计、调试和治理
+  - 允许保留证据、参考字段、动作摘要和失败原因
+  - 不要求外层理解当前内部每一个类名
+
+这样更符合当前仓库的职责边界：
+
+```text
+agent 跑完整个流程
+  -> 返回对外稳定的 ExtractionResult
+  -> backend 决定如何持久化 result 与 trace
+```
 
 ## task spec 设计
 

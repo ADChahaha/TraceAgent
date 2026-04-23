@@ -1,4 +1,33 @@
-last updated: 2026-04-22 15:33:33 CST
+last updated: 2026-04-23 11:08:00 CST
+
+## 2026-04-23 11:08:00
+
+### 已完成工作
+
+- 重写了 `file_extraction_agent/docs/DESIGN.md` 中关于 schema 分层的设计说明，明确把外部稳定契约与内部流程契约拆开描述。
+- 将设计中的内部契约文件名从 `impl/contracts.py` 收口为更常见的 `impl/schemas.py`，避免把“边界协议”语义误用到单纯字段对象文件上。
+- 调整了 `extractor_client.py` 的职责表述，明确它的职责是返回一个可直接 `invoke(...)` 的结构化模型调用器，而不是负责 graph 编排。
+- 收紧了 `impl/graph.py` 的职责描述，明确 broad / resolution 的节点串联顺序由 graph 决定，节点内部再通过 `ExtractorClient` 访问模型。
+- 把内部流程对象的推荐命名统一改成更通用的方向：`RunOptions`、`ExtractionInput`、`FieldEvidence`、`EvidenceCollection`、`FieldDecision`、`LookupRecord`。
+
+### 当前进展
+
+- `file_extraction_agent` 当前设计文档已经不再把 `BroadTrace`、`ResolvedFieldResult`、`LookupTraceRecord` 这类强实现阶段名视为长期稳定的外部契约名。
+- 当前设计口径已经收口成两层：
+  - `schemas.py` 负责外部稳定输入输出
+  - `impl/schemas.py` 负责内部流程对象
+- 当前这轮变更仍停留在设计文档层，尚未开始同步代码与测试实现。
+
+### 遇到的问题
+
+- 之前设计文档里一度把内部流程对象也放进全局 `schemas.py`，导致“对外返回结构”和“当前实现细节”边界不清。
+- `contracts.py` 这个命名也会误导读者，以为该文件承载的是跨模块稳定协议，而不是内部字段对象。
+- `extractor_client.py` 的表述如果不写清楚，容易让人误解成“graph builder”或“LangGraph 装配器”。
+
+### 下一步
+
+- 下一步如果继续落代码，优先把 `file_extraction_agent/schemas.py` 与 `file_extraction_agent/impl/schemas.py` 的真实边界按这版设计拆开。
+- 同步按 TDD 更新对应测试与 `tests/file_extraction_agent/docs/` 下的一一对应测试文档，确保文档、代码和测试口径一致。
 
 ## 2026-04-22 15:33:33
 
