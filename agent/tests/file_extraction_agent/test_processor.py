@@ -4,16 +4,16 @@ import json
 
 from file_extraction_agent import extractor_client as extractor_client_module
 from file_extraction_agent import processor as processor_module
+from file_extraction_agent.impl.schemas import ExtractionInput
 from file_extraction_agent.schemas import (
-    BroadTrace,
+    EvidenceSummary,
     ExtractionContent,
     ExtractionResult,
     ExtractionTrace,
     FieldDefinition,
-    FieldTraceRecord,
-    GraphInput,
+    FieldResult,
+    FieldTrace,
     NormalizedBlock,
-    ResolvedFieldResult,
     TaskSpec,
 )
 
@@ -22,27 +22,27 @@ def _build_result(
     *,
     field_name: str = "invoice_no",
     status: str = "resolved",
-    final_value: str | None = "INV-001",
+    value: str | None = "INV-001",
     reason: str | None = "图编排已完成",
     failure_reason: str | None = None,
 ) -> ExtractionResult:
     return ExtractionResult(
         result=ExtractionContent(
             fields=[
-                ResolvedFieldResult(
+                FieldResult(
                     field_name=field_name,
                     status=status,  # type: ignore[arg-type]
-                    final_value=final_value,
+                    value=value,
                 )
             ]
         ),
         trace=ExtractionTrace(
             fields=[
-                FieldTraceRecord(
+                FieldTrace(
                     field_name=field_name,
                     status=status,  # type: ignore[arg-type]
-                    broad_trace=BroadTrace(local_status="evidence_found"),
-                    used_field_outputs=[field_name] if status == "resolved" else [],
+                    evidence=EvidenceSummary(status="evidence_found"),
+                    related_fields=[field_name] if status == "resolved" else [],
                     reason=reason,
                     failure_reason=failure_reason,
                 )
@@ -54,7 +54,7 @@ def _build_result(
 def test_extract_delegates_graph_input_building_to_input_adapter(monkeypatch):
     seen_call: dict[str, object] = {}
     seen_graph_call: dict[str, object] = {}
-    expected_graph_input = GraphInput(
+    expected_input = ExtractionInput(
         blocks=[NormalizedBlock(document_id="doc-from-adapter", text="适配后内容")],
         task_spec=TaskSpec(
             task_name="invoice",
@@ -70,22 +70,17 @@ def test_extract_delegates_graph_input_building_to_input_adapter(monkeypatch):
 
     def fake_build_graph_input(**kwargs):
         seen_call.update(kwargs)
-        return expected_graph_input
+        return expected_input
 
     fake_client = object()
 
-    def fake_run_extraction_graph(*, graph_input, extractor_client):
-        seen_graph_call["graph_input"] = graph_input
+    def fake_run_extraction_graph(*, extraction_input, extractor_client):
+        seen_graph_call["extraction_input"] = extraction_input
         seen_graph_call["extractor_client"] = extractor_client
-        return _build_result(final_value="INV-ADAPTER")
+        return _build_result(value="INV-ADAPTER")
 
     monkeypatch.setattr(processor_module, "build_graph_input", fake_build_graph_input)
-    monkeypatch.setattr(
-        processor_module,
-        "run_extraction_graph",
-        fake_run_extraction_graph,
-        raising=False,
-    )
+    monkeypatch.setattr(processor_module, "run_extraction_graph", fake_run_extraction_graph, raising=False)
 
     result = processor_module.extract(
         blocks=[NormalizedBlock(document_id="doc-raw", text="原始输入")],
@@ -105,30 +100,24 @@ def test_extract_delegates_graph_input_building_to_input_adapter(monkeypatch):
 
     assert seen_call["blocks"][0].document_id == "doc-raw"
     assert seen_call["metadata"] == {"source": "backend"}
-    assert seen_graph_call["graph_input"] == expected_graph_input
+    assert seen_graph_call["extraction_input"] == expected_input
     assert seen_graph_call["extractor_client"] is fake_client
-    assert result.result.fields[0].final_value == "INV-ADAPTER"
+    assert result.result.fields[0].value == "INV-ADAPTER"
 
 
 def test_extract_delegates_execution_to_graph_with_built_client():
     seen_graph_call: dict[str, object] = {}
     fake_client = object()
 
-    def fake_run_extraction_graph(*, graph_input, extractor_client):
-        seen_graph_call["graph_input"] = graph_input
+    def fake_run_extraction_graph(*, extraction_input, extractor_client):
+        seen_graph_call["extraction_input"] = extraction_input
         seen_graph_call["extractor_client"] = extractor_client
-        return _build_result(final_value="INV-001")
+        return _build_result(value="INV-001")
 
     processor_module.run_extraction_graph = fake_run_extraction_graph
 
     result = processor_module.extract(
-        blocks=[
-            NormalizedBlock(
-                document_id="doc-1",
-                text="发票号码：INV-001",
-                page_no=1,
-            )
-        ],
+        blocks=[NormalizedBlock(document_id="doc-1", text="发票号码：INV-001", page_no=1)],
         task_spec=TaskSpec(
             task_name="invoice",
             fields=[
@@ -145,10 +134,10 @@ def test_extract_delegates_execution_to_graph_with_built_client():
 
     assert isinstance(result, ExtractionResult)
     assert seen_graph_call["extractor_client"] is fake_client
-    assert seen_graph_call["graph_input"].blocks[0].document_id == "doc-1"
+    assert seen_graph_call["extraction_input"].blocks[0].document_id == "doc-1"
     assert result.result.fields[0].status == "resolved"
-    assert result.result.fields[0].final_value == "INV-001"
-    assert result.trace.fields[0].used_field_outputs == ["invoice_no"]
+    assert result.result.fields[0].value == "INV-001"
+    assert result.trace.fields[0].related_fields == ["invoice_no"]
 
 
 def test_extract_passes_structured_output_strategy_to_client_builder(monkeypatch):
@@ -162,25 +151,16 @@ def test_extract_passes_structured_output_strategy_to_client_builder(monkeypatch
         seen_builder_call["structured_output_strategy"] = structured_output_strategy
         return fake_client
 
-    def fake_run_extraction_graph(*, graph_input, extractor_client):
-        assert graph_input.blocks[0].document_id == "doc-1"
+    def fake_run_extraction_graph(*, extraction_input, extractor_client):
+        assert extraction_input.blocks[0].document_id == "doc-1"
         assert extractor_client is fake_client
         return ExtractionResult(
             result=ExtractionContent(fields=[]),
             trace=ExtractionTrace(fields=[]),
         )
 
-    monkeypatch.setattr(
-        processor_module,
-        "build_extractor_client",
-        fake_builder,
-    )
-    monkeypatch.setattr(
-        processor_module,
-        "run_extraction_graph",
-        fake_run_extraction_graph,
-        raising=False,
-    )
+    monkeypatch.setattr(processor_module, "build_extractor_client", fake_builder)
+    monkeypatch.setattr(processor_module, "run_extraction_graph", fake_run_extraction_graph, raising=False)
 
     processor_module.extract(
         blocks=[NormalizedBlock(document_id="doc-1", text="内容")],
@@ -225,9 +205,9 @@ def test_extract_requires_explicit_connection_params_when_client_is_not_provided
         message = str(exc)
         assert "base_url" in message
         assert "api_key" in message
-        assert "model" in message
+        assert "model" not in message
     else:
-        raise AssertionError("未传 extractor_client 时应要求显式连接参数")
+        raise AssertionError("未传 extractor_client 且缺少连接环境变量时应要求连接参数")
 
 
 def test_extract_loads_task_spec_from_task_spec_name(monkeypatch, tmp_path):
@@ -252,22 +232,17 @@ def test_extract_loads_task_spec_from_task_spec_name(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(processor_module, "TASK_SPECS_DIR", task_spec_dir)
 
-    def fake_run_extraction_graph(*, graph_input, extractor_client):
+    def fake_run_extraction_graph(*, extraction_input, extractor_client):
         del extractor_client
-        assert graph_input.task_spec.task_name == "invoice"
+        assert extraction_input.task_spec.task_name == "invoice"
         return _build_result(
             status="failed",
-            final_value=None,
+            value=None,
             reason=None,
             failure_reason="未找到可用证据",
         )
 
-    monkeypatch.setattr(
-        processor_module,
-        "run_extraction_graph",
-        fake_run_extraction_graph,
-        raising=False,
-    )
+    monkeypatch.setattr(processor_module, "run_extraction_graph", fake_run_extraction_graph, raising=False)
 
     result = processor_module.extract(
         blocks=[NormalizedBlock(document_id="doc-2", text="空白")],
@@ -281,32 +256,28 @@ def test_extract_loads_task_spec_from_task_spec_name(monkeypatch, tmp_path):
 
 
 def test_extract_returns_graph_result_without_reimplementing_field_fill():
-    def fake_run_extraction_graph(*, graph_input, extractor_client):
-        del graph_input, extractor_client
+    def fake_run_extraction_graph(*, extraction_input, extractor_client):
+        del extraction_input, extractor_client
         return ExtractionResult(
             result=ExtractionContent(
                 fields=[
-                    ResolvedFieldResult(
-                        field_name="invoice_no",
-                        status="resolved",
-                        final_value="INV-003",
-                    ),
-                    ResolvedFieldResult(field_name="amount", status="failed"),
+                    FieldResult(field_name="invoice_no", status="resolved", value="INV-003"),
+                    FieldResult(field_name="amount", status="failed"),
                 ]
             ),
             trace=ExtractionTrace(
                 fields=[
-                    FieldTraceRecord(
+                    FieldTrace(
                         field_name="invoice_no",
                         status="resolved",
-                        broad_trace=BroadTrace(local_status="evidence_found"),
-                        used_field_outputs=["invoice_no"],
+                        evidence=EvidenceSummary(status="evidence_found"),
+                        related_fields=["invoice_no"],
                         reason="图编排已完成",
                     ),
-                    FieldTraceRecord(
+                    FieldTrace(
                         field_name="amount",
                         status="failed",
-                        broad_trace=BroadTrace(local_status="missing"),
+                        evidence=EvidenceSummary(status="missing"),
                         failure_reason="未找到可用证据",
                     ),
                 ]
@@ -327,19 +298,14 @@ def test_extract_returns_graph_result_without_reimplementing_field_fill():
         extractor_client=object(),
     )
 
-    assert [field.field_name for field in result.result.fields] == [
-        "invoice_no",
-        "amount",
-    ]
+    assert [field.field_name for field in result.result.fields] == ["invoice_no", "amount"]
     assert result.result.fields[0].status == "resolved"
     assert result.result.fields[1].status == "failed"
 
 
 def test_extract_rejects_missing_task_spec_and_task_spec_name():
     try:
-        processor_module.extract(
-            blocks=[NormalizedBlock(document_id="doc-4", text="")],
-        )
+        processor_module.extract(blocks=[NormalizedBlock(document_id="doc-4", text="")])
     except ValueError as exc:
         assert "task_spec" in str(exc)
     else:

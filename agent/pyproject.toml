@@ -31,7 +31,6 @@ dev = [
 py-modules = ["main"]
 packages = [
     "file_extraction_agent",
-    "file_extraction_agent.impl",
     "document_processor",
     "document_processor.impl",
     "document_processor.impl.docx",

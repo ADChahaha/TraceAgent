@@ -1,16 +1,4 @@
-"""file_extraction_agent 的外部输入适配层。
-
-实现步骤：
-
-```text
-调用方传入 session_id、documents，可选 task_spec 或 task_spec_name
-  -> 先校验 task_spec 与 task_spec_name 至少有一个可用
-  -> 如果显式传了 task_spec，就直接使用
-  -> 如果只传了 task_spec_name，就从 task_specs/*.json 加载并校验成 TaskSpec
-  -> 再把 session_id、documents、task_spec、run_config、metadata 收敛成 GraphInput
-  -> 返回给 processor 继续执行抽取流程
-```
-"""
+"""file_extraction_agent 的外部输入适配层。"""
 
 from __future__ import annotations
 
@@ -18,10 +6,12 @@ import json
 from pathlib import Path
 from typing import Any
 
+from file_extraction_agent.impl.schemas import (
+    ExtractionInput,
+    RunOptions,
+)
 from file_extraction_agent.schemas import (
-    GraphInput,
-    NormalizedDocument,
-    RunConfig,
+    NormalizedBlock,
     TaskSpec,
 )
 
@@ -35,24 +25,26 @@ class TaskSpecNotFoundError(RuntimeError):
 
 def build_graph_input(
     *,
-    session_id: str,
-    documents: list[NormalizedDocument],
+    blocks: list[NormalizedBlock],
+    markdown: str = "",
+    md_list: list[str] | None = None,
     task_spec: TaskSpec | None = None,
     task_spec_name: str | None = None,
-    run_config: RunConfig | None = None,
+    run_options: RunOptions | None = None,
     metadata: dict[str, Any] | None = None,
-) -> GraphInput:
-    """把外部 session 级输入收敛成模块内部统一的 GraphInput。"""
+) -> ExtractionInput:
+    """把外部 session 级输入收敛成模块内部统一的 `ExtractionInput`。"""
 
     resolved_task_spec = _resolve_task_spec(
         task_spec=task_spec,
         task_spec_name=task_spec_name,
     )
-    return GraphInput(
-        session_id=session_id,
-        documents=documents,
+    return ExtractionInput(
+        blocks=blocks,
+        markdown=markdown,
+        md_list=md_list or [],
         task_spec=resolved_task_spec,
-        run_config=run_config or RunConfig(),
+        options=run_options or RunOptions(),
         metadata=metadata or {},
     )
 
@@ -76,4 +68,3 @@ def _load_task_spec_from_name(task_spec_name: str) -> TaskSpec:
     except FileNotFoundError as exc:
         raise TaskSpecNotFoundError(f"task spec not found: {task_spec_name}") from exc
     return TaskSpec.model_validate(raw_spec)
-

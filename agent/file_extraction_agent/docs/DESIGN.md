@@ -197,7 +197,7 @@ file_extraction_agent/
 调用方传入 backend 聚合后的 all_blocks、task_spec_name 或 task_spec
   -> processor.extract(...) 先把外部参数交给 input_adapter.build_graph_input(...)
   -> input_adapter 负责 blocks 校验、协议适配和 impl/schemas.py::ExtractionInput 组装
-  -> 如果没传 extractor_client，就要求调用方显式传入 base_url / openai_api_key / model 来构造可 invoke 的模型调用器
+  -> 如果没传 extractor_client，就优先用显式 base_url / openai_api_key / model 构造模型调用器；缺省时读取 BASE_URL / OPENAI_API_KEY / MODEL，MODEL 仍缺省时使用默认模型
   -> impl/graph.py 从内部 ExtractionInput 开始驱动 broad extraction
   -> broad / resolution 节点内部再通过 extractor_client 发起结构化模型调用
   -> broad extraction 一次性为所有字段生成 evidence bundles
@@ -301,6 +301,13 @@ broad 的结构化输出建议以字段为中心组织，每个字段对应一�
 - 当前字段定案时参考了哪些字段
 - 当前字段是否执行过补查
 - 当前字段为什么成功或失败
+
+如果字段在 `TaskSpec.fields[].validation_rules` 中声明了通用规则，resolution 必须把这些规则视为字段级约束，而不是把规则硬编码在代码里。当前支持的规则方向包括：
+
+- `source_type=table_rows`：按声明的 `columns`、`filter`、`exclude` 和 `target_column` 从标准化表格行中筛选最小证据片段，并可覆盖模型混入的无关行。
+- `operation=count_items`：按 `source_field` 的结果条目数生成计数字段，用于保证列表字段和数量字段一致。
+
+规则执行应保持通用：代码只理解 `validation_rules` 的结构，不认识具体业务词，比如“文明寝室”或“模范寝室”。具体业务条件必须放在 task spec 中。
 
 ### resolution 的实现形式
 

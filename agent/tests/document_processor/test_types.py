@@ -21,6 +21,12 @@ def test_infer_file_type_returns_explicit_supported_type_without_filename_lookup
     assert infer_file_type(file_obj, file_type="PDF") is FileType.PDF
 
 
+def test_infer_file_type_accepts_file_type_enum_without_stringifying_name():
+    file_obj = NamedBytesIO(b"fake", filename="sample.unknown")
+
+    assert infer_file_type(file_obj, file_type=FileType.PDF) is FileType.PDF
+
+
 def test_infer_file_type_accepts_dot_prefixed_supported_type():
     file_obj = NamedBytesIO(b"fake", filename=None)
 

@@ -1,21 +1,22 @@
 from __future__ import annotations
 
+from file_extraction_agent.impl.schemas import (
+    EvidenceCollection,
+    ExtractionInput,
+    FieldDecision,
+    FieldEvidence,
+)
 from file_extraction_agent.schemas import (
-    BroadExtractionOutput,
-    BroadTrace,
+    EvidenceSummary,
     ExtractionResult,
     FieldDefinition,
-    FieldEvidenceBundle,
-    FieldTraceRecord,
-    GraphInput,
     NormalizedBlock,
-    ResolvedFieldResult,
     TaskSpec,
 )
 
 
-def _build_graph_input() -> GraphInput:
-    return GraphInput(
+def _build_extraction_input() -> ExtractionInput:
+    return ExtractionInput(
         blocks=[NormalizedBlock(document_id="doc-1", text="发票号：INV-900")],
         task_spec=TaskSpec(
             task_name="invoice",
@@ -40,10 +41,10 @@ def _build_graph_input() -> GraphInput:
 def test_run_extraction_graph_runs_broad_extraction_then_resolution(monkeypatch):
     from file_extraction_agent.impl import graph as graph_module
 
-    graph_input = _build_graph_input()
-    broad_output = BroadExtractionOutput(
+    extraction_input = _build_extraction_input()
+    evidence_collection = EvidenceCollection(
         fields=[
-            FieldEvidenceBundle(
+            FieldEvidence(
                 field_name="invoice_no",
                 relevant_block_ids=["b-1"],
                 evidence_texts=["发票号：INV-900"],
@@ -56,40 +57,31 @@ def test_run_extraction_graph_runs_broad_extraction_then_resolution(monkeypatch)
     def fake_run_broad_extraction(*, state, extractor_client):
         del extractor_client
         call_order.append("broad")
-        state.broad_output = broad_output
+        state.evidence_collection = evidence_collection
         return state
 
-    def fake_run_resolution(*, state):
+    def fake_run_resolution(*, state, extractor_client):
+        assert extractor_client == "fake-client"
         call_order.append("resolution")
-        assert state.broad_output is broad_output
-        state.result_fields = [
-            ResolvedFieldResult(
+        assert state.evidence_collection is evidence_collection
+        state.field_decisions = [
+            FieldDecision(
                 field_name="invoice_no",
                 status="resolved",
-                final_value="发票号：INV-900",
-            )
-        ]
-        state.trace_fields = [
-            FieldTraceRecord(
-                field_name="invoice_no",
-                status="resolved",
-                broad_trace=BroadTrace(local_status="evidence_found"),
+                value="发票号：INV-900",
+                evidence=FieldEvidence(field_name="invoice_no", local_status="evidence_found"),
                 reason="测试 graph 汇总",
             )
         ]
         state.warnings.append("resolution-ran")
         return state
 
-    monkeypatch.setattr(
-        graph_module,
-        "run_broad_extraction",
-        fake_run_broad_extraction,
-    )
+    monkeypatch.setattr(graph_module, "run_broad_extraction", fake_run_broad_extraction)
     monkeypatch.setattr(graph_module, "run_resolution", fake_run_resolution)
 
     result = graph_module.run_extraction_graph(
-        graph_input=graph_input,
-        extractor_client=object(),
+        extraction_input=extraction_input,
+        extractor_client="fake-client",
     )
 
     assert call_order == ["broad", "resolution"]
@@ -98,22 +90,22 @@ def test_run_extraction_graph_runs_broad_extraction_then_resolution(monkeypatch)
     assert result.trace.warnings == ["resolution-ran"]
 
 
-def test_run_extraction_graph_returns_result_and_trace_from_final_state(monkeypatch):
+def test_run_extraction_graph_maps_internal_decisions_to_external_result(monkeypatch):
     from file_extraction_agent.impl import graph as graph_module
 
-    graph_input = _build_graph_input()
+    extraction_input = _build_extraction_input()
 
     def fake_run_broad_extraction(*, state, extractor_client):
         del extractor_client
-        state.broad_output = BroadExtractionOutput(
+        state.evidence_collection = EvidenceCollection(
             fields=[
-                FieldEvidenceBundle(
+                FieldEvidence(
                     field_name="invoice_no",
                     relevant_block_ids=["b-2"],
                     evidence_texts=["发票号：INV-901"],
                     local_status="evidence_found",
                 ),
-                FieldEvidenceBundle(
+                FieldEvidence(
                     field_name="amount",
                     relevant_block_ids=["b-3"],
                     evidence_texts=["金额：300.00"],
@@ -123,27 +115,45 @@ def test_run_extraction_graph_returns_result_and_trace_from_final_state(monkeypa
         )
         return state
 
-    monkeypatch.setattr(
-        graph_module,
-        "run_broad_extraction",
-        fake_run_broad_extraction,
-    )
+    def fake_run_resolution(*, state, extractor_client):
+        assert extractor_client == "fake-client"
+        state.field_decisions = [
+            FieldDecision(
+                field_name="invoice_no",
+                status="resolved",
+                value="发票号：INV-901",
+                evidence=FieldEvidence(
+                    field_name="invoice_no",
+                    relevant_block_ids=["b-2"],
+                    evidence_texts=["发票号：INV-901"],
+                    local_status="evidence_found",
+                ),
+                reason="第一条证据可用",
+            ),
+            FieldDecision(
+                field_name="amount",
+                status="resolved",
+                value="金额：300.00",
+                evidence=FieldEvidence(
+                    field_name="amount",
+                    relevant_block_ids=["b-3"],
+                    evidence_texts=["金额：300.00"],
+                    local_status="evidence_found",
+                ),
+                reason="第一条证据可用",
+            ),
+        ]
+        return state
+
+    monkeypatch.setattr(graph_module, "run_broad_extraction", fake_run_broad_extraction)
+    monkeypatch.setattr(graph_module, "run_resolution", fake_run_resolution)
 
     result = graph_module.run_extraction_graph(
-        graph_input=graph_input,
-        extractor_client=object(),
+        extraction_input=extraction_input,
+        extractor_client="fake-client",
     )
 
-    assert [field.field_name for field in result.result.fields] == [
-        "invoice_no",
-        "amount",
-    ]
-    assert [field.status for field in result.result.fields] == [
-        "resolved",
-        "resolved",
-    ]
-    assert [field.final_value for field in result.result.fields] == [
-        "发票号：INV-901",
-        "金额：300.00",
-    ]
-    assert result.trace.fields[0].broad_trace.relevant_block_ids == ["b-2"]
+    assert [field.field_name for field in result.result.fields] == ["invoice_no", "amount"]
+    assert [field.value for field in result.result.fields] == ["发票号：INV-901", "金额：300.00"]
+    assert isinstance(result.trace.fields[0].evidence, EvidenceSummary)
+    assert result.trace.fields[0].evidence.block_ids == ["b-2"]

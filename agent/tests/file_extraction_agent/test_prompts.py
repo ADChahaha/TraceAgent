@@ -3,18 +3,12 @@ from __future__ import annotations
 import json
 
 from file_extraction_agent.impl import prompts
-from file_extraction_agent.schemas import (
-    BroadExtractionOutput,
-    FieldDefinition,
-    FieldEvidenceBundle,
-    GraphInput,
-    NormalizedBlock,
-    TaskSpec,
-)
+from file_extraction_agent.impl.schemas import EvidenceCollection, ExtractionInput, FieldEvidence
+from file_extraction_agent.schemas import FieldDefinition, NormalizedBlock, TaskSpec
 
 
 def test_build_broad_extraction_messages_includes_task_and_blocks_summary():
-    graph_input = GraphInput(
+    extraction_input = ExtractionInput(
         blocks=[
             NormalizedBlock(
                 document_id="doc-1",
@@ -39,20 +33,21 @@ def test_build_broad_extraction_messages_includes_task_and_blocks_summary():
         metadata={"source": "backend"},
     )
 
-    messages = prompts.build_broad_extraction_messages(graph_input)
+    messages = prompts.build_broad_extraction_messages(extraction_input)
 
     assert messages[0]["role"] == "system"
-    assert "BroadExtractionOutput" in messages[0]["content"]
+    assert "EvidenceCollection" in messages[0]["content"]
     payload = json.loads(messages[1]["content"])
     assert payload["task_name"] == "invoice"
     assert payload["metadata"] == {"source": "backend"}
     assert payload["blocks"][0]["document_id"] == "doc-1"
     assert payload["blocks"][0]["text"] == "发票号码：INV-001"
     assert payload["fields"][0]["field_name"] == "invoice_no"
+    assert "validation_rules" in messages[0]["content"]
 
 
-def test_build_field_resolution_messages_focuses_on_target_field_and_evidence_bundle():
-    graph_input = GraphInput(
+def test_build_field_resolution_messages_focuses_on_target_field_and_evidence():
+    extraction_input = ExtractionInput(
         blocks=[NormalizedBlock(document_id="doc-2", text="金额：100.00")],
         task_spec=TaskSpec(
             task_name="invoice",
@@ -62,15 +57,15 @@ def test_build_field_resolution_messages_focuses_on_target_field_and_evidence_bu
             ],
         ),
     )
-    broad_output = BroadExtractionOutput(
+    evidence_collection = EvidenceCollection(
         fields=[
-            FieldEvidenceBundle(
+            FieldEvidence(
                 field_name="amount",
                 relevant_block_ids=["b-amount"],
                 evidence_texts=["金额：100.00"],
                 local_status="evidence_found",
             ),
-            FieldEvidenceBundle(
+            FieldEvidence(
                 field_name="invoice_no",
                 relevant_block_ids=["b-invoice"],
                 evidence_texts=["发票号：INV-002"],
@@ -80,18 +75,19 @@ def test_build_field_resolution_messages_focuses_on_target_field_and_evidence_bu
     )
 
     messages = prompts.build_field_resolution_messages(
-        graph_input=graph_input,
+        extraction_input=extraction_input,
         target_field_name="amount",
-        broad_output=broad_output,
+        evidence_collection=evidence_collection,
     )
 
     assert messages[0]["role"] == "system"
-    assert "result + trace" in messages[0]["content"]
+    assert "field resolution" in messages[0]["content"]
+    assert "validation_rules" in messages[0]["content"]
     payload = json.loads(messages[1]["content"])
     assert payload["target_field_name"] == "amount"
     assert payload["target_field"]["field_name"] == "amount"
     assert payload["target_field"]["relevant_block_ids"] == ["b-amount"]
-    assert [field["field_name"] for field in payload["all_field_outputs"]] == [
+    assert [field["field_name"] for field in payload["all_field_evidence"]] == [
         "amount",
         "invoice_no",
     ]

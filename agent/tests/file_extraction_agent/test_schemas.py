@@ -1,23 +1,27 @@
 from pydantic import ValidationError
 
+from file_extraction_agent.impl.schemas import (
+    EvidenceCollection,
+    ExtractionInput,
+    FieldDecision,
+    FieldEvidence,
+    LookupRecord,
+    RunOptions,
+)
 from file_extraction_agent.schemas import (
-    BroadExtractionOutput,
-    BroadTrace,
+    EvidenceSummary,
     ExtractionContent,
     ExtractionResult,
     ExtractionTrace,
     FieldDefinition,
-    FieldEvidenceBundle,
     FieldEvidenceRef,
-    FieldTraceRecord,
-    GraphInput,
-    LookupTraceRecord,
+    FieldResult,
+    FieldTrace,
     NormalizedBlock,
     NormalizedBoundingBox,
     NormalizedDocument,
-    ResolvedFieldResult,
-    RunConfig,
     TaskSpec,
+    TraceAction,
 )
 
 
@@ -36,8 +40,8 @@ def test_task_spec_rejects_duplicate_field_names():
         raise AssertionError("TaskSpec 应拒绝重复 field_name")
 
 
-def test_graph_input_accepts_normalized_documents_with_safe_defaults():
-    graph_input = GraphInput(
+def test_extraction_input_accepts_blocks_with_safe_defaults():
+    extraction_input = ExtractionInput(
         blocks=[
             NormalizedBlock(
                 document_id="doc-1",
@@ -62,17 +66,15 @@ def test_graph_input_accepts_normalized_documents_with_safe_defaults():
         ),
     )
 
-    assert graph_input.blocks[0].document_id == "doc-1"
-    assert graph_input.md_list == []
-    assert graph_input.blocks[0].text == "发票号码：INV-001"
-    assert graph_input.blocks[0].bbox.x1 == 100
-    assert graph_input.blocks[0].meta_info["block_id"] == "b-1"
-    assert graph_input.run_config.max_extra_lookups_per_field == 1
-    assert graph_input.metadata == {}
+    assert extraction_input.blocks[0].document_id == "doc-1"
+    assert extraction_input.md_list == []
+    assert extraction_input.blocks[0].bbox.x1 == 100
+    assert extraction_input.options.max_extra_lookups_per_field == 1
+    assert extraction_input.metadata == {}
 
 
-def test_graph_input_parses_serialized_blocks_into_structured_models():
-    graph_input = GraphInput(
+def test_extraction_input_parses_serialized_blocks_into_structured_models():
+    extraction_input = ExtractionInput(
         blocks=[
             {
                 "document_id": "doc-1",
@@ -95,7 +97,7 @@ def test_graph_input_parses_serialized_blocks_into_structured_models():
         ),
     )
 
-    block = graph_input.blocks[0]
+    block = extraction_input.blocks[0]
     assert isinstance(block, NormalizedBlock)
     assert block.document_id == "doc-1"
     assert block.kind == "table"
@@ -104,9 +106,9 @@ def test_graph_input_parses_serialized_blocks_into_structured_models():
     assert block.meta_info == {"row": 3}
 
 
-def test_graph_input_requires_blocks():
+def test_extraction_input_requires_blocks():
     try:
-        GraphInput(
+        ExtractionInput(
             task_spec=TaskSpec(
                 task_name="invoice",
                 fields=[
@@ -121,13 +123,13 @@ def test_graph_input_requires_blocks():
     except ValidationError as exc:
         assert "blocks" in str(exc)
     else:
-        raise AssertionError("GraphInput 必须携带 blocks 主输入")
+        raise AssertionError("ExtractionInput 必须携带 blocks 主输入")
 
 
-def test_field_evidence_bundle_keeps_relevant_blocks_and_evidence():
-    output = BroadExtractionOutput(
+def test_field_evidence_keeps_relevant_blocks_and_evidence():
+    evidence_collection = EvidenceCollection(
         fields=[
-            FieldEvidenceBundle(
+            FieldEvidence(
                 field_name="invoice_no",
                 relevant_block_ids=["b-1", "b-2"],
                 evidence_texts=["发票号码：INV-001"],
@@ -140,32 +142,32 @@ def test_field_evidence_bundle_keeps_relevant_blocks_and_evidence():
         ]
     )
 
-    field_output = output.fields[0]
-    assert field_output.field_name == "invoice_no"
-    assert field_output.relevant_block_ids == ["b-1", "b-2"]
-    assert field_output.evidence_refs[0].block_id == "b-1"
-    assert field_output.local_notes == ["页眉处命中字段关键词"]
+    field_evidence = evidence_collection.fields[0]
+    assert field_evidence.field_name == "invoice_no"
+    assert field_evidence.relevant_block_ids == ["b-1", "b-2"]
+    assert field_evidence.evidence_refs[0].block_id == "b-1"
+    assert field_evidence.local_notes == ["页眉处命中字段关键词"]
 
 
-def test_resolved_field_result_rejects_failed_status_with_final_value():
+def test_field_result_rejects_failed_status_with_value():
     try:
-        ResolvedFieldResult(
+        FieldResult(
             field_name="invoice_no",
             status="failed",
-            final_value="INV-001",
+            value="INV-001",
         )
     except ValidationError as exc:
-        assert "final_value" in str(exc)
+        assert "value" in str(exc)
     else:
-        raise AssertionError("failed 状态不应携带 final_value")
+        raise AssertionError("failed 状态不应携带 value")
 
 
-def test_field_trace_record_requires_reason_or_failure_reason_by_status():
+def test_field_trace_requires_reason_or_failure_reason_by_status():
     try:
-        FieldTraceRecord(
+        FieldTrace(
             field_name="invoice_no",
             status="resolved",
-            broad_trace=BroadTrace(local_status="evidence_found"),
+            evidence=EvidenceSummary(status="evidence_found"),
         )
     except ValidationError as exc:
         assert "reason" in str(exc)
@@ -173,10 +175,10 @@ def test_field_trace_record_requires_reason_or_failure_reason_by_status():
         raise AssertionError("resolved trace 必须说明定案原因")
 
     try:
-        FieldTraceRecord(
+        FieldTrace(
             field_name="invoice_no",
             status="failed",
-            broad_trace=BroadTrace(local_status="evidence_missing"),
+            evidence=EvidenceSummary(status="missing"),
         )
     except ValidationError as exc:
         assert "failure_reason" in str(exc)
@@ -188,29 +190,29 @@ def test_extraction_result_separates_result_and_trace():
     result = ExtractionResult(
         result=ExtractionContent(
             fields=[
-                ResolvedFieldResult(
+                FieldResult(
                     field_name="invoice_no",
                     status="resolved",
-                    final_value="INV-001",
+                    value="INV-001",
                 )
             ]
         ),
         trace=ExtractionTrace(
             fields=[
-                FieldTraceRecord(
+                FieldTrace(
                     field_name="invoice_no",
                     status="resolved",
-                    broad_trace=BroadTrace(
-                        relevant_block_ids=["b-1"],
-                        evidence_texts=["发票号码：INV-001"],
-                        local_status="evidence_found",
+                    evidence=EvidenceSummary(
+                        block_ids=["b-1"],
+                        texts=["发票号码：INV-001"],
+                        status="evidence_found",
                     ),
-                    used_field_outputs=["invoice_no"],
-                    extra_lookup_used=False,
-                    lookup_trace=[
-                        LookupTraceRecord(
-                            lookup_reason="无须补查，仅验证序列化结构",
-                            returned_block_ids=["b-1"],
+                    related_fields=["invoice_no"],
+                    actions=[
+                        TraceAction(
+                            action_type="global_lookup",
+                            message="无须补查，仅验证序列化结构",
+                            used_in_final_decision=False,
                         )
                     ],
                     reason="证据充分，字段可定案",
@@ -223,14 +225,44 @@ def test_extraction_result_separates_result_and_trace():
     payload = result.model_dump()
 
     assert payload["result"]["fields"][0]["field_name"] == "invoice_no"
-    assert payload["trace"]["fields"][0]["broad_trace"]["local_status"] == "evidence_found"
+    assert payload["trace"]["fields"][0]["evidence"]["status"] == "evidence_found"
     assert payload["trace"]["warnings"] == ["none"]
 
 
-def test_run_config_rejects_non_positive_lookup_limit():
+def test_run_options_reject_non_positive_lookup_limit():
     try:
-        RunConfig(max_extra_lookups_per_field=0)
+        RunOptions(max_extra_lookups_per_field=0)
     except ValidationError as exc:
         assert "max_extra_lookups_per_field" in str(exc)
     else:
         raise AssertionError("max_extra_lookups_per_field 必须大于 0")
+
+
+def test_field_decision_rejects_failed_status_with_value():
+    try:
+        FieldDecision(
+            field_name="invoice_no",
+            status="failed",
+            value="INV-001",
+            evidence=FieldEvidence(field_name="invoice_no", local_status="missing"),
+        )
+    except ValidationError as exc:
+        assert "value" in str(exc)
+    else:
+        raise AssertionError("内部 failed 决策不应携带 value")
+
+
+def test_lookup_record_can_be_projected_to_trace_action():
+    record = LookupRecord(
+        lookup_reason="需要补查金额字段",
+        lookup_hints=["amount", "total"],
+        returned_refs=[FieldEvidenceRef(document_id="doc-1", block_id="b-1")],
+        used_in_final_decision=True,
+    )
+
+    action = record.to_trace_action()
+
+    assert action.action_type == "global_lookup"
+    assert action.refs[0].block_id == "b-1"
+    assert action.used_in_final_decision is True
+

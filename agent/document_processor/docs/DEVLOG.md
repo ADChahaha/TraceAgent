@@ -1,4 +1,15 @@
-last updated: 2026-04-19 21:55:00 CST
+last updated: 2026-04-24 12:33:50 CST
+
+## 2026-04-24 12:33:50 CST
+- completed work:
+  - 修复 `document_processor.types._parse_file_type(...)` 对 `FileType` 枚举入参的处理，避免把 `FileType.PDF` 错误字符串化成 `"FileType.PDF"`。
+  - 补充 `tests/document_processor/test_types.py` 覆盖显式传入 `FileType.PDF` 的入口行为，并同步更新对应测试说明文档。
+- current progress:
+  - `document_processor.process(file_obj, file_type=FileType.PDF)` 与 `file_type="pdf"` 现在应走同一条类型归一化路径。
+- encountered problems:
+  - 真实 PDF 联调时发现枚举入参会被误判为不支持类型，根因是 `_parse_file_type(...)` 没有优先识别已经归一化好的枚举对象。
+- next step:
+  - 后续如果扩展更多文件类型，继续优先保证字符串、带点后缀和枚举三类入口输入行为一致。
 
 ## 2026-04-19 21:55:00 CST
 - completed work:

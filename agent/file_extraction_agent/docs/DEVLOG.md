@@ -1,4 +1,77 @@
-last updated: 2026-04-23 11:08:00 CST
+last updated: 2026-04-24 13:31:58 CST
+
+## 2026-04-24 13:31:58
+
+### 已完成工作
+
+- 为 resolution 增加通用 `validation_rules` 后处理：支持 `source_type=table_rows` 按 `columns`、`filter`、`exclude`、`target_column` 从标准化表格行筛选最小证据片段，并覆盖模型混入的无关行。
+- 增加通用 `operation=count_items` 规则，允许数量字段按 `source_field` 的条目数生成，保证列表字段和计数字段一致。
+- 同步收紧 broad / resolution prompt，要求模型在 evidence 预选和字段定案时遵守 `validation_rules`，并排除 `exclude` 命中的证据。
+- 新增泛化测试，使用 `selected/rejected` 表格状态验证规则引擎，不在代码中硬编码“文明寝室/模范寝室”等业务词。
+- 更新文明寝室真实 PDF 集成脚本，把业务条件放入 task spec 的 `validation_rules`，并重新生成 `output/integration_civilized_dormitory/` 下的集成产物。
+
+### 当前进展
+
+- `tests/file_extraction_agent` 当前全量通过。
+- 真实 PDF 集成测试已通过，`summary.json` 中 `passed=true`，抽取结果为 `18栋`、12 个文明寝室房间号和数量 `12`。
+- 规则执行保持通用：代码只识别 `validation_rules` 结构，不识别具体业务词。
+
+### 遇到的问题
+
+- 两步抽取里 broad 阶段会把“模范/文明”混合表格块一起作为证据传给 resolution；如果 resolution 完全信模型，模型可能把排除项混入最终结果。
+- 单靠 prompt 不能稳定保证列表字段和计数字段一致，因此需要在通用规则层增加结构化校验和覆盖。
+
+### 下一步
+
+- 后续可继续把 `validation_rules` 的支持范围扩展到更多通用规则，例如数值范围、日期归一化、枚举映射和多字段组合校验。
+
+## 2026-04-24 12:33:50
+
+### 已完成工作
+
+- 修复 `extractor_client.py` 的运行配置读取：显式参数缺省时会读取 `BASE_URL`、`OPENAI_API_KEY`、`MODEL` 环境变量。
+- 为 `MODEL` 增加代码内默认值 `DEFAULT_MODEL`，支持 `.env` 只提供 `BASE_URL` 和 `OPENAI_API_KEY` 时直接构造模型客户端。
+- 补充 `tests/file_extraction_agent/test_extractor_client.py` 覆盖环境变量读取和默认模型行为，并同步更新对应测试说明文档。
+- 同步更新 `agent/docs/DESIGN.md` 和 `file_extraction_agent/docs/DESIGN.md`，把模型配置口径改成“显式参数优先，环境变量兜底，MODEL 可选”。
+
+### 当前进展
+
+- 真实 PDF 联调暴露的“`.env` 没有 `MODEL` 就无法跑”问题已收敛到单元测试和实现里。
+- `extractor_client` 仍保留显式参数优先级，测试环境和上层调用方可以继续覆盖默认环境变量。
+
+### 遇到的问题
+
+- 之前 `_validate_runtime_config(...)` 只检查入参本身，不读取环境变量，导致用户已经配置 `.env` 后仍必须在代码里额外传 `model`。
+
+### 下一步
+
+- 后续如果需要支持项目内自动加载 `.env` 文件，可单独评估放在 CLI/入口层还是 `extractor_client` 层，避免库函数隐式读取文件路径。
+
+## 2026-04-24 12:13:35
+
+### 已完成工作
+
+- 修正了 `impl/graph.py` 与设计不一致的问题：graph 现在会把同一个 `extractor_client` 继续传给 resolution 阶段，而不是只让 broad 阶段使用模型客户端。
+- 修正了 `impl/resolution.py` 的未完成链路：收到 `extractor_client` 时会按 `task_spec.fields` 逐字段请求 `FieldDecision` 结构化输出。
+- 新增了 `impl/tools.py`，落地 `get_field_bundle(...)` 与 `lookup_blocks_for_field(...)`，支持 resolution 按字段读取 broad evidence，并在证据缺失时按 `lookup_hints` 从全量 blocks 补查。
+- 为补查链路新增 `LookupResult` 内部对象，并让补查成功时把 `LookupRecord` 挂到 `FieldDecision.lookup_records`，最终可映射到对外 trace actions。
+- 为 `NormalizedBlock` 补充可选 `block_id`，让补查 trace 能稳定记录命中的 block 来源。
+- 更新了 `test_graph.py`、`test_resolution.py`、新增 `test_tools.py` 及对应 `tests/file_extraction_agent/docs/` 测试说明文档。
+
+### 当前进展
+
+- `file_extraction_agent` 当前主链路已经更贴近设计文档：`broad extraction -> FieldEvidence[] -> resolution -> FieldDecision[] -> ExtractionResult(result + trace)`。
+- resolution 仍保留 deterministic 兜底逻辑：没有传入模型客户端时，会基于已有 evidence 或一次补查结果做最小定案。
+- `tests/file_extraction_agent` 全量通过。
+
+### 遇到的问题
+
+- 之前 graph 只把模型客户端交给 broad，导致 resolution 实际没有按设计通过结构化模型调用完成字段定案。
+- 之前缺少 `impl/tools.py`，设计里要求的 field bundle tool 和 global lookup tool 没有代码落点。
+
+### 下一步
+
+- 后续可继续把 resolution 的 tool 使用从 deterministic 兜底推进到真正的 agent/tool 调用策略，并细化 lookup scoring 规则。
 
 ## 2026-04-23 11:08:00
 

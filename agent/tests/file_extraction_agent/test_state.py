@@ -1,20 +1,17 @@
 from __future__ import annotations
 
-from file_extraction_agent.impl.state import GraphState, build_graph_state
-from file_extraction_agent.schemas import (
-    BroadTrace,
-    BroadExtractionOutput,
-    FieldDefinition,
-    FieldTraceRecord,
-    GraphInput,
-    NormalizedBlock,
-    ResolvedFieldResult,
-    TaskSpec,
+from file_extraction_agent.impl.schemas import (
+    EvidenceCollection,
+    ExtractionInput,
+    FieldDecision,
+    FieldEvidence,
 )
+from file_extraction_agent.impl.state import GraphState, build_graph_state
+from file_extraction_agent.schemas import FieldDefinition, NormalizedBlock, TaskSpec
 
 
 def test_build_graph_state_initializes_empty_execution_state():
-    graph_input = GraphInput(
+    extraction_input = ExtractionInput(
         blocks=[NormalizedBlock(document_id="doc-1", text="内容")],
         task_spec=TaskSpec(
             task_name="invoice",
@@ -28,18 +25,17 @@ def test_build_graph_state_initializes_empty_execution_state():
         ),
     )
 
-    state = build_graph_state(graph_input)
+    state = build_graph_state(extraction_input)
 
     assert isinstance(state, GraphState)
-    assert state.graph_input == graph_input
-    assert state.broad_output is None
-    assert state.result_fields == []
-    assert state.trace_fields == []
+    assert state.extraction_input == extraction_input
+    assert state.evidence_collection is None
+    assert state.field_decisions == []
     assert state.warnings == []
 
 
 def test_graph_state_accepts_prepared_progress_payloads():
-    graph_input = GraphInput(
+    extraction_input = ExtractionInput(
         blocks=[NormalizedBlock(document_id="doc-2", text="内容")],
         task_spec=TaskSpec(
             task_name="invoice",
@@ -54,28 +50,22 @@ def test_graph_state_accepts_prepared_progress_payloads():
     )
 
     state = GraphState(
-        graph_input=graph_input,
-        broad_output=BroadExtractionOutput(fields=[]),
-        result_fields=[
-            ResolvedFieldResult(
+        extraction_input=extraction_input,
+        evidence_collection=EvidenceCollection(fields=[]),
+        field_decisions=[
+            FieldDecision(
                 field_name="amount",
                 status="resolved",
-                final_value="100.00",
-            )
-        ],
-        trace_fields=[
-            FieldTraceRecord(
-                field_name="amount",
-                status="resolved",
-                broad_trace=BroadTrace(local_status="evidence_found"),
-                used_field_outputs=["amount"],
+                value="100.00",
+                evidence=FieldEvidence(field_name="amount", local_status="evidence_found"),
                 reason="字段已定案",
             )
         ],
         warnings=["字段来源存在轻微歧义"],
     )
 
-    assert state.broad_output is not None
-    assert state.result_fields[0].field_name == "amount"
-    assert state.trace_fields[0].used_field_outputs == ["amount"]
+    assert state.evidence_collection is not None
+    assert state.field_decisions[0].field_name == "amount"
+    assert state.field_decisions[0].reason == "字段已定案"
     assert state.warnings == ["字段来源存在轻微歧义"]
+

@@ -1,31 +1,17 @@
-"""file_extraction_agent 对外统一入口。
-
-实现步骤：
-
-```text
-调用方传入 session_id + documents，再传 task_spec 或 task_spec_name
-  -> extract(...) 先把外部 session 输入交给 input_adapter.build_graph_input(...)
-  -> input_adapter 负责选择 task_spec：显式传入就直接用；否则按 task_spec_name 从 task_specs/*.json 加载
-  -> input_adapter 再用 session_id / documents / task_spec / run_config / metadata 组装 GraphInput
-  -> 如果没传 extractor_client，就调用 build_extractor_client_from_env() 构造默认客户端
-  -> 把 GraphInput 和 ExtractorClient 交给 impl/graph.py
-  -> graph 依次驱动 broad extraction 和 resolution
-  -> 返回 graph 汇总后的 ExtractionResult
-```
-"""
+"""file_extraction_agent 对外统一入口。"""
 
 from __future__ import annotations
 
 from typing import Any, Literal
 
-from file_extraction_agent.extractor_client import build_extractor_client_from_env
 from file_extraction_agent import input_adapter
+from file_extraction_agent.extractor_client import build_extractor_client
 from file_extraction_agent.impl.graph import run_extraction_graph
+from file_extraction_agent.impl.schemas import RunOptions
 from file_extraction_agent.input_adapter import build_graph_input
 from file_extraction_agent.schemas import (
     ExtractionResult,
-    NormalizedDocument,
-    RunConfig,
+    NormalizedBlock,
     TaskSpec,
 )
 
@@ -37,34 +23,42 @@ StructuredOutputStrategy = Literal["json_schema", "tool_call", "auto"]
 
 def extract(
     *,
-    session_id: str,
-    documents: list[NormalizedDocument],
+    blocks: list[NormalizedBlock],
+    markdown: str = "",
+    md_list: list[str] | None = None,
     task_spec: TaskSpec | None = None,
     task_spec_name: str | None = None,
-    run_config: RunConfig | None = None,
+    run_options: RunOptions | None = None,
     metadata: dict[str, Any] | None = None,
+    base_url: str | None = None,
+    openai_api_key: str | None = None,
+    model: str | None = None,
     structured_output_strategy: StructuredOutputStrategy = "auto",
     extractor_client: Any | None = None,
 ) -> ExtractionResult:
     """消费外部已校验好的输入，执行最小可用的字段抽取收口流程。"""
 
     input_adapter.TASK_SPECS_DIR = TASK_SPECS_DIR
-    graph_input = build_graph_input(
-        session_id=session_id,
-        documents=documents,
+    extraction_input = build_graph_input(
+        blocks=blocks,
+        markdown=markdown,
+        md_list=md_list,
         task_spec=task_spec,
         task_spec_name=task_spec_name,
-        run_config=run_config,
+        run_options=run_options,
         metadata=metadata,
     )
     client = (
         extractor_client
         if extractor_client is not None
-        else build_extractor_client_from_env(
-            structured_output_strategy=structured_output_strategy
+        else build_extractor_client(
+            base_url=base_url,
+            api_key=openai_api_key,
+            model=model,
+            structured_output_strategy=structured_output_strategy,
         )
     )
     return run_extraction_graph(
-        graph_input=graph_input,
+        extraction_input=extraction_input,
         extractor_client=client,
     )

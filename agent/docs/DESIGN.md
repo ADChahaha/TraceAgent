@@ -79,12 +79,12 @@ agent/
 当前固定采用两阶段流程：
 
 1. broad extraction：一次读取全部 block，为每个 schema 字段生成候选列表
-2. field resolution：读取所有字段候选，再按字段逐个定案
+2. field resolution：读取 broad extraction 的全字段候选结果，一次性输出所有字段最终结果
 
 两阶段都使用结构化输出，但不再假设所有 OpenAI 兼容接口都支持同一种结构化协议。LangGraph 负责编排阶段流转，模型调用层当前由 `file_extraction_agent/extractor_client.py` 统一处理：
 
 ```text
-部署环境提供 BASE_URL / OPENAI_API_KEY / MODEL
+部署环境提供 BASE_URL / OPENAI_API_KEY，可选再提供 MODEL
   -> extractor_client 读取 model_client_config.json 里的 structured_output.strategy 和 fallback_order
   -> 用 env 配置创建 langchain_openai.ChatOpenAI(...)
   -> 如果 strategy=json_schema，就用 with_structured_output(..., method="json_schema", strict=True)
@@ -95,14 +95,14 @@ agent/
 
 这样把“连哪个模型服务”和“结构化输出协议怎么选”拆开管理：
 
-- 环境变量负责连接信息和密钥
+- 环境变量负责连接信息、密钥和可选模型名；如果没有 MODEL，`extractor_client.py` 使用代码内默认模型
 - `model_client_config.json` 负责结构化输出策略与请求参数
 - `extractor_client.py` 负责把两者合并成统一可调用 agent
 
 两层结构化输出当前分别由不同的 Pydantic schema 控制：
 
 - 第一层 `broad extraction` 绑定 `BroadExtractionOutput`
-- 第二层 `field resolution` 绑定 `ResolvedFieldOutput`
+- 第二层 `field resolution` 输出 `ResolvedFieldOutput` 列表
 
 更具体的 schema、校验和任务配置，建议直接查看：
 

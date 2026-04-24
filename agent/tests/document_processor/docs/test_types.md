@@ -16,6 +16,7 @@
 ## 测什么
 
 - 显式传入支持的 `file_type` 时会直接规范化
+- 显式传入已经归一化好的 `FileType` 枚举时会原样接受
 - 显式类型支持带点前缀的写法
 - 省略 `file_type` 时会按文件名后缀推断
 - 不支持的显式类型会报错
@@ -29,6 +30,12 @@
 - 构造一个文件名不可用的场景。
 - 显式传入 `"PDF"`。
 - 检查返回值会被规范化成 `FileType.PDF`，说明显式类型优先。
+
+`test_infer_file_type_accepts_file_type_enum_without_stringifying_name`
+
+- 构造一个文件名不可用的场景。
+- 显式传入 `FileType.PDF`。
+- 确认入口不会把枚举错误转成 `"FileType.PDF"`，而是直接返回内部枚举。
 
 `test_infer_file_type_accepts_dot_prefixed_supported_type`
 

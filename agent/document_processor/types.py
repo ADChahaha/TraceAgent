@@ -49,6 +49,9 @@ def infer_file_type(file_obj, file_type: str | FileType | None = None) -> FileTy
 
 
 def _parse_file_type(value: str | FileType) -> FileType:
+    if isinstance(value, FileType):
+        return value
+
     normalized = str(value).strip().lower().lstrip(".")
     try:
         return FileType(normalized)
