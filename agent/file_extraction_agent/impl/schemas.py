@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -139,3 +139,35 @@ class FieldDecision(BaseModel):
             reason=self.reason,
             failure_reason=self.failure_reason,
         )
+
+
+ResolutionAction = Literal["final_decision", "get_field_bundle", "lookup_blocks"]
+
+
+class FieldResolutionAction(BaseModel):
+    """resolution 模型单轮返回的内部动作。"""
+
+    action: ResolutionAction
+    target_field_name: str
+    decision: FieldDecision | None = None
+    requested_field_name: str | None = None
+    query_reason: str | None = None
+    lookup_hints: list[str] = Field(default_factory=list)
+    model_notes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_action_payload(self) -> "FieldResolutionAction":
+        if self.action == "final_decision":
+            if self.decision is None:
+                raise ValueError("final_decision action requires decision")
+            if self.decision.field_name != self.target_field_name:
+                raise ValueError("decision.field_name must match target_field_name")
+            return self
+
+        if self.decision is not None:
+            raise ValueError("tool request action must not include decision")
+        if self.action == "get_field_bundle" and not self.requested_field_name:
+            raise ValueError("get_field_bundle action requires requested_field_name")
+        if self.action == "lookup_blocks" and not self.query_reason:
+            raise ValueError("lookup_blocks action requires query_reason")
+        return self

@@ -1,4 +1,26 @@
-last updated: 2026-04-24 13:31:58 CST
+last updated: 2026-04-25 05:59:48 CST
+
+## 2026-04-25 05:59:48
+
+### 已完成工作
+
+- 收紧 resolution prompt 的输入边界：字段定案阶段不再直接携带原始 `blocks`，只接收目标字段 evidence、全字段 evidence 摘要、`tool_evidence` 和 `tool_records`。
+- 保留 `lookup_blocks_for_field(...)` 作为唯一能按需访问全量 `blocks` 的补查入口，避免模型绕过 lookup trace 直接回查全文。
+- 更新 `test_prompts.py` 和对应测试说明文档，固定 resolution payload 不包含原始 `blocks` 的行为。
+- 同步更新 `file_extraction_agent/docs/DESIGN.md`，明确 resolution 默认只能看 broad 压缩证据和工具返回证据。
+
+### 当前进展
+
+- `tests/file_extraction_agent` 当前全量通过。
+- broad 阶段仍负责从全量 `blocks` 预选字段级 evidence，resolution 阶段只在模型显式请求 lookup 时获得补充证据。
+
+### 遇到的问题
+
+- 之前 resolution prompt 同时带入了全字段 evidence 和原始 `blocks`，会削弱 lookup trace 的治理意义。
+
+### 下一步
+
+- 后续可继续补强 lookup 次数限制、字段参考 trace 和 broad 输出字段集合校验，让 Agent 执行层的治理边界更硬。
 
 ## 2026-04-24 13:31:58
 

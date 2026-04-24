@@ -82,13 +82,17 @@ def test_build_field_resolution_messages_focuses_on_target_field_and_evidence():
 
     assert messages[0]["role"] == "system"
     assert "field resolution" in messages[0]["content"]
+    assert "FieldResolutionAction" in messages[0]["content"]
+    assert "lookup_blocks" in messages[0]["content"]
     assert "validation_rules" in messages[0]["content"]
     payload = json.loads(messages[1]["content"])
     assert payload["target_field_name"] == "amount"
     assert payload["target_field"]["field_name"] == "amount"
     assert payload["target_field"]["relevant_block_ids"] == ["b-amount"]
+    assert payload["tool_evidence"] == []
+    assert payload["tool_records"] == []
     assert [field["field_name"] for field in payload["all_field_evidence"]] == [
         "amount",
         "invoice_no",
     ]
-    assert payload["blocks"][0]["document_id"] == "doc-2"
+    assert "blocks" not in payload

@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
-from collections import Counter
 import re
 from typing import Any
 
 from file_extraction_agent.impl.prompts import build_field_resolution_messages
 from file_extraction_agent.impl.schemas import (
-    EvidenceCollection,
     FieldDecision,
     FieldEvidence,
+    FieldResolutionAction,
+    LookupRecord,
 )
 from file_extraction_agent.impl.state import GraphState
-from file_extraction_agent.impl.tools import lookup_blocks_for_field
-from file_extraction_agent.schemas import FieldDefinition, FieldEvidenceRef, NormalizedBlock, TaskSpec
+from file_extraction_agent.impl.tools import get_field_bundle, lookup_blocks_for_field
+from file_extraction_agent.schemas import FieldDefinition, FieldEvidenceRef, NormalizedBlock
 
 
 def run_resolution(*, state: GraphState, extractor_client: Any | None = None) -> GraphState:
@@ -22,173 +22,122 @@ def run_resolution(*, state: GraphState, extractor_client: Any | None = None) ->
 
     if state.evidence_collection is None:
         raise ValueError("resolution requires evidence_collection before resolving fields")
+    if extractor_client is None:
+        raise ValueError("resolution requires extractor_client for model-based field decisions")
 
-    if extractor_client is not None:
-        model_decisions = [
-            _apply_validation_rules(
-                decision=extractor_client.invoke(
-                output_schema=FieldDecision,
-                messages=build_field_resolution_messages(
-                    extraction_input=state.extraction_input,
-                    target_field_name=field.field_name,
-                    evidence_collection=state.evidence_collection,
-                ),
-                ),
-                field=field,
-                state=state,
-                prior_decisions=[],
-            )
-            for field in state.extraction_input.task_spec.fields
-        ]
-        state.field_decisions = []
-        for field, decision in zip(state.extraction_input.task_spec.fields, model_decisions):
-            state.field_decisions.append(
-                _apply_validation_rules(
-                    decision=decision,
-                    field=field,
-                    state=state,
-                    prior_decisions=state.field_decisions,
-                )
-            )
-        return state
-
-    state.field_decisions = resolve_fields(
-        task_spec=state.extraction_input.task_spec,
-        evidence_collection=state.evidence_collection,
-        state=state,
-    )
+    state.field_decisions = []
+    for field in state.extraction_input.task_spec.fields:
+        decision = _resolve_field_with_model(
+            state=state,
+            extractor_client=extractor_client,
+            field=field,
+            prior_decisions=state.field_decisions,
+        )
+        state.field_decisions.append(decision)
     return state
 
 
-def resolve_fields(
+def _resolve_field_with_model(
     *,
-    task_spec: TaskSpec,
-    evidence_collection: EvidenceCollection,
-    state: GraphState | None = None,
-) -> list[FieldDecision]:
-    """按 task spec 顺序把字段证据收口成内部字段决策。"""
-
-    evidence_by_field = {
-        field_evidence.field_name: field_evidence
-        for field_evidence in evidence_collection.fields
-    }
-    field_decisions: list[FieldDecision] = []
-
-    for field in task_spec.fields:
-        field_decisions.append(
-            resolve_single_field(
-                field_name=field.field_name,
-                field_evidence=evidence_by_field.get(field.field_name),
-                state=state,
-                lookup_hints=field.lookup_hints,
-            )
-        )
-
-    return field_decisions
-
-
-def resolve_single_field(
-    *,
-    field_name: str,
-    field_evidence: FieldEvidence | None,
-    state: GraphState | None = None,
-    lookup_hints: list[str] | None = None,
+    state: GraphState,
+    extractor_client: Any,
+    field: FieldDefinition,
+    prior_decisions: list[FieldDecision],
 ) -> FieldDecision:
-    """把单字段 evidence 收口成字段决策。"""
+    tool_evidence: list[FieldEvidence] = []
+    lookup_records: list[LookupRecord] = []
+    max_iterations = state.extraction_input.options.max_extra_lookups_per_field + 2
 
-    if field_evidence is None or not field_evidence.evidence_texts:
-        if state is not None and state.extraction_input.options.allow_extra_lookup:
+    for _ in range(max_iterations):
+        action = extractor_client.invoke(
+            output_schema=FieldResolutionAction,
+            messages=build_field_resolution_messages(
+                extraction_input=state.extraction_input,
+                target_field_name=field.field_name,
+                evidence_collection=state.evidence_collection,
+                tool_evidence=[item.model_dump() for item in tool_evidence],
+                tool_records=[item.model_dump() for item in lookup_records],
+            ),
+        )
+        if action.target_field_name != field.field_name:
+            raise ValueError("resolution action target_field_name does not match current field")
+
+        if action.action == "final_decision":
+            decision = action.decision
+            if decision is None:
+                raise ValueError("final_decision action requires decision")
+            decision.lookup_records = _merge_lookup_records(
+                list(decision.lookup_records),
+                lookup_records,
+            )
+            return _apply_validation_rules(
+                decision=decision,
+                field=field,
+                state=state,
+                prior_decisions=prior_decisions,
+            )
+
+        if action.action == "get_field_bundle":
+            bundle = get_field_bundle(
+                state.evidence_collection,
+                action.requested_field_name or "",
+            )
+            if bundle is not None:
+                tool_evidence.append(bundle)
+            continue
+
+        if action.action == "lookup_blocks":
+            if not state.extraction_input.options.allow_extra_lookup:
+                raise ValueError("lookup_blocks action is disabled by run options")
             lookup_result = lookup_blocks_for_field(
                 blocks=state.extraction_input.blocks,
-                target_field_name=field_name,
-                query_reason="字段证据缺失，按 lookup hints 从全量 blocks 补查",
-                lookup_hints=lookup_hints or [],
+                target_field_name=field.field_name,
+                query_reason=action.query_reason or "模型请求从全量 blocks 补查字段证据",
+                lookup_hints=action.lookup_hints or field.lookup_hints,
                 top_k=state.extraction_input.options.max_extra_lookups_per_field,
             )
+            lookup_result.record.used_in_final_decision = True
+            lookup_records.append(lookup_result.record)
             if lookup_result.matched_blocks:
-                lookup_result.record.used_in_final_decision = True
-                lookup_evidence = FieldEvidence(
-                    field_name=field_name,
-                    relevant_block_ids=list(lookup_result.record.returned_block_ids),
-                    evidence_texts=[block.text for block in lookup_result.matched_blocks],
-                    evidence_refs=list(lookup_result.record.returned_refs),
-                    local_status="lookup_found",
-                    local_notes=["broad 阶段证据缺失，resolution 触发全局补查"],
+                tool_evidence.append(
+                    FieldEvidence(
+                        field_name=field.field_name,
+                        relevant_block_ids=list(lookup_result.record.returned_block_ids),
+                        evidence_texts=[block.text for block in lookup_result.matched_blocks],
+                        evidence_refs=list(lookup_result.record.returned_refs),
+                        local_status="lookup_found",
+                        local_notes=["模型请求 lookup_blocks 后补充的证据"],
+                    )
                 )
-                return FieldDecision(
-                    field_name=field_name,
-                    status="resolved",
-                    value=_resolve_value_from_evidence(
-                        field_name=field_name,
-                        evidence_texts=lookup_evidence.evidence_texts,
-                    ),
-                    evidence=lookup_evidence,
-                    related_fields=[field_name],
-                    lookup_records=[lookup_result.record],
-                    reason="通过全局补查找到字段证据并完成最小规则定案",
-                )
-        return FieldDecision(
-            field_name=field_name,
-            status="failed",
-            evidence=field_evidence or _missing_evidence(field_name),
-            related_fields=[field_name] if field_evidence is not None else [],
-            failure_reason="未找到可用证据",
+            continue
+
+    raise ValueError("resolution model did not return final_decision after tool requests")
+
+
+def _merge_lookup_records(
+    current_records: list[LookupRecord],
+    new_records: list[LookupRecord],
+) -> list[LookupRecord]:
+    merged = list(current_records)
+    seen = {
+        (
+            record.target_field_name,
+            record.lookup_reason,
+            tuple(record.returned_block_ids),
         )
-
-    value = _resolve_value_from_evidence(
-        field_name=field_name,
-        evidence_texts=field_evidence.evidence_texts,
-    )
-    return FieldDecision(
-        field_name=field_name,
-        status="resolved",
-        value=value,
-        evidence=field_evidence,
-        related_fields=[field_name],
-        reason="基于字段证据文本完成最小规则定案",
-    )
-
-
-def _missing_evidence(field_name: str) -> FieldEvidence:
-    return FieldEvidence(
-        field_name=field_name,
-        local_status="missing",
-    )
-
-
-def _resolve_value_from_evidence(*, field_name: str, evidence_texts: list[str]) -> str:
-    table_rows = [_parse_markdown_table_row(text) for text in evidence_texts]
-    table_rows = [row for row in table_rows if row is not None]
-    if table_rows:
-        if field_name == "building_name":
-            buildings = [row[0] for row in table_rows if row[0]]
-            if buildings:
-                return Counter(buildings).most_common(1)[0][0]
-        if field_name == "civilized_dormitory_rooms":
-            room_numbers = [
-                row[1]
-                for row in table_rows
-                if len(row) >= 4 and row[3] == "文明寝室" and row[1]
-            ]
-            if room_numbers:
-                return "、".join(room_numbers)
-        if field_name == "civilized_dormitory_count":
-            civilized_count = sum(
-                1 for row in table_rows if len(row) >= 4 and row[3] == "文明寝室"
-            )
-            if civilized_count:
-                return str(civilized_count)
-    return evidence_texts[0]
-
-
-def _parse_markdown_table_row(text: str) -> list[str] | None:
-    stripped = text.strip()
-    if "|" not in stripped:
-        return None
-    cells = [cell.strip() for cell in stripped.strip("|").split("|")]
-    if len(cells) < 2:
-        return None
-    return cells
+        for record in merged
+    }
+    for record in new_records:
+        key = (
+            record.target_field_name,
+            record.lookup_reason,
+            tuple(record.returned_block_ids),
+        )
+        if key in seen:
+            continue
+        merged.append(record)
+        seen.add(key)
+    return merged
 
 
 def _apply_validation_rules(

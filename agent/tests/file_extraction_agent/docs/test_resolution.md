@@ -2,78 +2,66 @@
 
 ## 基本实现思路
 
-`file_extraction_agent.impl.resolution` 负责把 broad 阶段的 `FieldEvidence` 收口成内部 `FieldDecision`。
+`file_extraction_agent.impl.resolution` 负责把 broad 阶段的 `FieldEvidence` 交给模型做字段级最终定案。代码只负责编排模型动作、执行模型请求的工具、应用通用 `validation_rules`，不能在没有模型输出的情况下把 evidence 文本自行改成最终字段值。
 
 ```text
-EvidenceCollection + TaskSpec
-  -> 按 task_spec.fields 固定输出顺序
-  -> 找到每个字段对应的 evidence
-  -> 有 extractor_client 时逐字段调用模型做 FieldDecision
-  -> 如果字段定义了 validation_rules，就按通用规则校验或覆盖模型结果
-  -> 有 evidence_texts 时产出 resolved decision
-  -> 缺失 evidence 时按 lookup_hints 从全量 blocks 补查
-  -> 补查仍无结果时产出 failed decision
-  -> 把 field_decisions 写回 GraphState
+GraphState.evidence_collection + TaskSpec.fields + extractor_client
+  -> 校验 broad 阶段已经写入 EvidenceCollection
+  -> 校验必须传入 extractor_client，禁止本地 evidence 兜底
+  -> 按 task_spec.fields 逐字段请求 FieldResolutionAction
+  -> 如果模型返回 final_decision，取其中 FieldDecision
+  -> 如果模型返回 lookup_blocks，按模型给出的 reason / hints 执行 lookup_blocks_for_field(...)
+  -> 把 tool_records / tool_evidence 追加进下一轮该字段模型请求
+  -> 最终仍由模型返回 FieldDecision
+  -> 应用通用 validation_rules 后写回 GraphState.field_decisions
 ```
 
-当前保留 deterministic 兜底：没有传入模型客户端时，优先用 evidence 或补查命中的文本做最小定案。
-如果字段配置了 `validation_rules`，resolution 会按通用规则对模型结果做校验或覆盖；这些规则只描述列名、筛选条件、排除条件和跨字段计数，不把具体业务词写进代码。
+lookup 的触发点必须来自模型动作：即使 broad 阶段缺证据、全量 blocks 中存在可匹配内容，系统也不能自己调用 lookup 并自行定案。
 
 ## 测什么
 
-- resolution 会按 `task_spec.fields` 顺序输出字段决策
-- 缺失字段时会补一个显式失败决策
-- evidence 与最终 value 分离保存
-- `run_resolution(...)` 会把字段决策写回 `GraphState`
-- `run_resolution(...)` 在收到模型客户端时，会逐字段调用结构化输出拿回 `FieldDecision`
-- `validation_rules.table_rows` 能按通用表格列规则筛选证据，并覆盖模型混入的无关行
-- `validation_rules.operation=count_items` 能根据前置字段条目数做一致性收口
-- broad 阶段缺少证据时，resolution 会按 lookup hints 执行一次全局补查并记录 `LookupRecord`
-- 对文明寝室这类表格证据，会把楼栋、文明寝室房间号和数量从 evidence 行里归一化出来
+- resolution 必须先拿到 broad 阶段的 `EvidenceCollection`。
+- resolution 必须传入模型客户端，不能走本地 fallback。
+- resolution 按 `task_spec.fields` 逐字段请求 `FieldResolutionAction`。
+- lookup 只在模型返回 `lookup_blocks` 动作时执行，并把记录并入最终 trace。
+- 模型没有请求 lookup 时，缺证据字段保持模型给出的失败结果。
+- `validation_rules.table_rows` 和 `operation=count_items` 仍作为通用规则校正模型结果。
 
 ## 每个函数在干什么
 
-`test_resolve_fields_uses_task_spec_order_and_fills_missing_outputs`
+`test_run_resolution_requires_evidence_collection_before_model_resolution`
 
-- 构造只命中一个字段的 evidence。
-- 确认 resolution 会保序输出，并给缺失字段补失败决策。
+- 构造未写入 `evidence_collection` 的状态。
+- 确认 resolution 会在调用模型前报错，避免跳过 broad 阶段。
 
-`test_resolve_fields_keeps_evidence_separate_from_result_value`
+`test_run_resolution_requires_model_client_and_does_not_use_local_fallback`
 
-- 构造带 notes 的 evidence。
-- 确认最终 `value` 和原始 evidence 明细不会混在一起。
+- 构造已有 broad evidence 的状态，但不传模型客户端。
+- 确认 resolution 直接报错，并且不会写入本地兜底生成的 `field_decisions`。
 
-`test_run_resolution_reads_evidence_collection_and_writes_decisions_to_state`
+`test_run_resolution_invokes_model_action_for_each_field_decision`
 
-- 先往 `GraphState` 写好 `evidence_collection`。
-- 调用 `run_resolution(...)`。
-- 确认状态里会被写回最终 `field_decisions`。
+- 构造一个 fake extractor client 返回 `final_decision` 动作。
+- 确认 resolution 对每个 task field 都请求 `FieldResolutionAction`，并把模型决策写回状态。
 
-`test_run_resolution_invokes_model_client_for_field_decisions`
+`test_run_resolution_only_uses_lookup_when_model_requests_it`
 
-- 构造一个可记录调用的 fake extractor client。
-- 调用 `run_resolution(...)` 并传入 fake client。
-- 确认 resolution 按 task spec 字段顺序逐字段请求 `FieldDecision` 结构化输出。
+- fake 模型第一轮返回 `lookup_blocks` 动作。
+- 确认系统按模型请求执行 lookup，并在第二轮把 `tool_records` 交回模型。
+- 确认最终 `FieldDecision` 中保留 lookup 记录且标记为用于最终定案。
 
-`test_run_resolution_records_lookup_when_evidence_is_missing`
+`test_run_resolution_does_not_lookup_missing_evidence_without_model_request`
 
-- 构造 broad 阶段缺失 `amount` 证据，但全量 blocks 中有“应付金额”的输入。
-- 启用 extra lookup 后调用 `run_resolution(...)`。
-- 确认字段通过补查定案，并在 `lookup_records` 中保留目标字段、返回 block id 和使用标记。
+- broad 阶段缺少金额 evidence，但全量 blocks 中存在可匹配金额文本。
+- fake 模型直接返回失败定案，不请求工具。
+- 确认系统不会因为本地规则自动 lookup。
 
 `test_run_resolution_applies_generic_table_row_rules_after_model_decision`
 
 - 构造一个通用表格，包含 `selected` 和 `rejected` 两类状态行。
 - fake 模型故意把 rejected 行混入最终结果。
 - 在字段的 `validation_rules` 中声明 `source_type=table_rows`、`target_column=room`、`filter status == selected`、`exclude status == rejected`。
-- 确认 resolution 不硬编码任何业务词，而是按规则把结果纠正成 `A101, A103`，并让 count 字段按源字段条目数得到 `2`。
-
-`test_resolve_fields_normalizes_civilized_dormitory_table_evidence`
-
-- 构造一组 markdown 表格行，其中多行标注为“文明寝室”。
-- 确认 `building_name` 会定案成楼栋名，而不是整行文本。
-- 确认 `civilized_dormitory_rooms` 会按出现顺序定案成房间号列表字符串。
-- 确认 `civilized_dormitory_count` 会定案成文明寝室条目数。
+- 确认 resolution 不硬编码业务词，而是按规则纠正列表字段，并让 count 字段按源字段条目数得到 `2`。
 
 ## 怎么跑
 

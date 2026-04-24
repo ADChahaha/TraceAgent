@@ -286,13 +286,20 @@ broad 的结构化输出建议以字段为中心组织，每个字段对应一�
 `resolution` 是面向目标字段最终定案的执行层。它的职责不是简单去重，而是：
 
 ```text
-目标字段 bundle
-  -> 判断当前字段证据是否足够
-  -> 若不足，参考其他字段 bundle
-  -> 若仍不足，执行一次全局补查
-  -> 结合 schema / cross hints / lookup 结果
-  -> 输出 resolved / failed
+目标字段 broad bundle + 全字段 evidence 摘要 + task spec 字段约束
+  -> 调用模型判断当前 broad 证据是否足够定案
+  -> 如果模型认为证据足够，模型直接输出 FieldDecision(resolved / failed)
+  -> 如果模型认为 broad 给出的 blocks 不够完整，模型输出 tool_request
+  -> 系统按 tool_request 调用 get_field_bundle(...) 或 lookup_blocks_for_field(...)
+  -> 把 tool 返回的补充证据重新交给模型
+  -> 模型输出最终 FieldDecision(resolved / failed)
 ```
+
+这里需要特别注意输入边界：resolution 模型默认不直接接收原始 `blocks`。
+它只能看到 broad 阶段已经压缩出的目标字段 evidence、全字段 evidence 摘要、
+以及工具返回的补充 evidence。只有当模型显式请求 `lookup_blocks_for_field(...)`
+时，系统才允许工具从全量 `blocks` 中定向补查，并把补查结果作为 `tool_evidence`
+进入下一轮 resolution。这样可以避免模型绕过 lookup trace 直接回查全文，确保补查行为可追踪。
 
 也就是说，这一层真正负责回答的是：
 
@@ -309,14 +316,18 @@ broad 的结构化输出建议以字段为中心组织，每个字段对应一�
 
 规则执行应保持通用：代码只理解 `validation_rules` 的结构，不认识具体业务词，比如“文明寝室”或“模范寝室”。具体业务条件必须放在 task spec 中。
 
+注意：`resolution` 的字段最终定案必须由模型完成。代码不能在未调用模型的情况下，把 broad 阶段的 `evidence_texts` 直接改写成最终值；也不能因为 broad 缺证据就自动执行 lookup 并自行定案。规则层只能作为模型输出后的通用约束校验或 trace 补强，不能替代模型做字段值判断。
+
 ### resolution 的实现形式
 
-治理语义上，resolution 是“字段级定案”；实现上不强制必须“每字段单独一次外部模型调用”。
+治理语义上，resolution 是“字段级定案”；实现上当前必须按字段组织模型调用，让模型逐字段决定是否已有足够证据，以及是否需要工具补充证据。
 
-代码层可接受两种落地方式：
+代码层当前固定为下面的落地方式：
 
-1. 在同一个 resolution 阶段内部，按字段逐个组织定案逻辑并返回字段级结果列表。
-2. 对少数字段做单独 resolution 调用，但这不是当前第一版的必需条件。
+1. 对 `TaskSpec.fields` 中的每个字段发起一次模型 resolution 请求。
+2. 模型返回最终 `FieldDecision` 时，系统直接进入规则校验与结果收口。
+3. 模型返回 tool request 时，系统只执行被模型请求的工具，并把工具结果追加回该字段的下一次模型请求。
+4. 工具调用结束后，仍然必须由模型输出最终 `FieldDecision`，系统不根据工具返回内容自行定案。
 
 无论采取哪种形式，都必须保证：
 
@@ -487,17 +498,18 @@ broad 的结构化输出建议以字段为中心组织，每个字段对应一�
 resolution 默认遵循下面这条顺序：
 
 ```text
-先看当前字段 broad bundle
-  -> 若需要 cross，调 get_field_bundle(...)
-  -> 若 cross 后仍不足，调 lookup_blocks_for_field(...)
-  -> 再做最终 resolved / failed
+模型先看当前字段 broad bundle
+  -> 模型认为需要 cross-field evidence 时，请求 get_field_bundle(...)
+  -> 模型认为 broad blocks 不完整时，请求 lookup_blocks_for_field(...)
+  -> 系统执行模型请求的 tool，并记录 LookupRecord / tool evidence
+  -> 模型基于原始 broad evidence + tool evidence 做最终 resolved / failed
 ```
 
 也就是说：
 
-- 先利用已有局部证据
-- 再按需参考其他字段
-- 最后才做一次全局补查
+- 是否使用 tool 由模型判断，不由本地规则根据“缺 evidence”自动触发
+- tool 只补充模型认为缺失的 evidence，不直接产出最终字段值
+- lookup 的典型触发条件是：模型认为 broad 阶段给到的 blocks 不够完整，需要从全量 blocks 定向补查
 
 ## Graph 输入与内部状态
 
@@ -539,7 +551,7 @@ run_extraction_graph(graph_input, extractor_client) -> ExtractionResult
 ExtractionInput + ExtractorClient
   -> build_graph_state(extraction_input)
   -> run_broad_extraction(state, extractor_client)
-  -> run_resolution(state)
+  -> run_resolution(state, extractor_client)
   -> ExtractionResult(result + trace)
 ```
 
@@ -693,6 +705,8 @@ resolution 阶段内部需要回答的是：
 
 这些信息都可以先保留在内部决策对象里；最后再由 `graph.py` 按外部稳定契约收口。
 
+当前实现还需要一个仅供 resolution 内部使用的模型动作对象，用来表达“模型已经能最终定案”还是“模型要求先调用工具补充证据”。该对象不属于外部 API；如果模型请求工具，系统执行工具后必须再次请求模型输出 `FieldDecision`。
+
 #### 内部契约的命名约束
 
 内部流程契约建议优先使用常见、短路径的名字，而不是把阶段词堆进类名。
@@ -837,8 +851,8 @@ agent 跑完整个流程
 - 输入归一化与 task spec 加载
 - broad extraction 只返回 evidence bundles，不返回 candidate
 - resolution 能读取 broad 全量结果，并对字段级结果做最终收口
-- resolution 在需要时能调用 `get_field_bundle(...)`
-- resolution 在需要时能调用 `lookup_blocks_for_field(...)`
+- resolution 必须调用模型完成字段定案，不能无模型走本地 evidence 兜底
+- resolution 只有在模型请求时才调用 `get_field_bundle(...)` 或 `lookup_blocks_for_field(...)`
 - 最终结果可追踪到 evidence、used field outputs 和 lookup trace
 
 ## 文档同步要求

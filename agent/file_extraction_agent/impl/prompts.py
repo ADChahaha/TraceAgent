@@ -45,6 +45,8 @@ def build_field_resolution_messages(
     extraction_input: ExtractionInput,
     target_field_name: str,
     evidence_collection: EvidenceCollection,
+    tool_evidence: list[dict[str, Any]] | None = None,
+    tool_records: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, str]]:
     """为 field resolution 阶段构造 messages。"""
 
@@ -70,7 +72,12 @@ def build_field_resolution_messages(
             "role": "system",
             "content": (
                 "你负责对单个目标字段做 field resolution。"
-                "只能输出 resolved 或 failed，并解释定案或失败原因。"
+                "必须返回 FieldResolutionAction。"
+                "如果当前 broad evidence 足够，返回 action=final_decision 和 FieldDecision；"
+                "如果 broad 给出的 blocks 不够完整，先返回 lookup_blocks 并说明 query_reason；"
+                "如果需要参考其他字段 evidence，先返回 get_field_bundle；"
+                "工具返回后仍然必须由你返回 final_decision。"
+                "最终 FieldDecision 只能是 resolved 或 failed，并解释定案或失败原因。"
                 "如果 target_field 带 validation_rules，最终值必须满足这些规则；"
                 "不要把 exclude 条件命中的证据混入最终值。"
             ),
@@ -113,7 +120,8 @@ def build_field_resolution_messages(
                         field_evidence.model_dump()
                         for field_evidence in evidence_collection.fields
                     ],
-                    "blocks": _serialize_blocks(extraction_input),
+                    "tool_evidence": tool_evidence or [],
+                    "tool_records": tool_records or [],
                 },
                 ensure_ascii=False,
             ),
