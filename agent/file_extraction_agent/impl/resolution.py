@@ -9,12 +9,14 @@ from file_extraction_agent.impl.prompts import build_field_resolution_messages
 from file_extraction_agent.impl.schemas import (
     FieldDecision,
     FieldEvidence,
+    FieldReferenceRecord,
     FieldResolutionAction,
+    FieldResolutionDecision,
     LookupRecord,
 )
 from file_extraction_agent.impl.state import GraphState
 from file_extraction_agent.impl.tools import get_field_bundle, lookup_blocks_for_field
-from file_extraction_agent.schemas import FieldDefinition, FieldEvidenceRef, NormalizedBlock
+from file_extraction_agent.schemas import FieldDefinition, FieldEvidenceRef, NormalizedBlock, TraceAction
 
 
 def run_resolution(*, state: GraphState, extractor_client: Any | None = None) -> GraphState:
@@ -45,8 +47,14 @@ def _resolve_field_with_model(
     prior_decisions: list[FieldDecision],
 ) -> FieldDecision:
     tool_evidence: list[FieldEvidence] = []
+    field_reference_records: list[FieldReferenceRecord] = []
     lookup_records: list[LookupRecord] = []
-    max_iterations = state.extraction_input.options.max_extra_lookups_per_field + 2
+    lookup_calls = 0
+    max_iterations = (
+        state.extraction_input.options.max_lookup_calls_per_field
+        + len(state.extraction_input.task_spec.fields)
+        + 2
+    )
 
     for _ in range(max_iterations):
         action = extractor_client.invoke(
@@ -56,16 +64,32 @@ def _resolve_field_with_model(
                 target_field_name=field.field_name,
                 evidence_collection=state.evidence_collection,
                 tool_evidence=[item.model_dump() for item in tool_evidence],
-                tool_records=[item.model_dump() for item in lookup_records],
+                tool_records=[
+                    *[
+                        item.to_trace_action().model_dump()
+                        for item in field_reference_records
+                    ],
+                    *[item.to_trace_action().model_dump() for item in lookup_records],
+                ],
             ),
         )
         if action.target_field_name != field.field_name:
             raise ValueError("resolution action target_field_name does not match current field")
 
         if action.action == "final_decision":
-            decision = action.decision
-            if decision is None:
+            model_decision = action.decision
+            if model_decision is None:
                 raise ValueError("final_decision action requires decision")
+            decision = _build_field_decision_from_model(
+                model_decision=model_decision,
+                field=field,
+                state=state,
+            )
+            decision.field_reference_records = _merge_field_reference_records(
+                list(decision.field_reference_records),
+                field_reference_records,
+                related_fields=decision.related_fields,
+            )
             decision.lookup_records = _merge_lookup_records(
                 list(decision.lookup_records),
                 lookup_records,
@@ -78,9 +102,19 @@ def _resolve_field_with_model(
             )
 
         if action.action == "get_field_bundle":
+            requested_field_name = action.requested_field_name or ""
             bundle = get_field_bundle(
                 state.evidence_collection,
-                action.requested_field_name or "",
+                requested_field_name,
+            )
+            field_reference_records.append(
+                FieldReferenceRecord(
+                    target_field_name=field.field_name,
+                    requested_field_name=requested_field_name,
+                    found=bundle is not None,
+                    returned_refs=list(bundle.evidence_refs) if bundle is not None else [],
+                    returned_to_model=True,
+                )
             )
             if bundle is not None:
                 tool_evidence.append(bundle)
@@ -89,14 +123,17 @@ def _resolve_field_with_model(
         if action.action == "lookup_blocks":
             if not state.extraction_input.options.allow_extra_lookup:
                 raise ValueError("lookup_blocks action is disabled by run options")
+            if lookup_calls >= state.extraction_input.options.max_lookup_calls_per_field:
+                raise ValueError("lookup_blocks action exceeded limit")
+            lookup_calls += 1
             lookup_result = lookup_blocks_for_field(
                 blocks=state.extraction_input.blocks,
                 target_field_name=field.field_name,
                 query_reason=action.query_reason or "模型请求从全量 blocks 补查字段证据",
                 lookup_hints=action.lookup_hints or field.lookup_hints,
-                top_k=state.extraction_input.options.max_extra_lookups_per_field,
+                top_k=state.extraction_input.options.lookup_top_k,
             )
-            lookup_result.record.used_in_final_decision = True
+            lookup_result.record.returned_to_model = True
             lookup_records.append(lookup_result.record)
             if lookup_result.matched_blocks:
                 tool_evidence.append(
@@ -112,6 +149,126 @@ def _resolve_field_with_model(
             continue
 
     raise ValueError("resolution model did not return final_decision after tool requests")
+
+
+def _build_field_decision_from_model(
+    *,
+    model_decision: FieldResolutionDecision,
+    field: FieldDefinition,
+    state: GraphState,
+) -> FieldDecision:
+    evidence = _evidence_from_used_block_ids(
+        field_name=field.field_name,
+        used_block_ids=model_decision.used_block_ids,
+        state=state,
+        status=model_decision.status,
+    )
+    return FieldDecision(
+        field_name=field.field_name,
+        status=model_decision.status,
+        value=model_decision.value,
+        evidence=evidence,
+        related_fields=list(model_decision.related_fields),
+        reason=model_decision.reason,
+        failure_reason=model_decision.failure_reason,
+    )
+
+
+def _evidence_from_used_block_ids(
+    *,
+    field_name: str,
+    used_block_ids: list[str],
+    state: GraphState,
+    status: str,
+) -> FieldEvidence:
+    if not used_block_ids:
+        return _fallback_evidence_for_field(
+            field_name=field_name,
+            state=state,
+            status=status,
+        )
+
+    blocks_by_id = {_block_id(block): block for block in state.extraction_input.blocks}
+    ordered_block_ids = _deduplicate_preserving_order([block_id for block_id in used_block_ids if block_id])
+    unknown_block_ids = [block_id for block_id in ordered_block_ids if block_id not in blocks_by_id]
+    if unknown_block_ids:
+        raise ValueError(f"unknown used_block_ids: {', '.join(unknown_block_ids)}")
+
+    blocks = [blocks_by_id[block_id] for block_id in ordered_block_ids]
+    local_status = "model_resolved" if status == "resolved" else "model_failed"
+    return FieldEvidence(
+        field_name=field_name,
+        relevant_block_ids=ordered_block_ids,
+        evidence_texts=[block.text for block in blocks],
+        evidence_refs=[
+            FieldEvidenceRef(
+                document_id=block.document_id,
+                page=block.page_no,
+                block_id=_block_id(block),
+            )
+            for block in blocks
+        ],
+        local_status=local_status,
+        local_notes=["按模型 used_block_ids 从标准化 blocks 绑定证据"],
+    )
+
+
+def _fallback_evidence_for_field(
+    *,
+    field_name: str,
+    state: GraphState,
+    status: str,
+) -> FieldEvidence:
+    if state.evidence_collection is not None:
+        evidence = get_field_bundle(state.evidence_collection, field_name)
+        if evidence is not None:
+            return FieldEvidence(
+                field_name=evidence.field_name,
+                relevant_block_ids=list(evidence.relevant_block_ids),
+                evidence_texts=list(evidence.evidence_texts),
+                evidence_refs=list(evidence.evidence_refs),
+                local_status=evidence.local_status,
+                local_notes=[
+                    *list(evidence.local_notes),
+                    "模型未声明 used_block_ids，沿用 broad evidence",
+                ],
+            )
+    local_status = "model_resolved" if status == "resolved" else "model_failed"
+    return FieldEvidence(
+        field_name=field_name,
+        local_status=local_status,
+        local_notes=["模型未声明 used_block_ids，且没有可沿用的 broad evidence"],
+    )
+
+
+def _merge_field_reference_records(
+    current_records: list[FieldReferenceRecord],
+    new_records: list[FieldReferenceRecord],
+    *,
+    related_fields: list[str],
+) -> list[FieldReferenceRecord]:
+    merged = list(current_records)
+    seen = {
+        (
+            record.target_field_name,
+            record.requested_field_name,
+            record.found,
+        )
+        for record in merged
+    }
+    related_field_set = set(related_fields)
+    for record in new_records:
+        key = (
+            record.target_field_name,
+            record.requested_field_name,
+            record.found,
+        )
+        if key in seen:
+            continue
+        record.used_in_final_decision = record.requested_field_name in related_field_set
+        merged.append(record)
+        seen.add(key)
+    return merged
 
 
 def _merge_lookup_records(
@@ -197,7 +354,24 @@ def _apply_table_row_rules(
         value=separator.join(values),
         evidence=evidence,
         related_fields=list(decision.related_fields),
+        field_reference_records=list(decision.field_reference_records),
         lookup_records=list(decision.lookup_records),
+        trace_actions=[
+            *list(decision.trace_actions),
+            TraceAction(
+                action_type="validation_rule",
+                message="按 validation_rules.table_rows 从标准化 blocks 重新筛选证据",
+                refs=[row["ref"] for row in matched_rows],
+                used_in_final_decision=True,
+                metadata={
+                    "rule_type": "table_rows",
+                    "matched_block_ids": _deduplicate_preserving_order(
+                        [row["block_id"] for row in matched_rows]
+                    ),
+                    "target_column": target_column,
+                },
+            ),
+        ],
         reason="按字段 validation_rules 从表格行筛选并覆盖模型定案结果",
     )
 
@@ -229,7 +403,21 @@ def _apply_count_items_rule(
         related_fields=_deduplicate_preserving_order(
             [*decision.related_fields, source_field]
         ),
+        field_reference_records=list(decision.field_reference_records),
         lookup_records=list(decision.lookup_records),
+        trace_actions=[
+            *list(decision.trace_actions),
+            TraceAction(
+                action_type="validation_rule",
+                message=f"按 validation_rules 从字段 {source_field} 的条目数计算得到",
+                refs=list(source_decision.evidence.evidence_refs),
+                used_in_final_decision=True,
+                metadata={
+                    "rule_type": "count_items",
+                    "source_field": source_field,
+                },
+            ),
+        ],
         reason=f"按 validation_rules 从字段 {source_field} 的条目数计算得到",
     )
 

@@ -109,6 +109,7 @@ class TraceAction(BaseModel):
     message: str | None = None
     refs: list[FieldEvidenceRef] = Field(default_factory=list)
     used_in_final_decision: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class FieldResult(BaseModel):

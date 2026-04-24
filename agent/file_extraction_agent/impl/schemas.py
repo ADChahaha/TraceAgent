@@ -22,14 +22,15 @@ class RunOptions(BaseModel):
     """图执行阶段的运行配置。"""
 
     allow_extra_lookup: bool = True
-    max_extra_lookups_per_field: int = 1
+    max_lookup_calls_per_field: int = 1
+    lookup_top_k: int = 3
     keep_detailed_trace: bool = False
 
-    @field_validator("max_extra_lookups_per_field")
+    @field_validator("max_lookup_calls_per_field", "lookup_top_k")
     @classmethod
     def validate_lookup_limit(cls, value: int) -> int:
         if value <= 0:
-            raise ValueError("max_extra_lookups_per_field must be greater than 0")
+            raise ValueError("lookup limits must be greater than 0")
         return value
 
 
@@ -78,6 +79,7 @@ class LookupRecord(BaseModel):
     lookup_hints: list[str] = Field(default_factory=list)
     returned_block_ids: list[str] = Field(default_factory=list)
     returned_refs: list[FieldEvidenceRef] = Field(default_factory=list)
+    returned_to_model: bool = False
     used_in_final_decision: bool = False
 
     def to_trace_action(self) -> TraceAction:
@@ -86,6 +88,42 @@ class LookupRecord(BaseModel):
             message=self.lookup_reason,
             refs=list(self.returned_refs),
             used_in_final_decision=self.used_in_final_decision,
+            metadata={
+                "target_field_name": self.target_field_name,
+                "lookup_hints": list(self.lookup_hints),
+                "returned_block_ids": list(self.returned_block_ids),
+                "returned_to_model": self.returned_to_model,
+            },
+        )
+
+
+class FieldReferenceRecord(BaseModel):
+    """一次跨字段 evidence bundle 读取留下的内部记录。"""
+
+    target_field_name: str
+    requested_field_name: str
+    found: bool = False
+    returned_refs: list[FieldEvidenceRef] = Field(default_factory=list)
+    returned_to_model: bool = False
+    used_in_final_decision: bool = False
+
+    def to_trace_action(self) -> TraceAction:
+        message = (
+            f"模型请求参考字段 {self.requested_field_name}"
+            if self.found
+            else f"模型请求参考字段 {self.requested_field_name}，但未找到对应 evidence bundle"
+        )
+        return TraceAction(
+            action_type="field_reference",
+            message=message,
+            refs=list(self.returned_refs),
+            used_in_final_decision=self.used_in_final_decision,
+            metadata={
+                "target_field_name": self.target_field_name,
+                "requested_field_name": self.requested_field_name,
+                "found": self.found,
+                "returned_to_model": self.returned_to_model,
+            },
         )
 
 
@@ -104,7 +142,9 @@ class FieldDecision(BaseModel):
     value: Any | None = None
     evidence: FieldEvidence
     related_fields: list[str] = Field(default_factory=list)
+    field_reference_records: list[FieldReferenceRecord] = Field(default_factory=list)
     lookup_records: list[LookupRecord] = Field(default_factory=list)
+    trace_actions: list[TraceAction] = Field(default_factory=list)
     reason: str | None = None
     failure_reason: str | None = None
 
@@ -135,7 +175,11 @@ class FieldDecision(BaseModel):
             status=self.status,
             evidence=self.evidence.to_evidence_summary(),
             related_fields=list(self.related_fields),
-            actions=[record.to_trace_action() for record in self.lookup_records],
+            actions=[
+                *[record.to_trace_action() for record in self.field_reference_records],
+                *[record.to_trace_action() for record in self.lookup_records],
+                *list(self.trace_actions),
+            ],
             reason=self.reason,
             failure_reason=self.failure_reason,
         )
@@ -144,12 +188,37 @@ class FieldDecision(BaseModel):
 ResolutionAction = Literal["final_decision", "get_field_bundle", "lookup_blocks"]
 
 
+class FieldResolutionDecision(BaseModel):
+    """resolution 模型返回的轻量字段判断。"""
+
+    status: FieldStatus
+    value: Any | None = None
+    used_block_ids: list[str] = Field(default_factory=list)
+    related_fields: list[str] = Field(default_factory=list)
+    reason: str | None = None
+    failure_reason: str | None = None
+
+    @model_validator(mode="after")
+    def validate_status_shape(self) -> "FieldResolutionDecision":
+        if self.status == "failed":
+            if self.value is not None:
+                raise ValueError("failed resolution decision must not include value")
+            if not self.failure_reason:
+                raise ValueError("failed resolution decision requires failure_reason")
+        else:
+            if self.value is None:
+                raise ValueError("resolved resolution decision requires value")
+            if not self.reason:
+                raise ValueError("resolved resolution decision requires reason")
+        return self
+
+
 class FieldResolutionAction(BaseModel):
     """resolution 模型单轮返回的内部动作。"""
 
     action: ResolutionAction
     target_field_name: str
-    decision: FieldDecision | None = None
+    decision: FieldResolutionDecision | None = None
     requested_field_name: str | None = None
     query_reason: str | None = None
     lookup_hints: list[str] = Field(default_factory=list)
@@ -160,8 +229,6 @@ class FieldResolutionAction(BaseModel):
         if self.action == "final_decision":
             if self.decision is None:
                 raise ValueError("final_decision action requires decision")
-            if self.decision.field_name != self.target_field_name:
-                raise ValueError("decision.field_name must match target_field_name")
             return self
 
         if self.decision is not None:

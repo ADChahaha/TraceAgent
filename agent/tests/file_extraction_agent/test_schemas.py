@@ -5,6 +5,8 @@ from file_extraction_agent.impl.schemas import (
     ExtractionInput,
     FieldDecision,
     FieldEvidence,
+    FieldResolutionAction,
+    FieldResolutionDecision,
     LookupRecord,
     RunOptions,
 )
@@ -69,7 +71,8 @@ def test_extraction_input_accepts_blocks_with_safe_defaults():
     assert extraction_input.blocks[0].document_id == "doc-1"
     assert extraction_input.md_list == []
     assert extraction_input.blocks[0].bbox.x1 == 100
-    assert extraction_input.options.max_extra_lookups_per_field == 1
+    assert extraction_input.options.max_lookup_calls_per_field == 1
+    assert extraction_input.options.lookup_top_k == 3
     assert extraction_input.metadata == {}
 
 
@@ -229,13 +232,20 @@ def test_extraction_result_separates_result_and_trace():
     assert payload["trace"]["warnings"] == ["none"]
 
 
-def test_run_options_reject_non_positive_lookup_limit():
+def test_run_options_reject_non_positive_lookup_limits():
     try:
-        RunOptions(max_extra_lookups_per_field=0)
+        RunOptions(max_lookup_calls_per_field=0)
     except ValidationError as exc:
-        assert "max_extra_lookups_per_field" in str(exc)
+        assert "max_lookup_calls_per_field" in str(exc)
     else:
-        raise AssertionError("max_extra_lookups_per_field 必须大于 0")
+        raise AssertionError("max_lookup_calls_per_field 必须大于 0")
+
+    try:
+        RunOptions(lookup_top_k=0)
+    except ValidationError as exc:
+        assert "lookup_top_k" in str(exc)
+    else:
+        raise AssertionError("lookup_top_k 必须大于 0")
 
 
 def test_field_decision_rejects_failed_status_with_value():
@@ -252,17 +262,40 @@ def test_field_decision_rejects_failed_status_with_value():
         raise AssertionError("内部 failed 决策不应携带 value")
 
 
+def test_field_resolution_action_uses_lightweight_model_decision():
+    action = FieldResolutionAction(
+        action="final_decision",
+        target_field_name="amount",
+        decision=FieldResolutionDecision(
+            status="resolved",
+            value="100.00",
+            used_block_ids=["b-amount"],
+            related_fields=["invoice_no"],
+            reason="模型判断金额字段证据充分",
+        ),
+    )
+
+    assert action.decision is not None
+    assert action.decision.used_block_ids == ["b-amount"]
+    assert not hasattr(action.decision, "evidence")
+
+
 def test_lookup_record_can_be_projected_to_trace_action():
     record = LookupRecord(
+        target_field_name="amount",
         lookup_reason="需要补查金额字段",
         lookup_hints=["amount", "total"],
+        returned_block_ids=["b-1"],
         returned_refs=[FieldEvidenceRef(document_id="doc-1", block_id="b-1")],
-        used_in_final_decision=True,
+        returned_to_model=True,
+        used_in_final_decision=False,
     )
 
     action = record.to_trace_action()
 
     assert action.action_type == "global_lookup"
     assert action.refs[0].block_id == "b-1"
-    assert action.used_in_final_decision is True
-
+    assert action.used_in_final_decision is False
+    assert action.metadata["target_field_name"] == "amount"
+    assert action.metadata["returned_block_ids"] == ["b-1"]
+    assert action.metadata["returned_to_model"] is True

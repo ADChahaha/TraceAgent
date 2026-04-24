@@ -1,4 +1,32 @@
-last updated: 2026-04-25 05:59:48 CST
+last updated: 2026-04-25 07:06:20 CST
+
+## 2026-04-25 07:06:20
+
+### 已完成工作
+
+- 先扩展 `docs/DESIGN.md` 为更具体的 agent 施工图，按处理单元写清 `input_adapter -> broad model -> resolution model -> tools -> validation rule -> graph mapper` 的输入、输出、失败条件和 trace 语义。
+- 为 broad 阶段增加输出校验：必须覆盖 `TaskSpec.fields`，不能返回重复字段、schema 外字段，也不能引用不存在的 `block_id`。
+- 将 resolution 模型输出收窄为轻量 `FieldResolutionDecision`：模型只负责 `status/value/used_block_ids/related_fields/reason` 等语义判断，系统再按 `used_block_ids` 回查 `NormalizedBlock` 绑定 evidence 与 refs。
+- 拆分 lookup 配置为 `max_lookup_calls_per_field` 和 `lookup_top_k`，避免把“调用次数”和“每次返回条数”混在一个字段里。
+- 增加 `field_reference / global_lookup / validation_rule` 三类 trace action，并区分 `returned_to_model` 与 `used_in_final_decision`。
+- 同步更新 `test_broad_extraction.py`、`test_resolution.py`、`test_schemas.py` 及对应 `tests/docs/` 说明文档。
+- 复用 `output/integration_civilized_dormitory/` 中已有 md、normalized blocks 和 task spec 跑真实 agent 集成，并生成 `direct_md_integration_call_trace.json` 记录模型调用过程。
+
+### 当前进展
+
+- `tests/file_extraction_agent` 当前全量通过：`52 passed`。
+- 直接基于 md/blocks 的真实集成通过，输出 `building_name=18栋`、12 个文明寝室房间号和 `civilized_dormitory_count=12`。
+- 新的调用记录显示最小调用链为 4 次：1 次 broad，全字段预选；3 次逐字段 resolution。
+
+### 遇到的问题
+
+- 原来的 resolution 模型需要直接生成内部 `FieldDecision.evidence`，schema 太重，真实调用中容易出现漏填嵌套字段的问题。
+- 直接让模型填系统内部 trace 对象会模糊职责边界；更合理的是模型只声明语义判断和 `used_block_ids`，由系统绑定可追踪证据。
+
+### 下一步
+
+- 后续可把 `keep_detailed_trace=True` 正式接入运行选项，让模型调用记录进入稳定 trace，而不是只依赖集成脚本产物。
+- 可以继续收口 structured output 的 warning，评估默认使用 `function_calling` 或更简单的 schema 生成策略。
 
 ## 2026-04-25 05:59:48
 

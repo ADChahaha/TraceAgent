@@ -9,10 +9,13 @@ GraphState.evidence_collection + TaskSpec.fields + extractor_client
   -> 校验 broad 阶段已经写入 EvidenceCollection
   -> 校验必须传入 extractor_client，禁止本地 evidence 兜底
   -> 按 task_spec.fields 逐字段请求 FieldResolutionAction
-  -> 如果模型返回 final_decision，取其中 FieldDecision
+  -> 如果模型返回 final_decision，取其中轻量 FieldResolutionDecision
+  -> 系统用 decision.used_block_ids 回查 NormalizedBlock
+  -> 系统组装内部 FieldEvidence / FieldDecision
   -> 如果模型返回 lookup_blocks，按模型给出的 reason / hints 执行 lookup_blocks_for_field(...)
-  -> 把 tool_records / tool_evidence 追加进下一轮该字段模型请求
-  -> 最终仍由模型返回 FieldDecision
+  -> 如果模型返回 get_field_bundle，读取对应字段 broad bundle 并记录 field_reference action
+  -> 把 trace-action 形状的 tool_records / tool_evidence 追加进下一轮该字段模型请求
+  -> 最终仍由模型返回轻量字段判断
   -> 应用通用 validation_rules 后写回 GraphState.field_decisions
 ```
 
@@ -23,9 +26,13 @@ lookup 的触发点必须来自模型动作：即使 broad 阶段缺证据、全
 - resolution 必须先拿到 broad 阶段的 `EvidenceCollection`。
 - resolution 必须传入模型客户端，不能走本地 fallback。
 - resolution 按 `task_spec.fields` 逐字段请求 `FieldResolutionAction`。
-- lookup 只在模型返回 `lookup_blocks` 动作时执行，并把记录并入最终 trace。
+- 模型 final decision 只需要给 `used_block_ids`，系统负责绑定 evidence / refs。
+- 模型返回不存在的 `used_block_ids` 时会被拒绝。
+- lookup 只在模型返回 `lookup_blocks` 动作时执行，并把 `global_lookup` action 并入最终 trace。
+- `max_lookup_calls_per_field` 限制 lookup 调用次数，`lookup_top_k` 限制每次返回的 blocks 数量。
+- 模型请求 `get_field_bundle` 时会记录 `field_reference` action。
 - 模型没有请求 lookup 时，缺证据字段保持模型给出的失败结果。
-- `validation_rules.table_rows` 和 `operation=count_items` 仍作为通用规则校正模型结果。
+- `validation_rules.table_rows` 和 `operation=count_items` 会作为通用规则校正模型结果，并记录 `validation_rule` action。
 
 ## 每个函数在干什么
 
@@ -43,12 +50,37 @@ lookup 的触发点必须来自模型动作：即使 broad 阶段缺证据、全
 
 - 构造一个 fake extractor client 返回 `final_decision` 动作。
 - 确认 resolution 对每个 task field 都请求 `FieldResolutionAction`，并把模型决策写回状态。
+- 确认模型只返回 `used_block_ids` 时，系统能从输入 blocks 绑定 evidence 文本。
+
+`test_run_resolution_rejects_unknown_used_block_ids_from_model_decision`
+
+- fake 模型返回一个不存在的 `used_block_ids`。
+- 确认 resolution 在组装内部 `FieldDecision` 前拒绝该结果，避免 trace 指向不可追踪来源。
 
 `test_run_resolution_only_uses_lookup_when_model_requests_it`
 
 - fake 模型第一轮返回 `lookup_blocks` 动作。
-- 确认系统按模型请求执行 lookup，并在第二轮把 `tool_records` 交回模型。
-- 确认最终 `FieldDecision` 中保留 lookup 记录且标记为用于最终定案。
+- 确认系统按模型请求执行 lookup，并在第二轮把 trace-action 形状的 `tool_records` 交回模型。
+- 确认 `lookup_top_k=2` 会返回两条 block id。
+- 确认最终 `FieldDecision` 中保留 lookup 记录，且只标记 `returned_to_model=True`，不在 lookup 调用时直接假定 `used_in_final_decision=True`。
+
+`test_run_resolution_enforces_lookup_call_limit`
+
+- fake 模型连续请求 `lookup_blocks`。
+- 设置 `max_lookup_calls_per_field=1`。
+- 确认第二次 lookup 请求会被拒绝，避免模型无限补查。
+
+`test_run_resolution_records_field_reference_action_when_model_requests_bundle`
+
+- fake 模型在确定金额字段前请求读取发票号字段 bundle。
+- 确认下一轮 prompt 中出现 `field_reference` action。
+- 确认最终 trace 保留该 action，且 `related_fields` 仍来自模型最终声明。
+
+`test_run_resolution_records_missing_field_reference_as_returned_tool_record`
+
+- fake 模型请求一个不存在的字段 bundle。
+- 确认下一轮 prompt 中仍然出现 `field_reference` action，且 `found=False`。
+- 确认“未命中”这个工具结果也被标记为 `returned_to_model=True`，避免负结果从 trace 中消失。
 
 `test_run_resolution_does_not_lookup_missing_evidence_without_model_request`
 
@@ -62,6 +94,7 @@ lookup 的触发点必须来自模型动作：即使 broad 阶段缺证据、全
 - fake 模型故意把 rejected 行混入最终结果。
 - 在字段的 `validation_rules` 中声明 `source_type=table_rows`、`target_column=room`、`filter status == selected`、`exclude status == rejected`。
 - 确认 resolution 不硬编码业务词，而是按规则纠正列表字段，并让 count 字段按源字段条目数得到 `2`。
+- 确认列表字段和计数字段都会记录 `validation_rule` action，说明规则访问过哪些证据。
 
 ## 怎么跑
 

@@ -10,7 +10,7 @@
   -> 包括 TaskSpec / NormalizedBlock / ExtractionResult
 内部 `file_extraction_agent.impl.schemas`
   -> 定义流程专用对象
-  -> 包括 ExtractionInput / FieldEvidence / FieldDecision / LookupRecord
+  -> 包括 ExtractionInput / FieldEvidence / FieldResolutionDecision / FieldDecision / LookupRecord / FieldReferenceRecord
 ```
 
 目标是把“外部稳定契约”和“内部流程对象”固定成两层，不再把 broad / resolution / lookup 的实现细节直接塞进全局 schema。
@@ -23,6 +23,8 @@
 - `FieldEvidence` 保留 broad 阶段的证据信息
 - 外部 `FieldResult` / `FieldTrace` 维持稳定的 `result + trace` 结构
 - 内部 `RunOptions` / `FieldDecision` / `LookupRecord` 维持流程对象约束
+- `FieldResolutionDecision` 是模型返回的轻量字段判断，不携带系统内部 evidence 对象
+- lookup 调用次数、lookup 返回条数和 trace action metadata 分开表达
 
 ## 每个函数在干什么
 
@@ -35,6 +37,7 @@
 
 - 构造最小合法的 `ExtractionInput`。
 - 确认内部入口对象会保留 blocks、bbox、默认 options 和 metadata。
+- 确认默认 `max_lookup_calls_per_field=1`、`lookup_top_k=3`。
 
 `test_extraction_input_parses_serialized_blocks_into_structured_models`
 
@@ -66,20 +69,27 @@
 - 构造新的 `ExtractionResult(result + trace)`。
 - 确认外部返回对象仍然把业务结果和留痕拆开。
 
-`test_run_options_reject_non_positive_lookup_limit`
+`test_run_options_reject_non_positive_lookup_limits`
 
-- 构造非法 `max_extra_lookups_per_field=0`。
-- 确认内部运行选项会拒绝非正数。
+- 分别构造非法 `max_lookup_calls_per_field=0` 和 `lookup_top_k=0`。
+- 确认内部运行选项会拒绝非正数，并且两个控制维度互不混用。
 
 `test_field_decision_rejects_failed_status_with_value`
 
 - 给内部 `FieldDecision(status="failed")` 塞一个 `value`。
 - 确认内部定案对象也会维持一致的状态约束。
 
+`test_field_resolution_action_uses_lightweight_model_decision`
+
+- 构造 `FieldResolutionAction(action="final_decision")`。
+- 其中的 decision 只包含 `status/value/used_block_ids/related_fields/reason`。
+- 确认模型决策对象不要求也不暴露 `evidence` 字段。
+
 `test_lookup_record_can_be_projected_to_trace_action`
 
 - 构造内部 `LookupRecord`。
 - 确认它可以映射成对外 `TraceAction`。
+- 确认 `target_field_name`、`returned_block_ids`、`returned_to_model` 会写入 action metadata。
 
 ## 怎么跑
 

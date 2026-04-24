@@ -63,8 +63,6 @@ file_extraction_agent/
 ├── processor.py
 ├── schemas.py
 ├── extractor_client.py
-├── task_specs/
-│   └── *.json
 ├── impl/
 │   ├── schemas.py
 │   ├── graph.py
@@ -105,9 +103,6 @@ file_extraction_agent/
   - 只解决“如何按给定 schema 调模型并拿到结构化结果”
   - broad 与 resolution 节点都通过这个可调用器访问模型
   - 不负责 graph 编排，也不负责拼装 LangGraph 流程
-
-- `task_specs/*.json`
-  - 保存固定 schema、字段类型、关键字段标记、局部校验规则、cross-field hints、lookup hints
 
 - `impl/schemas.py`
   - 定义**内部流程契约**
@@ -218,6 +213,369 @@ all_blocks
   -> per-field resolved / failed
 ```
 
+## 模型与处理单元施工图
+
+这一节是当前实现的施工图。后续改代码时，优先让代码和测试贴合这里，而不是只看函数名猜职责。
+
+整体链路按下面的对象流动：
+
+```text
+NormalizedBlock[] + TaskSpec
+  -> input_adapter.build_graph_input(...)
+  -> ExtractionInput(blocks, task_spec, options, metadata)
+  -> broad model
+  -> EvidenceCollection(FieldEvidence[])
+  -> broad 输出校验
+  -> resolution model per field
+      -> 可请求 get_field_bundle(...)
+      -> 可请求 lookup_blocks_for_field(...)
+      -> 必须最终返回轻量字段判断 FieldResolutionDecision
+  -> 系统按 used_block_ids 绑定 FieldEvidence
+  -> validation rule executor
+  -> FieldDecision[]
+  -> graph mapper
+  -> ExtractionResult(result.fields[] + trace.fields[])
+```
+
+### 处理单元 1：input adapter
+
+实现位置：`input_adapter.py`
+
+输入：
+
+- 调用方传入的 `blocks`
+- `task_spec` 或 `task_spec_name`
+- 可选 `markdown / md_list`
+- 可选 `run_options`
+- 可选 `metadata`
+
+处理步骤：
+
+```text
+外部调用参数
+  -> 检查 task_spec 与 task_spec_name 至少有一个存在
+  -> 如果传了 task_spec，直接使用
+  -> 如果只传 task_spec_name，从 task_specs/<name>.json 加载
+  -> 用 Pydantic 把 blocks / task_spec 归一化成内部对象
+  -> 填充默认 RunOptions 和 metadata
+  -> 返回 ExtractionInput
+```
+
+失败条件：
+
+- 没有传 `task_spec` 或 `task_spec_name`，抛 `ValueError`
+- `task_spec_name` 找不到对应 JSON，抛 `TaskSpecNotFoundError`
+- 字段定义重复、block 结构不合法等由 Pydantic 校验抛出
+
+### 处理单元 2：broad model
+
+实现位置：`impl/broad_extraction.py` 与 `impl/prompts.py::build_broad_extraction_messages(...)`
+
+职责：
+
+- 从全量 `blocks` 中为每个 schema 字段预选证据
+- 输出字段级 `FieldEvidence`
+- 不生成最终字段值
+- 不决定 route
+- 不写库
+
+模型输入：
+
+- `task_name`
+- `TaskSpec.fields[]`
+- 全量 `NormalizedBlock[]`
+- `RunOptions`
+- `metadata`
+
+模型输出：
+
+- `EvidenceCollection.fields[]`
+- 每个 `FieldEvidence` 至少包含：
+  - `field_name`
+  - `relevant_block_ids`
+  - `evidence_texts`
+  - `evidence_refs`
+  - `local_status`
+  - `local_notes`
+
+broad 输出后的代码校验必须执行：
+
+```text
+EvidenceCollection
+  -> 提取 task_spec.fields 中声明的字段集合
+  -> 检查 broad 是否返回重复 field_name
+  -> 检查 broad 是否返回 schema 外 field_name
+  -> 检查 broad 是否覆盖所有 task_spec 字段
+  -> 提取 ExtractionInput.blocks 中可引用的 block_id 集合
+  -> 检查 relevant_block_ids / evidence_refs.block_id 是否都来自输入 blocks
+  -> 校验通过后写入 GraphState.evidence_collection
+```
+
+失败条件：
+
+- broad 少返回字段：抛 `ValueError("missing broad evidence fields: ...")`
+- broad 返回 schema 外字段：抛 `ValueError("unknown broad evidence fields: ...")`
+- broad 返回重复字段：抛 `ValueError("duplicate broad evidence fields: ...")`
+- broad 引用了不存在的 block：抛 `ValueError("unknown broad evidence block ids: ...")`
+
+这一步的意义是：模型可以犯错，但进入 resolution 之前，字段集合和证据引用必须先被系统校验。
+
+### 处理单元 3：resolution model
+
+实现位置：`impl/resolution.py` 与 `impl/prompts.py::build_field_resolution_messages(...)`
+
+职责：
+
+- 对单个目标字段做最终定案
+- 默认只读取 broad 阶段压缩后的 evidence
+- 根据需要显式请求工具
+- 最终只返回轻量字段判断，不直接构造系统内部 `FieldDecision`
+
+模型输入：
+
+- 当前 `target_field_name`
+- 当前目标字段的 schema 定义
+- 当前目标字段的 broad evidence 摘要
+- 全字段 `all_field_evidence`
+- 已有 `tool_evidence`
+- 已有 `tool_records`
+
+resolution 模型默认**不直接接收原始 `blocks`**。原始 `blocks` 只能由工具或规则执行器访问。
+
+模型输出边界必须保持轻量：
+
+```text
+FieldResolutionAction(action=final_decision)
+  -> decision.status
+  -> decision.value
+  -> decision.used_block_ids
+  -> decision.related_fields
+  -> decision.reason / failure_reason
+```
+
+模型不负责输出：
+
+- `FieldEvidence`
+- `FieldEvidenceRef`
+- `LookupRecord`
+- `FieldReferenceRecord`
+- `TraceAction`
+
+这些对象都由系统根据 `used_block_ids`、工具记录和规则执行结果组装。
+
+处理步骤：
+
+```text
+目标字段 field
+  -> 构造只包含 field schema、目标字段 evidence、全字段 evidence 摘要的 prompt
+  -> extractor_client.invoke(output_schema=FieldResolutionAction)
+  -> 如果 action=final_decision，读取轻量 action.decision
+  -> 用 decision.used_block_ids 从 ExtractionInput.blocks 回查 block 文本、页码和 bbox
+  -> 系统组装 FieldEvidence 和 FieldDecision
+  -> 如果 action=get_field_bundle，执行 field bundle tool，再把 tool evidence 交回下一轮模型
+  -> 如果 action=lookup_blocks，执行 global lookup tool，再把 lookup evidence / record 交回下一轮模型
+  -> 重复直到模型返回 final_decision 或超过工具调用限制
+  -> 对 FieldDecision 应用 validation_rules
+  -> 返回最终 FieldDecision
+```
+
+失败条件：
+
+- resolution 开始前没有 `EvidenceCollection`，抛 `ValueError`
+- 没有传 `extractor_client`，抛 `ValueError`
+- 模型返回的 `target_field_name` 与当前字段不一致，抛 `ValueError`
+- 模型返回了输入中不存在的 `used_block_ids`，抛 `ValueError`
+- 模型请求工具次数超过限制，抛 `ValueError`
+- 禁用 extra lookup 时模型请求 `lookup_blocks`，抛 `ValueError`
+
+### 处理单元 4：field bundle tool
+
+实现位置：`impl/tools.py::get_field_bundle(...)`
+
+职责：
+
+- 让 resolution 模型显式读取某个其他字段的 broad evidence
+- 服务于跨字段参考
+- 不产出最终字段值
+
+输入：
+
+- `EvidenceCollection`
+- `requested_field_name`
+
+处理步骤：
+
+```text
+requested_field_name
+  -> 在 EvidenceCollection.fields 中查找同名 FieldEvidence
+  -> 找到则返回该 FieldEvidence，并把该 bundle 加入下一轮 tool_evidence
+  -> 找不到则返回 None，但仍把“未命中”作为 tool_records 交回下一轮模型
+  -> 无论是否找到，都记录一条 field_reference action
+```
+
+trace 要求：
+
+- 只要模型请求过 `get_field_bundle(...)`，系统就必须记录 `field_reference` action
+- action 中至少记录：
+  - 请求的字段名
+  - 是否找到 bundle
+  - 返回证据的 refs
+  - 工具结果是否已经返回给模型
+  - 是否被模型最终声明为使用
+
+这里区分两件事：
+
+```text
+系统可证明：模型显式请求过某字段 bundle
+模型声明：最终定案时参考了哪些字段
+```
+
+### 处理单元 5：global lookup tool
+
+实现位置：`impl/tools.py::lookup_blocks_for_field(...)`
+
+职责：
+
+- 当模型认为 broad evidence 不够完整时，从全量 `blocks` 中定向补查
+- 返回一小批补充证据
+- 记录 lookup trace
+- 不直接产出最终字段值
+
+输入：
+
+- 全量 `NormalizedBlock[]`
+- `target_field_name`
+- `query_reason`
+- `lookup_hints`
+- `lookup_top_k`
+
+处理步骤：
+
+```text
+target_field_name + lookup_hints
+  -> 对全量 blocks 做轻量相关性打分
+  -> 按分数和原顺序排序
+  -> 返回 top_k matched_blocks
+  -> 生成 LookupRecord(returned_to_model=True, used_in_final_decision=False)
+  -> 把 matched_blocks 转成 tool_evidence
+  -> 下一轮 resolution model 再决定最终 FieldDecision
+```
+
+配置要求：
+
+- `allow_extra_lookup`：是否允许模型请求 lookup
+- `max_lookup_calls_per_field`：每个字段最多允许几次 lookup 调用
+- `lookup_top_k`：每次 lookup 最多返回几个 blocks
+
+这三个配置不能混用。lookup 调用次数和每次返回条数必须分开表达。
+
+trace 语义：
+
+- `returned_to_model=True` 表示 lookup 结果确实被传给了模型
+- `used_in_final_decision=True` 只能来自模型最终声明或后续规则显式确认，不能在 lookup 调用时直接写死
+
+### 处理单元 6：validation rule executor
+
+实现位置：`impl/resolution.py::_apply_validation_rules(...)`
+
+职责：
+
+- 在模型给出 `FieldDecision` 后，执行 task spec 中声明的通用规则
+- 做结构化校验、规则覆盖或跨字段一致性收口
+- 不代替模型发起字段定案
+
+输入：
+
+- 模型返回的 `FieldDecision`
+- 当前 `FieldDefinition.validation_rules`
+- `GraphState`
+- 已完成的 `prior_decisions`
+
+处理步骤：
+
+```text
+FieldDecision + validation_rules
+  -> 如果没有 validation_rules，原样返回 FieldDecision
+  -> 如果 source_type=table_rows，从全量 blocks 中按声明的 columns/filter/exclude/target_column 选行
+  -> 将命中行转成 evidence，并覆盖模型混入的无关结果
+  -> 记录 validation_rule action，说明规则访问了 blocks 并覆盖/校正了模型结果
+  -> 如果 operation=count_items，从 source_field 的已定案结果计算条目数
+  -> 记录 validation_rule action，说明结果来自跨字段计数
+  -> 返回新的 FieldDecision
+```
+
+规则层访问全量 `blocks` 是允许的，但必须满足两个条件：
+
+1. 只能由 `TaskSpec.fields[].validation_rules` 显式声明触发。
+2. 必须在 trace action 中记录 `validation_rule`，说明访问原因、规则类型和证据来源。
+
+这和 lookup 的区别是：
+
+```text
+lookup_blocks_for_field
+  -> 模型主动请求的补查行为
+
+validation_rules
+  -> schema 声明的确定性规则校验 / 覆盖行为
+```
+
+### 处理单元 7：graph mapper
+
+实现位置：`impl/graph.py`
+
+职责：
+
+- 串联 broad 和 resolution
+- 不做业务抽取
+- 不做 route
+- 不访问数据库
+- 把内部 `FieldDecision[]` 映射为外部 `ExtractionResult`
+
+处理步骤：
+
+```text
+ExtractionInput
+  -> build_graph_state(...)
+  -> run_broad_extraction(...)
+  -> run_resolution(...)
+  -> FieldDecision.to_field_result()
+  -> FieldDecision.to_field_trace()
+  -> ExtractionResult(result, trace)
+```
+
+输出给上层的内容必须分成两类：
+
+- `result.fields[]`：字段名、状态、最终值
+- `trace.fields[]`：证据、相关字段、actions、reason / failure_reason
+
+## Trace Action 语义
+
+`trace.fields[].actions[]` 用来记录系统可证明发生过的处理动作。它不是模型自由生成的解释文本。
+
+当前 action 类型至少包括：
+
+- `field_reference`
+  - resolution 模型显式请求了其他字段的 evidence bundle
+  - metadata 中记录 `requested_field_name`、是否找到 bundle
+- `global_lookup`
+  - resolution 模型显式请求了全量 blocks 补查
+  - metadata 中记录 `lookup_hints`、`returned_block_ids`、`returned_to_model`
+- `validation_rule`
+  - schema 声明的规则访问了 blocks 或其他字段结果，并校正/覆盖了模型结果
+  - metadata 中记录 `rule_type`、`source_field`、`matched_block_ids`
+
+`related_fields` 与 `actions` 的关系：
+
+```text
+related_fields
+  -> 模型最终声明当前字段定案参考过哪些字段
+
+actions
+  -> 系统可证明执行过哪些工具或规则动作
+```
+
+因此，`related_fields` 可以作为解释，但不能替代 `field_reference` action。
+
 ## broad extraction 设计
 
 ### broad 的职责
@@ -288,11 +646,12 @@ broad 的结构化输出建议以字段为中心组织，每个字段对应一�
 ```text
 目标字段 broad bundle + 全字段 evidence 摘要 + task spec 字段约束
   -> 调用模型判断当前 broad 证据是否足够定案
-  -> 如果模型认为证据足够，模型直接输出 FieldDecision(resolved / failed)
+  -> 如果模型认为证据足够，模型输出轻量 FieldResolutionDecision(resolved / failed)
   -> 如果模型认为 broad 给出的 blocks 不够完整，模型输出 tool_request
   -> 系统按 tool_request 调用 get_field_bundle(...) 或 lookup_blocks_for_field(...)
   -> 把 tool 返回的补充证据重新交给模型
-  -> 模型输出最终 FieldDecision(resolved / failed)
+  -> 模型输出最终轻量 FieldResolutionDecision(resolved / failed)
+  -> 系统按 used_block_ids 绑定 evidence 并生成内部 FieldDecision
 ```
 
 这里需要特别注意输入边界：resolution 模型默认不直接接收原始 `blocks`。
@@ -316,7 +675,7 @@ broad 的结构化输出建议以字段为中心组织，每个字段对应一�
 
 规则执行应保持通用：代码只理解 `validation_rules` 的结构，不认识具体业务词，比如“文明寝室”或“模范寝室”。具体业务条件必须放在 task spec 中。
 
-注意：`resolution` 的字段最终定案必须由模型完成。代码不能在未调用模型的情况下，把 broad 阶段的 `evidence_texts` 直接改写成最终值；也不能因为 broad 缺证据就自动执行 lookup 并自行定案。规则层只能作为模型输出后的通用约束校验或 trace 补强，不能替代模型做字段值判断。
+注意：`resolution` 的字段最终语义判断必须由模型完成。代码不能在未调用模型的情况下，把 broad 阶段的 `evidence_texts` 直接改写成最终值；也不能因为 broad 缺证据就自动执行 lookup 并自行定案。代码可以根据模型给出的 `used_block_ids` 绑定证据和 trace，但不能替代模型决定字段值。规则层只能作为模型输出后的通用约束校验或 trace 补强，不能替代模型做字段值判断。
 
 ### resolution 的实现形式
 
@@ -325,15 +684,15 @@ broad 的结构化输出建议以字段为中心组织，每个字段对应一�
 代码层当前固定为下面的落地方式：
 
 1. 对 `TaskSpec.fields` 中的每个字段发起一次模型 resolution 请求。
-2. 模型返回最终 `FieldDecision` 时，系统直接进入规则校验与结果收口。
+2. 模型返回最终轻量 `FieldResolutionDecision` 时，系统用 `used_block_ids` 生成内部 `FieldEvidence / FieldDecision`，再进入规则校验与结果收口。
 3. 模型返回 tool request 时，系统只执行被模型请求的工具，并把工具结果追加回该字段的下一次模型请求。
-4. 工具调用结束后，仍然必须由模型输出最终 `FieldDecision`，系统不根据工具返回内容自行定案。
+4. 工具调用结束后，仍然必须由模型输出最终轻量字段判断，系统不根据工具返回内容自行定案。
 
 无论采取哪种形式，都必须保证：
 
 - 输出是字段级的
-- `used_field_outputs` 可追踪
-- `extra_lookup_used` 可追踪
+- 模型声明的 `related_fields` 可保留
+- 系统可证明的 `field_reference / global_lookup / validation_rule` action 可追踪
 - 每个字段单独有 `reason / failure_reason`
 
 ## traceability 设计
@@ -381,25 +740,27 @@ broad 的结构化输出建议以字段为中心组织，每个字段对应一�
 
 - 当前字段最终是否 `resolved / failed`
 - 当前字段最终的 `final_value`
-- 当前字段在定案时实际使用了哪些字段输出，即 `used_field_outputs`
+- 当前字段定案时模型声明参考了哪些字段，即 `related_fields`
+- 当前字段定案过程中系统实际执行了哪些可证明动作，即 `actions`
 - 当前字段的 `reason / failure_reason`
 
 这层 trace 的目的，是回答：
 
 - 当前字段最后为什么是这个结果
-- 当前字段是否参考了其他字段
-- 如果参考了，是哪些字段参与了当前字段定案
+- 模型最终声明参考了哪些其他字段
+- 系统是否真的执行过 field bundle 读取、global lookup 或 validation rule
 - 当前字段失败时，失败原因是什么
 
 #### 第三层：补查 trace
 
 如果当前字段在 resolution 阶段触发全局补查，系统必须显式保存：
 
-- 是否触发过补查，即 `extra_lookup_used`
+- 是否触发过补查，即 `global_lookup` action
 - 补查触发原因
 - 补查使用的 `lookup_hints`
 - 补查返回的 block 摘要或 block id
-- 补查结果是否真正参与了最终定案
+- 补查结果是否已经返回给模型
+- 补查结果是否被模型最终声明用于定案
 
 这层 trace 的目的，是回答：
 
@@ -460,6 +821,7 @@ broad 的结构化输出建议以字段为中心组织，每个字段对应一�
 - `evidence_refs`
 - `local_status`
 - `local_notes`
+- 一条 `field_reference` action，记录模型请求过哪个字段 bundle
 
 用途：
 
@@ -480,7 +842,7 @@ broad 的结构化输出建议以字段为中心组织，每个字段对应一�
 - `target_field_name`
 - `query_reason`
 - `lookup_hints`
-- `top_k`
+- `lookup_top_k`
 
 输出建议至少包括：
 
@@ -492,6 +854,7 @@ broad 的结构化输出建议以字段为中心组织，每个字段对应一�
   - `score`
 - `applied_hints`
 - `lookup_reason`
+- 一条 `global_lookup` action / record，记录返回给模型的 block id 与 refs
 
 ### tools 的使用顺序
 
@@ -510,6 +873,7 @@ resolution 默认遵循下面这条顺序：
 - 是否使用 tool 由模型判断，不由本地规则根据“缺 evidence”自动触发
 - tool 只补充模型认为缺失的 evidence，不直接产出最终字段值
 - lookup 的典型触发条件是：模型认为 broad 阶段给到的 blocks 不够完整，需要从全量 blocks 定向补查
+- field bundle tool 和 global lookup tool 都必须留下 trace action，不能只把 evidence 作为内部变量传递
 
 ## Graph 输入与内部状态
 
@@ -533,7 +897,7 @@ run_extraction_graph(graph_input, extractor_client) -> ExtractionResult
 - `task_spec`
   是当前任务的固定 schema 定义
 - `options`
-  是流程执行策略，例如是否允许 extra lookup、每字段最多 lookup 次数、是否保留详细 trace
+  是流程执行策略，例如是否允许 extra lookup、每字段最多 lookup 调用次数、每次 lookup 返回条数、是否保留详细 trace
 - `metadata`
   是可选任务标签、session 信息或调试信息
 
@@ -639,9 +1003,9 @@ ExtractionResult
 
 例如：
 
-- `action_type = "evidence_selection"`
 - `action_type = "field_reference"`
 - `action_type = "global_lookup"`
+- `action_type = "validation_rule"`
 
 每条 action 至少可以包含：
 
@@ -649,6 +1013,7 @@ ExtractionResult
 - `message`
 - `refs`
 - `used_in_final_decision`
+- `metadata`
 
 这样外层能看到“做过什么”，但不会和当前内部类名强耦合。
 
@@ -665,6 +1030,7 @@ ExtractionResult
 - broad 阶段专用 trace 对象
 - `FieldDecision`
 - `LookupRecord`
+- `FieldReferenceRecord` 或等价的内部工具动作记录
 
 这一层允许显式带出当前 pipeline 阶段语义，因为它本来就是服务于内部实现。
 
@@ -705,7 +1071,76 @@ resolution 阶段内部需要回答的是：
 
 这些信息都可以先保留在内部决策对象里；最后再由 `graph.py` 按外部稳定契约收口。
 
-当前实现还需要一个仅供 resolution 内部使用的模型动作对象，用来表达“模型已经能最终定案”还是“模型要求先调用工具补充证据”。该对象不属于外部 API；如果模型请求工具，系统执行工具后必须再次请求模型输出 `FieldDecision`。
+当前实现还需要一个仅供 resolution 内部使用的模型动作对象，用来表达“模型已经能最终定案”还是“模型要求先调用工具补充证据”。该对象不属于外部 API；如果模型请求工具，系统执行工具后必须再次请求模型输出轻量字段判断。
+
+模型返回的轻量字段判断不包含完整 `FieldEvidence`，只包含最小可追踪依据：
+
+```text
+FieldResolutionDecision
+  -> status
+  -> value
+  -> used_block_ids
+  -> related_fields
+  -> reason / failure_reason
+```
+
+系统再执行：
+
+```text
+used_block_ids
+  -> 从 ExtractionInput.blocks 查找 NormalizedBlock
+  -> 生成 FieldEvidence.relevant_block_ids
+  -> 生成 evidence_texts
+  -> 生成 FieldEvidenceRef(document_id, page, block_id)
+  -> 组装内部 FieldDecision
+```
+
+#### RunOptions 当前字段
+
+`RunOptions` 必须把不同控制维度拆开，避免一个字段同时表达多件事：
+
+- `allow_extra_lookup`
+  - 是否允许 resolution 模型请求 `lookup_blocks_for_field(...)`
+- `max_lookup_calls_per_field`
+  - 每个目标字段最多允许几次 global lookup 调用
+- `lookup_top_k`
+  - 每次 global lookup 最多返回几个 blocks
+- `keep_detailed_trace`
+  - 是否保留更详细的内部调试信息；如果当前版本暂未展开详细 trace，也要在文档中说明它是预留开关
+
+不再把 `max_lookup_calls_per_field` 和 `lookup_top_k` 混在同一个字段里。
+
+#### 内部工具记录对象
+
+resolution 内部至少需要保存两类工具记录：
+
+```text
+FieldReferenceRecord
+  -> target_field_name
+  -> requested_field_name
+  -> found
+  -> returned_refs
+  -> returned_to_model
+  -> used_in_final_decision
+
+LookupRecord
+  -> target_field_name
+  -> lookup_reason
+  -> lookup_hints
+  -> returned_block_ids
+  -> returned_refs
+  -> returned_to_model
+  -> used_in_final_decision
+```
+
+其中：
+
+- `returned_to_model`
+  表示系统确实把工具结果传回了下一轮模型。
+- `used_in_final_decision`
+  表示模型最终声明使用了该工具结果，或者规则层明确基于该工具结果完成覆盖。
+
+二者不能混用。
 
 #### 内部契约的命名约束
 
@@ -850,10 +1285,12 @@ agent 跑完整个流程
 
 - 输入归一化与 task spec 加载
 - broad extraction 只返回 evidence bundles，不返回 candidate
+- broad 输出必须覆盖所有 task spec 字段，且不能引用不存在的 block
 - resolution 能读取 broad 全量结果，并对字段级结果做最终收口
 - resolution 必须调用模型完成字段定案，不能无模型走本地 evidence 兜底
 - resolution 只有在模型请求时才调用 `get_field_bundle(...)` 或 `lookup_blocks_for_field(...)`
-- 最终结果可追踪到 evidence、used field outputs 和 lookup trace
+- `max_lookup_calls_per_field` 只限制 lookup 调用次数，`lookup_top_k` 只限制每次 lookup 返回条数
+- 最终结果可追踪到 evidence、`related_fields` 和 `field_reference / global_lookup / validation_rule` actions
 
 ## 文档同步要求
 
