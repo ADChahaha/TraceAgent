@@ -186,13 +186,14 @@ class FieldDecision(BaseModel):
 
 
 ResolutionAction = Literal["final_decision", "get_field_bundle", "lookup_blocks"]
+FieldResolutionValue = str | int | float | bool | list[str] | None
 
 
 class FieldResolutionDecision(BaseModel):
     """resolution 模型返回的轻量字段判断。"""
 
     status: FieldStatus
-    value: Any | None = None
+    value: FieldResolutionValue = None
     used_block_ids: list[str] = Field(default_factory=list)
     related_fields: list[str] = Field(default_factory=list)
     reason: str | None = None

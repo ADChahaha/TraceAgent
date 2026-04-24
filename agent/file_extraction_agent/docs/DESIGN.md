@@ -19,7 +19,8 @@ backend 聚合后的 all_blocks + task_spec
       -> 必要时调用 field bundle tool
       -> 必要时调用 global lookup tool
   -> graph.py 把内部决策对象映射成对外 ExtractionResult
-  -> schemas.py 中的 ExtractionResult(result + trace)
+      -> 如果 broad / resolution 中途失败，统一收口成 failed ExtractionResult
+  -> schemas.py 中的 ExtractionResult(status + result + trace)
 ```
 
 可以拆成三件事理解：
@@ -234,7 +235,7 @@ NormalizedBlock[] + TaskSpec
   -> validation rule executor
   -> FieldDecision[]
   -> graph mapper
-  -> ExtractionResult(result.fields[] + trace.fields[])
+  -> ExtractionResult(status + result.fields[] + trace.fields[])
 ```
 
 ### 处理单元 1：input adapter
@@ -352,6 +353,17 @@ FieldResolutionAction(action=final_decision)
   -> decision.related_fields
   -> decision.reason / failure_reason
 ```
+
+`decision.value` 不能在模型输出 schema 中写成任意 `Any`。OpenAI 兼容 provider 的 strict `response_format` 要求 JSON Schema 的每个分支都有明确 `type`，所以当前只允许：
+
+- `string`
+- `integer`
+- `number`
+- `boolean`
+- `string[]`
+- `null`
+
+如果后续需要支持更复杂的对象值，应先把对象结构显式建模成 Pydantic 类型，而不是把 `Any` 直接暴露给模型输出。
 
 模型不负责输出：
 
@@ -540,13 +552,35 @@ ExtractionInput
   -> run_resolution(...)
   -> FieldDecision.to_field_result()
   -> FieldDecision.to_field_trace()
-  -> ExtractionResult(result, trace)
+  -> ExtractionResult(status, result, trace)
 ```
+
+统一失败收口：
+
+```text
+ExtractionInput
+  -> build_graph_state(...)
+  -> run_broad_extraction(...) 或 run_resolution(...)
+  -> 如果阶段抛出模型调用、结构化输出或流程校验异常
+  -> graph 捕获异常，不继续执行后续阶段
+  -> 保留 state 中失败前已经写入的 evidence_collection / field_decisions / warnings
+  -> 对尚未形成 FieldDecision 的 schema 字段补一个 status=failed 的占位决策
+  -> 在 failed 字段 trace.actions[] 中写入 model_call_error
+  -> 在 ExtractionResult.trace.metadata 中记录 failure_stage、error_type、error_message
+  -> 返回 ExtractionResult(status="failed", failure_reason=...)
+```
+
+这个包当前不做更细的企业级回退，例如不从 resolution 失败回滚到 broad 重跑，也不在失败后继续尝试其他字段。当前本科毕设版本只要求 agent 层做到“执行过程可追踪、失败可返回”；真正的 route、人工复核和数据库处置由后续 backend 治理层完成。
 
 输出给上层的内容必须分成两类：
 
 - `result.fields[]`：字段名、状态、最终值
 - `trace.fields[]`：证据、相关字段、actions、reason / failure_reason
+
+另外，顶层 `ExtractionResult.status` 表达这次 agent 包执行整体是否完整跑完：
+
+- `completed`：broad 和 resolution 正常跑完，字段自身仍可能是 `resolved` 或 `failed`
+- `failed`：agent 包执行中途失败，返回的是失败前可追踪信息和统一失败原因
 
 ## Trace Action 语义
 
@@ -563,6 +597,9 @@ ExtractionInput
 - `validation_rule`
   - schema 声明的规则访问了 blocks 或其他字段结果，并校正/覆盖了模型结果
   - metadata 中记录 `rule_type`、`source_field`、`matched_block_ids`
+- `model_call_error`
+  - broad 或 resolution 阶段发生模型 API、结构化输出或节点校验失败
+  - metadata 中记录 `failure_stage`、`error_type`、`error_message`
 
 `related_fields` 与 `actions` 的关系：
 
@@ -916,7 +953,7 @@ ExtractionInput + ExtractorClient
   -> build_graph_state(extraction_input)
   -> run_broad_extraction(state, extractor_client)
   -> run_resolution(state, extractor_client)
-  -> ExtractionResult(result + trace)
+  -> ExtractionResult(status + result + trace)
 ```
 
 如果 resolution 内部触发 tool，它们也应当只修改当前 `GraphState` 中与 lookup / trace 相关的部分，不应反向修改 broad 的职责语义。
@@ -955,6 +992,8 @@ ExtractionInput + ExtractorClient
 
 ```text
 ExtractionResult
+  -> status
+  -> failure_reason
   -> result
   -> trace
 ```
@@ -972,6 +1011,8 @@ ExtractionResult
 
 ```text
 ExtractionResult
+  -> status
+  -> failure_reason
   -> result.fields[]
        -> field_name
        -> status
@@ -1083,6 +1124,8 @@ FieldResolutionDecision
   -> related_fields
   -> reason / failure_reason
 ```
+
+这里的 `value` 是模型直接输出给结构化接口的字段，因此必须保持 provider 可接受的显式 JSON 类型；当前支持字符串、数字、布尔值、字符串列表或 null，不使用 `Any`。
 
 系统再执行：
 
@@ -1199,8 +1242,11 @@ LookupRecord
 
 ### 最终聚合输出的职责边界
 
-`processor.extract(...)` 最终仍然返回 `ExtractionResult(result + trace)`，但职责边界应收紧为：
+`processor.extract(...)` 最终仍然返回 `ExtractionResult(status + result + trace)`，但职责边界应收紧为：
 
+- `status / failure_reason`
+  - 表达 agent 包本次执行是否完整跑完
+  - 当模型 API、结构化输出或节点校验失败时，不向外抛裸异常，而是统一返回 `status="failed"`
 - `result`
   - 服务于 route policy、写库判断和上层业务消费
   - 不直接挂内部流程对象
@@ -1215,6 +1261,17 @@ LookupRecord
 agent 跑完整个流程
   -> 返回对外稳定的 ExtractionResult
   -> backend 决定如何持久化 result 与 trace
+```
+
+失败时则收口为：
+
+```text
+agent 中途失败
+  -> graph 捕获异常
+  -> 返回 status="failed" 的 ExtractionResult
+  -> result.fields[] 中保留已完成字段，未完成字段标记 failed
+  -> trace.fields[] 中保留已有 evidence / actions，并为失败字段写入 model_call_error
+  -> backend 根据顶层失败状态决定转人工或终止写库
 ```
 
 ## task spec 设计

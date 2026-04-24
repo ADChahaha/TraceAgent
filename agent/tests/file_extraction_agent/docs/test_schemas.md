@@ -21,10 +21,12 @@
 - `ExtractionInput` 能接住 blocks 主输入并提供安全默认值
 - `ExtractionInput.blocks` 会把序列化后的 block 字典解析成结构化模型
 - `FieldEvidence` 保留 broad 阶段的证据信息
-- 外部 `FieldResult` / `FieldTrace` 维持稳定的 `result + trace` 结构
+- 外部 `FieldResult` / `FieldTrace` 维持稳定的 `status + result + trace` 结构
 - 内部 `RunOptions` / `FieldDecision` / `LookupRecord` 维持流程对象约束
 - `FieldResolutionDecision` 是模型返回的轻量字段判断，不携带系统内部 evidence 对象
+- `FieldResolutionDecision.value` 的 JSON Schema 分支都带明确 `type`，避免 strict response format 被 provider 拒绝
 - lookup 调用次数、lookup 返回条数和 trace action metadata 分开表达
+- 整包 `ExtractionResult(status="failed")` 必须说明统一失败原因
 
 ## 每个函数在干什么
 
@@ -66,8 +68,15 @@
 
 `test_extraction_result_separates_result_and_trace`
 
-- 构造新的 `ExtractionResult(result + trace)`。
+- 构造新的 `ExtractionResult(status + result + trace)`。
 - 确认外部返回对象仍然把业务结果和留痕拆开。
+- 确认未显式失败时，顶层状态默认为 `completed`。
+
+`test_failed_extraction_result_requires_failure_reason`
+
+- 构造没有 `failure_reason` 的整包 failed 返回。
+- 确认 schema 会拒绝这种不可审计的失败状态。
+- 再构造带统一失败原因的 failed 返回，确认其可被正常序列化和传递。
 
 `test_run_options_reject_non_positive_lookup_limits`
 
@@ -84,6 +93,12 @@
 - 构造 `FieldResolutionAction(action="final_decision")`。
 - 其中的 decision 只包含 `status/value/used_block_ids/related_fields/reason`。
 - 确认模型决策对象不要求也不暴露 `evidence` 字段。
+
+`test_field_resolution_action_value_schema_is_strict_provider_compatible`
+
+- 读取 `FieldResolutionAction.model_json_schema()`。
+- 确认 `FieldResolutionDecision.value` 的每个 `anyOf` 分支都有明确 `type`。
+- 防止 `Any | None` 生成 `{}` 分支，导致 provider 在创建 strict `response_format` 时返回 400。
 
 `test_lookup_record_can_be_projected_to_trace_action`
 

@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 FieldType = Literal["string", "date", "enum", "money", "boolean"]
 FieldStatus = Literal["resolved", "failed"]
+RunStatus = Literal["completed", "failed"]
 
 
 class FieldEvidenceRef(BaseModel):
@@ -169,5 +170,13 @@ class ExtractionTrace(BaseModel):
 class ExtractionResult(BaseModel):
     """一次 extraction 运行的最终返回对象。"""
 
+    status: RunStatus = "completed"
+    failure_reason: str | None = None
     result: ExtractionContent
     trace: ExtractionTrace
+
+    @model_validator(mode="after")
+    def validate_run_status_shape(self) -> "ExtractionResult":
+        if self.status == "failed" and not self.failure_reason:
+            raise ValueError("failed extraction result requires failure_reason")
+        return self

@@ -230,6 +230,29 @@ def test_extraction_result_separates_result_and_trace():
     assert payload["result"]["fields"][0]["field_name"] == "invoice_no"
     assert payload["trace"]["fields"][0]["evidence"]["status"] == "evidence_found"
     assert payload["trace"]["warnings"] == ["none"]
+    assert payload["status"] == "completed"
+
+
+def test_failed_extraction_result_requires_failure_reason():
+    try:
+        ExtractionResult(
+            status="failed",
+            result=ExtractionContent(fields=[]),
+            trace=ExtractionTrace(fields=[]),
+        )
+    except ValidationError as exc:
+        assert "failure_reason" in str(exc)
+    else:
+        raise AssertionError("整包 failed 返回必须说明统一失败原因")
+
+    result = ExtractionResult(
+        status="failed",
+        failure_reason="resolution 执行失败: RuntimeError: api timeout",
+        result=ExtractionContent(fields=[]),
+        trace=ExtractionTrace(fields=[]),
+    )
+
+    assert result.failure_reason == "resolution 执行失败: RuntimeError: api timeout"
 
 
 def test_run_options_reject_non_positive_lookup_limits():
@@ -278,6 +301,14 @@ def test_field_resolution_action_uses_lightweight_model_decision():
     assert action.decision is not None
     assert action.decision.used_block_ids == ["b-amount"]
     assert not hasattr(action.decision, "evidence")
+
+
+def test_field_resolution_action_value_schema_is_strict_provider_compatible():
+    schema = FieldResolutionAction.model_json_schema()
+    value_schema = schema["$defs"]["FieldResolutionDecision"]["properties"]["value"]
+
+    assert value_schema["anyOf"]
+    assert all("type" in branch for branch in value_schema["anyOf"])
 
 
 def test_lookup_record_can_be_projected_to_trace_action():

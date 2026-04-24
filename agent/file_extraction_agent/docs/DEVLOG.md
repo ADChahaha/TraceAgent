@@ -1,4 +1,30 @@
-last updated: 2026-04-25 07:06:20 CST
+last updated: 2026-04-25 07:54:02 CST
+
+## 2026-04-25 07:54:02
+
+### 已完成工作
+
+- 为 `impl/graph.py` 增加统一失败收口：broad / resolution 中途出现模型调用、结构化输出或节点校验异常时，不再向外抛裸异常，而是返回 `ExtractionResult(status="failed")`。
+- 在失败返回中保留失败前已有的 `field_decisions`、`evidence_collection` 和 `warnings`；未完成字段补 `status="failed"`，并写入 `model_call_error` trace action。
+- 扩展对外 `ExtractionResult`，新增顶层 `status` 和 `failure_reason`，用于表达 agent 包级执行是否完整完成。
+- 修复 `FieldResolutionAction` strict response schema：将 `FieldResolutionDecision.value` 从 `Any | None` 收紧为 `str | int | float | bool | list[str] | None`，避免生成 `anyOf: [{}]` 这类 provider 会拒绝的 schema。
+- 同步更新 `docs/DESIGN.md`、`test_graph.py`、`test_schemas.py` 和对应 `tests/file_extraction_agent/docs/` 测试说明文档。
+
+### 当前进展
+
+- `tests/file_extraction_agent` 当前全量通过：`56 passed`。
+- 直接使用 `output/integration_civilized_dormitory/` 中已有 md、normalized blocks 和 task spec 跑真实模型集成通过：4 次调用，输出 `building_name=18栋`、12 个文明寝室房间号和 `civilized_dormitory_count=12`。
+- 专门验证 `FieldResolutionAction` 的 strict `json_schema` provider 调用已经可以正常返回，不再出现 `schema must have a type key` 的 400。
+
+### 遇到的问题
+
+- 原来的 `value: Any | None` 在 Pydantic JSON Schema 中会生成 `{}` 分支，strict response format 下 provider 会在请求进入模型推理前直接拒绝。
+- 之前 broad / resolution 失败会直接中断调用方，不利于后续 backend route 和人工复核统一处理失败结果。
+
+### 下一步
+
+- 后续可继续处理 LangChain / Pydantic 的 serializer warning；当前 warning 不影响 provider schema 校验和最终抽取结果。
+- backend 接入时可以直接根据顶层 `ExtractionResult.status` 判断是否进入正常 route，或转入人工兜底流程。
 
 ## 2026-04-25 07:06:20
 

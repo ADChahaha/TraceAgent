@@ -75,6 +75,7 @@ def build_field_resolution_messages(
                 "必须返回 FieldResolutionAction。"
                 "如果当前 broad evidence 足够，返回 action=final_decision 和轻量 decision；"
                 "decision 只填写 status、value、used_block_ids、related_fields、reason 或 failure_reason；"
+                "value 只能是字符串、数字、布尔值、字符串列表或 null，不能返回对象；"
                 "不要在 decision 中构造 evidence、refs、lookup_records 或 trace_actions；"
                 "used_block_ids 必须来自已提供 evidence 或 tool_evidence 中的 block id；"
                 "如果 broad 给出的 blocks 不够完整，先返回 lookup_blocks 并说明 query_reason；"
