@@ -29,6 +29,15 @@ class UploadFileProxy:
     content_type: str | None
     file: Any
 
+    def read(self, *args, **kwargs):
+        return self.file.read(*args, **kwargs)
+
+    def seek(self, *args, **kwargs):
+        return self.file.seek(*args, **kwargs)
+
+    def tell(self):
+        return self.file.tell()
+
 
 class HealthResponse(BaseModel):
     status: str
@@ -88,6 +97,7 @@ async def get_capabilities() -> CapabilitiesResponse:
     )
 
 
+@router.post("/v1/document-processor/process", response_model=ProcessResponse)
 @router.post("/v1/ocr/process", response_model=ProcessResponse)
 async def process_document(
     file: UploadFile = File(...),

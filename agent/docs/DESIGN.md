@@ -29,7 +29,8 @@
 agent/
 ├── main.py
 ├── routes/
-│   └── document_processor.py
+│   ├── document_processor.py
+│   └── file_extraction_agent.py
 ├── docs/
 │   └── DESIGN.md
 ├── document_processor/
@@ -74,7 +75,8 @@ agent/
 当前业务入口包括：
 
 - `file_extraction_agent.processor.extract(...)`
-- `file_extraction_agent.model_client.build_model_client_from_env(...)`
+- `file_extraction_agent.extractor_client.build_extractor_client(...)`
+- HTTP 入口：`routes/file_extraction_agent.py`
 
 当前固定采用两阶段流程：
 
@@ -135,6 +137,32 @@ raw file
 可以理解为：
 
 `raw file -> document_processor -> normalized markdown + blocks -> backend session aggregation -> file_extraction_agent -> extraction result`
+
+## HTTP 出口
+
+`main.py` 只负责创建 FastAPI app 并挂载 router，不直接写业务逻辑。当前 route 层按下面方式工作：
+
+```text
+HTTP 请求
+  -> main.create_app() 挂载 routes/document_processor.py 和 routes/file_extraction_agent.py
+  -> route 层完成 multipart 或 JSON 协议适配
+  -> 调用对应业务入口 document_processor.processor.process(...) 或 file_extraction_agent.processor.extract(...)
+  -> 把业务结果映射成 HTTP 响应
+```
+
+当前对外路径是：
+
+- `POST /v1/document-processor/process`
+  - 接收上传文件和可选 `file_type`
+  - 调用 `document_processor.processor.process(...)`
+  - 返回 `ProcessResult` 对应的 JSON 形状
+  - 兼容保留旧路径 `POST /v1/ocr/process`
+- `POST /v1/file-extraction-agent/extract`
+  - 接收标准化后的 `blocks`、可选 `markdown/md_list`、`task_spec` 或 `task_spec_name`、`metadata` 以及可选模型连接参数
+  - 调用 `file_extraction_agent.processor.extract(...)`
+  - 返回 `ExtractionResult`
+
+当前暂不引入额外 `src/` 或 `app/` 目录。原因是 `agent/pyproject.toml` 已经按 `main.py`、`routes/` 和两个业务包打包；路由层新增文件即可保持业务代码和 HTTP 适配的边界清楚，目录迁移应当等到服务入口或包结构需要整体重排时再做。
 
 ## 约束
 
