@@ -108,7 +108,7 @@ agent/
 
 - `file_extraction_agent/task_specs/*.json`
 - `file_extraction_agent/schemas.py`
-- `file_extraction_agent/impl/validation.py`
+- `file_extraction_agent/impl/resolution.py` 中的 `validation_rules` 后处理逻辑
 
 ## 主链路
 

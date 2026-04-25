@@ -1,4 +1,25 @@
-last updated: 2026-04-25 07:54:02 CST
+last updated: 2026-04-25 16:02:27 CST
+
+## 2026-04-25 16:02:27
+
+### 已完成工作
+
+- 完善 `README.md`，补齐 `file_extraction_agent` 的职责边界、主处理链路、快速使用、输入输出契约、模型配置、运行选项、目录结构和测试入口。
+- 更新 `docs/DESIGN.md`，把 `validation rule executor` 明确收敛为 `resolution.py::_apply_validation_rules(...)` 的字段级后处理。
+- 明确当前不设置独立 `impl/validation.py`；规则校验、规则覆盖和跨字段一致性收口都放在 `resolution.py` 中。
+
+### 当前进展
+
+- 包级 README 已可作为调用方和维护者的第一入口。
+- validation 文档口径已与源码一致：模型先完成字段定案，系统再在 resolution 内执行 `validation_rules` 后处理并记录 `validation_rule` action。
+
+### 遇到的问题
+
+- 原来的文档表达容易让人误以为 validation 是独立模块；实际代码中已经没有 `impl/validation.py`，只有 `resolution.py` 内部的规则后处理函数。
+
+### 下一步
+
+- 后续如果 `validation_rules` 类型明显增多、需要被多个节点复用，或 `resolution.py` 因规则实现变得难维护，再评估是否拆独立 validation 模块。
 
 ## 2026-04-25 07:54:02
 
@@ -395,9 +416,9 @@ last updated: 2026-04-25 07:54:02 CST
 DESIGN.md有雷，
 - `impl/normalization.py`
   接收 `processor.py` 已经收拢好的 session 级输入和 task spec，继续做进入 graph 前的内部归一化，产出 `schemas.py` 中定义的 `GraphInput`。
-- `impl/validation.py`
-  做候选清洗、字段类型归一化、局部规则校验和状态归类。
-不知道干嘛的。
+- 曾误设独立 validation 模块
+  原设想是做候选清洗、字段类型归一化、局部规则校验和状态归类；当前已经收敛为 `resolution.py::_apply_validation_rules(...)` 的字段定案后处理。
+这条职责不再单独拆文件。
 没有将processor.py的数据核验单开一个input_adapter.py来做
 
 ### 已完成工作

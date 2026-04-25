@@ -132,6 +132,8 @@ file_extraction_agent/
   - 负责字段最终定案
   - 默认先看当前字段 broad bundle
   - 必要时调用 tools
+  - 在模型给出字段判断之后执行 `validation_rules` 通用后处理
+  - 当前不设置独立的 `impl/validation.py`；规则校验、规则覆盖和跨字段一致性收口都收在 `resolution.py` 的字段级链路里
 
 - `impl/tools.py`
   - 放 resolution 可调用的内部工具
@@ -232,7 +234,7 @@ NormalizedBlock[] + TaskSpec
       -> 可请求 lookup_blocks_for_field(...)
       -> 必须最终返回轻量字段判断 FieldResolutionDecision
   -> 系统按 used_block_ids 绑定 FieldEvidence
-  -> validation rule executor
+  -> resolution.py::_apply_validation_rules(...) 执行 validation_rules 后处理
   -> FieldDecision[]
   -> graph mapper
   -> ExtractionResult(status + result.fields[] + trace.fields[])
@@ -486,9 +488,21 @@ trace 语义：
 - `returned_to_model=True` 表示 lookup 结果确实被传给了模型
 - `used_in_final_decision=True` 只能来自模型最终声明或后续规则显式确认，不能在 lookup 调用时直接写死
 
-### 处理单元 6：validation rule executor
+### 处理单元 6：resolution validation 后处理
 
 实现位置：`impl/resolution.py::_apply_validation_rules(...)`
+
+当前不设置独立的 `impl/validation.py`。validation 规则只在模型完成字段定案之后执行，用来对 `FieldDecision` 做通用规则校验、规则覆盖或跨字段一致性收口。它依赖 resolution 已经拿到的 `GraphState`、当前字段、已完成字段决策和 trace action 语义，因此收在 `resolution.py` 里，保持下面这条字段级链路连续：
+
+```text
+FieldResolutionDecision
+  -> 按 used_block_ids 绑定 FieldEvidence
+  -> 组装 FieldDecision
+  -> _apply_validation_rules(...)
+  -> 返回最终 FieldDecision
+```
+
+只有当规则类型明显增多、需要被 resolution 以外的节点复用，或 `resolution.py` 因规则实现变得难以维护时，才考虑重新拆出独立 validation 模块。
 
 职责：
 
@@ -705,7 +719,7 @@ broad 的结构化输出建议以字段为中心组织，每个字段对应一�
 - 当前字段是否执行过补查
 - 当前字段为什么成功或失败
 
-如果字段在 `TaskSpec.fields[].validation_rules` 中声明了通用规则，resolution 必须把这些规则视为字段级约束，而不是把规则硬编码在代码里。当前支持的规则方向包括：
+如果字段在 `TaskSpec.fields[].validation_rules` 中声明了通用规则，resolution 必须把这些规则视为字段级约束，并在模型输出字段判断之后调用 `_apply_validation_rules(...)` 做后处理，而不是把规则硬编码在 prompt、graph 或独立 validation 模块里。当前支持的规则方向包括：
 
 - `source_type=table_rows`：按声明的 `columns`、`filter`、`exclude` 和 `target_column` 从标准化表格行中筛选最小证据片段，并可覆盖模型混入的无关行。
 - `operation=count_items`：按 `source_field` 的结果条目数生成计数字段，用于保证列表字段和数量字段一致。
@@ -1082,8 +1096,9 @@ processor.extract(...)
   -> input_adapter.build_graph_input(...)
   -> impl/schemas.py::ExtractionInput
   -> broad_extraction.py 产出 FieldEvidence[]
-  -> resolution.py 读取 bundles 并生成内部决策对象
-  -> tools.py 按需补充 field reference / global lookup 记录
+  -> resolution.py 读取 bundles，并按需通过 tools.py 补充 field reference / global lookup 记录
+  -> resolution.py 生成内部决策对象
+  -> resolution.py::_apply_validation_rules(...) 执行字段级规则后处理
   -> graph.py 把内部对象映射成 schemas.py::ExtractionResult
 ```
 
