@@ -251,7 +251,7 @@ def test_run_resolution_only_uses_lookup_when_model_requests_it():
     assert decision.lookup_records[0].target_field_name == "amount"
     assert decision.lookup_records[0].returned_block_ids == ["b-lookup-1", "b-lookup-2"]
     assert decision.lookup_records[0].returned_to_model is True
-    assert decision.lookup_records[0].used_in_final_decision is False
+    assert decision.lookup_records[0].used_in_final_decision is True
 
 
 def test_run_resolution_enforces_lookup_call_limit():

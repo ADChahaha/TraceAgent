@@ -93,6 +93,7 @@ def _resolve_field_with_model(
             decision.lookup_records = _merge_lookup_records(
                 list(decision.lookup_records),
                 lookup_records,
+                used_block_ids=decision.evidence.relevant_block_ids,
             )
             return _apply_validation_rules(
                 decision=decision,
@@ -274,6 +275,8 @@ def _merge_field_reference_records(
 def _merge_lookup_records(
     current_records: list[LookupRecord],
     new_records: list[LookupRecord],
+    *,
+    used_block_ids: list[str],
 ) -> list[LookupRecord]:
     merged = list(current_records)
     seen = {
@@ -292,6 +295,9 @@ def _merge_lookup_records(
         )
         if key in seen:
             continue
+        record.used_in_final_decision = bool(
+            set(record.returned_block_ids) & set(used_block_ids)
+        )
         merged.append(record)
         seen.add(key)
     return merged

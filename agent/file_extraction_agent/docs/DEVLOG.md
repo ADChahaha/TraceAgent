@@ -1,4 +1,24 @@
-last updated: 2026-04-25 16:02:27 CST
+last updated: 2026-04-27 02:18:08 CST
+
+## 2026-04-27 02:18:08
+
+### 已完成工作
+
+- 修复 `resolution.py` 中 lookup trace 的使用标记：当模型在 `final_decision.used_block_ids` 中引用了 `lookup_blocks_for_field(...)` 返回的 block，系统会把对应 `LookupRecord.used_in_final_decision` 标记为 `True`。
+- 更新 `tests/file_extraction_agent/test_resolution.py`，固定“lookup 返回证据被最终字段定案使用时 trace action 必须标记 used”的行为。
+
+### 当前进展
+
+- `global_lookup` trace 现在可以区分“补查证据返回给模型但未参与最终定案”和“补查证据确实支撑最终字段值”。
+- `tests/file_extraction_agent` 当前全量通过：`56 passed`。
+
+### 遇到的问题
+
+- 原实现只记录 lookup 是否 `returned_to_model`，没有根据最终字段证据回填 `used_in_final_decision`，会削弱字段级 trace 的审计语义。
+
+### 下一步
+
+- 继续处理 review 中剩余问题：`table_rows` 空值覆盖、fallback block id 稳定性，以及 HTTP route 暴露 `run_options`。
 
 ## 2026-04-25 16:02:27
 
