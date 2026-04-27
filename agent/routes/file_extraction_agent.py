@@ -3,7 +3,7 @@
 实现步骤：
 
 ```text
-HTTP 调用方提交 blocks、markdown、task_spec/task_spec_name 和 metadata
+HTTP 调用方提交 blocks、markdown、显式 task_spec、run_options 和 metadata
   -> FastAPI 先用 file_extraction_agent.schemas 里的稳定输入对象解析请求体
   -> route 层不重新定义抽取业务结构，只把 HTTP JSON 转成 processor.extract(...) 的参数
   -> processor.extract(...) 负责输入适配、模型客户端构造和 graph 执行
@@ -18,11 +18,11 @@ from importlib import import_module
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from file_extraction_agent.extractor_client import ExtractorClientConfigError
-from file_extraction_agent.input_adapter import TaskSpecNotFoundError
+from file_extraction_agent.impl.schemas import RunOptions
 from file_extraction_agent.schemas import ExtractionResult, NormalizedBlock, TaskSpec
 
 
@@ -32,11 +32,13 @@ router = APIRouter(tags=["file-extraction-agent"])
 
 
 class ExtractRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     blocks: list[NormalizedBlock]
     markdown: str = ""
     md_list: list[str] = Field(default_factory=list)
     task_spec: TaskSpec | None = None
-    task_spec_name: str | None = None
+    run_options: RunOptions | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     base_url: str | None = None
     openai_api_key: str | None = None
@@ -48,7 +50,7 @@ class ExtractRequest(BaseModel):
 async def extract_fields(request: ExtractRequest) -> ExtractionResult:
     try:
         return await run_in_threadpool(_extract_fields, request)
-    except (ValueError, TaskSpecNotFoundError, ExtractorClientConfigError) as exc:
+    except (ValueError, ExtractorClientConfigError) as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
@@ -62,7 +64,7 @@ def _extract_fields(request: ExtractRequest) -> ExtractionResult:
         markdown=request.markdown,
         md_list=request.md_list,
         task_spec=request.task_spec,
-        task_spec_name=request.task_spec_name,
+        run_options=request.run_options,
         metadata=request.metadata,
         base_url=request.base_url,
         openai_api_key=request.openai_api_key,

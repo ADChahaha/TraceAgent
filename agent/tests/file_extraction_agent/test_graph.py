@@ -17,7 +17,7 @@ from file_extraction_agent.schemas import (
 
 def _build_extraction_input() -> ExtractionInput:
     return ExtractionInput(
-        blocks=[NormalizedBlock(document_id="doc-1", text="发票号：INV-900")],
+        blocks=[NormalizedBlock(document_id="doc-1", block_id="b-1", text="发票号：INV-900")],
         task_spec=TaskSpec(
             task_name="invoice",
             fields=[

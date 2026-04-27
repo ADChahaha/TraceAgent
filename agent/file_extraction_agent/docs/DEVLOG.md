@@ -1,4 +1,45 @@
-last updated: 2026-04-27 02:18:08 CST
+last updated: 2026-04-27 18:59:19 CST
+
+## 2026-04-27 18:59:19
+
+### 已完成工作
+
+- 新增 `file_extraction_agent/docs/API.md`，补齐 Python `extract(...)`、HTTP `/v1/file-extraction-agent/extract`、`blocks`、显式 `task_spec`、`run_options`、`validation_rules`、返回结构和失败语义说明。
+- 在 API 文档中明确 trace 对外稳定字段：`trace.fields[].evidence`、`related_fields`、`actions`、`reason/failure_reason`、`warnings` 和 `metadata`。
+- 在 API 文档中明确当前 trace 边界：保留证据、工具动作、规则动作和失败原因，不对外保留 raw prompt、raw model response 或完整内部 broad 原始对象。
+- 更新 `README.md`、`docs/DESIGN.md`、`agent/README.md` 和 `agent/docs/DESIGN.md` 的调用方 API 文档入口。
+
+### 当前进展
+
+- `file_extraction_agent` 的调用方文档已覆盖显式 `task_spec`、外部必传稳定唯一 `block_id`、HTTP `run_options` 和不支持 `task_spec_name` 的新契约。
+
+### 下一步
+
+- 后续如果 `keep_detailed_trace` 从预留开关变成真实返回扩展，需要同步更新 API 文档中的 trace 边界说明。
+
+## 2026-04-27 18:41:14
+
+### 已完成工作
+
+- 移除 `file_extraction_agent` 的本地 `task_specs/` / `task_spec_name` 加载入口，改为调用方必须显式传入 `task_spec`。
+- 修复 `agent-service` wheel 漏打 `file_extraction_agent.impl` 的问题，并新增 packaging 回归测试。
+- 将 `block_id` 契约收紧为 backend / session 聚合层必传：agent 只校验 `block.block_id` 存在且本次输入内唯一，缺失或重复时直接抛 `ValueError`。
+- 删除 agent 内 block id 兜底生成逻辑，不再从 `meta_info.block_id` 兜底读取，也不再基于文本或 Python `hash(...)` 生成 fallback id。
+- 为 resolution 增加字段约束后处理：`required`、`enum_values`、`money/date/boolean` 基础形状不满足时降级为 failed，并记录 `field_constraint` action。
+- 为 broad / resolution prompt 增加 `RunOptions` prompt budget，限制 blocks / evidence 数量和文本长度。
+- 修复 `validation_rules.table_rows` 的空目标列覆盖问题：命中行的 `target_column` 全为空时保留模型原始定案，不再覆盖成空字符串 resolved。
+- 修复 validation 覆盖证据后的 lookup trace 语义：按最终 `FieldDecision.evidence` 重新计算 `LookupRecord.used_in_final_decision`。
+- 为 HTTP `/v1/file-extraction-agent/extract` 暴露 `run_options`，让 prompt budget 和 lookup 开关能从 API 路径配置。
+- 同步更新 `agent/docs/DESIGN.md`、`file_extraction_agent/docs/DESIGN.md`、README 和测试说明文档。
+
+### 当前进展
+
+- `tests/file_extraction_agent` 与 `tests/routes/test_file_extraction_agent_route.py` 已通过：`70 passed`。
+- 本地 wheel 内容已确认包含 `file_extraction_agent/impl/block_ids.py`、`impl/validation.py`、`routes/file_extraction_agent.py`。
+
+### 下一步
+
+- 如后续接真实大文档，需要根据业务规模调整 prompt budget，或在外层增加检索 / 分页策略。
 
 ## 2026-04-27 02:18:08
 

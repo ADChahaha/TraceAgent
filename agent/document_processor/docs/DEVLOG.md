@@ -1,4 +1,16 @@
-last updated: 2026-04-24 12:33:50 CST
+last updated: 2026-04-27 18:59:19 CST
+
+## 2026-04-27 18:59:19 CST
+- completed work:
+  - 新增 `document_processor/docs/API.md`，补齐 Python `process(...)`、HTTP `/v1/document-processor/process`、兼容旧路径 `/v1/ocr/process`、健康检查、能力查询、输入输出结构和失败语义说明。
+  - 更新 `document_processor/README.md`、`document_processor/docs/DESIGN.md`、`agent/README.md` 和 `agent/docs/DESIGN.md`，让调用方能从顶层和包内入口找到 API 文档。
+  - 修正 `document_processor/README.md` 中关于 `pdf/docx` 仍是占位实现的旧说法，改为说明当前已落地 `docling + RapidOCR` 与 `python-docx` 两条真实处理链路。
+- current progress:
+  - `document_processor` 的调用方文档已明确 `ProcessResult`、`ContentBlock`、PDF/DOCX 行为，以及它不负责生成 `file_extraction_agent` 所需 `block_id` 的边界。
+- encountered problems:
+  - 旧 README 和当前实现存在文档漂移，容易让调用方误判 PDF / DOCX 处理能力仍未落地。
+- next step:
+  - 后续如果扩展新文件类型，继续同步更新 API 文档中的支持类型、HTTP 请求字段和返回结构。
 
 ## 2026-04-24 12:33:50 CST
 - completed work:

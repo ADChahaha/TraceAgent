@@ -1,6 +1,6 @@
 # Document Processor Design
 
-这份文档面向开发者，记录 `document_processor` 的实现分层、处理链路和设计约束。使用方式请看 [README.md](./agent/document_processor/README.md)。
+这份文档面向开发者，记录 `document_processor` 的实现分层、处理链路和设计约束。使用方式请看 [README.md](./agent/document_processor/README.md)，调用方 API 契约请看 [API.md](./agent/document_processor/docs/API.md)。
 
 ## 目标
 
@@ -140,6 +140,10 @@ file_obj
 - `impl/docx/`
   - `processor.py`：基于 `python-docx` 的 DOCX 处理器
   - 只负责 `DOCX` 的二进制读取、段落/表格遍历、markdown 导出和 block 归一化
+- `docs/`
+  - `API.md`：面向调用方的 Python / HTTP 入口、请求字段、返回结构和失败语义
+  - `DESIGN.md`：面向开发者的模块边界、处理链路和设计约束
+  - `DEVLOG.md`：按时间记录重要变更
 
 ## 重命名说明
 

@@ -73,6 +73,8 @@ def test_extraction_input_accepts_blocks_with_safe_defaults():
     assert extraction_input.blocks[0].bbox.x1 == 100
     assert extraction_input.options.max_lookup_calls_per_field == 1
     assert extraction_input.options.lookup_top_k == 3
+    assert extraction_input.options.max_prompt_blocks == 200
+    assert extraction_input.options.max_prompt_block_chars == 2000
     assert extraction_input.metadata == {}
 
 
@@ -269,6 +271,13 @@ def test_run_options_reject_non_positive_lookup_limits():
         assert "lookup_top_k" in str(exc)
     else:
         raise AssertionError("lookup_top_k 必须大于 0")
+
+    try:
+        RunOptions(max_prompt_blocks=0)
+    except ValidationError as exc:
+        assert "max_prompt_blocks" in str(exc)
+    else:
+        raise AssertionError("max_prompt_blocks 必须大于 0")
 
 
 def test_field_decision_rejects_failed_status_with_value():

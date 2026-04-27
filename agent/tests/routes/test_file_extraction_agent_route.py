@@ -12,6 +12,7 @@ from file_extraction_agent.schemas import (
     FieldTrace,
     TaskSpec,
 )
+from file_extraction_agent.impl.schemas import RunOptions
 from main import create_app
 
 
@@ -98,12 +99,63 @@ def test_file_extraction_agent_route_calls_business_extractor(monkeypatch):
     assert response.json()["result"]["fields"][0]["value"] == "INV-001"
 
 
+def test_file_extraction_agent_route_passes_run_options_to_business_extractor(monkeypatch):
+    from file_extraction_agent import processor as processor_module
+
+    seen_call: dict[str, object] = {}
+
+    def fake_extract(**kwargs):
+        seen_call.update(kwargs)
+        return ExtractionResult(
+            result=ExtractionContent(fields=[]),
+            trace=ExtractionTrace(fields=[]),
+        )
+
+    monkeypatch.setattr(processor_module, "extract", fake_extract)
+
+    client = TestClient(create_app())
+    response = client.post(
+        "/v1/file-extraction-agent/extract",
+        json={
+            "blocks": [
+                {
+                    "document_id": "doc-1",
+                    "block_id": "b1",
+                    "text": "发票号 INV-001",
+                }
+            ],
+            "task_spec": {
+                "task_name": "invoice",
+                "fields": [
+                    {
+                        "field_name": "invoice_no",
+                        "display_name": "发票号",
+                        "type": "string",
+                    }
+                ],
+            },
+            "run_options": {
+                "allow_extra_lookup": False,
+                "max_prompt_blocks": 12,
+                "max_resolution_evidence_fields": 4,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert seen_call["run_options"] == RunOptions(
+        allow_extra_lookup=False,
+        max_prompt_blocks=12,
+        max_resolution_evidence_fields=4,
+    )
+
+
 def test_file_extraction_agent_route_returns_422_for_missing_task_spec(monkeypatch):
     from file_extraction_agent import processor as processor_module
 
     def fake_extract(**kwargs):
         del kwargs
-        raise ValueError("task_spec or task_spec_name is required")
+        raise ValueError("task_spec is required")
 
     monkeypatch.setattr(processor_module, "extract", fake_extract)
 
@@ -121,4 +173,22 @@ def test_file_extraction_agent_route_returns_422_for_missing_task_spec(monkeypat
     )
 
     assert response.status_code == 422
-    assert response.json()["detail"] == "task_spec or task_spec_name is required"
+    assert response.json()["detail"] == "task_spec is required"
+
+
+def test_file_extraction_agent_route_rejects_task_spec_name_payload():
+    client = TestClient(create_app())
+    response = client.post(
+        "/v1/file-extraction-agent/extract",
+        json={
+            "blocks": [
+                {
+                    "document_id": "doc-1",
+                    "text": "发票号 INV-001",
+                }
+            ],
+            "task_spec_name": "invoice",
+        },
+    )
+
+    assert response.status_code == 422

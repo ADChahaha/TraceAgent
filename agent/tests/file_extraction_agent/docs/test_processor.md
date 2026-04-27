@@ -5,8 +5,9 @@
 `file_extraction_agent.processor` 是对外总入口。它负责：
 
 ```text
-blocks + task_spec / task_spec_name
+blocks + 显式 task_spec
   -> input_adapter.build_graph_input(...)
+  -> 校验 blocks 均带有上游传入的唯一 block_id
   -> 组装内部 ExtractionInput
   -> 准备可 invoke 的 ExtractorClient
   -> 调用 impl/graph.run_extraction_graph(extraction_input, extractor_client)
@@ -18,10 +19,11 @@ blocks + task_spec / task_spec_name
 ## 测什么
 
 - `processor` 会先把 blocks 主输入委托给 `input_adapter`
+- 直接入口的合法 blocks 必须携带显式 `block_id`
 - `processor` 会把内部 `ExtractionInput + ExtractorClient` 交给 graph
 - 未传 extractor client 且缺少连接环境变量时会要求 `base_url` / `api_key`
 - `structured_output_strategy` 会显式传给 extractor client builder
-- `task_spec_name` 可以从 `task_specs/*.json` 加载 schema
+- 缺少显式 `task_spec` 时会被拒绝
 - `processor` 直接返回 graph 的 `ExtractionResult`
 
 ## 每个函数在干什么
@@ -48,18 +50,12 @@ blocks + task_spec / task_spec_name
 - 故意不传 extractor client，也不传连接参数，并依赖测试环境没有连接环境变量。
 - 确认入口会要求 `base_url` / `api_key`，但不再要求 `model`，因为模型名已有默认值。
 
-`test_extract_loads_task_spec_from_task_spec_name`
-
-- 在临时目录写一份 task spec JSON。
-- 只传 `task_spec_name`。
-- 确认入口会先加载 task spec，再继续交给 graph。
-
 `test_extract_returns_graph_result_without_reimplementing_field_fill`
 
 - 让假的 graph 直接返回两字段结果。
 - 确认 `processor` 不会自己再补字段或重算 trace。
 
-`test_extract_rejects_missing_task_spec_and_task_spec_name`
+`test_extract_rejects_missing_task_spec`
 
 - 故意只传 `blocks`。
 - 确认入口会拒绝在 schema 未确定时继续执行。

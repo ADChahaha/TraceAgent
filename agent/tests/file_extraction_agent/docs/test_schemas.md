@@ -23,6 +23,7 @@
 - `FieldEvidence` 保留 broad 阶段的证据信息
 - 外部 `FieldResult` / `FieldTrace` 维持稳定的 `status + result + trace` 结构
 - 内部 `RunOptions` / `FieldDecision` / `LookupRecord` 维持流程对象约束
+- `RunOptions` 同时约束 lookup 调用预算和 prompt 输入预算
 - `FieldResolutionDecision` 是模型返回的轻量字段判断，不携带系统内部 evidence 对象
 - `FieldResolutionDecision.value` 的 JSON Schema 分支都带明确 `type`，避免 strict response format 被 provider 拒绝
 - lookup 调用次数、lookup 返回条数和 trace action metadata 分开表达
@@ -39,7 +40,7 @@
 
 - 构造最小合法的 `ExtractionInput`。
 - 确认内部入口对象会保留 blocks、bbox、默认 options 和 metadata。
-- 确认默认 `max_lookup_calls_per_field=1`、`lookup_top_k=3`。
+- 确认默认 `max_lookup_calls_per_field=1`、`lookup_top_k=3`、`max_prompt_blocks=200`、`max_prompt_block_chars=2000`。
 
 `test_extraction_input_parses_serialized_blocks_into_structured_models`
 
@@ -80,8 +81,8 @@
 
 `test_run_options_reject_non_positive_lookup_limits`
 
-- 分别构造非法 `max_lookup_calls_per_field=0` 和 `lookup_top_k=0`。
-- 确认内部运行选项会拒绝非正数，并且两个控制维度互不混用。
+- 分别构造非法 `max_lookup_calls_per_field=0`、`lookup_top_k=0` 和 `max_prompt_blocks=0`。
+- 确认内部运行选项会拒绝非正数，并且 lookup 与 prompt budget 控制维度互不混用。
 
 `test_field_decision_rejects_failed_status_with_value`
 

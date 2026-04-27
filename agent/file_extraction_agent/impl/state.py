@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from file_extraction_agent.impl.block_ids import validate_block_ids
 from file_extraction_agent.impl.schemas import (
     EvidenceCollection,
     ExtractionInput,
@@ -23,4 +24,7 @@ class GraphState(BaseModel):
 def build_graph_state(extraction_input: ExtractionInput) -> GraphState:
     """基于入口 `ExtractionInput` 创建一份空的执行态。"""
 
-    return GraphState(extraction_input=extraction_input)
+    normalized_input = extraction_input.model_copy(
+        update={"blocks": validate_block_ids(extraction_input.blocks)}
+    )
+    return GraphState(extraction_input=normalized_input)

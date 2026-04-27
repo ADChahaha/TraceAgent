@@ -9,13 +9,14 @@
 当前统一入口是 `processor.extract(...)`：
 
 ```text
-backend 聚合后的 blocks + task_spec / task_spec_name
+backend 聚合后的 blocks + 显式 task_spec
   -> processor.extract(...)
-  -> input_adapter.build_graph_input(...) 校验并组装内部 ExtractionInput
+  -> input_adapter.build_graph_input(...) 校验 block_id 必填且唯一，并组装内部 ExtractionInput
   -> broad_extraction.py 为每个字段预选相关 blocks 和 evidence
   -> resolution.py 逐字段调用模型做最终定案
   -> resolution.py 按模型请求调用 get_field_bundle(...) 或 lookup_blocks_for_field(...)
-  -> resolution.py::_apply_validation_rules(...) 执行 validation_rules 后处理
+  -> validation.py::apply_validation_rules(...) 执行 validation_rules 后处理
+  -> validation.py::apply_field_constraints(...) 按 FieldDefinition 做 required / enum_values / type 约束校验
   -> graph.py 把内部 FieldDecision[] 映射成对外 ExtractionResult
 ```
 
@@ -26,7 +27,7 @@ backend 聚合后的 blocks + task_spec / task_spec_name
 适合交给这个包处理的输入：
 
 - 已经标准化成 `NormalizedBlock[]`
-- 已经补齐 `document_id`、文本、页码、可选 bbox 和 block id
+- 已经补齐 `document_id`、文本、页码、可选 bbox 和稳定唯一的 `block_id`
 - 已经明确本次抽取任务的 `TaskSpec`
 - 需要返回字段级 `result` 和字段级 `trace`
 
@@ -97,11 +98,11 @@ print(result.trace.fields[0].evidence.block_ids)
 `blocks` 是主输入，类型是 `list[NormalizedBlock]`。每个 block 至少需要：
 
 - `document_id`：文档 id
+- `block_id`：backend 或 session 聚合层生成的稳定唯一 block id；缺失或重复会被拒绝
 - `text`：标准化后的块文本
 
 常用可选字段：
 
-- `block_id`：稳定 block id；如果不传，内部会根据文档、页码和文本生成引用 id
 - `page_no`：页码
 - `bbox`：标准化坐标框
 - `kind`：块类型，默认是 `text`
@@ -131,18 +132,19 @@ print(result.trace.fields[0].evidence.block_ids)
 - `lookup_hints`
 - `enum_values`
 
-调用方可以直接传 `TaskSpec`，也可以传 `task_spec_name`，让 `input_adapter.py` 从 `file_extraction_agent/task_specs/<name>.json` 加载配置。
+调用方必须直接传 `TaskSpec`。`file_extraction_agent` 当前不维护本地 `task_specs/` 目录，也不再支持 `task_spec_name` 加载；schema 选择应由 backend 或调用方在进入本包前完成。
 
 ## validation_rules
 
-`validation_rules` 不是独立模块。当前没有 `impl/validation.py`；规则后处理直接放在 `impl/resolution.py` 中：
+`validation_rules` 和基础字段约束由 `impl/validation.py` 统一后处理：
 
 ```text
 模型返回 FieldResolutionDecision
   -> resolution.py 按 used_block_ids 绑定 FieldEvidence
   -> resolution.py 组装 FieldDecision
-  -> resolution.py::_apply_validation_rules(...) 读取字段 validation_rules
+  -> validation.py::apply_validation_rules(...) 读取字段 validation_rules
   -> 如有规则，执行通用校验、覆盖或跨字段一致性收口
+  -> validation.py::apply_field_constraints(...) 检查基础字段约束
   -> 返回最终 FieldDecision
 ```
 
@@ -152,6 +154,16 @@ print(result.trace.fields[0].evidence.block_ids)
 - `operation=count_items`：按 `source_field` 的已定案结果计算条目数量，用于保证列表字段和数量字段一致。
 
 规则层只能作为模型定案后的通用约束校验或 trace 补强，不能绕过模型自行决定字段值。每次规则覆盖都应记录 `validation_rule` action，说明访问了哪些证据、应用了什么规则。
+
+`validation_rules` 执行后，系统还会按字段定义做基础约束校验：
+
+```text
+FieldDecision
+  -> 检查 required / allow_missing
+  -> 检查 enum 值是否在 enum_values 中
+  -> 检查 money / date / boolean 的基本类型形状
+  -> 不满足时把该字段降级为 failed，并记录 field_constraint action
+```
 
 ## 模型配置
 
@@ -184,7 +196,13 @@ extract(...) 显式参数
 - `allow_extra_lookup`：是否允许 resolution 模型请求全局补查
 - `max_lookup_calls_per_field`：每个字段最多允许几次补查
 - `lookup_top_k`：每次补查最多返回几个 blocks
+- `max_prompt_blocks`：broad prompt 最多携带的 blocks 数
+- `max_prompt_block_chars`：broad prompt 单个 block 文本最多保留的字符数
+- `max_resolution_evidence_fields`：resolution prompt 最多携带的字段 evidence 数，目标字段优先保留
+- `max_prompt_evidence_text_chars`：resolution prompt 单条 evidence 文本最多保留的字符数
 - `keep_detailed_trace`：预留的详细 trace 开关
+
+Python 入口和 HTTP `/v1/file-extraction-agent/extract` 都支持传入 `run_options`。
 
 ## 输出结构
 
@@ -221,17 +239,20 @@ file_extraction_agent/
 ├── impl/
 │   ├── schemas.py        # 内部流程对象
 │   ├── graph.py          # broad -> resolution 的编排和失败收口
+│   ├── block_ids.py      # block id 必填和唯一性校验
 │   ├── broad_extraction.py
-│   ├── resolution.py     # 字段定案、工具调度和 validation_rules 后处理
+│   ├── resolution.py     # 字段定案和工具调度
+│   ├── validation.py     # validation_rules 和基础字段约束后处理
 │   ├── tools.py
 │   ├── prompts.py
 │   └── state.py
 └── docs/
+    ├── API.md
     ├── DESIGN.md
     └── DEVLOG.md
 ```
 
-更完整的设计边界和实现细节见 [`docs/DESIGN.md`](docs/DESIGN.md)。
+调用方接口见 [`docs/API.md`](docs/API.md)，更完整的设计边界和实现细节见 [`docs/DESIGN.md`](docs/DESIGN.md)。
 
 ## 测试
 

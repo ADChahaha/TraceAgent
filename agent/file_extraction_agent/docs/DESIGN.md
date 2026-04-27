@@ -46,7 +46,7 @@ backend 聚合后的 all_blocks + task_spec
 
 - 原始文件解析
 - `blocks` 标准化
-- `document_id`、页码、bbox 等定位信息补齐
+- `document_id`、稳定唯一的 `block_id`、页码、bbox 等定位信息补齐
 - 任务级 schema / task spec 确定
 
 这一层不直接接收 `pdf/docx` 文件对象，只接收标准化后的 blocks 主输入。
@@ -68,11 +68,14 @@ file_extraction_agent/
 │   ├── schemas.py
 │   ├── graph.py
 │   ├── state.py
+│   ├── block_ids.py
 │   ├── prompts.py
 │   ├── broad_extraction.py
 │   ├── resolution.py
+│   ├── validation.py
 │   └── tools.py
 └── docs/
+    ├── API.md
     ├── DESIGN.md
     └── DEVLOG.md
 ```
@@ -120,6 +123,11 @@ file_extraction_agent/
   - 定义流程内部执行态
   - 供 graph、broad、resolution、tools 共用
 
+- `impl/block_ids.py`
+  - 负责校验和读取上游传入的稳定 block id
+  - 要求每个 `block.block_id` 都存在，且在本次输入内唯一
+  - 不从 `meta_info` 兜底读取，也不在 agent 内生成 fallback id；缺失或重复时直接抛 `ValueError`
+
 - `impl/prompts.py`
   - 定义 broad extraction 与 resolution agent 的提示词组装逻辑
   - 属于内部执行策略，不对外暴露 prompt override
@@ -132,8 +140,13 @@ file_extraction_agent/
   - 负责字段最终定案
   - 默认先看当前字段 broad bundle
   - 必要时调用 tools
-  - 在模型给出字段判断之后执行 `validation_rules` 通用后处理
-  - 当前不设置独立的 `impl/validation.py`；规则校验、规则覆盖和跨字段一致性收口都收在 `resolution.py` 的字段级链路里
+  - 在模型给出字段判断之后调用 `impl/validation.py` 做通用规则和基础字段约束后处理
+
+- `impl/validation.py`
+  - 负责模型定案后的确定性后处理
+  - `apply_validation_rules(...)` 执行 `TaskSpec.fields[].validation_rules` 声明的通用规则
+  - `apply_field_constraints(...)` 执行 `required`、`enum_values`、字段类型形状等基础约束校验
+  - 不负责调用模型、调度工具或自行发起字段语义定案
 
 - `impl/tools.py`
   - 放 resolution 可调用的内部工具
@@ -192,9 +205,9 @@ file_extraction_agent/
 整体流程应当按下面这条 pipeline 落到代码里：
 
 ```text
-调用方传入 backend 聚合后的 all_blocks、task_spec_name 或 task_spec
+调用方传入 backend 聚合后的 all_blocks 和显式 task_spec
   -> processor.extract(...) 先把外部参数交给 input_adapter.build_graph_input(...)
-  -> input_adapter 负责 blocks 校验、协议适配和 impl/schemas.py::ExtractionInput 组装
+  -> input_adapter 负责 blocks 校验、block_id 必填唯一校验、协议适配和 impl/schemas.py::ExtractionInput 组装
   -> 如果没传 extractor_client，就优先用显式 base_url / openai_api_key / model 构造模型调用器；缺省时读取 BASE_URL / OPENAI_API_KEY / MODEL，MODEL 仍缺省时使用默认模型
   -> impl/graph.py 从内部 ExtractionInput 开始驱动 broad extraction
   -> broad / resolution 节点内部再通过 extractor_client 发起结构化模型调用
@@ -234,7 +247,8 @@ NormalizedBlock[] + TaskSpec
       -> 可请求 lookup_blocks_for_field(...)
       -> 必须最终返回轻量字段判断 FieldResolutionDecision
   -> 系统按 used_block_ids 绑定 FieldEvidence
-  -> resolution.py::_apply_validation_rules(...) 执行 validation_rules 后处理
+  -> validation.py::apply_validation_rules(...) 执行 validation_rules 后处理
+  -> validation.py::apply_field_constraints(...) 执行基础字段约束后处理
   -> FieldDecision[]
   -> graph mapper
   -> ExtractionResult(status + result.fields[] + trace.fields[])
@@ -247,7 +261,7 @@ NormalizedBlock[] + TaskSpec
 输入：
 
 - 调用方传入的 `blocks`
-- `task_spec` 或 `task_spec_name`
+- 显式 `task_spec`
 - 可选 `markdown / md_list`
 - 可选 `run_options`
 - 可选 `metadata`
@@ -256,9 +270,10 @@ NormalizedBlock[] + TaskSpec
 
 ```text
 外部调用参数
-  -> 检查 task_spec 与 task_spec_name 至少有一个存在
-  -> 如果传了 task_spec，直接使用
-  -> 如果只传 task_spec_name，从 task_specs/<name>.json 加载
+  -> 检查 task_spec 是否存在
+  -> 检查每个 block.block_id 是否存在
+  -> 检查 block_id 在本次输入内是否唯一
+  -> 缺失或重复时直接抛 ValueError，不做 agent 内兜底生成
   -> 用 Pydantic 把 blocks / task_spec 归一化成内部对象
   -> 填充默认 RunOptions 和 metadata
   -> 返回 ExtractionInput
@@ -266,8 +281,9 @@ NormalizedBlock[] + TaskSpec
 
 失败条件：
 
-- 没有传 `task_spec` 或 `task_spec_name`，抛 `ValueError`
-- `task_spec_name` 找不到对应 JSON，抛 `TaskSpecNotFoundError`
+- 没有传 `task_spec`，抛 `ValueError("task_spec is required")`
+- 任一 block 缺少 `block_id`，抛 `ValueError("block_id is required ...")`
+- 任一 `block_id` 重复，抛 `ValueError("duplicate block_id: ...")`
 - 字段定义重复、block 结构不合法等由 Pydantic 校验抛出
 
 ### 处理单元 2：broad model
@@ -389,7 +405,8 @@ FieldResolutionAction(action=final_decision)
   -> 如果 action=get_field_bundle，执行 field bundle tool，再把 tool evidence 交回下一轮模型
   -> 如果 action=lookup_blocks，执行 global lookup tool，再把 lookup evidence / record 交回下一轮模型
   -> 重复直到模型返回 final_decision 或超过工具调用限制
-  -> 对 FieldDecision 应用 validation_rules
+  -> 调用 validation.apply_validation_rules(...) 应用 validation_rules
+  -> 调用 validation.apply_field_constraints(...) 做系统级字段约束校验
   -> 返回最终 FieldDecision
 ```
 
@@ -401,6 +418,7 @@ FieldResolutionAction(action=final_decision)
 - 模型返回了输入中不存在的 `used_block_ids`，抛 `ValueError`
 - 模型请求工具次数超过限制，抛 `ValueError`
 - 禁用 extra lookup 时模型请求 `lookup_blocks`，抛 `ValueError`
+- 模型返回的 resolved 值不满足字段约束时，系统把该字段降级为 failed，并记录 `field_constraint` action
 
 ### 处理单元 4：field bundle tool
 
@@ -488,32 +506,32 @@ trace 语义：
 - `returned_to_model=True` 表示 lookup 结果确实被传给了模型
 - `used_in_final_decision=True` 只能来自模型最终声明或后续规则显式确认，不能在 lookup 调用时直接写死
 
-### 处理单元 6：resolution validation 后处理
+### 处理单元 6：validation 后处理
 
-实现位置：`impl/resolution.py::_apply_validation_rules(...)`
+实现位置：`impl/validation.py`
 
-当前不设置独立的 `impl/validation.py`。validation 规则只在模型完成字段定案之后执行，用来对 `FieldDecision` 做通用规则校验、规则覆盖或跨字段一致性收口。它依赖 resolution 已经拿到的 `GraphState`、当前字段、已完成字段决策和 trace action 语义，因此收在 `resolution.py` 里，保持下面这条字段级链路连续：
+validation 只在模型完成字段定案之后执行，用来对 `FieldDecision` 做通用规则校验、规则覆盖、跨字段一致性收口和基础字段约束检查。它由 `resolution.py` 在组装出内部 `FieldDecision` 后显式调用，保持“模型定案”和“确定性后处理”分开：
 
 ```text
 FieldResolutionDecision
   -> 按 used_block_ids 绑定 FieldEvidence
   -> 组装 FieldDecision
-  -> _apply_validation_rules(...)
+  -> validation.apply_validation_rules(...)
+  -> validation.apply_field_constraints(...)
   -> 返回最终 FieldDecision
 ```
-
-只有当规则类型明显增多、需要被 resolution 以外的节点复用，或 `resolution.py` 因规则实现变得难以维护时，才考虑重新拆出独立 validation 模块。
 
 职责：
 
 - 在模型给出 `FieldDecision` 后，执行 task spec 中声明的通用规则
 - 做结构化校验、规则覆盖或跨字段一致性收口
+- 按字段定义检查基础输出形状，不满足时降级为 failed 并记录 `field_constraint`
 - 不代替模型发起字段定案
 
 输入：
 
 - 模型返回的 `FieldDecision`
-- 当前 `FieldDefinition.validation_rules`
+- 当前 `FieldDefinition`
 - `GraphState`
 - 已完成的 `prior_decisions`
 
@@ -523,11 +541,15 @@ FieldResolutionDecision
 FieldDecision + validation_rules
   -> 如果没有 validation_rules，原样返回 FieldDecision
   -> 如果 source_type=table_rows，从全量 blocks 中按声明的 columns/filter/exclude/target_column 选行
-  -> 将命中行转成 evidence，并覆盖模型混入的无关结果
+  -> 如果命中行的 target_column 都为空，原样返回模型 FieldDecision，不用空值覆盖
+  -> 将 target_column 非空的命中行转成 evidence，并覆盖模型混入的无关结果
   -> 记录 validation_rule action，说明规则访问了 blocks 并覆盖/校正了模型结果
   -> 如果 operation=count_items，从 source_field 的已定案结果计算条目数
   -> 记录 validation_rule action，说明结果来自跨字段计数
-  -> 返回新的 FieldDecision
+  -> apply_field_constraints(...) 检查 required / enum_values / money / date / boolean
+  -> 如果字段基础约束不满足，返回 status=failed 的 FieldDecision，并追加 field_constraint action
+  -> resolution 按最终 FieldDecision.evidence 重新标记 lookup_records.used_in_final_decision
+  -> 返回最终 FieldDecision
 ```
 
 规则层访问全量 `blocks` 是允许的，但必须满足两个条件：
@@ -611,6 +633,9 @@ ExtractionInput
 - `validation_rule`
   - schema 声明的规则访问了 blocks 或其他字段结果，并校正/覆盖了模型结果
   - metadata 中记录 `rule_type`、`source_field`、`matched_block_ids`
+- `field_constraint`
+  - 系统按 `FieldDefinition` 的 `required`、`enum_values` 或字段类型检查最终值，并发现不满足约束
+  - metadata 中记录 `constraint`、`field_type`、`value`
 - `model_call_error`
   - broad 或 resolution 阶段发生模型 API、结构化输出或节点校验失败
   - metadata 中记录 `failure_stage`、`error_type`、`error_message`
@@ -719,7 +744,7 @@ broad 的结构化输出建议以字段为中心组织，每个字段对应一�
 - 当前字段是否执行过补查
 - 当前字段为什么成功或失败
 
-如果字段在 `TaskSpec.fields[].validation_rules` 中声明了通用规则，resolution 必须把这些规则视为字段级约束，并在模型输出字段判断之后调用 `_apply_validation_rules(...)` 做后处理，而不是把规则硬编码在 prompt、graph 或独立 validation 模块里。当前支持的规则方向包括：
+如果字段在 `TaskSpec.fields[].validation_rules` 中声明了通用规则，resolution 必须把这些规则视为字段级约束，并在模型输出字段判断之后调用 `validation.apply_validation_rules(...)` 做后处理，而不是把规则硬编码在 prompt 或 graph 里。当前支持的规则方向包括：
 
 - `source_type=table_rows`：按声明的 `columns`、`filter`、`exclude` 和 `target_column` 从标准化表格行中筛选最小证据片段，并可覆盖模型混入的无关行。
 - `operation=count_items`：按 `source_field` 的结果条目数生成计数字段，用于保证列表字段和数量字段一致。
@@ -944,7 +969,7 @@ run_extraction_graph(graph_input, extractor_client) -> ExtractionResult
 其中：
 
 - `blocks`
-  是 backend 聚合后的多文档块级输入，每个 block 至少带 `document_id`、`text`、`page_no`、`bbox`、`kind`
+  是 backend 聚合后的多文档块级输入，每个 block 至少带 `document_id`、稳定唯一的 `block_id`、`text`、`page_no`、`bbox`、`kind`。`input_adapter.py` / `impl/state.py` 只校验 `block_id` 是否存在且唯一；如果上游没有给 `block_id`，会直接报错，确保后续 `used_block_ids` 和 trace refs 总是回查到明确的外部来源。
 - `task_spec`
   是当前任务的固定 schema 定义
 - `options`
@@ -1098,7 +1123,8 @@ processor.extract(...)
   -> broad_extraction.py 产出 FieldEvidence[]
   -> resolution.py 读取 bundles，并按需通过 tools.py 补充 field reference / global lookup 记录
   -> resolution.py 生成内部决策对象
-  -> resolution.py::_apply_validation_rules(...) 执行字段级规则后处理
+  -> validation.py::apply_validation_rules(...) 执行字段级规则后处理
+  -> validation.py::apply_field_constraints(...) 执行基础字段约束后处理
   -> graph.py 把内部对象映射成 schemas.py::ExtractionResult
 ```
 
@@ -1151,6 +1177,8 @@ used_block_ids
   -> 生成 evidence_texts
   -> 生成 FieldEvidenceRef(document_id, page, block_id)
   -> 组装内部 FieldDecision
+  -> validation_rules / field constraints 可能更新最终 FieldDecision
+  -> 按最终 evidence 重新计算工具记录的 used_in_final_decision
 ```
 
 #### RunOptions 当前字段
@@ -1163,10 +1191,19 @@ used_block_ids
   - 每个目标字段最多允许几次 global lookup 调用
 - `lookup_top_k`
   - 每次 global lookup 最多返回几个 blocks
+- `max_prompt_blocks`
+  - broad prompt 最多携带多少个 blocks，避免一次请求无上限增长
+- `max_prompt_block_chars`
+  - broad prompt 中单个 block 文本最多保留多少字符
+- `max_resolution_evidence_fields`
+  - resolution prompt 中最多携带多少个字段 evidence；目标字段优先保留
+- `max_prompt_evidence_text_chars`
+  - resolution prompt 中单条 evidence 文本最多保留多少字符
 - `keep_detailed_trace`
   - 是否保留更详细的内部调试信息；如果当前版本暂未展开详细 trace，也要在文档中说明它是预留开关
 
 不再把 `max_lookup_calls_per_field` 和 `lookup_top_k` 混在同一个字段里。
+prompt budget 只负责限制单次模型请求规模；如果外部任务需要更完整上下文，应在调用时显式调大这些选项，或在更外层增加检索 / 分页策略。
 
 #### 内部工具记录对象
 
@@ -1291,7 +1328,7 @@ agent 中途失败
 
 ## task spec 设计
 
-`task_specs/*.json` 负责表达固定 schema，而不是把字段规则硬编码到 prompt 里。
+`task_spec` 由调用方显式传入，负责表达固定 schema，而不是把字段规则硬编码到 prompt 里。`file_extraction_agent` 当前不再维护本地 `task_specs/*.json` 目录，也不再支持 `task_spec_name` 到本地文件的加载；schema 选择属于 backend 或调用方的职责。
 
 每个字段至少定义：
 
@@ -1355,14 +1392,14 @@ agent 中途失败
 
 重点固定这些行为：
 
-- 输入归一化与 task spec 加载
+- 输入归一化与显式 task spec 校验
 - broad extraction 只返回 evidence bundles，不返回 candidate
 - broad 输出必须覆盖所有 task spec 字段，且不能引用不存在的 block
 - resolution 能读取 broad 全量结果，并对字段级结果做最终收口
 - resolution 必须调用模型完成字段定案，不能无模型走本地 evidence 兜底
 - resolution 只有在模型请求时才调用 `get_field_bundle(...)` 或 `lookup_blocks_for_field(...)`
 - `max_lookup_calls_per_field` 只限制 lookup 调用次数，`lookup_top_k` 只限制每次 lookup 返回条数
-- 最终结果可追踪到 evidence、`related_fields` 和 `field_reference / global_lookup / validation_rule` actions
+- 最终结果可追踪到 evidence、`related_fields` 和 `field_reference / global_lookup / validation_rule / field_constraint` actions
 
 ## 文档同步要求
 

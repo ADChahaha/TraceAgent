@@ -13,6 +13,8 @@
 
 ## Usage
 
+更完整的调用方接口说明见 [`docs/API.md`](docs/API.md)。
+
 ```python
 from document_processor.processor import process
 
@@ -23,6 +25,7 @@ result = process(file_obj, file_type=None)
 
 - `file_obj` 建议传文件对象，而不是文件路径
 - `file_type` 可省略；如果文件名可识别，会自动推断
+- HTTP 入口是 `POST /v1/document-processor/process`，兼容旧路径 `POST /v1/ocr/process`
 
 ## 当前实现结构
 
@@ -57,11 +60,12 @@ file_obj
 
 ## 当前行为说明
 
-- 当前 `pdf` 和 `docx` 已经有内部注册入口
-- 当前注册的 `pdf/docx` 处理器还是占位实现，主要用于固定编排结构和扩展方式
-- 真实的 PDF / DOCX 解析算法后续应放到 `impl/` 下的具体处理器类里
+- 当前 `pdf` 和 `docx` 已经有内部注册入口和真实处理器
+- `pdf` 固定走 `docling + RapidOCR`
+- `docx` 固定走 `python-docx`
+- 输出的 `blocks` 不包含 `block_id`；如果要继续交给 `file_extraction_agent`，应由 backend 或 session 聚合层补齐稳定唯一 `block_id`
 - `.doc` 当前仍不支持
 
 ## 当前阶段说明
 
-这一层现在已经把“外层编排 / 内部固定接口 / 具体处理器基类 / 注册式扩展”这套骨架固定下来了。下一步补真实算法时，应该直接在 `impl/` 下增加具体处理器类，并通过内部注册机制挂到 `InternalProcessorInterface` 上，而不是回到手写分支分发。
+这一层现在已经把“外层编排 / 内部固定接口 / 具体处理器基类 / 注册式扩展”这套结构固定下来，并落地了 PDF / DOCX 两条真实解析链路。后续增加新文件类型时，应直接在 `impl/` 下增加具体处理器类，并通过内部注册机制挂到 `InternalProcessorInterface` 上，而不是回到手写分支分发。

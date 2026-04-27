@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from file_extraction_agent.impl.block_ids import require_block_id, validate_block_ids
 from file_extraction_agent.impl.schemas import EvidenceCollection, ExtractionInput
 
 
@@ -33,6 +34,7 @@ def build_broad_extraction_messages(extraction_input: ExtractionInput) -> list[d
                     "blocks": _serialize_blocks(extraction_input),
                     "options": extraction_input.options.model_dump(),
                     "metadata": extraction_input.metadata,
+                    "prompt_budget": _broad_prompt_budget(extraction_input),
                 },
                 ensure_ascii=False,
             ),
@@ -58,10 +60,15 @@ def build_field_resolution_messages(
         ),
         None,
     )
+    budgeted_evidence = _budgeted_evidence_collection(
+        extraction_input=extraction_input,
+        evidence_collection=evidence_collection,
+        target_field_name=target_field_name,
+    )
     target_evidence = next(
         (
             field_evidence
-            for field_evidence in evidence_collection.fields
+            for field_evidence in budgeted_evidence.fields
             if field_evidence.field_name == target_field_name
         ),
         None,
@@ -122,10 +129,15 @@ def build_field_resolution_messages(
                     ),
                     "all_field_evidence": [
                         field_evidence.model_dump()
-                        for field_evidence in evidence_collection.fields
+                        for field_evidence in budgeted_evidence.fields
                     ],
                     "tool_evidence": tool_evidence or [],
                     "tool_records": tool_records or [],
+                    "prompt_budget": _resolution_prompt_budget(
+                        extraction_input=extraction_input,
+                        evidence_collection=evidence_collection,
+                        budgeted_evidence=budgeted_evidence,
+                    ),
                 },
                 ensure_ascii=False,
             ),
@@ -152,4 +164,86 @@ def _serialize_task_fields(extraction_input: ExtractionInput) -> list[dict[str, 
 
 
 def _serialize_blocks(extraction_input: ExtractionInput) -> list[dict[str, Any]]:
-    return [block.model_dump() for block in extraction_input.blocks]
+    blocks = validate_block_ids(extraction_input.blocks)
+    limited_blocks = blocks[: extraction_input.options.max_prompt_blocks]
+    serialized_blocks: list[dict[str, Any]] = []
+    for block in limited_blocks:
+        payload = block.model_dump()
+        payload["block_id"] = require_block_id(block)
+        payload["text"] = _truncate_text(
+            block.text,
+            max_chars=extraction_input.options.max_prompt_block_chars,
+        )
+        serialized_blocks.append(payload)
+    return serialized_blocks
+
+
+def _budgeted_evidence_collection(
+    *,
+    extraction_input: ExtractionInput,
+    evidence_collection: EvidenceCollection,
+    target_field_name: str,
+) -> EvidenceCollection:
+    target_evidence = [
+        field_evidence
+        for field_evidence in evidence_collection.fields
+        if field_evidence.field_name == target_field_name
+    ]
+    other_evidence = [
+        field_evidence
+        for field_evidence in evidence_collection.fields
+        if field_evidence.field_name != target_field_name
+    ]
+    max_fields = extraction_input.options.max_resolution_evidence_fields
+    selected_fields = [*target_evidence, *other_evidence][:max_fields]
+    return EvidenceCollection(
+        fields=[
+            field_evidence.model_copy(
+                update={
+                    "evidence_texts": [
+                        _truncate_text(
+                            text,
+                            max_chars=extraction_input.options.max_prompt_evidence_text_chars,
+                        )
+                        for text in field_evidence.evidence_texts
+                    ]
+                }
+            )
+            for field_evidence in selected_fields
+        ]
+    )
+
+
+def _broad_prompt_budget(extraction_input: ExtractionInput) -> dict[str, Any]:
+    total_blocks = len(extraction_input.blocks)
+    included_blocks = min(total_blocks, extraction_input.options.max_prompt_blocks)
+    return {
+        "total_block_count": total_blocks,
+        "included_block_count": included_blocks,
+        "omitted_block_count": total_blocks - included_blocks,
+        "max_prompt_blocks": extraction_input.options.max_prompt_blocks,
+        "max_prompt_block_chars": extraction_input.options.max_prompt_block_chars,
+    }
+
+
+def _resolution_prompt_budget(
+    *,
+    extraction_input: ExtractionInput,
+    evidence_collection: EvidenceCollection,
+    budgeted_evidence: EvidenceCollection,
+) -> dict[str, Any]:
+    total_fields = len(evidence_collection.fields)
+    included_fields = len(budgeted_evidence.fields)
+    return {
+        "total_field_evidence_count": total_fields,
+        "included_field_evidence_count": included_fields,
+        "omitted_field_evidence_count": total_fields - included_fields,
+        "max_resolution_evidence_fields": extraction_input.options.max_resolution_evidence_fields,
+        "max_prompt_evidence_text_chars": extraction_input.options.max_prompt_evidence_text_chars,
+    }
+
+
+def _truncate_text(text: str, *, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars]

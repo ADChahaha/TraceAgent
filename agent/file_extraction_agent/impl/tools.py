@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from file_extraction_agent.impl.block_ids import require_block_id
 from file_extraction_agent.impl.schemas import (
     EvidenceCollection,
     FieldEvidence,
@@ -46,7 +47,7 @@ def lookup_blocks_for_field(
         target_field_name=target_field_name,
         lookup_reason=query_reason,
         lookup_hints=hints,
-        returned_block_ids=[_block_id(block) for block in matched_blocks],
+        returned_block_ids=[require_block_id(block) for block in matched_blocks],
         returned_refs=[_block_ref(block) for block in matched_blocks],
     )
     return LookupResult(matched_blocks=matched_blocks, record=record)
@@ -66,18 +67,9 @@ def _score_block(
     return score
 
 
-def _block_id(block: NormalizedBlock) -> str:
-    if block.block_id:
-        return block.block_id
-    meta_block_id = block.meta_info.get("block_id")
-    if meta_block_id:
-        return str(meta_block_id)
-    return f"{block.document_id}:{block.page_no or 0}:{abs(hash(block.text))}"
-
-
 def _block_ref(block: NormalizedBlock) -> FieldEvidenceRef:
     return FieldEvidenceRef(
         document_id=block.document_id,
         page=block.page_no,
-        block_id=_block_id(block),
+        block_id=require_block_id(block),
     )

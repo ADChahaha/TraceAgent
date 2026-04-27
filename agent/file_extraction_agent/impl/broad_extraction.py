@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from file_extraction_agent.impl.block_ids import require_block_id
 from file_extraction_agent.impl.prompts import build_broad_extraction_messages
 from file_extraction_agent.impl.schemas import EvidenceCollection
 from file_extraction_agent.impl.state import GraphState
-from file_extraction_agent.schemas import NormalizedBlock
 
 
 def run_broad_extraction(
@@ -57,7 +57,7 @@ def _validate_evidence_collection(
     if missing_fields:
         raise ValueError(f"missing broad evidence fields: {', '.join(missing_fields)}")
 
-    known_block_ids = {_block_id(block) for block in state.extraction_input.blocks}
+    known_block_ids = {require_block_id(block) for block in state.extraction_input.blocks}
     unknown_block_ids: set[str] = set()
     for field_evidence in evidence_collection.fields:
         unknown_block_ids.update(
@@ -74,12 +74,3 @@ def _validate_evidence_collection(
     if unknown_block_ids:
         unknown = ", ".join(sorted(unknown_block_ids))
         raise ValueError(f"unknown broad evidence block ids: {unknown}")
-
-
-def _block_id(block: NormalizedBlock) -> str:
-    if block.block_id:
-        return block.block_id
-    meta_block_id = block.meta_info.get("block_id")
-    if meta_block_id:
-        return str(meta_block_id)
-    return f"{block.document_id}:{block.page_no or 0}:{abs(hash(block.text))}"

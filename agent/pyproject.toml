@@ -31,15 +31,13 @@ dev = [
 py-modules = ["main"]
 packages = [
     "file_extraction_agent",
+    "file_extraction_agent.impl",
     "document_processor",
     "document_processor.impl",
     "document_processor.impl.docx",
     "document_processor.impl.pdf",
     "routes",
 ]
-
-[tool.setuptools.package-data]
-file_extraction_agent = ["task_specs/*.json", "model_client_config.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -76,10 +76,17 @@ python -m uvicorn main:app --reload --port 8000
 文档见：
 
 - [document_processor/README.md](document_processor/README.md)
+- [document_processor/docs/API.md](document_processor/docs/API.md)
 - [document_processor/docs/DESIGN.md](document_processor/docs/DESIGN.md)
 
 ### `file_extraction_agent`
 
 负责在标准化后的多文档内容上做字段抽取，输出候选和最终结果。
 
-更具体的实现边界和流程说明见 [docs/DESIGN.md](docs/DESIGN.md)。
+文档见：
+
+- [file_extraction_agent/README.md](file_extraction_agent/README.md)
+- [file_extraction_agent/docs/API.md](file_extraction_agent/docs/API.md)
+- [file_extraction_agent/docs/DESIGN.md](file_extraction_agent/docs/DESIGN.md)
+
+更具体的服务级实现边界和流程说明见 [docs/DESIGN.md](docs/DESIGN.md)。

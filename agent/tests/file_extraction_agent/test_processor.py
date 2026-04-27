@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-
 from file_extraction_agent import extractor_client as extractor_client_module
 from file_extraction_agent import processor as processor_module
 from file_extraction_agent.impl.schemas import ExtractionInput
@@ -117,7 +115,7 @@ def test_extract_delegates_execution_to_graph_with_built_client():
     processor_module.run_extraction_graph = fake_run_extraction_graph
 
     result = processor_module.extract(
-        blocks=[NormalizedBlock(document_id="doc-1", text="发票号码：INV-001", page_no=1)],
+        blocks=[NormalizedBlock(document_id="doc-1", block_id="b-1", text="发票号码：INV-001", page_no=1)],
         task_spec=TaskSpec(
             task_name="invoice",
             fields=[
@@ -163,7 +161,7 @@ def test_extract_passes_structured_output_strategy_to_client_builder(monkeypatch
     monkeypatch.setattr(processor_module, "run_extraction_graph", fake_run_extraction_graph, raising=False)
 
     processor_module.extract(
-        blocks=[NormalizedBlock(document_id="doc-1", text="内容")],
+        blocks=[NormalizedBlock(document_id="doc-1", block_id="b-1", text="内容")],
         task_spec=TaskSpec(
             task_name="invoice",
             fields=[
@@ -189,7 +187,7 @@ def test_extract_passes_structured_output_strategy_to_client_builder(monkeypatch
 def test_extract_requires_explicit_connection_params_when_client_is_not_provided():
     try:
         processor_module.extract(
-            blocks=[NormalizedBlock(document_id="doc-1", text="内容")],
+            blocks=[NormalizedBlock(document_id="doc-1", block_id="b-1", text="内容")],
             task_spec=TaskSpec(
                 task_name="invoice",
                 fields=[
@@ -208,51 +206,6 @@ def test_extract_requires_explicit_connection_params_when_client_is_not_provided
         assert "model" not in message
     else:
         raise AssertionError("未传 extractor_client 且缺少连接环境变量时应要求连接参数")
-
-
-def test_extract_loads_task_spec_from_task_spec_name(monkeypatch, tmp_path):
-    task_spec_dir = tmp_path / "task_specs"
-    task_spec_dir.mkdir()
-    (task_spec_dir / "invoice.json").write_text(
-        json.dumps(
-            {
-                "task_name": "invoice",
-                "fields": [
-                    {
-                        "field_name": "invoice_no",
-                        "display_name": "发票号",
-                        "type": "string",
-                        "required": True,
-                    }
-                ],
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(processor_module, "TASK_SPECS_DIR", task_spec_dir)
-
-    def fake_run_extraction_graph(*, extraction_input, extractor_client):
-        del extractor_client
-        assert extraction_input.task_spec.task_name == "invoice"
-        return _build_result(
-            status="failed",
-            value=None,
-            reason=None,
-            failure_reason="未找到可用证据",
-        )
-
-    monkeypatch.setattr(processor_module, "run_extraction_graph", fake_run_extraction_graph, raising=False)
-
-    result = processor_module.extract(
-        blocks=[NormalizedBlock(document_id="doc-2", text="空白")],
-        task_spec_name="invoice",
-        extractor_client=object(),
-    )
-
-    assert result.result.fields[0].field_name == "invoice_no"
-    assert result.result.fields[0].status == "failed"
-    assert result.trace.fields[0].failure_reason == "未找到可用证据"
 
 
 def test_extract_returns_graph_result_without_reimplementing_field_fill():
@@ -287,7 +240,7 @@ def test_extract_returns_graph_result_without_reimplementing_field_fill():
     processor_module.run_extraction_graph = fake_run_extraction_graph
 
     result = processor_module.extract(
-        blocks=[NormalizedBlock(document_id="doc-3", text="只命中一个字段")],
+        blocks=[NormalizedBlock(document_id="doc-3", block_id="b-1", text="只命中一个字段")],
         task_spec=TaskSpec(
             task_name="invoice",
             fields=[
@@ -303,10 +256,10 @@ def test_extract_returns_graph_result_without_reimplementing_field_fill():
     assert result.result.fields[1].status == "failed"
 
 
-def test_extract_rejects_missing_task_spec_and_task_spec_name():
+def test_extract_rejects_missing_task_spec():
     try:
         processor_module.extract(blocks=[NormalizedBlock(document_id="doc-4", text="")])
     except ValueError as exc:
-        assert "task_spec" in str(exc)
+        assert "task_spec is required" in str(exc)
     else:
-        raise AssertionError("缺少 task_spec 和 task_spec_name 时应拒绝继续执行")
+        raise AssertionError("缺少显式 task_spec 时应拒绝继续执行")

@@ -7,6 +7,7 @@
 ```text
 ExtractionInput + ExtractorClient
   -> build_graph_state(extraction_input)
+  -> 确认进入图的 blocks 已带有上游 block_id
   -> run_broad_extraction(state, extractor_client)
   -> run_resolution(state, extractor_client)
   -> 读取 state.field_decisions / state.warnings
@@ -18,6 +19,7 @@ ExtractionInput + ExtractorClient
 ## 测什么
 
 - graph 会先跑 broad，再跑 resolution
+- graph 入口依赖 input adapter 已校验过的显式 `block_id`
 - resolution 读取的是 broad 写回后的同一个状态对象
 - graph 会把同一个 `extractor_client` 继续传给 resolution 阶段
 - graph 最后会把内部 `FieldDecision` 映射成外部 `FieldResult` / `FieldTrace`

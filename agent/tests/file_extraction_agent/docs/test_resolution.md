@@ -2,7 +2,7 @@
 
 ## 基本实现思路
 
-`file_extraction_agent.impl.resolution` 负责把 broad 阶段的 `FieldEvidence` 交给模型做字段级最终定案。代码只负责编排模型动作、执行模型请求的工具、应用通用 `validation_rules`，不能在没有模型输出的情况下把 evidence 文本自行改成最终字段值。
+`file_extraction_agent.impl.resolution` 负责把 broad 阶段的 `FieldEvidence` 交给模型做字段级最终定案。代码只负责编排模型动作、执行模型请求的工具，并在模型输出后调用 `impl.validation` 做确定性后处理；不能在没有模型输出的情况下把 evidence 文本自行改成最终字段值。
 
 ```text
 GraphState.evidence_collection + TaskSpec.fields + extractor_client
@@ -16,7 +16,9 @@ GraphState.evidence_collection + TaskSpec.fields + extractor_client
   -> 如果模型返回 get_field_bundle，读取对应字段 broad bundle 并记录 field_reference action
   -> 把 trace-action 形状的 tool_records / tool_evidence 追加进下一轮该字段模型请求
   -> 最终仍由模型返回轻量字段判断
-  -> 应用通用 validation_rules 后写回 GraphState.field_decisions
+  -> 调用 validation.apply_validation_rules(...) 应用通用 validation_rules
+  -> 调用 validation.apply_field_constraints(...) 按 FieldDefinition 做 required / enum_values / type 基础约束校验
+  -> 写回 GraphState.field_decisions
 ```
 
 lookup 的触发点必须来自模型动作：即使 broad 阶段缺证据、全量 blocks 中存在可匹配内容，系统也不能自己调用 lookup 并自行定案。
@@ -28,7 +30,9 @@ lookup 的触发点必须来自模型动作：即使 broad 阶段缺证据、全
 - resolution 按 `task_spec.fields` 逐字段请求 `FieldResolutionAction`。
 - 模型 final decision 只需要给 `used_block_ids`，系统负责绑定 evidence / refs。
 - 模型返回不存在的 `used_block_ids` 时会被拒绝。
+- 模型返回结构合法但不满足字段定义的值时，系统会把字段降级为 failed 并记录 `field_constraint` action。
 - lookup 只在模型返回 `lookup_blocks` 动作时执行，并把 `global_lookup` action 并入最终 trace。
+- validation 覆盖最终 evidence 后，lookup 的 `used_in_final_decision` 会按覆盖后的 evidence 重新计算。
 - `max_lookup_calls_per_field` 限制 lookup 调用次数，`lookup_top_k` 限制每次返回的 blocks 数量。
 - 模型请求 `get_field_bundle` 时会记录 `field_reference` action。
 - 模型没有请求 lookup 时，缺证据字段保持模型给出的失败结果。
@@ -57,12 +61,24 @@ lookup 的触发点必须来自模型动作：即使 broad 阶段缺证据、全
 - fake 模型返回一个不存在的 `used_block_ids`。
 - 确认 resolution 在组装内部 `FieldDecision` 前拒绝该结果，避免 trace 指向不可追踪来源。
 
+`test_run_resolution_downgrades_invalid_enum_value_to_failed_decision`
+
+- fake 模型对 enum 字段返回一个不在 `enum_values` 内的 resolved 值。
+- 确认系统不把该结果当成已解决字段，而是降级为 failed。
+- 确认 trace 中记录 `field_constraint` action，说明失败来自字段约束校验。
+
 `test_run_resolution_only_uses_lookup_when_model_requests_it`
 
 - fake 模型第一轮返回 `lookup_blocks` 动作。
 - 确认系统按模型请求执行 lookup，并在第二轮把 trace-action 形状的 `tool_records` 交回模型。
 - 确认 `lookup_top_k=2` 会返回两条 block id。
 - 确认最终 `FieldDecision` 中保留 lookup 记录，且只标记 `returned_to_model=True`，不在 lookup 调用时直接假定 `used_in_final_decision=True`。
+
+`test_run_resolution_recomputes_lookup_usage_after_validation_override`
+
+- fake 模型先请求 lookup，并在 final decision 中引用 lookup 返回的 block。
+- validation_rules 随后用表格规则把最终 evidence 覆盖到另一个 block。
+- 确认最终 lookup record 仍保留 returned 记录，但 `used_in_final_decision=False`。
 
 `test_run_resolution_enforces_lookup_call_limit`
 

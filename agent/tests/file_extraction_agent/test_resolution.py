@@ -170,6 +170,62 @@ def test_run_resolution_rejects_unknown_used_block_ids_from_model_decision():
         run_resolution(state=state, extractor_client=FakeExtractorClient())
 
 
+def test_run_resolution_downgrades_invalid_enum_value_to_failed_decision():
+    from file_extraction_agent.impl.resolution import run_resolution
+    from file_extraction_agent.impl.schemas import FieldResolutionAction
+
+    class FakeExtractorClient:
+        def invoke(self, *, output_schema, messages):
+            del output_schema, messages
+            return FieldResolutionAction(
+                action="final_decision",
+                target_field_name="approval_status",
+                decision=FieldResolutionDecision(
+                    status="resolved",
+                    value="pending",
+                    used_block_ids=["b-status"],
+                    reason="模型返回了 schema 外状态",
+                ),
+            )
+
+    extraction_input = ExtractionInput(
+        blocks=[NormalizedBlock(document_id="doc-1", block_id="b-status", text="状态：pending")],
+        task_spec=TaskSpec(
+            task_name="approval",
+            fields=[
+                FieldDefinition(
+                    field_name="approval_status",
+                    display_name="审批状态",
+                    type="enum",
+                    enum_values=["approved", "rejected"],
+                    required=True,
+                )
+            ],
+        ),
+    )
+    state = build_graph_state(extraction_input)
+    state.evidence_collection = EvidenceCollection(
+        fields=[
+            FieldEvidence(
+                field_name="approval_status",
+                relevant_block_ids=["b-status"],
+                evidence_texts=["状态：pending"],
+                local_status="evidence_found",
+            )
+        ]
+    )
+
+    run_resolution(state=state, extractor_client=FakeExtractorClient())
+
+    decision = state.field_decisions[0]
+    assert decision.status == "failed"
+    assert decision.value is None
+    assert "enum_values" in decision.failure_reason
+    action = decision.to_field_trace().actions[0]
+    assert action.action_type == "field_constraint"
+    assert action.metadata["constraint"] == "enum_values"
+
+
 def test_run_resolution_only_uses_lookup_when_model_requests_it():
     from file_extraction_agent.impl.resolution import run_resolution
     from file_extraction_agent.impl.schemas import FieldResolutionAction
@@ -252,6 +308,83 @@ def test_run_resolution_only_uses_lookup_when_model_requests_it():
     assert decision.lookup_records[0].returned_block_ids == ["b-lookup-1", "b-lookup-2"]
     assert decision.lookup_records[0].returned_to_model is True
     assert decision.lookup_records[0].used_in_final_decision is True
+
+
+def test_run_resolution_recomputes_lookup_usage_after_validation_override():
+    from file_extraction_agent.impl.resolution import run_resolution
+    from file_extraction_agent.impl.schemas import FieldResolutionAction
+
+    class FakeExtractorClient:
+        def __init__(self):
+            self.payloads = []
+
+        def invoke(self, *, output_schema, messages):
+            assert output_schema is FieldResolutionAction
+            payload = json.loads(messages[1]["content"])
+            self.payloads.append(payload)
+            if len(self.payloads) == 1:
+                return FieldResolutionAction(
+                    action="lookup_blocks",
+                    target_field_name="selected_rooms",
+                    query_reason="需要补查 selected_rooms",
+                    lookup_hints=["selected_rooms"],
+                )
+            return FieldResolutionAction(
+                action="final_decision",
+                target_field_name="selected_rooms",
+                decision=FieldResolutionDecision(
+                    status="resolved",
+                    value="错误房间",
+                    used_block_ids=["b-lookup"],
+                    reason="模型先使用 lookup 结果定案",
+                ),
+            )
+
+    field = FieldDefinition(
+        field_name="selected_rooms",
+        display_name="选中房间",
+        type="string",
+        validation_rules={
+            "source_type": "table_rows",
+            "columns": ["building", "room", "status"],
+            "target_column": "room",
+            "filter": {"column": "status", "equals": "selected"},
+        },
+        lookup_hints=["selected_rooms"],
+    )
+    extraction_input = ExtractionInput(
+        blocks=[
+            NormalizedBlock(
+                document_id="doc-1",
+                block_id="b-lookup",
+                text="selected_rooms 错误房间",
+            ),
+            NormalizedBlock(
+                document_id="doc-1",
+                block_id="b-table",
+                kind="table",
+                text=(
+                    "| building | room | status | "
+                    "|---|---|---| "
+                    "| B1 | A101 | selected |"
+                ),
+            ),
+        ],
+        task_spec=TaskSpec(task_name="room-selection", fields=[field]),
+        options=RunOptions(max_lookup_calls_per_field=1, lookup_top_k=1),
+    )
+    state = build_graph_state(extraction_input)
+    state.evidence_collection = EvidenceCollection(
+        fields=[FieldEvidence(field_name="selected_rooms", local_status="missing")]
+    )
+
+    run_resolution(state=state, extractor_client=FakeExtractorClient())
+
+    decision = state.field_decisions[0]
+    assert decision.value == "A101"
+    assert decision.evidence.relevant_block_ids == ["b-table"]
+    assert decision.lookup_records[0].returned_block_ids == ["b-lookup"]
+    assert decision.lookup_records[0].used_in_final_decision is False
 
 
 def test_run_resolution_enforces_lookup_call_limit():

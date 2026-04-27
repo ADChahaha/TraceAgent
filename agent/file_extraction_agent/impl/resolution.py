@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
+from file_extraction_agent.impl.block_ids import require_block_id
 from file_extraction_agent.impl.prompts import build_field_resolution_messages
 from file_extraction_agent.impl.schemas import (
     FieldDecision,
@@ -16,7 +16,8 @@ from file_extraction_agent.impl.schemas import (
 )
 from file_extraction_agent.impl.state import GraphState
 from file_extraction_agent.impl.tools import get_field_bundle, lookup_blocks_for_field
-from file_extraction_agent.schemas import FieldDefinition, FieldEvidenceRef, NormalizedBlock, TraceAction
+from file_extraction_agent.impl.validation import apply_field_constraints, apply_validation_rules
+from file_extraction_agent.schemas import FieldDefinition, FieldEvidenceRef
 
 
 def run_resolution(*, state: GraphState, extractor_client: Any | None = None) -> GraphState:
@@ -95,12 +96,14 @@ def _resolve_field_with_model(
                 lookup_records,
                 used_block_ids=decision.evidence.relevant_block_ids,
             )
-            return _apply_validation_rules(
+            decision = apply_validation_rules(
                 decision=decision,
                 field=field,
                 state=state,
                 prior_decisions=prior_decisions,
             )
+            decision = apply_field_constraints(decision=decision, field=field)
+            return _refresh_tool_record_usage(decision)
 
         if action.action == "get_field_bundle":
             requested_field_name = action.requested_field_name or ""
@@ -189,7 +192,7 @@ def _evidence_from_used_block_ids(
             status=status,
         )
 
-    blocks_by_id = {_block_id(block): block for block in state.extraction_input.blocks}
+    blocks_by_id = {require_block_id(block): block for block in state.extraction_input.blocks}
     ordered_block_ids = _deduplicate_preserving_order([block_id for block_id in used_block_ids if block_id])
     unknown_block_ids = [block_id for block_id in ordered_block_ids if block_id not in blocks_by_id]
     if unknown_block_ids:
@@ -205,7 +208,7 @@ def _evidence_from_used_block_ids(
             FieldEvidenceRef(
                 document_id=block.document_id,
                 page=block.page_no,
-                block_id=_block_id(block),
+                block_id=require_block_id(block),
             )
             for block in blocks
         ],
@@ -303,211 +306,16 @@ def _merge_lookup_records(
     return merged
 
 
-def _apply_validation_rules(
-    *,
-    decision: FieldDecision,
-    field: FieldDefinition,
-    state: GraphState,
-    prior_decisions: list[FieldDecision],
-) -> FieldDecision:
-    rules = field.validation_rules
-    if not rules:
-        return decision
+def _refresh_tool_record_usage(decision: FieldDecision) -> FieldDecision:
+    """按最终 evidence 重新标记工具记录是否支撑最终定案。"""
 
-    if rules.get("source_type") == "table_rows":
-        return _apply_table_row_rules(decision=decision, field=field, state=state)
-
-    if rules.get("operation") == "count_items":
-        return _apply_count_items_rule(decision=decision, field=field, prior_decisions=prior_decisions)
-
+    final_block_ids = set(decision.evidence.relevant_block_ids)
+    final_related_fields = set(decision.related_fields)
+    for record in decision.field_reference_records:
+        record.used_in_final_decision = record.requested_field_name in final_related_fields
+    for record in decision.lookup_records:
+        record.used_in_final_decision = bool(set(record.returned_block_ids) & final_block_ids)
     return decision
-
-
-def _apply_table_row_rules(
-    *,
-    decision: FieldDecision,
-    field: FieldDefinition,
-    state: GraphState,
-) -> FieldDecision:
-    matched_rows = _select_table_rows(
-        blocks=state.extraction_input.blocks,
-        rules=field.validation_rules,
-    )
-    target_column = field.validation_rules.get("target_column")
-    if not target_column or not matched_rows:
-        return decision
-
-    output_rules = field.validation_rules.get("output", {})
-    values = [row["values"].get(target_column, "") for row in matched_rows]
-    values = [value for value in values if value]
-    if output_rules.get("deduplicate"):
-        values = _deduplicate_preserving_order(values)
-
-    separator = output_rules.get("separator", "、")
-    evidence = FieldEvidence(
-        field_name=field.field_name,
-        relevant_block_ids=_deduplicate_preserving_order(
-            [row["block_id"] for row in matched_rows]
-        ),
-        evidence_texts=[row["text"] for row in matched_rows],
-        evidence_refs=[row["ref"] for row in matched_rows],
-        local_status="validated_by_rules",
-        local_notes=["按 validation_rules.table_rows 从标准化 blocks 重新筛选证据"],
-    )
-    return FieldDecision(
-        field_name=field.field_name,
-        status="resolved",
-        value=separator.join(values),
-        evidence=evidence,
-        related_fields=list(decision.related_fields),
-        field_reference_records=list(decision.field_reference_records),
-        lookup_records=list(decision.lookup_records),
-        trace_actions=[
-            *list(decision.trace_actions),
-            TraceAction(
-                action_type="validation_rule",
-                message="按 validation_rules.table_rows 从标准化 blocks 重新筛选证据",
-                refs=[row["ref"] for row in matched_rows],
-                used_in_final_decision=True,
-                metadata={
-                    "rule_type": "table_rows",
-                    "matched_block_ids": _deduplicate_preserving_order(
-                        [row["block_id"] for row in matched_rows]
-                    ),
-                    "target_column": target_column,
-                },
-            ),
-        ],
-        reason="按字段 validation_rules 从表格行筛选并覆盖模型定案结果",
-    )
-
-
-def _apply_count_items_rule(
-    *,
-    decision: FieldDecision,
-    field: FieldDefinition,
-    prior_decisions: list[FieldDecision],
-) -> FieldDecision:
-    source_field = field.validation_rules.get("source_field")
-    if not source_field:
-        return decision
-
-    source_decision = next(
-        (item for item in prior_decisions if item.field_name == source_field),
-        None,
-    )
-    if source_decision is None or source_decision.status != "resolved":
-        return decision
-
-    separator = field.validation_rules.get("separator")
-    values = _split_items(source_decision.value, separator=separator)
-    return FieldDecision(
-        field_name=field.field_name,
-        status="resolved",
-        value=str(len(values)),
-        evidence=source_decision.evidence,
-        related_fields=_deduplicate_preserving_order(
-            [*decision.related_fields, source_field]
-        ),
-        field_reference_records=list(decision.field_reference_records),
-        lookup_records=list(decision.lookup_records),
-        trace_actions=[
-            *list(decision.trace_actions),
-            TraceAction(
-                action_type="validation_rule",
-                message=f"按 validation_rules 从字段 {source_field} 的条目数计算得到",
-                refs=list(source_decision.evidence.evidence_refs),
-                used_in_final_decision=True,
-                metadata={
-                    "rule_type": "count_items",
-                    "source_field": source_field,
-                },
-            ),
-        ],
-        reason=f"按 validation_rules 从字段 {source_field} 的条目数计算得到",
-    )
-
-
-def _select_table_rows(
-    *,
-    blocks: list[NormalizedBlock],
-    rules: dict[str, Any],
-) -> list[dict[str, Any]]:
-    columns = rules.get("columns") or []
-    matched_rows: list[dict[str, Any]] = []
-    for block in blocks:
-        for row in _extract_table_rows(block.text, columns=columns):
-            values = row["values"]
-            if not _matches_condition(values, rules.get("filter")):
-                continue
-            if any(_matches_condition(values, condition) for condition in rules.get("exclude", [])):
-                continue
-            matched_rows.append(
-                {
-                    "values": values,
-                    "text": row["text"],
-                    "block_id": _block_id(block),
-                    "ref": FieldEvidenceRef(
-                        document_id=block.document_id,
-                        page=block.page_no,
-                        block_id=_block_id(block),
-                        span=row["text"],
-                    ),
-                }
-            )
-    return matched_rows
-
-
-def _extract_table_rows(text: str, *, columns: list[str]) -> list[dict[str, Any]]:
-    column_count = len(columns)
-    if column_count == 0:
-        return []
-
-    row_pattern = "\\|" + "".join(r"\s*([^|]*)\s*\|" for _ in range(column_count))
-    rows: list[dict[str, Any]] = []
-    for match in re.findall(row_pattern, text):
-        row_cells = [cell.strip() for cell in match]
-        if _is_separator_row(row_cells) or row_cells == columns:
-            continue
-        values = dict(zip(columns, row_cells))
-        rows.append(
-            {
-                "values": values,
-                "text": "| " + " | ".join(row_cells) + " |",
-            }
-        )
-    return rows
-
-
-def _matches_condition(values: dict[str, str], condition: Any) -> bool:
-    if not condition:
-        return True
-    column = condition.get("column")
-    if not column:
-        return False
-    current = values.get(column, "")
-    if "equals" in condition:
-        return current == condition["equals"]
-    if "contains" in condition:
-        return str(condition["contains"]) in current
-    return False
-
-
-def _split_items(value: Any, *, separator: str | None = None) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
-    text = str(value)
-    if separator:
-        parts = text.split(separator)
-    else:
-        parts = text.replace("，", ",").replace("、", ",").split(",")
-    return [part.strip() for part in parts if part.strip()]
-
-
-def _is_separator_row(cells: list[str]) -> bool:
-    return all(cell and set(cell) <= {"-", ":"} for cell in cells)
 
 
 def _deduplicate_preserving_order(values: list[str]) -> list[str]:
@@ -519,12 +327,3 @@ def _deduplicate_preserving_order(values: list[str]) -> list[str]:
         seen.add(value)
         deduplicated.append(value)
     return deduplicated
-
-
-def _block_id(block: NormalizedBlock) -> str:
-    if block.block_id:
-        return block.block_id
-    meta_block_id = block.meta_info.get("block_id")
-    if meta_block_id:
-        return str(meta_block_id)
-    return f"{block.document_id}:{block.page_no or 0}:{abs(hash(block.text))}"
