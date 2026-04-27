@@ -51,8 +51,7 @@ GraphState(extraction_input=..., evidence_collection=None)
 ## 运行方式
 
 ```bash
-source <conda-env>/etc/profile.d/conda.sh
 conda activate agent-gate
-cd ./agent
+cd agent
 python -m pytest tests/file_extraction_agent/test_broad_extraction.py -q
 ```

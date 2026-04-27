@@ -43,3 +43,4 @@ file_extraction_agent = ["task_specs/*.json", "model_client_config.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = ["--import-mode=importlib"]

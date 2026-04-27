@@ -99,8 +99,7 @@ lookup 的触发点必须来自模型动作：即使 broad 阶段缺证据、全
 ## 怎么跑
 
 ```bash
-source <conda-env>/etc/profile.d/conda.sh
 conda activate agent-gate
-cd ./agent
+cd agent
 python -m pytest tests/file_extraction_agent/test_resolution.py -q
 ```

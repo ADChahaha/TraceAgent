@@ -50,12 +50,11 @@ file_obj
 
 ## 为什么有它
 
-这个测试文件专门对应 [processor.py](./agent/document_processor/impl/docx/processor.py)，把 `DOCX` 真实实现文件自己的职责固定住。这样后面就算入口层、注册表或 route 层继续调整，也不会把 `DocxProcessor` 这条基于 `python-docx` 的处理链路改坏。
+这个测试文件专门对应 `document_processor/impl/docx/processor.py`，把 `DOCX` 真实实现文件自己的职责固定住。这样后面就算入口层、注册表或 route 层继续调整，也不会把 `DocxProcessor` 这条基于 `python-docx` 的处理链路改坏。
 
 ## 怎么跑
 
 ```bash
-source <conda-env>/etc/profile.d/conda.sh
 conda activate agent-gate
 python -m pytest tests/document_processor/test_docx_processor.py -q
 ```

@@ -97,7 +97,6 @@
 ## 怎么跑
 
 ```bash
-source <conda-env>/etc/profile.d/conda.sh
 conda activate agent-gate
 python -m pytest tests/document_processor/test_pdf_processor.py -q
 ```

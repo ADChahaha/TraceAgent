@@ -33,8 +33,7 @@ resolution 传入 broad 阶段的 EvidenceCollection 或全量 blocks
 ## 怎么跑
 
 ```bash
-source <conda-env>/etc/profile.d/conda.sh
 conda activate agent-gate
-cd ./agent
+cd agent
 python -m pytest tests/file_extraction_agent/test_tools.py -q
 ```

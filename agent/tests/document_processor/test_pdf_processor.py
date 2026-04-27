@@ -145,7 +145,7 @@ def test_pdf_processor_uses_explicit_rapidocr_for_text_extraction(monkeypatch):
     format_options = converter.init_kwargs["format_options"]
     pdf_option = format_options[processor_module.InputFormat.PDF]
     ocr_options = pdf_option.pipeline_options.ocr_options
-    repo_pdf_dir = Path("./agent/document_processor/impl/pdf/models")
+    repo_pdf_dir = Path(processor_module.__file__).resolve().parent / "models"
 
     assert type(ocr_options).__name__ == "RapidOcrOptions"
     assert ocr_options.backend == "torch"
@@ -242,7 +242,7 @@ def test_pdf_processor_propagates_docling_errors_without_fallback(monkeypatch):
 def test_pdf_processor_sets_repo_local_cache_dirs_by_default(monkeypatch):
     from document_processor.impl.pdf import processor as processor_module
 
-    repo_pdf_dir = Path("./agent/document_processor/impl/pdf/models")
+    repo_pdf_dir = Path(processor_module.__file__).resolve().parent / "models"
 
     monkeypatch.delenv("DOCLING_CACHE_DIR", raising=False)
     monkeypatch.delenv("HF_HOME", raising=False)
