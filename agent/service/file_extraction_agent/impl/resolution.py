@@ -186,6 +186,8 @@ def _evidence_from_used_block_ids(
     status: str,
 ) -> FieldEvidence:
     if not used_block_ids:
+        if status == "resolved":
+            raise ValueError("resolved decision requires used_block_ids")
         return _fallback_evidence_for_field(
             field_name=field_name,
             state=state,

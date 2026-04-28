@@ -192,6 +192,51 @@ def test_build_extractor_client_from_env_falls_back_to_tool_call_when_json_schem
     assert result.answer == "fallback"
 
 
+def test_auto_strategy_does_not_retry_tool_call_after_json_schema_invoke_failure(
+    monkeypatch,
+):
+    seen_methods: list[tuple[str, bool | None]] = []
+
+    class FakeRunnable:
+        def __init__(self, schema, method):
+            self.schema = schema
+            self.method = method
+
+        def invoke(self, payload):
+            if self.method == "json_schema":
+                raise RuntimeError("json_schema invoke timeout")
+            return self.schema(answer="tool-call-should-not-run")
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            del kwargs
+
+        def with_structured_output(self, schema, *, method, strict):
+            seen_methods.append((method, strict))
+            return FakeRunnable(schema, method)
+
+    monkeypatch.setattr(extractor_client_module, "ChatOpenAI", FakeChatOpenAI)
+
+    client = extractor_client_module.build_extractor_client(
+        base_url="https://llm.example.com/v1",
+        api_key="test-key",
+        model="gpt-compatible",
+        structured_output_strategy="auto",
+    )
+
+    try:
+        client.invoke(
+            output_schema=DummyOutput,
+            messages=[{"role": "user", "content": "should fail once"}],
+        )
+    except extractor_client_module.ExtractorClientInvocationError as exc:
+        assert "json_schema" in str(exc)
+    else:
+        raise AssertionError("json_schema invoke 失败后不应重试 tool_call")
+
+    assert seen_methods == [("json_schema", True)]
+
+
 def test_invoke_rejects_raw_json_content_when_structured_invoke_fails(monkeypatch):
     class FakeRunnable:
         def invoke(self, payload):

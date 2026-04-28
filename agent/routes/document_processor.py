@@ -17,7 +17,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
-from service.document_processor.impl.base import InvalidFileObjectError
+from service.document_processor.processor import InvalidFileObjectError
 from service.document_processor.types import FileType, UnsupportedFileTypeError
 
 router = APIRouter(tags=["document-processor"])

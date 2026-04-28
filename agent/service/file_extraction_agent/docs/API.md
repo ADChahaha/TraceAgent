@@ -375,7 +375,7 @@ extract(...) / HTTP request 显式参数
 - `model` 或 `MODEL`
 - `structured_output_strategy`：`auto`、`json_schema` 或 `tool_call`
 
-`structured_output_strategy="auto"` 时，系统先尝试 `json_schema`，不支持时再尝试 `tool_call`。
+`structured_output_strategy="auto"` 时，系统先尝试 `json_schema`；只有结构化协议明确不支持时才尝试 `tool_call`。如果结构化 runnable 已经开始调用后发生超时、鉴权、服务端错误或输出校验失败，抽取端不会换协议重试，而是按模型调用失败进入统一失败收口。
 
 ## 不支持的输入
 

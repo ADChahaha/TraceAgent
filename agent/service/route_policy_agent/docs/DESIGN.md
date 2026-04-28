@@ -175,6 +175,11 @@ processor.evaluate(task_spec, field_outputs, refs_with_text)
   -> 汇总 RoutePolicyResult(field_routes[])
 ```
 
+`policy_client` 只接受 `with_structured_output(...)` 产出的结构化结果，不解析裸
+`model.invoke(...)` JSON 文本。`structured_output_strategy=auto` 时，route policy
+阶段为了兼容小模型 provider，按 `json_schema -> tool_call` 顺序重试结构化协议；
+两种结构化协议都失败时，再把错误作为 route policy 模型调用失败向上抛出。
+
 ### 1. 合并字段上下文
 
 mapper 接收已经通过 `input_validator` 的输入，只按 `field_name` 对齐字段定义、字段输出和 refs：

@@ -1,4 +1,28 @@
-last updated: 2026-04-28 13:32:31 CST
+last updated: 2026-04-28 14:19:45 CST
+
+## 2026-04-28 14:19:45
+
+### 已完成工作
+
+- 收紧 `extractor_client.py` 的 `auto` 结构化输出策略：只有 `json_schema` 明确不支持时才切到 `tool_call`。
+- 调整结构化 runnable 调用失败语义：进入 `invoke(...)` 后的超时、鉴权、服务端错误或输出校验失败直接抛 `ExtractorClientInvocationError`，不再换协议重试。
+- 收紧 `resolution.py` 的证据绑定：`status=resolved` 的模型定案必须声明非空 `used_block_ids`，系统再据此回查 `NormalizedBlock` 生成最终 evidence。
+- 清理 `docs/DESIGN.md` 中 `RunOptions` 归属残留，统一说明它是公开契约，内部 graph 复用同一对象。
+- 更新 extractor client、resolution 的回归测试和对应测试说明文档。
+
+### 当前进展
+
+- 抽取端结构化输出失败语义、resolved 字段证据绑定语义和设计文档已对齐。
+- 相关测试已通过，完整 agent 测试结果为：`126 passed, 2 warnings`。
+
+### 遇到的问题
+
+- 旧实现会在 `json_schema` invoke 阶段失败后继续尝试 `tool_call`，可能导致同一次抽取字段模型调用被重复执行。
+- 旧实现允许 resolved 字段不声明 `used_block_ids`，最终 trace 可能引用 broad evidence，而不是模型最终声明使用的证据。
+
+### 下一步
+
+- 后续如果要支持更复杂的结构化输出 provider 兼容逻辑，先补清楚“协议不支持”的错误识别测试，再扩展 fallback 条件。
 
 ## 2026-04-28 13:32:31
 

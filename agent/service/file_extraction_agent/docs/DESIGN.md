@@ -111,7 +111,8 @@ service/file_extraction_agent/
 
 - `impl/schemas.py`
   - 定义**内部流程契约**
-  - 包括 `RunOptions`、`ExtractionInput`、`FieldEvidence`、`EvidenceCollection`、`FieldDecision`、`LookupRecord`
+  - 包括 `ExtractionInput`、`FieldEvidence`、`EvidenceCollection`、`FieldDecision`、`LookupRecord`
+  - 运行配置复用公开 `schemas.py::RunOptions`，不在 `impl` 中重复定义同构对象
   - 这些对象服务于当前实现链路，不应直接当作外部长期稳定 API
 
 - `impl/graph.py`
@@ -192,7 +193,6 @@ service/file_extraction_agent/
 
 因此，下面这类对象更适合下沉到 `impl/schemas.py`：
 
-- `RunOptions`
 - `ExtractionInput`
 - `FieldEvidence`
 - `EvidenceCollection`
@@ -418,6 +418,7 @@ FieldResolutionAction(action=final_decision)
 - resolution 开始前没有 `EvidenceCollection`，抛 `ValueError`
 - 没有传 `extractor_client`，抛 `ValueError`
 - 模型返回的 `target_field_name` 与当前字段不一致，抛 `ValueError`
+- 模型返回 `status=resolved` 但没有声明 `used_block_ids`，抛 `ValueError`
 - 模型返回了输入中不存在的 `used_block_ids`，抛 `ValueError`
 - 模型请求工具次数超过限制，抛 `ValueError`
 - 禁用 extra lookup 时模型请求 `lookup_blocks`，抛 `ValueError`
@@ -1106,7 +1107,6 @@ ExtractionResult
 
 推荐把下面这些对象下沉到这一层：
 
-- `RunOptions`
 - `ExtractionInput`
 - `FieldEvidence`
 - `EvidenceCollection`
@@ -1175,6 +1175,7 @@ FieldResolutionDecision
 
 ```text
 used_block_ids
+  -> 如果字段 status=resolved 但 used_block_ids 为空，直接抛 ValueError
   -> 从 ExtractionInput.blocks 查找 NormalizedBlock
   -> 生成 FieldEvidence.relevant_block_ids
   -> 生成 evidence_texts
@@ -1250,8 +1251,6 @@ LookupRecord
 
 推荐命名方向：
 
-- `RunOptions`
-  - 表达执行选项，而不是 `RunConfig`
 - `ExtractionInput`
   - 表达进入流程的输入，而不是 `GraphInput`
 - `FieldEvidence`

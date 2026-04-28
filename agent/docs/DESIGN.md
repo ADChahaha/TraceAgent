@@ -120,7 +120,8 @@ agent/
   -> 用连接配置创建 langchain_openai.ChatOpenAI(...)
   -> 如果 strategy=json_schema，就用 with_structured_output(..., method="json_schema", strict=True)
   -> 如果 strategy=tool_call，就改用 with_structured_output(..., method="function_calling", strict=True)
-  -> 如果 strategy=auto，就先试 json_schema，再在不支持时回退到 tool_call
+  -> 如果 strategy=auto，就先试 json_schema；只有结构化协议明确不支持时才回退到 tool_call
+  -> 如果已经进入 runnable.invoke(...) 后发生超时、鉴权、服务端错误或输出校验失败，不切换协议重试
   -> broad extraction / field resolution 继续收到同样的 Pydantic 结构化结果
 ```
 

@@ -29,6 +29,45 @@ def test_build_policy_client_requires_connection_params(monkeypatch):
         raise AssertionError("未提供 policy client 和连接参数时应明确拒绝")
 
 
+def test_policy_client_auto_retries_tool_call_when_json_schema_fails(monkeypatch):
+    from service.route_policy_agent import policy_client as policy_client_module
+
+    seen_methods: list[tuple[str, bool | None]] = []
+
+    class FakeRunnable:
+        def __init__(self, schema):
+            self.schema = schema
+
+        def invoke(self, payload):
+            return self.schema(route=payload[-1]["content"])
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            del kwargs
+
+        def with_structured_output(self, schema, *, method, strict):
+            seen_methods.append((method, strict))
+            if method == "json_schema":
+                raise RuntimeError("json_schema unsupported by route model")
+            return FakeRunnable(schema)
+
+    monkeypatch.setattr(policy_client_module, "ChatOpenAI", FakeChatOpenAI)
+
+    client = build_policy_client(
+        base_url="https://llm.example.com/v1",
+        api_key="test-key",
+        model="route-model",
+        structured_output_strategy="auto",
+    )
+    result = client.invoke(
+        output_schema=DummyRouteOutput,
+        messages=[{"role": "user", "content": "accept"}],
+    )
+
+    assert seen_methods == [("json_schema", True), ("function_calling", True)]
+    assert result.route == "accept"
+
+
 def test_policy_client_rejects_raw_json_content_when_structured_invoke_fails(monkeypatch):
     from service.route_policy_agent import policy_client as policy_client_module
 

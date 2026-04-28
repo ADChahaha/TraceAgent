@@ -59,7 +59,7 @@ class ExtractorClient:
 
     def with_output_schema(self, output_schema: type[SchemaT]) -> Any:
         last_error: Exception | None = None
-        for method in self.structured_output_methods:
+        for index, method in enumerate(self.structured_output_methods):
             try:
                 return self.model.with_structured_output(
                     output_schema,
@@ -68,28 +68,56 @@ class ExtractorClient:
                 )
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
-        attempted = ", ".join(self.structured_output_methods)
-        raise ExtractorClientInvocationError(
-            f"failed to create structured output runnable with methods: {attempted}"
-        ) from last_error
+                if _should_try_next_structured_method(
+                    methods=self.structured_output_methods,
+                    current_index=index,
+                    error=exc,
+                ):
+                    continue
+                raise ExtractorClientInvocationError(
+                    "failed to create structured output runnable "
+                    f"with method: {method}"
+                ) from exc
+        raise _build_all_methods_failed_error(last_error, self.structured_output_methods)
 
     def invoke(self, *, output_schema: type[SchemaT], messages: Any) -> SchemaT:
         last_error: Exception | None = None
-        for method in self.structured_output_methods:
+        for index, method in enumerate(self.structured_output_methods):
             try:
                 runnable = self.model.with_structured_output(
                     output_schema,
                     method=LANGCHAIN_METHOD_MAP[method],
                     strict=True,
                 )
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                if _should_try_next_structured_method(
+                    methods=self.structured_output_methods,
+                    current_index=index,
+                    error=exc,
+                ):
+                    continue
+                raise ExtractorClientInvocationError(
+                    "failed to create structured output runnable "
+                    f"with method: {method}"
+                ) from exc
+
+            try:
                 return _coerce_output(output_schema, runnable.invoke(messages))
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
+                if _should_try_next_structured_method(
+                    methods=self.structured_output_methods,
+                    current_index=index,
+                    error=exc,
+                ):
+                    continue
+                raise ExtractorClientInvocationError(
+                    "failed to invoke structured output runnable "
+                    f"with method: {method}"
+                ) from exc
 
-        attempted = ", ".join(self.structured_output_methods)
-        raise ExtractorClientInvocationError(
-            f"failed to invoke structured output runnable with methods: {attempted}"
-        ) from last_error
+        raise _build_all_methods_failed_error(last_error, self.structured_output_methods)
 
 
 def build_extractor_client(
@@ -119,6 +147,7 @@ def build_extractor_client(
         structured_output_strategy=structured_output_strategy,
         structured_output_methods=methods,
     )
+
 
 def _validate_runtime_config(
     *,
@@ -173,3 +202,40 @@ def _coerce_output(output_schema: type[SchemaT], payload: Any) -> SchemaT:
     raise ExtractorClientInvocationError(
         f"unsupported structured output payload type: {type(payload)!r}"
     )
+
+
+def _should_try_next_structured_method(
+    *,
+    methods: tuple[StructuredOutputMethod, ...],
+    current_index: int,
+    error: Exception,
+) -> bool:
+    if current_index >= len(methods) - 1:
+        return False
+    if methods[current_index] != "json_schema":
+        return False
+    return _is_unsupported_structured_output_error(error)
+
+
+def _is_unsupported_structured_output_error(error: Exception) -> bool:
+    message = str(error).lower()
+    markers = (
+        "unsupported",
+        "not supported",
+        "does not support",
+        "response_format",
+    )
+    return any(marker in message for marker in markers)
+
+
+def _build_all_methods_failed_error(
+    last_error: Exception | None,
+    methods: tuple[StructuredOutputMethod, ...],
+) -> ExtractorClientInvocationError:
+    attempted = ", ".join(methods)
+    error = ExtractorClientInvocationError(
+        f"failed to invoke structured output runnable with methods: {attempted}"
+    )
+    if last_error is not None:
+        error.__cause__ = last_error
+    return error

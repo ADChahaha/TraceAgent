@@ -30,6 +30,7 @@ lookup 的触发点必须来自模型动作：即使 broad 阶段缺证据、全
 - resolution 按 `task_spec.fields` 逐字段请求 `FieldResolutionAction`。
 - 模型 final decision 只需要给 `used_block_ids`，系统负责绑定 evidence / refs。
 - 模型返回不存在的 `used_block_ids` 时会被拒绝。
+- 模型把字段标成 `resolved` 时必须给出非空 `used_block_ids`，避免最终 trace 沿用未声明使用的 broad evidence。
 - 模型返回结构合法但不满足字段定义的值时，系统会把字段降级为 failed 并记录 `field_constraint` action。
 - lookup 只在模型返回 `lookup_blocks` 动作时执行，并把 `global_lookup` action 并入最终 trace。
 - validation 覆盖最终 evidence 后，lookup 的 `used_in_final_decision` 会按覆盖后的 evidence 重新计算。
@@ -60,6 +61,11 @@ lookup 的触发点必须来自模型动作：即使 broad 阶段缺证据、全
 
 - fake 模型返回一个不存在的 `used_block_ids`。
 - 确认 resolution 在组装内部 `FieldDecision` 前拒绝该结果，避免 trace 指向不可追踪来源。
+
+`test_run_resolution_rejects_resolved_decision_without_used_block_ids`
+
+- fake 模型返回 `status=resolved` 和字段值，但没有声明任何 `used_block_ids`。
+- 确认 resolution 拒绝该结果，不用 broad evidence 冒充模型最终声明使用的证据。
 
 `test_run_resolution_downgrades_invalid_enum_value_to_failed_decision`
 

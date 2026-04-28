@@ -1,4 +1,28 @@
-last updated: 2026-04-28 13:32:31
+last updated: 2026-04-28 14:19:45
+
+## 2026-04-28 14:19:45
+
+### 已完成工作
+
+- 按 review 修正 `file_extraction_agent` 抽取端结构化输出策略：`auto` 只在 `json_schema` 明确不支持时切到 `tool_call`，已经进入 invoke 阶段的超时、鉴权、服务端错误或输出校验失败不再换协议重试。
+- 收紧 resolution 证据绑定：模型返回 `status=resolved` 时必须声明非空 `used_block_ids`，避免最终 trace 沿用未被模型声明使用的 broad evidence。
+- 清理 document processor route 边界：HTTP 层改为从公开 `service.document_processor.processor` 导入 `InvalidFileObjectError`，不再依赖 `impl.base`。
+- 按你的决策保留 route policy 的 `json_schema -> tool_call` 结构化重试语义，但仍不解析裸 `model.invoke(...)` 响应。
+- 同步更新相关设计/API 和测试说明文档。
+
+### 当前进展
+
+- review 中除 route policy 保留结构化 tool call 重试外，其余仍成立的设计偏差已修正。
+- 在 `agent-gate` 环境中验证完整测试：`126 passed, 2 warnings`。
+
+### 遇到的问题
+
+- 抽取端之前把结构化 runnable 构造失败和 invoke 失败放在同一个 broad except 中，会把业务调用失败误判成协议不支持并重复请求模型。
+- resolution 之前允许 resolved 字段缺少 `used_block_ids`，会削弱后续 route policy 基于 refs 做放行判断的审计语义。
+
+### 下一步
+
+- 后续如果继续调整结构化输出兼容策略，需要分别说明“协议选择失败”和“模型调用失败”的处理语义。
 
 ## 2026-04-28 13:32:31
 

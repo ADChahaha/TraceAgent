@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from service.document_processor.schemas import ContentBlock, ProcessResult
@@ -19,6 +21,15 @@ def test_document_processor_capabilities_route_reports_available_processors():
         "service/document_processor/impl/pdf/models/docling"
     )
     assert isinstance(payload["docling_artifacts_available"], bool)
+
+
+def test_document_processor_route_uses_public_processor_exception_contract():
+    import routes.document_processor as route_module
+
+    source = Path(route_module.__file__).read_text()
+
+    assert "service.document_processor.impl.base" not in source
+    assert "service.document_processor.processor import InvalidFileObjectError" in source
 
 
 def test_document_processor_process_route_calls_business_processor(monkeypatch):

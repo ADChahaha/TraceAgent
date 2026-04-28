@@ -1,4 +1,16 @@
-last updated: 2026-04-28 13:32:31 CST
+last updated: 2026-04-28 14:19:45 CST
+
+## 2026-04-28 14:19:45 CST
+- completed work:
+  - 清理 `routes/document_processor.py` 的边界依赖：route 层改为从公开 `service.document_processor.processor` 导入 `InvalidFileObjectError`，不再引用 `service.document_processor.impl.base`。
+  - 为 document processor route 增加静态边界回归测试，固定 HTTP 适配层不依赖 `impl.*` 异常模块。
+- current progress:
+  - document processor route 继续只做 HTTP 协议适配，业务入口和异常契约由 `processor.py` 暴露。
+  - 完整 agent 测试已通过：`126 passed, 2 warnings`。
+- encountered problems:
+  - 旧 route import 虽然运行时可用，但让 HTTP 层耦合内部实现文件，和 route 层只做协议适配的设计边界不一致。
+- next step:
+  - 后续如果扩展 route 错误处理，继续优先从公开业务入口或公开异常契约导入，不直接依赖 `impl/`。
 
 ## 2026-04-28 13:32:31 CST
 - completed work:

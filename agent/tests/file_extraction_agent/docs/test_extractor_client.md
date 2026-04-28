@@ -16,6 +16,7 @@
   -> 用显式连接参数和代码内默认参数创建 ChatOpenAI(base_url=..., api_key=..., model=..., temperature=0)
   -> 先按显式参数选择 json_schema 或 tool_call
   -> 如果 structured_output_strategy=auto 且 json_schema 不支持，就回退到 tool_call
+  -> 如果 json_schema runnable 已开始 invoke 后失败，直接返回结构化调用失败，不再重试 tool_call
   -> 返回能直接 invoke 的结构化 agent
   -> 如果结构化 runnable 调用失败，不再解析裸 JSON 文本或裸 tool call 参数
 ```
@@ -28,6 +29,7 @@
 - `json_schema` 策略会按严格 schema 方式构造 runnable
 - `tool_call` 策略会映射到 LangChain 的 `function_calling`
 - `auto` 策略会在 `json_schema` 不支持时回退到 `tool_call`
+- `auto` 策略不会把 json_schema 调用阶段的超时、鉴权、服务端错误或输出校验失败当成协议不支持并重试
 - 结构化调用失败后不会再调用裸 `model.invoke(...)` 解析 JSON 文本
 - 结构化调用失败后不会再解析裸 tool call arguments
 - 非法策略参数会被拒绝
@@ -65,6 +67,11 @@
 
 - 让假的 `ChatOpenAI` 在 `json_schema` 时抛错。
 - 确认 client 会继续尝试 `tool_call`，而不是直接失败。
+
+`test_auto_strategy_does_not_retry_tool_call_after_json_schema_invoke_failure`
+
+- 让假的 `json_schema` structured runnable 在 `invoke(...)` 阶段抛出超时类错误。
+- 确认 client 不会继续调用 `function_calling`，避免一次业务调用被换协议重复执行。
 
 `test_invoke_rejects_raw_json_content_when_structured_invoke_fails`
 

@@ -48,7 +48,27 @@ def _build_extraction_input() -> ExtractionInput:
 def test_run_resolution_requires_evidence_collection_before_model_resolution():
     from service.file_extraction_agent.impl.resolution import run_resolution
 
-    state = build_graph_state(_build_extraction_input())
+    extraction_input = ExtractionInput(
+        blocks=[
+            NormalizedBlock(
+                document_id="doc-1",
+                block_id="b-invoice",
+                text="发票号：INV-001",
+            )
+        ],
+        task_spec=TaskSpec(
+            task_name="invoice",
+            fields=[
+                FieldDefinition(
+                    field_name="invoice_no",
+                    display_name="发票号",
+                    type="string",
+                    required=True,
+                )
+            ],
+        ),
+    )
+    state = build_graph_state(extraction_input)
 
     with pytest.raises(ValueError, match="evidence_collection"):
         run_resolution(state=state, extractor_client=object())
@@ -57,7 +77,27 @@ def test_run_resolution_requires_evidence_collection_before_model_resolution():
 def test_run_resolution_requires_model_client_and_does_not_use_local_fallback():
     from service.file_extraction_agent.impl.resolution import run_resolution
 
-    state = build_graph_state(_build_extraction_input())
+    extraction_input = ExtractionInput(
+        blocks=[
+            NormalizedBlock(
+                document_id="doc-1",
+                block_id="b-invoice",
+                text="发票号：INV-001",
+            )
+        ],
+        task_spec=TaskSpec(
+            task_name="invoice",
+            fields=[
+                FieldDefinition(
+                    field_name="invoice_no",
+                    display_name="发票号",
+                    type="string",
+                    required=True,
+                )
+            ],
+        ),
+    )
+    state = build_graph_state(extraction_input)
     state.evidence_collection = EvidenceCollection(
         fields=[
             FieldEvidence(
@@ -171,6 +211,60 @@ def test_run_resolution_rejects_unknown_used_block_ids_from_model_decision():
     )
 
     with pytest.raises(ValueError, match="unknown used_block_ids: b-missing"):
+        run_resolution(state=state, extractor_client=FakeExtractorClient())
+
+
+def test_run_resolution_rejects_resolved_decision_without_used_block_ids():
+    from service.file_extraction_agent.impl.resolution import run_resolution
+    from service.file_extraction_agent.impl.schemas import FieldResolutionAction
+
+    class FakeExtractorClient:
+        def invoke(self, *, output_schema, messages):
+            del output_schema, messages
+            return FieldResolutionAction(
+                action="final_decision",
+                target_field_name="invoice_no",
+                decision=FieldResolutionDecision(
+                    status="resolved",
+                    value="INV-001",
+                    used_block_ids=[],
+                    reason="模型给了字段值但没有声明支撑证据",
+                ),
+            )
+
+    extraction_input = ExtractionInput(
+        blocks=[
+            NormalizedBlock(
+                document_id="doc-1",
+                block_id="b-invoice",
+                text="发票号：INV-001",
+            )
+        ],
+        task_spec=TaskSpec(
+            task_name="invoice",
+            fields=[
+                FieldDefinition(
+                    field_name="invoice_no",
+                    display_name="发票号",
+                    type="string",
+                    required=True,
+                )
+            ],
+        ),
+    )
+    state = build_graph_state(extraction_input)
+    state.evidence_collection = EvidenceCollection(
+        fields=[
+            FieldEvidence(
+                field_name="invoice_no",
+                relevant_block_ids=["b-invoice"],
+                evidence_texts=["发票号：INV-001"],
+                local_status="evidence_found",
+            )
+        ]
+    )
+
+    with pytest.raises(ValueError, match="resolved decision requires used_block_ids"):
         run_resolution(state=state, extractor_client=FakeExtractorClient())
 
 

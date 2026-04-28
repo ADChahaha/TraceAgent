@@ -1,6 +1,28 @@
 # Route Policy Agent Devlog
 
-last updated: 2026-04-28 13:32:31
+last updated: 2026-04-28 14:19:45
+
+## 2026-04-28 14:19:45
+
+### 已完成工作
+
+- 按当前决策明确 route policy 的 `structured_output_strategy=auto` 语义：保留 `json_schema -> tool_call` 的结构化协议重试。
+- 保持 route policy 不解析裸 `model.invoke(...)` 响应，只接受 `with_structured_output(...)` 产出的结构化 route 决策。
+- 更新 `route_policy_agent/docs/DESIGN.md`，说明 route policy 阶段为了兼容小模型 provider 会重试结构化协议。
+- 补充 policy client 测试和测试说明文档，固定 `json_schema` 失败时会尝试 LangChain `function_calling`。
+
+### 当前进展
+
+- route policy 的模型调用边界已明确：可以在结构化协议之间重试，但不读取 raw model response。
+- 完整 agent 测试已通过：`126 passed, 2 warnings`。
+
+### 遇到的问题
+
+- review 中把 route policy 的 tool call 重试也列为偏差；经确认这一路径需要保留，因此改为同步设计和测试，而不是删除重试行为。
+
+### 下一步
+
+- 后续如果要进一步区分 route policy 的协议不支持和 invoke 失败，需要先明确是否仍要求小模型场景下跨协议重试。
 
 ## 2026-04-28 13:32:31
 

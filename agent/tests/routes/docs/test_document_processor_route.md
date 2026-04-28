@@ -19,6 +19,10 @@ HTTP 请求
   - 验证 `/v1/ocr/capabilities` 能返回 200。
   - 验证能力声明包含当前支持和已实现的 `pdf/docx`，并返回 PDF docling 模型目录状态。
 
+- `test_document_processor_route_uses_public_processor_exception_contract`
+  - 验证 document processor route 不从 `service.document_processor.impl.*` 导入异常。
+  - 确认 HTTP 适配层只依赖公开业务入口暴露的异常契约。
+
 - `test_document_processor_process_route_calls_business_processor`
   - 验证 `/v1/document-processor/process` 会把上传文件和显式 `file_type` 传给业务入口。
   - 验证 route 层不会重新定义业务结果，只把 `ProcessResult` 的 markdown、blocks、meta_info 和 warnings 转成 HTTP 响应。
