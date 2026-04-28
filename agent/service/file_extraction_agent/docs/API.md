@@ -203,7 +203,8 @@ HTTP 错误语义：
 
 ### run_options
 
-`run_options` 控制运行策略和 prompt 预算。Python 入口和 HTTP 入口都支持。
+`run_options` 控制运行策略和 prompt 预算。Python 入口和 HTTP 入口都支持，
+并按公开契约 `RunOptions` 解析；内部 graph 也复用这一份运行配置。
 
 - `allow_extra_lookup`：是否允许 resolution 模型请求全局补查。
 - `max_lookup_calls_per_field`：每个字段最多允许几次全局补查。

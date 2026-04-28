@@ -192,7 +192,7 @@ def test_build_extractor_client_from_env_falls_back_to_tool_call_when_json_schem
     assert result.answer == "fallback"
 
 
-def test_invoke_falls_back_to_raw_json_content_when_structured_invoke_fails(monkeypatch):
+def test_invoke_rejects_raw_json_content_when_structured_invoke_fails(monkeypatch):
     class FakeRunnable:
         def invoke(self, payload):
             assert payload == [{"role": "user", "content": "json please"}]
@@ -224,15 +224,18 @@ def test_invoke_falls_back_to_raw_json_content_when_structured_invoke_fails(monk
         structured_output_strategy="json_schema",
     )
 
-    result = client.invoke(
-        output_schema=DummyOutput,
-        messages=[{"role": "user", "content": "json please"}],
-    )
+    try:
+        client.invoke(
+            output_schema=DummyOutput,
+            messages=[{"role": "user", "content": "json please"}],
+        )
+    except extractor_client_module.ExtractorClientInvocationError as exc:
+        assert "failed to invoke structured output runnable" in str(exc)
+    else:
+        raise AssertionError("结构化调用失败后不应继续解析裸 JSON 文本")
 
-    assert result.answer == "raw-json"
 
-
-def test_invoke_parses_tool_call_arguments_from_raw_message(monkeypatch):
+def test_invoke_rejects_raw_tool_call_arguments_when_structured_invoke_fails(monkeypatch):
     class FakeRunnable:
         def invoke(self, payload):
             assert payload == [{"role": "user", "content": "tool please"}]
@@ -273,12 +276,15 @@ def test_invoke_parses_tool_call_arguments_from_raw_message(monkeypatch):
         structured_output_strategy="tool_call",
     )
 
-    result = client.invoke(
-        output_schema=DummyOutput,
-        messages=[{"role": "user", "content": "tool please"}],
-    )
-
-    assert result.answer == "tool-json"
+    try:
+        client.invoke(
+            output_schema=DummyOutput,
+            messages=[{"role": "user", "content": "tool please"}],
+        )
+    except extractor_client_module.ExtractorClientInvocationError as exc:
+        assert "failed to invoke structured output runnable" in str(exc)
+    else:
+        raise AssertionError("结构化调用失败后不应继续解析裸 tool call 参数")
 
 
 def test_build_extractor_client_from_env_rejects_unknown_structured_output_strategy_argument(

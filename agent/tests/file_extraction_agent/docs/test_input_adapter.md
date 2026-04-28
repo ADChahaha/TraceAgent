@@ -10,6 +10,7 @@
   -> 校验 task_spec 存在
   -> 校验每个 block 都带有上游生成的 block_id
   -> 校验 block_id 在本次输入内唯一
+  -> 保留公开 RunOptions 作为内部 graph 的同一份运行配置
   -> 组装内部 ExtractionInput
   -> 返回给 processor 继续执行 graph
 ```
@@ -29,7 +30,8 @@
 
 - 直接传一份 `blocks + task_spec`。
 - 同时补 `markdown`、`run_options` 和 `metadata`。
-- 确认 `build_graph_input(...)` 返回的是内部 `ExtractionInput`，而且关键字段完整保留。
+- 确认 `build_graph_input(...)` 返回的是内部 `ExtractionInput`。
+- 确认公开 `RunOptions` 会作为内部 graph 使用的同一份配置对象保留，而且关键字段完整。
 
 `test_build_graph_input_requires_explicit_task_spec`
 

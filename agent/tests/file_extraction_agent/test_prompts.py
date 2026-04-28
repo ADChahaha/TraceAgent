@@ -3,8 +3,17 @@ from __future__ import annotations
 import json
 
 from service.file_extraction_agent.impl import prompts
-from service.file_extraction_agent.impl.schemas import EvidenceCollection, ExtractionInput, FieldEvidence, RunOptions
-from service.file_extraction_agent.schemas import FieldDefinition, NormalizedBlock, TaskSpec
+from service.file_extraction_agent.impl.schemas import (
+    EvidenceCollection,
+    ExtractionInput,
+    FieldEvidence,
+)
+from service.file_extraction_agent.schemas import (
+    FieldDefinition,
+    NormalizedBlock,
+    RunOptions,
+    TaskSpec,
+)
 
 
 def test_build_broad_extraction_messages_includes_task_and_blocks_summary():

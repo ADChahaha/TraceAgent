@@ -256,3 +256,9 @@ def _configure_runtime_cache_dirs() -> None:
 
 def _package_models_root() -> Path:
     return Path(__file__).resolve().parent / "models"
+
+
+def resolve_docling_artifacts_path() -> Path:
+    """返回 capabilities 接口展示的 docling 模型目录路径。"""
+
+    return Path(os.environ.get("DOCLING_CACHE_DIR") or _package_models_root() / "docling")

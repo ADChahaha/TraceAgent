@@ -1,6 +1,26 @@
 # Route Policy Agent Devlog
 
-last updated: 2026-04-28 12:33:11
+last updated: 2026-04-28 13:32:31
+
+## 2026-04-28 13:32:31
+
+### 已完成工作
+
+- 移除 `policy_client.py` 中结构化调用失败后的裸 `model.invoke(...)` JSON / tool call 回退。
+- 补充 policy client 回归测试，固定 route policy 只接受 `with_structured_output(...)` 产出的结构化结果。
+
+### 当前进展
+
+- route policy 的模型调用边界已与设计一致：只消费字段定义、字段输出和 `refs_with_text`，只接受结构化 route 决策。
+- 真实文明寝室 PDF 三段端到端验证中，route policy 对 `building_name`、`civilized_dormitory_rooms`、`civilized_dormitory_count` 均返回 `accept`。
+
+### 遇到的问题
+
+- 旧实现会在结构化输出失败后解析裸 JSON 文本，和“不读取 raw model response”的设计口径不一致。
+
+### 下一步
+
+- 后续接真实 backend 调用链时，继续让 backend 只传 `field_outputs + refs_with_text`，不把抽取 trace actions 或 raw 模型响应传入 route policy。
 
 ## 2026-04-28 12:33:11
 

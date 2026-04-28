@@ -1,4 +1,16 @@
-last updated: 2026-04-27 18:59:19 CST
+last updated: 2026-04-28 13:32:31 CST
+
+## 2026-04-28 13:32:31 CST
+- completed work:
+  - 修复 `GET /v1/ocr/capabilities` 仍导入不存在 `docling_adapter` 的问题，改为复用当前 `impl/pdf/processor.py` 暴露的 docling 模型目录解析函数。
+  - 为 capabilities route 增加回归测试，固定 `pdf/docx` 支持类型和 docling 模型目录返回行为。
+- current progress:
+  - `document_processor` 的 HTTP 能力查询接口已恢复可用，和 API 文档中的能力声明一致。
+  - 真实文明寝室 PDF 端到端验证中，`document_processor` 输出 7 个 blocks、markdown 长度 6034。
+- encountered problems:
+  - capabilities route 保留了旧模块名，普通 process route 测试无法覆盖该 GET 路径。
+- next step:
+  - 后续如果继续调整 PDF 模型目录策略，需要同步维护 capabilities route 和 API 文档。
 
 ## 2026-04-27 18:59:19 CST
 - completed work:

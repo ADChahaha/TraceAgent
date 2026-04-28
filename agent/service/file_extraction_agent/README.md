@@ -191,7 +191,8 @@ extract(...) 显式参数
 
 ## 运行选项
 
-`run_options` 使用 `impl/schemas.py` 中的 `RunOptions`：
+`run_options` 使用公开契约 `schemas.py::RunOptions`，HTTP 入口、Python 入口和
+内部 graph 共用这一份运行配置：
 
 - `allow_extra_lookup`：是否允许 resolution 模型请求全局补查
 - `max_lookup_calls_per_field`：每个字段最多允许几次补查

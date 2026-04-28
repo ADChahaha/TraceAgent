@@ -18,7 +18,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 import os
 from typing import Any, Literal, TypeVar
 
@@ -86,17 +85,6 @@ class ExtractorClient:
                 return _coerce_output(output_schema, runnable.invoke(messages))
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
-                try:
-                    raw_message = self.model.invoke(messages)
-                except Exception:  # noqa: BLE001
-                    continue
-                try:
-                    return _coerce_output(
-                        output_schema,
-                        _extract_payload_from_raw_message(raw_message),
-                    )
-                except Exception:  # noqa: BLE001
-                    continue
 
         attempted = ", ".join(self.structured_output_methods)
         raise ExtractorClientInvocationError(
@@ -184,28 +172,4 @@ def _coerce_output(output_schema: type[SchemaT], payload: Any) -> SchemaT:
         return output_schema.model_validate(payload.model_dump())
     raise ExtractorClientInvocationError(
         f"unsupported structured output payload type: {type(payload)!r}"
-    )
-
-
-def _extract_payload_from_raw_message(raw_message: Any) -> Any:
-    additional_kwargs = getattr(raw_message, "additional_kwargs", {}) or {}
-    parsed = additional_kwargs.get("parsed")
-    if parsed is not None:
-        return parsed
-
-    tool_calls = additional_kwargs.get("tool_calls") or []
-    for tool_call in tool_calls:
-        function_payload = tool_call.get("function") if isinstance(tool_call, dict) else None
-        if not function_payload:
-            continue
-        arguments = function_payload.get("arguments")
-        if isinstance(arguments, str) and arguments.strip():
-            return json.loads(arguments)
-
-    content = getattr(raw_message, "content", None)
-    if isinstance(content, str) and content.strip():
-        return content
-
-    raise ExtractorClientInvocationError(
-        "raw model response does not contain parsed payload, tool call arguments, or text content"
     )

@@ -8,7 +8,6 @@ from service.file_extraction_agent.impl.schemas import (
     FieldResolutionAction,
     FieldResolutionDecision,
     LookupRecord,
-    RunOptions,
 )
 from service.file_extraction_agent.schemas import (
     EvidenceSummary,
@@ -22,6 +21,7 @@ from service.file_extraction_agent.schemas import (
     NormalizedBlock,
     NormalizedBoundingBox,
     NormalizedDocument,
+    RunOptions,
     TaskSpec,
     TraceAction,
 )

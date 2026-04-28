@@ -6,11 +6,11 @@ from typing import Any, Literal
 
 from service.file_extraction_agent.extractor_client import build_extractor_client
 from service.file_extraction_agent.impl.graph import run_extraction_graph
-from service.file_extraction_agent.impl.schemas import RunOptions
 from service.file_extraction_agent.input_adapter import build_graph_input
 from service.file_extraction_agent.schemas import (
     ExtractionResult,
     NormalizedBlock,
+    RunOptions,
     TaskSpec,
 )
 
@@ -24,7 +24,7 @@ def extract(
     markdown: str = "",
     md_list: list[str] | None = None,
     task_spec: TaskSpec | None = None,
-    run_options: RunOptions | None = None,
+    run_options: RunOptions | dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
     base_url: str | None = None,
     openai_api_key: str | None = None,

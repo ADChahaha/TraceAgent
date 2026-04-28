@@ -86,6 +86,7 @@ service/file_extraction_agent/
 
 - `input_adapter.py`
   - 负责外部 blocks 输入校验、协议适配和内部 `ExtractionInput` 组装
+  - 负责保留公开 `RunOptions` 作为内部 graph 的同一份运行配置
   - 只解决“外面传进来的数据能不能进入 agent 内部契约”
   - 不负责 broad / resolution / tool 调度
 
@@ -169,6 +170,7 @@ service/file_extraction_agent/
 
 - `FieldDefinition`
 - `TaskSpec`
+- `RunOptions`
 - `NormalizedBoundingBox`
 - `NormalizedBlock`
 - `FieldEvidenceRef`
@@ -275,7 +277,8 @@ NormalizedBlock[] + TaskSpec
   -> 检查 block_id 在本次输入内是否唯一
   -> 缺失或重复时直接抛 ValueError，不做 agent 内兜底生成
   -> 用 Pydantic 把 blocks / task_spec 归一化成内部对象
-  -> 填充默认 RunOptions 和 metadata
+  -> 使用公开 RunOptions，缺省时填充默认值
+  -> 填充 metadata
   -> 返回 ExtractionInput
 ```
 
@@ -1183,7 +1186,11 @@ used_block_ids
 
 #### RunOptions 当前字段
 
-`RunOptions` 必须把不同控制维度拆开，避免一个字段同时表达多件事：
+`RunOptions` 是 HTTP 入口、Python 入口和内部 graph 共用的公开运行契约，
+定义在 `schemas.py` 中，避免 `impl` 内部对象泄漏到外部 API，同时也避免
+外部/内部维护两份同构配置。
+
+这些选项必须把不同控制维度拆开，避免一个字段同时表达多件事：
 
 - `allow_extra_lookup`
   - 是否允许 resolution 模型请求 `lookup_blocks_for_field(...)`

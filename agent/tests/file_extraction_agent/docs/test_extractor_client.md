@@ -17,6 +17,7 @@
   -> 先按显式参数选择 json_schema 或 tool_call
   -> 如果 structured_output_strategy=auto 且 json_schema 不支持，就回退到 tool_call
   -> 返回能直接 invoke 的结构化 agent
+  -> 如果结构化 runnable 调用失败，不再解析裸 JSON 文本或裸 tool call 参数
 ```
 
 ## 测什么
@@ -27,6 +28,8 @@
 - `json_schema` 策略会按严格 schema 方式构造 runnable
 - `tool_call` 策略会映射到 LangChain 的 `function_calling`
 - `auto` 策略会在 `json_schema` 不支持时回退到 `tool_call`
+- 结构化调用失败后不会再调用裸 `model.invoke(...)` 解析 JSON 文本
+- 结构化调用失败后不会再解析裸 tool call arguments
 - 非法策略参数会被拒绝
 
 ## 每个函数在干什么
@@ -62,6 +65,16 @@
 
 - 让假的 `ChatOpenAI` 在 `json_schema` 时抛错。
 - 确认 client 会继续尝试 `tool_call`，而不是直接失败。
+
+`test_invoke_rejects_raw_json_content_when_structured_invoke_fails`
+
+- 让假的结构化 runnable 在调用时抛错。
+- 即使底层裸模型能返回 JSON 文本，也确认 client 直接返回结构化调用失败。
+
+`test_invoke_rejects_raw_tool_call_arguments_when_structured_invoke_fails`
+
+- 让假的结构化 runnable 在调用时抛错。
+- 即使底层裸模型能返回 tool call arguments，也确认 client 不解析这类非结构化回退结果。
 
 `test_build_extractor_client_from_env_rejects_unknown_structured_output_strategy_argument`
 

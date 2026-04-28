@@ -1,4 +1,29 @@
-last updated: 2026-04-28 12:51:12
+last updated: 2026-04-28 13:32:31
+
+## 2026-04-28 13:32:31
+
+### 已完成工作
+
+- 修复 `/v1/ocr/capabilities` 依赖不存在 `docling_adapter` 的问题，改为从现有 PDF processor 读取 docling 模型目录。
+- 将 `file_extraction_agent` 的 `RunOptions` 收敛为 `schemas.py` 中的公开全局契约，供 HTTP 入口、Python 入口和内部 graph 共用。
+- 移除 `file_extraction_agent` 和 `route_policy_agent` 模型客户端中的裸 `model.invoke(...)` JSON / tool call 回退，只保留设计中的结构化输出策略回退。
+- 同步更新相关设计/API/README 和测试说明文档，补齐 capabilities、run options 边界和结构化调用失败语义。
+
+### 当前进展
+
+- agent service 的 HTTP 能力查询、字段抽取公开参数边界和模型结构化调用行为已与当前设计一致。
+- 使用真实文明寝室 PDF 完成三段业务端到端验证：`document_processor -> file_extraction_agent -> route_policy_agent`，结果为 `18栋`、12 个文明寝室房间号、数量 `12`，route policy 三个字段均 `accept`。
+- 在 `agent-gate` 环境中验证完整测试：`122 passed, 2 warnings`。
+
+### 遇到的问题
+
+- review 发现 capabilities 路由、HTTP `run_options` 暴露内部对象、模型客户端裸 JSON 回退三处与设计或文档不一致。
+- 当前 shell 未提供 `BASE_URL` / `OPENAI_API_KEY`，端到端验证使用确定性结构化 fake client 替代外部 LLM，但真实 PDF 解析、字段 graph、validation_rules 和 route policy 输入校验均走当前代码。
+- 完整测试仍有 docling / RapidOCR 依赖自身的 deprecation warning，本次未改动第三方依赖行为。
+
+### 下一步
+
+- 后续如果继续调整运行参数，优先扩展公开 `RunOptions`，避免外部和内部维护两份同构配置。
 
 ## 2026-04-28 12:51:12
 

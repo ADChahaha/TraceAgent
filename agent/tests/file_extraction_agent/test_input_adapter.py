@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from service.file_extraction_agent.impl.schemas import ExtractionInput, RunOptions
+from service.file_extraction_agent.impl.schemas import ExtractionInput
 from service.file_extraction_agent.schemas import (
     FieldDefinition,
     NormalizedBlock,
+    RunOptions,
     TaskSpec,
 )
 
@@ -29,6 +30,7 @@ def test_build_graph_input_uses_explicit_task_spec():
     )
 
     assert isinstance(extraction_input, ExtractionInput)
+    assert isinstance(extraction_input.options, RunOptions)
     assert extraction_input.blocks[0].document_id == "doc-1"
     assert extraction_input.blocks[0].block_id == "b-1"
     assert extraction_input.markdown == "内容"

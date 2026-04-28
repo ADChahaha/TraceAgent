@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from service.file_extraction_agent.schemas import (
     EvidenceSummary,
@@ -13,36 +13,10 @@ from service.file_extraction_agent.schemas import (
     FieldStatus,
     FieldTrace,
     NormalizedBlock,
+    RunOptions,
     TaskSpec,
     TraceAction,
 )
-
-
-class RunOptions(BaseModel):
-    """图执行阶段的运行配置。"""
-
-    allow_extra_lookup: bool = True
-    max_lookup_calls_per_field: int = 1
-    lookup_top_k: int = 3
-    max_prompt_blocks: int = 200
-    max_prompt_block_chars: int = 2000
-    max_resolution_evidence_fields: int = 80
-    max_prompt_evidence_text_chars: int = 1000
-    keep_detailed_trace: bool = False
-
-    @field_validator(
-        "max_lookup_calls_per_field",
-        "lookup_top_k",
-        "max_prompt_blocks",
-        "max_prompt_block_chars",
-        "max_resolution_evidence_fields",
-        "max_prompt_evidence_text_chars",
-    )
-    @classmethod
-    def validate_lookup_limit(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError("lookup limits must be greater than 0")
-        return value
 
 
 class ExtractionInput(BaseModel):

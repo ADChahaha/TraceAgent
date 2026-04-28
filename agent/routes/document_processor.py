@@ -127,8 +127,8 @@ def _stringify_path(path: Path | None) -> str | None:
 
 
 def _resolve_docling_artifacts_path() -> Path | None:
-    pdf_docling_adapter = import_module("service.document_processor.impl.pdf.docling_adapter")
-    return pdf_docling_adapter.resolve_docling_artifacts_path()
+    pdf_processor = import_module("service.document_processor.impl.pdf.processor")
+    return pdf_processor.resolve_docling_artifacts_path()
 
 
 def _process_document(file_obj, file_type: str | None):

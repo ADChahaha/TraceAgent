@@ -6,6 +6,21 @@ from service.document_processor.schemas import ContentBlock, ProcessResult
 from main import create_app
 
 
+def test_document_processor_capabilities_route_reports_available_processors():
+    client = TestClient(create_app())
+
+    response = client.get("/v1/ocr/capabilities")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["supported_file_types"] == ["pdf", "docx"]
+    assert payload["implemented_file_types"] == ["pdf", "docx"]
+    assert payload["docling_artifacts_path"].endswith(
+        "service/document_processor/impl/pdf/models/docling"
+    )
+    assert isinstance(payload["docling_artifacts_available"], bool)
+
+
 def test_document_processor_process_route_calls_business_processor(monkeypatch):
     from service.document_processor import processor as processor_module
 

@@ -10,9 +10,9 @@ from service.file_extraction_agent.schemas import (
     FieldDefinition,
     FieldResult,
     FieldTrace,
+    RunOptions,
     TaskSpec,
 )
-from service.file_extraction_agent.impl.schemas import RunOptions
 from main import create_app
 
 
@@ -148,6 +148,7 @@ def test_file_extraction_agent_route_passes_run_options_to_business_extractor(mo
         max_prompt_blocks=12,
         max_resolution_evidence_fields=4,
     )
+    assert type(seen_call["run_options"]).__module__ == "service.file_extraction_agent.schemas"
 
 
 def test_file_extraction_agent_route_returns_422_for_missing_task_spec(monkeypatch):

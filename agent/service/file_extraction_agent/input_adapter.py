@@ -5,12 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 from service.file_extraction_agent.impl.block_ids import validate_block_ids
-from service.file_extraction_agent.impl.schemas import (
-    ExtractionInput,
-    RunOptions,
-)
+from service.file_extraction_agent.impl.schemas import ExtractionInput
 from service.file_extraction_agent.schemas import (
     NormalizedBlock,
+    RunOptions,
     TaskSpec,
 )
 
@@ -21,7 +19,7 @@ def build_graph_input(
     markdown: str = "",
     md_list: list[str] | None = None,
     task_spec: TaskSpec | None = None,
-    run_options: RunOptions | None = None,
+    run_options: RunOptions | dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> ExtractionInput:
     """把外部 session 级输入收敛成模块内部统一的 `ExtractionInput`。"""
@@ -32,7 +30,7 @@ def build_graph_input(
         markdown=markdown,
         md_list=md_list or [],
         task_spec=resolved_task_spec,
-        options=run_options or RunOptions(),
+        options=_resolve_run_options(run_options),
         metadata=metadata or {},
     )
 
@@ -41,3 +39,13 @@ def _resolve_task_spec(*, task_spec: TaskSpec | None) -> TaskSpec:
     if task_spec is not None:
         return task_spec
     raise ValueError("task_spec is required")
+
+
+def _resolve_run_options(
+    run_options: RunOptions | dict[str, Any] | None,
+) -> RunOptions:
+    if run_options is None:
+        return RunOptions()
+    if isinstance(run_options, RunOptions):
+        return run_options
+    return RunOptions.model_validate(run_options)

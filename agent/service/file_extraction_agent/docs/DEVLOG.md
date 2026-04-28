@@ -1,4 +1,28 @@
-last updated: 2026-04-27 18:59:19 CST
+last updated: 2026-04-28 13:32:31 CST
+
+## 2026-04-28 13:32:31
+
+### 已完成工作
+
+- 将 `RunOptions` 提升到 `schemas.py`，作为 HTTP 入口、Python 入口和内部 graph 共用的公开运行契约。
+- 删除 `impl/schemas.py` 中重复的 `RunOptions` 定义，避免外部和内部维护两份同构配置。
+- 移除 `extractor_client.py` 中结构化调用失败后的裸 `model.invoke(...)` JSON / tool call 回退，严格遵循 `json_schema -> tool_call` 的结构化输出策略。
+- 同步更新 README、API、设计文档和测试说明文档，明确 `RunOptions` 是全局契约。
+
+### 当前进展
+
+- `file_extraction_agent` 的运行选项边界已与设计一致，不再从 route 层暴露 `impl` 对象。
+- 真实文明寝室 PDF 三段端到端验证中，抽取结果为 `building_name=18栋`、12 个文明寝室房间号和 `civilized_dormitory_count=12`。
+- `tests/file_extraction_agent` 与 file extraction route 相关测试已通过：`70 passed`。
+
+### 遇到的问题
+
+- review 发现之前的 HTTP `run_options` 直接引用 `impl.schemas.RunOptions`，边界不符合“schemas.py 承载稳定外部契约”的设计。
+- 模型客户端曾在结构化 runnable 失败后解析裸模型响应，绕过了设计中的结构化输出协议边界。
+
+### 下一步
+
+- 后续新增运行参数时，直接扩展公开 `RunOptions`，并让内部 graph 复用同一对象。
 
 ## 2026-04-27 18:59:19
 

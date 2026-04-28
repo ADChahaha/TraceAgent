@@ -9,10 +9,14 @@ from service.file_extraction_agent.impl.schemas import (
     ExtractionInput,
     FieldEvidence,
     FieldResolutionDecision,
-    RunOptions,
 )
 from service.file_extraction_agent.impl.state import build_graph_state
-from service.file_extraction_agent.schemas import FieldDefinition, NormalizedBlock, TaskSpec
+from service.file_extraction_agent.schemas import (
+    FieldDefinition,
+    NormalizedBlock,
+    RunOptions,
+    TaskSpec,
+)
 
 
 def _build_extraction_input() -> ExtractionInput:

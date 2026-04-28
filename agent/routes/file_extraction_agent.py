@@ -22,8 +22,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from service.file_extraction_agent.extractor_client import ExtractorClientConfigError
-from service.file_extraction_agent.impl.schemas import RunOptions
-from service.file_extraction_agent.schemas import ExtractionResult, NormalizedBlock, TaskSpec
+from service.file_extraction_agent.schemas import (
+    ExtractionResult,
+    NormalizedBlock,
+    RunOptions,
+    TaskSpec,
+)
 
 
 StructuredOutputStrategy = Literal["json_schema", "tool_call", "auto"]
