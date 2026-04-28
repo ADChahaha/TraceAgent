@@ -1,0 +1,38 @@
+# Backend Devlog
+
+last updated: 2026-04-28 10:56:45
+
+## 2026-04-28 10:56:45
+
+### 已完成工作
+
+- 修正后端文档存储边界：上传文件只作为调用 `document_processor` 的临时输入，数据库不保存原始文件、不保存 BLOB，只保存 markdown、md_list、blocks 和处理元信息。
+- 将 route policy 口径从 backend 内部确定性规则调整为 agent service 提供的小 LLM + rules route 判断。
+- 统一 route 类型为 `accept / review / reject`，并同步更新 API 示例、capabilities 和 DESIGN 中的字段 route 说明。
+
+### 当前进展
+
+- `backend` 仍只负责任务、SQLite 记录、状态流转、人工审核、最终结果和 audit。
+- LLM 相关 route 判断移到 agent service，backend 只保存 route 输出并驱动 review / audit。
+
+### 下一步
+
+- 实现时先对接 agent 的 `document_processor`、`file_extraction_agent` 和 `route_policy_agent` 三个 HTTP 出口。
+- 按当前文档口径设计 `documents` 表，只保存标准化文本结果和处理元信息。
+
+## 2026-04-28 10:37:12
+
+### 已完成工作
+
+- 新增后端 API 设计文档，固定任务、结果、trace、review、audit 和 capabilities 接口。
+- 新增后端 DESIGN 设计文档，明确 FastAPI、SQLite、agent HTTP 调用和数据库表设计。
+- 补充 CRUD 分层设计，采用按业务聚合拆分，而不是每张表一个 CRUD 文件。
+
+### 当前进展
+
+- `backend` 处于设计文档阶段，API 边界、架构边界和数据库字段已经明确。
+
+### 下一步
+
+- 搭建 FastAPI 项目骨架。
+- 按 TDD 实现 models、crud、services 和 routes。
