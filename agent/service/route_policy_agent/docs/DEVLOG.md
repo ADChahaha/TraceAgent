@@ -1,6 +1,24 @@
 # Route Policy Agent Devlog
 
-last updated: 2026-04-28 11:17:55
+last updated: 2026-04-28 12:33:11
+
+## 2026-04-28 12:33:11
+
+### 已完成工作
+
+- 实现 `route_policy_agent` 的 `schemas.py`、`input_validator.py`、`policy_client.py`、`processor.py`、`impl/mapper.py` 和 `impl/prompts.py`。
+- 新增 `POST /v1/route-policy-agent/evaluate`，并在 FastAPI app 中挂载 route policy router。
+- 新增 `route_policy_agent` 单元测试、HTTP route 测试，以及对应 `tests/docs/` 测试说明文档。
+- 同步更新 `agent/docs/DESIGN.md` 和 `route_policy_agent/docs/DESIGN.md`，记录当前结构、HTTP 出口和实际处理 pipeline。
+
+### 当前进展
+
+- 新增 route policy agent 已通过目标测试。
+- 已验证现有 routes 测试未被破坏。
+
+### 下一步
+
+- 后续可接入真实 backend 调用链和真实小 LLM 配置做端到端验证。
 
 ## 2026-04-28 11:17:55
 

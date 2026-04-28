@@ -1,13 +1,12 @@
-"""Build the agent service FastAPI app.
-
-Purpose: assemble the HTTP routers exposed by the agent service.
-Input/Output: takes no runtime input and returns a configured `FastAPI` app.
-How to use: import `app` for ASGI serving or call `create_app()` in tests/startup code.
-"""
+"""创建 agent service 的 FastAPI 应用并挂载各阶段 HTTP router。"""
 
 from fastapi import FastAPI
 
-from routes import document_processor_router, file_extraction_agent_router
+from routes import (
+    document_processor_router,
+    file_extraction_agent_router,
+    route_policy_agent_router,
+)
 
 
 def create_app() -> FastAPI:
@@ -17,6 +16,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(document_processor_router)
     app.include_router(file_extraction_agent_router)
+    app.include_router(route_policy_agent_router)
     return app
 
 

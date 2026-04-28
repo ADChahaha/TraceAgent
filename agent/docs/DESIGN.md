@@ -31,9 +31,12 @@ agent/
 ├── main.py
 ├── routes/
 │   ├── document_processor.py
-│   └── file_extraction_agent.py
+│   ├── file_extraction_agent.py
+│   └── route_policy_agent.py
 ├── docs/
-│   └── DESIGN.md
+│   ├── API.md
+│   ├── DESIGN.md
+│   └── DEVLOG.md
 └── service/
     ├── __init__.py
     ├── document_processor/
@@ -55,8 +58,16 @@ agent/
     │       └── DESIGN.md
     └── route_policy_agent/
         ├── __init__.py
+        ├── processor.py
+        ├── schemas.py
+        ├── input_validator.py
+        ├── policy_client.py
+        ├── impl/
+        │   ├── mapper.py
+        │   └── prompts.py
         └── docs/
-            └── DESIGN.md
+            ├── DESIGN.md
+            └── DEVLOG.md
 ```
 
 当前 `agent/pyproject.toml` 负责 `agent` 这一层的 FastAPI 入口、`routes/` 和 `service/` 业务包打包。`routes/` 只保留 HTTP 协议适配，真实业务阶段统一放在 `service` 包下，并通过 `service.document_processor`、`service.file_extraction_agent`、`service.route_policy_agent` 这三个导入路径访问。模块内部除 `__init__.py` 外统一使用绝对导入，避免相对导入层级扩散。
@@ -185,9 +196,9 @@ raw file
 
 ```text
 HTTP 请求
-  -> main.create_app() 挂载 routes/document_processor.py 和 routes/file_extraction_agent.py
+  -> main.create_app() 挂载 document_processor / file_extraction_agent / route_policy_agent 三个 router
   -> route 层完成 multipart 或 JSON 协议适配
-  -> 调用对应业务入口 service.document_processor.processor.process(...) 或 service.file_extraction_agent.processor.extract(...)
+  -> 调用对应业务入口 process(...) / extract(...) / evaluate(...)
   -> 把业务结果映射成 HTTP 响应
 ```
 
@@ -202,7 +213,7 @@ HTTP 请求
   - 接收标准化后的 `blocks`、可选 `markdown/md_list`、必填 `task_spec`、可选 `run_options`、`metadata` 以及可选模型连接参数
   - 调用 `service.file_extraction_agent.processor.extract(...)`
   - 返回 `ExtractionResult`
-- 规划中的 `POST /v1/route-policy-agent/evaluate`
+- `POST /v1/route-policy-agent/evaluate`
   - 接收 `TaskSpec`、`field_outputs` 和 `refs_with_text`
   - 调用 `service.route_policy_agent.processor.evaluate(...)`
   - 返回字段级 `accept / review / reject` route 决策

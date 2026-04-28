@@ -1,4 +1,47 @@
-last updated: 2026-04-27 14:46:39 CST
+last updated: 2026-04-28 12:51:12
+
+## 2026-04-28 12:51:12
+
+### 已完成工作
+
+- 新增 `agent/docs/API.md`，记录 agent service 的健康检查、文档标准化、字段抽取和 route policy 三类 HTTP API。
+- 文档中补齐三段式全流程 pipeline：`document_processor -> file_extraction_agent -> route_policy_agent`。
+- 记录 backend 在两段接口之间需要完成的组装职责：为 blocks 补齐 `document_id/block_id`，并从抽取 trace 组装 `refs_with_text`。
+- 实现并挂载 `route_policy_agent` HTTP 出口 `POST /v1/route-policy-agent/evaluate`，与 `agent/docs/DESIGN.md` 中的三阶段链路保持一致。
+- 使用真实 PDF `18【本科生】2025-2026学年第一学期 文明模范寝室.pdf` 走 HTTP 全流程并验证三段接口均返回 200。
+
+### 当前进展
+
+- agent service 当前具备三段 HTTP 出口：文档标准化、字段抽取、route policy 判断。
+- 真实 HTTP 全流程结果可用：模范寝室为 `106、218、413、521、603`，文明寝室为 `212、214、302、324、401、518、519、523、614、618、620、621`，楼宇平均分为 `85.1`。
+- route policy 对本次样例的 4 个字段均返回 `accept`。
+
+### 遇到的问题
+
+- RapidOCR 日志提示 `ppocr_keys_v1.txt` 不存在，但本次 OCR 和接口返回未受阻断。
+- 模型结构化输出阶段出现 Pydantic serializer warning，但 HTTP 链路和业务结果正常返回。
+
+### 下一步
+
+- 后续可把 route policy 的真实 HTTP 样例沉淀为集成测试或脚本，避免只依赖手工 curl 验证。
+
+## 2026-04-28 10:56:45
+
+### 已完成工作
+
+- 新增 `route_policy_agent` 的设计文档，明确它作为 agent service 下第三个独立阶段，负责小 LLM + rules 的字段级 route 判断。
+- 同步更新 `agent/docs/DESIGN.md`，把 agent service 从两个阶段扩展为 `document_processor`、`file_extraction_agent`、`route_policy_agent` 三个阶段。
+- 明确 `file_extraction_agent` 只产出 `ExtractionResult(result + trace)`，不内置 `accept / review / reject` 判断。
+
+### 当前进展
+
+- agent service 的职责边界调整为：文档标准化、字段抽取与 trace、route policy 三阶段分离。
+- backend 不做 LLM route 判断，只调用 agent 的 route policy 能力并保存输出。
+
+### 下一步
+
+- 后续实现 `route_policy_agent` 时，按 TDD 补 schemas、rules、policy client、processor 和 HTTP route。
+- 为新增测试文件同步维护 `tests/docs/` 下的一一对应说明文档。
 
 ## 2026-04-27 14:46:39
 

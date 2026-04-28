@@ -38,7 +38,7 @@ service.route_policy_agent
   -> 只根据字段输出和 refs 中的证据文本回答这个字段结果应 accept、review 还是 reject
 ```
 
-## 推荐结构
+## 当前结构
 
 ```text
 service/route_policy_agent/
@@ -51,17 +51,17 @@ service/route_policy_agent/
 │   ├── mapper.py
 │   └── prompts.py
 └── docs/
-    ├── API.md
-    └── DESIGN.md
+    ├── DESIGN.md
+    └── DEVLOG.md
 ```
 
-对应 HTTP route 建议放在：
+对应 HTTP route 放在：
 
 ```text
 agent/routes/route_policy_agent.py
 ```
 
-对外路径建议为：
+对外路径为：
 
 ```text
 POST /v1/route-policy-agent/evaluate
@@ -155,6 +155,24 @@ FieldDefinition + FieldOutput + refs_with_text
   -> prompts 构造不包含抽取推理过程的评价上下文
   -> policy_client.invoke(RoutePolicyDecision)
   -> FieldRouteDecision
+```
+
+当前第一版对 `failed` 字段先做最小阻断判断：如果字段是
+`critical`，或是 `required` 且不允许缺失，直接返回 `reject`，避免在
+关键字段没有字段值时继续请求模型。其他 `failed` 字段进入 `review`。
+`resolved` 字段才会进入小 LLM 判断。
+
+实际处理 pipeline 是：
+
+```text
+processor.evaluate(task_spec, field_outputs, refs_with_text)
+  -> RoutePolicyInput 解析并拒绝 trace/actions/额外风险标记等未知字段
+  -> input_validator 校验字段名、refs 分组、ref.text 和来源位置
+  -> mapper 按 field_name 合并 FieldDefinition、RouteFieldOutput、EvidenceTextRef[]
+  -> failed + critical/required 字段直接生成 FieldRouteDecision(route=reject)
+  -> resolved 字段由 prompts 构造只含字段定义、字段输出和 refs 文本的 messages
+  -> policy_client.invoke(RoutePolicyDecision, messages)
+  -> 汇总 RoutePolicyResult(field_routes[])
 ```
 
 ### 1. 合并字段上下文
