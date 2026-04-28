@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from file_extraction_agent import extractor_client as extractor_client_module
+from service.file_extraction_agent import extractor_client as extractor_client_module
 
 
 class DummyOutput(BaseModel):

@@ -21,7 +21,7 @@ def build_docx_file(*paragraphs: str, heading: str | None = None) -> NamedBytesI
 
 
 def test_docx_processor_uses_python_docx_to_generate_markdown_and_blocks():
-    from document_processor.impl.docx.processor import DocxProcessor
+    from service.document_processor.impl.docx.processor import DocxProcessor
 
     result = DocxProcessor().process(
         build_docx_file("第一段内容", "第二段内容", heading="测试标题")
@@ -39,8 +39,8 @@ def test_docx_processor_uses_python_docx_to_generate_markdown_and_blocks():
 
 
 def test_docx_processor_uses_python_docx_instead_of_docling():
-    from document_processor.impl.docx import processor as processor_module
-    from document_processor.impl.docx.processor import DocxProcessor
+    from service.document_processor.impl.docx import processor as processor_module
+    from service.document_processor.impl.docx.processor import DocxProcessor
 
     assert not hasattr(processor_module, "DocumentConverter")
 
@@ -50,7 +50,7 @@ def test_docx_processor_uses_python_docx_instead_of_docling():
 
 
 def test_docx_processor_uses_default_filename_when_input_has_no_name():
-    from document_processor.impl.docx.processor import DocxProcessor
+    from service.document_processor.impl.docx.processor import DocxProcessor
 
     result = DocxProcessor().process(NamedBytesIO(build_docx_file("内容").getvalue()))
 

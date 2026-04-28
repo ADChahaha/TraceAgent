@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from file_extraction_agent.impl.schemas import EvidenceCollection, FieldEvidence
-from file_extraction_agent.impl.tools import get_field_bundle, lookup_blocks_for_field
-from file_extraction_agent.schemas import NormalizedBlock
+from service.file_extraction_agent.impl.schemas import EvidenceCollection, FieldEvidence
+from service.file_extraction_agent.impl.tools import get_field_bundle, lookup_blocks_for_field
+from service.file_extraction_agent.schemas import NormalizedBlock
 
 
 def test_get_field_bundle_returns_named_broad_evidence():

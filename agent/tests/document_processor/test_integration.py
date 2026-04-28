@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from document_processor.processor import process
+from service.document_processor.processor import process
 
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "document_processor"

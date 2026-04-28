@@ -2,7 +2,7 @@
 
 ## 基本实现思路
 
-`file_extraction_agent.impl.resolution` 负责把 broad 阶段的 `FieldEvidence` 交给模型做字段级最终定案。代码只负责编排模型动作、执行模型请求的工具，并在模型输出后调用 `impl.validation` 做确定性后处理；不能在没有模型输出的情况下把 evidence 文本自行改成最终字段值。
+`service.file_extraction_agent.impl.resolution` 负责把 broad 阶段的 `FieldEvidence` 交给模型做字段级最终定案。代码只负责编排模型动作、执行模型请求的工具，并在模型输出后调用 `impl.validation` 做确定性后处理；不能在没有模型输出的情况下把 evidence 文本自行改成最终字段值。
 
 ```text
 GraphState.evidence_collection + TaskSpec.fields + extractor_client

@@ -4,15 +4,15 @@ import json
 
 import pytest
 
-from file_extraction_agent.impl.schemas import (
+from service.file_extraction_agent.impl.schemas import (
     EvidenceCollection,
     ExtractionInput,
     FieldEvidence,
     FieldResolutionDecision,
     RunOptions,
 )
-from file_extraction_agent.impl.state import build_graph_state
-from file_extraction_agent.schemas import FieldDefinition, NormalizedBlock, TaskSpec
+from service.file_extraction_agent.impl.state import build_graph_state
+from service.file_extraction_agent.schemas import FieldDefinition, NormalizedBlock, TaskSpec
 
 
 def _build_extraction_input() -> ExtractionInput:
@@ -42,7 +42,7 @@ def _build_extraction_input() -> ExtractionInput:
 
 
 def test_run_resolution_requires_evidence_collection_before_model_resolution():
-    from file_extraction_agent.impl.resolution import run_resolution
+    from service.file_extraction_agent.impl.resolution import run_resolution
 
     state = build_graph_state(_build_extraction_input())
 
@@ -51,7 +51,7 @@ def test_run_resolution_requires_evidence_collection_before_model_resolution():
 
 
 def test_run_resolution_requires_model_client_and_does_not_use_local_fallback():
-    from file_extraction_agent.impl.resolution import run_resolution
+    from service.file_extraction_agent.impl.resolution import run_resolution
 
     state = build_graph_state(_build_extraction_input())
     state.evidence_collection = EvidenceCollection(
@@ -72,8 +72,8 @@ def test_run_resolution_requires_model_client_and_does_not_use_local_fallback():
 
 
 def test_run_resolution_invokes_model_action_for_each_field_decision():
-    from file_extraction_agent.impl.resolution import run_resolution
-    from file_extraction_agent.impl.schemas import FieldResolutionAction
+    from service.file_extraction_agent.impl.resolution import run_resolution
+    from service.file_extraction_agent.impl.schemas import FieldResolutionAction
 
     class FakeExtractorClient:
         def __init__(self):
@@ -130,8 +130,8 @@ def test_run_resolution_invokes_model_action_for_each_field_decision():
 
 
 def test_run_resolution_rejects_unknown_used_block_ids_from_model_decision():
-    from file_extraction_agent.impl.resolution import run_resolution
-    from file_extraction_agent.impl.schemas import FieldResolutionAction
+    from service.file_extraction_agent.impl.resolution import run_resolution
+    from service.file_extraction_agent.impl.schemas import FieldResolutionAction
 
     class FakeExtractorClient:
         def invoke(self, *, output_schema, messages):
@@ -171,8 +171,8 @@ def test_run_resolution_rejects_unknown_used_block_ids_from_model_decision():
 
 
 def test_run_resolution_downgrades_invalid_enum_value_to_failed_decision():
-    from file_extraction_agent.impl.resolution import run_resolution
-    from file_extraction_agent.impl.schemas import FieldResolutionAction
+    from service.file_extraction_agent.impl.resolution import run_resolution
+    from service.file_extraction_agent.impl.schemas import FieldResolutionAction
 
     class FakeExtractorClient:
         def invoke(self, *, output_schema, messages):
@@ -227,8 +227,8 @@ def test_run_resolution_downgrades_invalid_enum_value_to_failed_decision():
 
 
 def test_run_resolution_only_uses_lookup_when_model_requests_it():
-    from file_extraction_agent.impl.resolution import run_resolution
-    from file_extraction_agent.impl.schemas import FieldResolutionAction
+    from service.file_extraction_agent.impl.resolution import run_resolution
+    from service.file_extraction_agent.impl.schemas import FieldResolutionAction
 
     class FakeExtractorClient:
         def __init__(self):
@@ -311,8 +311,8 @@ def test_run_resolution_only_uses_lookup_when_model_requests_it():
 
 
 def test_run_resolution_recomputes_lookup_usage_after_validation_override():
-    from file_extraction_agent.impl.resolution import run_resolution
-    from file_extraction_agent.impl.schemas import FieldResolutionAction
+    from service.file_extraction_agent.impl.resolution import run_resolution
+    from service.file_extraction_agent.impl.schemas import FieldResolutionAction
 
     class FakeExtractorClient:
         def __init__(self):
@@ -388,8 +388,8 @@ def test_run_resolution_recomputes_lookup_usage_after_validation_override():
 
 
 def test_run_resolution_enforces_lookup_call_limit():
-    from file_extraction_agent.impl.resolution import run_resolution
-    from file_extraction_agent.impl.schemas import FieldResolutionAction
+    from service.file_extraction_agent.impl.resolution import run_resolution
+    from service.file_extraction_agent.impl.schemas import FieldResolutionAction
 
     class FakeExtractorClient:
         def invoke(self, *, output_schema, messages):
@@ -433,8 +433,8 @@ def test_run_resolution_enforces_lookup_call_limit():
 
 
 def test_run_resolution_records_field_reference_action_when_model_requests_bundle():
-    from file_extraction_agent.impl.resolution import run_resolution
-    from file_extraction_agent.impl.schemas import FieldResolutionAction
+    from service.file_extraction_agent.impl.resolution import run_resolution
+    from service.file_extraction_agent.impl.schemas import FieldResolutionAction
 
     class FakeExtractorClient:
         def __init__(self):
@@ -509,8 +509,8 @@ def test_run_resolution_records_field_reference_action_when_model_requests_bundl
 
 
 def test_run_resolution_records_missing_field_reference_as_returned_tool_record():
-    from file_extraction_agent.impl.resolution import run_resolution
-    from file_extraction_agent.impl.schemas import FieldResolutionAction
+    from service.file_extraction_agent.impl.resolution import run_resolution
+    from service.file_extraction_agent.impl.schemas import FieldResolutionAction
 
     class FakeExtractorClient:
         def __init__(self):
@@ -568,8 +568,8 @@ def test_run_resolution_records_missing_field_reference_as_returned_tool_record(
 
 
 def test_run_resolution_does_not_lookup_missing_evidence_without_model_request():
-    from file_extraction_agent.impl.resolution import run_resolution
-    from file_extraction_agent.impl.schemas import FieldResolutionAction
+    from service.file_extraction_agent.impl.resolution import run_resolution
+    from service.file_extraction_agent.impl.schemas import FieldResolutionAction
 
     class FakeExtractorClient:
         def invoke(self, *, output_schema, messages):
@@ -618,8 +618,8 @@ def test_run_resolution_does_not_lookup_missing_evidence_without_model_request()
 
 
 def test_run_resolution_applies_generic_table_row_rules_after_model_decision():
-    from file_extraction_agent.impl.resolution import run_resolution
-    from file_extraction_agent.impl.schemas import FieldResolutionAction
+    from service.file_extraction_agent.impl.resolution import run_resolution
+    from service.file_extraction_agent.impl.schemas import FieldResolutionAction
 
     class FakeExtractorClient:
         def invoke(self, *, output_schema, messages):

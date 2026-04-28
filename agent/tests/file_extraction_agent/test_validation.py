@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from file_extraction_agent.impl.schemas import ExtractionInput, FieldDecision, FieldEvidence
-from file_extraction_agent.impl.state import build_graph_state
-from file_extraction_agent.schemas import FieldDefinition, NormalizedBlock, TaskSpec
+from service.file_extraction_agent.impl.schemas import ExtractionInput, FieldDecision, FieldEvidence
+from service.file_extraction_agent.impl.state import build_graph_state
+from service.file_extraction_agent.schemas import FieldDefinition, NormalizedBlock, TaskSpec
 
 
 def test_apply_validation_rules_corrects_table_rows_in_dedicated_module():
-    from file_extraction_agent.impl.validation import apply_validation_rules
+    from service.file_extraction_agent.impl.validation import apply_validation_rules
 
     field = FieldDefinition(
         field_name="selected_rooms",
@@ -64,7 +64,7 @@ def test_apply_validation_rules_corrects_table_rows_in_dedicated_module():
 
 
 def test_apply_validation_rules_keeps_model_decision_when_target_column_is_empty():
-    from file_extraction_agent.impl.validation import apply_validation_rules
+    from service.file_extraction_agent.impl.validation import apply_validation_rules
 
     field = FieldDefinition(
         field_name="selected_rooms",
@@ -119,7 +119,7 @@ def test_apply_validation_rules_keeps_model_decision_when_target_column_is_empty
 
 
 def test_apply_field_constraints_downgrades_invalid_enum_in_dedicated_module():
-    from file_extraction_agent.impl.validation import apply_field_constraints
+    from service.file_extraction_agent.impl.validation import apply_field_constraints
 
     field = FieldDefinition(
         field_name="approval_status",

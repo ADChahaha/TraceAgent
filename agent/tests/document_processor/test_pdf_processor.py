@@ -2,7 +2,7 @@ from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 
-from document_processor.schemas import BoundingBox
+from service.document_processor.schemas import BoundingBox
 
 
 class NamedBytesIO(BytesIO):
@@ -62,8 +62,8 @@ class FakeDocumentConverter:
 
 
 def test_pdf_processor_uses_docling_to_generate_markdown_and_blocks(monkeypatch):
-    from document_processor.impl.pdf import processor as processor_module
-    from document_processor.impl.pdf.processor import PdfProcessor
+    from service.document_processor.impl.pdf import processor as processor_module
+    from service.document_processor.impl.pdf.processor import PdfProcessor
 
     FakeDocumentConverter.instances.clear()
     monkeypatch.setattr(
@@ -91,7 +91,7 @@ def test_pdf_processor_uses_docling_to_generate_markdown_and_blocks(monkeypatch)
 
 
 def test_pdf_processor_passes_document_when_item_markdown_export_requires_it():
-    from document_processor.impl.pdf.processor import PdfProcessor
+    from service.document_processor.impl.pdf.processor import PdfProcessor
 
     class ExportNeedsDoc:
         label = "table"
@@ -109,8 +109,8 @@ def test_pdf_processor_passes_document_when_item_markdown_export_requires_it():
 
 
 def test_pdf_processor_enables_table_structure_explicitly(monkeypatch):
-    from document_processor.impl.pdf import processor as processor_module
-    from document_processor.impl.pdf.processor import PdfProcessor
+    from service.document_processor.impl.pdf import processor as processor_module
+    from service.document_processor.impl.pdf.processor import PdfProcessor
 
     FakeDocumentConverter.instances.clear()
     monkeypatch.setattr(
@@ -129,8 +129,8 @@ def test_pdf_processor_enables_table_structure_explicitly(monkeypatch):
 
 
 def test_pdf_processor_uses_explicit_rapidocr_for_text_extraction(monkeypatch):
-    from document_processor.impl.pdf import processor as processor_module
-    from document_processor.impl.pdf.processor import PdfProcessor
+    from service.document_processor.impl.pdf import processor as processor_module
+    from service.document_processor.impl.pdf.processor import PdfProcessor
 
     FakeDocumentConverter.instances.clear()
     monkeypatch.setattr(
@@ -157,8 +157,8 @@ def test_pdf_processor_uses_explicit_rapidocr_for_text_extraction(monkeypatch):
 
 
 def test_pdf_processor_uses_default_filename_when_input_has_no_name(monkeypatch):
-    from document_processor.impl.pdf import processor as processor_module
-    from document_processor.impl.pdf.processor import PdfProcessor
+    from service.document_processor.impl.pdf import processor as processor_module
+    from service.document_processor.impl.pdf.processor import PdfProcessor
 
     FakeDocumentConverter.instances.clear()
     monkeypatch.setattr(
@@ -177,11 +177,11 @@ def test_pdf_processor_uses_default_filename_when_input_has_no_name(monkeypatch)
 
 
 def test_process_routes_pdf_files_to_docling_processor_by_default(monkeypatch):
-    from document_processor import processor as entrypoint_module
-    from document_processor.impl.interface import InternalProcessorInterface
-    from document_processor.impl.pdf import processor as processor_module
-    from document_processor.impl.pdf.processor import PdfProcessor
-    from document_processor.types import FileType
+    from service.document_processor import processor as entrypoint_module
+    from service.document_processor.impl.interface import InternalProcessorInterface
+    from service.document_processor.impl.pdf import processor as processor_module
+    from service.document_processor.impl.pdf.processor import PdfProcessor
+    from service.document_processor.types import FileType
 
     FakeDocumentConverter.instances.clear()
     monkeypatch.setattr(
@@ -213,8 +213,8 @@ def test_process_routes_pdf_files_to_docling_processor_by_default(monkeypatch):
 
 
 def test_pdf_processor_propagates_docling_errors_without_fallback(monkeypatch):
-    from document_processor.impl.pdf import processor as processor_module
-    from document_processor.impl.pdf.processor import PdfProcessor
+    from service.document_processor.impl.pdf import processor as processor_module
+    from service.document_processor.impl.pdf.processor import PdfProcessor
 
     class RaisingDocumentConverter:
         def __init__(self, *args, **kwargs):
@@ -240,7 +240,7 @@ def test_pdf_processor_propagates_docling_errors_without_fallback(monkeypatch):
 
 
 def test_pdf_processor_sets_repo_local_cache_dirs_by_default(monkeypatch):
-    from document_processor.impl.pdf import processor as processor_module
+    from service.document_processor.impl.pdf import processor as processor_module
 
     repo_pdf_dir = Path(processor_module.__file__).resolve().parent / "models"
 
@@ -257,7 +257,7 @@ def test_pdf_processor_sets_repo_local_cache_dirs_by_default(monkeypatch):
 
 
 def test_pdf_processor_respects_explicit_cache_env_overrides(monkeypatch, tmp_path):
-    from document_processor.impl.pdf import processor as processor_module
+    from service.document_processor.impl.pdf import processor as processor_module
 
     custom_docling_cache = tmp_path / "docling-cache"
     custom_hf_home = tmp_path / "hf-home"

@@ -2,7 +2,7 @@
 
 ## 基本实现思路
 
-`file_extraction_agent.processor` 是对外总入口。它负责：
+`service.file_extraction_agent.processor` 是对外总入口。它负责：
 
 ```text
 blocks + 显式 task_spec

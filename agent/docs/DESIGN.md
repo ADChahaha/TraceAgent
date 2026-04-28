@@ -34,24 +34,32 @@ agent/
 │   └── file_extraction_agent.py
 ├── docs/
 │   └── DESIGN.md
-├── document_processor/
-│   ├── processor.py
-│   ├── schemas.py
-│   ├── types.py
-│   ├── impl/
-│   └── docs/
-│       ├── API.md
-│       └── DESIGN.md
-└── file_extraction_agent/
-    └── docs/
-        ├── API.md
-        └── DESIGN.md
-└── route_policy_agent/
-    └── docs/
-        └── DESIGN.md
+└── service/
+    ├── __init__.py
+    ├── document_processor/
+    │   ├── processor.py
+    │   ├── schemas.py
+    │   ├── types.py
+    │   ├── impl/
+    │   └── docs/
+    │       ├── API.md
+    │       └── DESIGN.md
+    ├── file_extraction_agent/
+    │   ├── processor.py
+    │   ├── schemas.py
+    │   ├── extractor_client.py
+    │   ├── input_adapter.py
+    │   ├── impl/
+    │   └── docs/
+    │       ├── API.md
+    │       └── DESIGN.md
+    └── route_policy_agent/
+        ├── __init__.py
+        └── docs/
+            └── DESIGN.md
 ```
 
-当前 `agent/pyproject.toml` 负责 `agent` 这一层的 FastAPI 入口和 `routes/`，并且为了让 `agent-service` 单独安装后也能启动，当前会一并打包 `document_processor`。`document_processor` 仍保留自己的 `document_processor/pyproject.toml`，便于独立开发与测试。模块内部除 `__init__.py` 外统一使用绝对导入，避免相对导入层级扩散。
+当前 `agent/pyproject.toml` 负责 `agent` 这一层的 FastAPI 入口、`routes/` 和 `service/` 业务包打包。`routes/` 只保留 HTTP 协议适配，真实业务阶段统一放在 `service` 包下，并通过 `service.document_processor`、`service.file_extraction_agent`、`service.route_policy_agent` 这三个导入路径访问。模块内部除 `__init__.py` 外统一使用绝对导入，避免相对导入层级扩散。
 
 当前 `agent` 根层运行时依赖由 [pyproject.toml](./agent/pyproject.toml) 管理，至少包括：
 
@@ -71,7 +79,7 @@ agent/
 - 负责原始 `pdf/docx` 的读取、OCR、结构化块提取和 Markdown 标准化
 - 输出统一 `ProcessResult(blocks + md_list + markdown + meta_info + warnings)`
 - 提供两类入口：
-  - Python 入口：`document_processor.process(...)`
+  - Python 入口：`service.document_processor.processor.process(...)`
   - HTTP 入口：`routes/document_processor.py`
 
 ### `file_extraction_agent`
@@ -83,8 +91,8 @@ agent/
 
 当前业务入口包括：
 
-- `file_extraction_agent.processor.extract(...)`
-- `file_extraction_agent.extractor_client.build_extractor_client(...)`
+- `service.file_extraction_agent.processor.extract(...)`
+- `service.file_extraction_agent.extractor_client.build_extractor_client(...)`
 - HTTP 入口：`routes/file_extraction_agent.py`
 
 当前固定采用两阶段流程：
@@ -92,7 +100,7 @@ agent/
 1. broad extraction：一次读取全部 block，为每个 schema 字段生成证据 bundle
 2. field resolution：逐字段读取 broad evidence，必要时请求工具补查，再输出字段最终结果
 
-两阶段都使用结构化输出，但不再假设所有 OpenAI 兼容接口都支持同一种结构化协议。`impl/graph.py` 负责编排阶段流转，模型调用层当前由 `file_extraction_agent/extractor_client.py` 统一处理：
+两阶段都使用结构化输出，但不再假设所有 OpenAI 兼容接口都支持同一种结构化协议。`impl/graph.py` 负责编排阶段流转，模型调用层当前由 `service/file_extraction_agent/extractor_client.py` 统一处理：
 
 ```text
 调用方显式传入 base_url / openai_api_key / model，或部署环境提供 BASE_URL / OPENAI_API_KEY / MODEL
@@ -118,10 +126,10 @@ agent/
 
 更具体的 schema、校验和任务配置，建议直接查看：
 
-- `document_processor/docs/API.md`
-- `file_extraction_agent/docs/API.md`
-- `file_extraction_agent/schemas.py`
-- `file_extraction_agent/impl/resolution.py` 中的 `validation_rules` 后处理逻辑
+- `service/document_processor/docs/API.md`
+- `service/file_extraction_agent/docs/API.md`
+- `service/file_extraction_agent/schemas.py`
+- `service/file_extraction_agent/impl/resolution.py` 中的 `validation_rules` 后处理逻辑
 
 ### `route_policy_agent`
 
@@ -134,12 +142,12 @@ agent/
 
 当前规划入口包括：
 
-- Python 入口：`route_policy_agent.processor.evaluate(...)`
+- Python 入口：`service.route_policy_agent.processor.evaluate(...)`
 - HTTP 入口：`routes/route_policy_agent.py`
 
 这一层只看任务/字段定义、字段输出和 refs 中携带的证据文本与来源位置，不读取完整原文。更具体的设计见：
 
-- `route_policy_agent/docs/DESIGN.md`
+- `service/route_policy_agent/docs/DESIGN.md`
 
 ## 主链路
 
@@ -177,9 +185,9 @@ raw file
 
 ```text
 HTTP 请求
-  -> main.create_app() 挂载 routes/document_processor.py、routes/file_extraction_agent.py 和 routes/route_policy_agent.py
+  -> main.create_app() 挂载 routes/document_processor.py 和 routes/file_extraction_agent.py
   -> route 层完成 multipart 或 JSON 协议适配
-  -> 调用对应业务入口 document_processor.processor.process(...) 或 file_extraction_agent.processor.extract(...)
+  -> 调用对应业务入口 service.document_processor.processor.process(...) 或 service.file_extraction_agent.processor.extract(...)
   -> 把业务结果映射成 HTTP 响应
 ```
 
@@ -187,19 +195,19 @@ HTTP 请求
 
 - `POST /v1/document-processor/process`
   - 接收上传文件和可选 `file_type`
-  - 调用 `document_processor.processor.process(...)`
+  - 调用 `service.document_processor.processor.process(...)`
   - 返回 `ProcessResult` 对应的 JSON 形状
   - 兼容保留旧路径 `POST /v1/ocr/process`
 - `POST /v1/file-extraction-agent/extract`
   - 接收标准化后的 `blocks`、可选 `markdown/md_list`、必填 `task_spec`、可选 `run_options`、`metadata` 以及可选模型连接参数
-  - 调用 `file_extraction_agent.processor.extract(...)`
+  - 调用 `service.file_extraction_agent.processor.extract(...)`
   - 返回 `ExtractionResult`
-- `POST /v1/route-policy-agent/evaluate`
+- 规划中的 `POST /v1/route-policy-agent/evaluate`
   - 接收 `TaskSpec`、`field_outputs` 和 `refs_with_text`
-  - 调用 `route_policy_agent.processor.evaluate(...)`
+  - 调用 `service.route_policy_agent.processor.evaluate(...)`
   - 返回字段级 `accept / review / reject` route 决策
 
-当前暂不引入额外 `src/` 或 `app/` 目录。原因是 `agent/pyproject.toml` 已经按 `main.py`、`routes/` 和业务包打包；路由层新增文件即可保持业务代码和 HTTP 适配的边界清楚，目录迁移应当等到服务入口或包结构需要整体重排时再做。
+当前暂不引入额外 `src/` 或 `app/` 目录。原因是 `agent/pyproject.toml` 已经按 `main.py`、`routes/` 和 `service/` 业务包打包；`service/` 只承载业务阶段，路由层继续放在 `routes/`，这样可以保持业务代码和 HTTP 适配边界清楚。
 
 ## 约束
 

@@ -2,7 +2,7 @@ from io import BytesIO
 
 import pytest
 
-from document_processor.types import (
+from service.document_processor.types import (
     FileType,
     UnsupportedFileTypeError,
     infer_file_type,

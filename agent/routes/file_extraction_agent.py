@@ -4,7 +4,7 @@
 
 ```text
 HTTP 调用方提交 blocks、markdown、显式 task_spec、run_options 和 metadata
-  -> FastAPI 先用 file_extraction_agent.schemas 里的稳定输入对象解析请求体
+  -> FastAPI 先用 service.file_extraction_agent.schemas 里的稳定输入对象解析请求体
   -> route 层不重新定义抽取业务结构，只把 HTTP JSON 转成 processor.extract(...) 的参数
   -> processor.extract(...) 负责输入适配、模型客户端构造和 graph 执行
   -> route 层把 ExtractionResult 作为响应返回
@@ -21,9 +21,9 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
-from file_extraction_agent.extractor_client import ExtractorClientConfigError
-from file_extraction_agent.impl.schemas import RunOptions
-from file_extraction_agent.schemas import ExtractionResult, NormalizedBlock, TaskSpec
+from service.file_extraction_agent.extractor_client import ExtractorClientConfigError
+from service.file_extraction_agent.impl.schemas import RunOptions
+from service.file_extraction_agent.schemas import ExtractionResult, NormalizedBlock, TaskSpec
 
 
 StructuredOutputStrategy = Literal["json_schema", "tool_call", "auto"]
@@ -58,7 +58,7 @@ async def extract_fields(request: ExtractRequest) -> ExtractionResult:
 
 
 def _extract_fields(request: ExtractRequest) -> ExtractionResult:
-    extract = import_module("file_extraction_agent.processor").extract
+    extract = import_module("service.file_extraction_agent.processor").extract
     return extract(
         blocks=request.blocks,
         markdown=request.markdown,

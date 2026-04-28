@@ -3,7 +3,7 @@
 Purpose: expose health/capability/process routes for document normalization.
 Input/Output: accepts FastAPI uploads/forms and returns Pydantic response models.
 How to use: mount `router` in the service FastAPI app; business callers should use
-`document_processor.process(...)` directly instead of this module.
+`service.document_processor.processor.process(...)` directly instead of this module.
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
-from document_processor.impl.base import InvalidFileObjectError
-from document_processor.types import FileType, UnsupportedFileTypeError
+from service.document_processor.impl.base import InvalidFileObjectError
+from service.document_processor.types import FileType, UnsupportedFileTypeError
 
 router = APIRouter(tags=["document-processor"])
 
@@ -127,12 +127,12 @@ def _stringify_path(path: Path | None) -> str | None:
 
 
 def _resolve_docling_artifacts_path() -> Path | None:
-    pdf_docling_adapter = import_module("document_processor.impl.pdf.docling_adapter")
+    pdf_docling_adapter = import_module("service.document_processor.impl.pdf.docling_adapter")
     return pdf_docling_adapter.resolve_docling_artifacts_path()
 
 
 def _process_document(file_obj, file_type: str | None):
-    process_document = import_module("document_processor.processor").process
+    process_document = import_module("service.document_processor.processor").process
     return process_document(file_obj, file_type)
 
 

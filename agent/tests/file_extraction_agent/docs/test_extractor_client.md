@@ -2,7 +2,7 @@
 
 ## 基本实现思路
 
-`file_extraction_agent.extractor_client` 负责把“连接哪个 OpenAI 兼容服务”和“按什么结构化输出协议调用模型”拆开管理。连接信息优先来自显式参数，缺省时读取环境变量；如果环境里没有 `MODEL`，就使用代码内默认模型。结构化输出策略由调用方显式传入 `build_extractor_client(...)`，然后再统一构造一个可直接 `invoke(...)` 的抽取客户端。
+`service.file_extraction_agent.extractor_client` 负责把“连接哪个 OpenAI 兼容服务”和“按什么结构化输出协议调用模型”拆开管理。连接信息优先来自显式参数，缺省时读取环境变量；如果环境里没有 `MODEL`，就使用代码内默认模型。结构化输出策略由调用方显式传入 `build_extractor_client(...)`，然后再统一构造一个可直接 `invoke(...)` 的抽取客户端。
 
 这层可以按下面的 pipeline 理解：
 

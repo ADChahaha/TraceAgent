@@ -1,6 +1,6 @@
 from pydantic import ValidationError
 
-from file_extraction_agent.impl.schemas import (
+from service.file_extraction_agent.impl.schemas import (
     EvidenceCollection,
     ExtractionInput,
     FieldDecision,
@@ -10,7 +10,7 @@ from file_extraction_agent.impl.schemas import (
     LookupRecord,
     RunOptions,
 )
-from file_extraction_agent.schemas import (
+from service.file_extraction_agent.schemas import (
     EvidenceSummary,
     ExtractionContent,
     ExtractionResult,

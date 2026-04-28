@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from file_extraction_agent.impl.schemas import EvidenceCollection, ExtractionInput, FieldEvidence
-from file_extraction_agent.impl.state import build_graph_state
-from file_extraction_agent.schemas import FieldDefinition, NormalizedBlock, TaskSpec
+from service.file_extraction_agent.impl.schemas import EvidenceCollection, ExtractionInput, FieldEvidence
+from service.file_extraction_agent.impl.state import build_graph_state
+from service.file_extraction_agent.schemas import FieldDefinition, NormalizedBlock, TaskSpec
 
 
 def test_run_broad_extraction_invokes_client_and_writes_output_to_state():
-    from file_extraction_agent.impl.broad_extraction import run_broad_extraction
+    from service.file_extraction_agent.impl.broad_extraction import run_broad_extraction
 
     extraction_input = ExtractionInput(
         blocks=[NormalizedBlock(document_id="doc-1", block_id="b-1", text="发票号：INV-100")],
@@ -55,7 +55,7 @@ def test_run_broad_extraction_invokes_client_and_writes_output_to_state():
 
 
 def test_run_broad_extraction_rejects_missing_task_field():
-    from file_extraction_agent.impl.broad_extraction import run_broad_extraction
+    from service.file_extraction_agent.impl.broad_extraction import run_broad_extraction
 
     extraction_input = ExtractionInput(
         blocks=[NormalizedBlock(document_id="doc-1", block_id="b-1", text="发票号：INV-100")],
@@ -88,7 +88,7 @@ def test_run_broad_extraction_rejects_missing_task_field():
 
 
 def test_run_broad_extraction_rejects_duplicate_fields_before_resolution():
-    from file_extraction_agent.impl.broad_extraction import run_broad_extraction
+    from service.file_extraction_agent.impl.broad_extraction import run_broad_extraction
 
     extraction_input = ExtractionInput(
         blocks=[NormalizedBlock(document_id="doc-1", block_id="b-1", text="发票号：INV-100")],
@@ -114,7 +114,7 @@ def test_run_broad_extraction_rejects_duplicate_fields_before_resolution():
 
 
 def test_run_broad_extraction_rejects_unknown_fields_and_block_references():
-    from file_extraction_agent.impl.broad_extraction import run_broad_extraction
+    from service.file_extraction_agent.impl.broad_extraction import run_broad_extraction
 
     extraction_input = ExtractionInput(
         blocks=[NormalizedBlock(document_id="doc-1", block_id="b-1", text="发票号：INV-100")],

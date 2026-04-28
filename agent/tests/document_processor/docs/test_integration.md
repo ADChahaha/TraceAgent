@@ -2,12 +2,12 @@
 
 ## 基本实现思路
 
-这个测试文件不直接碰 `impl/docx/processor.py` 或 `impl/pdf/processor.py`，而是专门从 `document_processor.processor.process(...)` 这个对外入口做真实样本集成验证。它固定的链路是：
+这个测试文件不直接碰 `impl/docx/processor.py` 或 `impl/pdf/processor.py`，而是专门从 `service.document_processor.processor.process(...)` 这个对外入口做真实样本集成验证。它固定的链路是：
 
 ```text
 测试夹具目录里的真实 `.docx` / `.pdf` 文件
   -> 以二进制文件对象方式打开
-  -> 调用 `document_processor.process(file_obj)`
+  -> 调用 `service.document_processor.processor.process(file_obj)`
   -> 外层入口校验 `read()` 并按文件名推断 `FileType`
   -> `InternalProcessorInterface` 选择默认注册的 `DocxProcessor` / `PdfProcessor`
   -> 真实处理器完成解析
@@ -18,8 +18,8 @@
 
 ## 测什么
 
-- `document_processor.process(...)` 能处理真实 `DOCX` 样本
-- `document_processor.process(...)` 能处理真实 `PDF` 样本
+- `service.document_processor.processor.process(...)` 能处理真实 `DOCX` 样本
+- `service.document_processor.processor.process(...)` 能处理真实 `PDF` 样本
 - 对外入口返回的 `ProcessResult` 至少包含可用的 `markdown`、`md_list`、`blocks` 和基础 `meta_info`
 
 ## 每个函数在干什么

@@ -2,7 +2,7 @@
 
 ## 基本实现思路
 
-`file_extraction_agent.impl.tools` 给 resolution 阶段提供内部辅助能力。
+`service.file_extraction_agent.impl.tools` 给 resolution 阶段提供内部辅助能力。
 
 ```text
 resolution 传入 broad 阶段的 EvidenceCollection 或全量 blocks

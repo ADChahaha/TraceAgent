@@ -2,7 +2,7 @@
 
 ## 基本实现思路
 
-`document_processor.processor` 现在是对外统一入口，外部调用方只需要传入 `file_obj` 和可选的 `file_type`，不需要直接接触具体处理器类。外层入口自己负责输入校验和文件类型推断；真正的注册表和实例缓存都封装在 `impl/interface.py` 里的固定内部接口类 `InternalProcessorInterface` 中。外部入口把“已经确定好的 `FileType` + file_obj”交给这个内部类；内部类只负责根据类型从自己维护的注册表里找到具体处理器类，实例化后再走多态调用。外部不能显式注入处理器实例，扩展只能通过内部注册机制完成。
+`service.document_processor.processor` 现在是对外统一入口，外部调用方只需要传入 `file_obj` 和可选的 `file_type`，不需要直接接触具体处理器类。外层入口自己负责输入校验和文件类型推断；真正的注册表和实例缓存都封装在 `impl/interface.py` 里的固定内部接口类 `InternalProcessorInterface` 中。外部入口把“已经确定好的 `FileType` + file_obj”交给这个内部类；内部类只负责根据类型从自己维护的注册表里找到具体处理器类，实例化后再走多态调用。外部不能显式注入处理器实例，扩展只能通过内部注册机制完成。
 
 也就是说，这一层负责三件事：
 

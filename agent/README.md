@@ -5,8 +5,8 @@
 ## Overview
 
 - 接收 `pdf`、`docx` 等文档输入
-- 调用 `document_processor` 做文档标准化
-- 调用 `file_extraction_agent` 做字段抽取
+- 调用 `service.document_processor` 做文档标准化
+- 调用 `service.file_extraction_agent` 做字段抽取
 - 通过 HTTP 接口对外提供服务
 
 ## Quick Start
@@ -26,10 +26,10 @@ pip install -e .
 
 ### PDF 模型目录
 
-`document_processor` 的 PDF 路径默认使用 `docling + RapidOCR`。为了让模型下载产物跟 `impl/pdf` 这块能力放在一起，同时避免散落到每台机器自己的默认用户目录，当前实现会在运行时自动把目录收口到 [`agent/document_processor/impl/pdf/models`](./agent/document_processor/impl/pdf/models)：
+`service.document_processor` 的 PDF 路径默认使用 `docling + RapidOCR`。为了让模型下载产物跟 `impl/pdf` 这块能力放在一起，同时避免散落到每台机器自己的默认用户目录，当前实现会在运行时自动把目录收口到 [`agent/service/document_processor/impl/pdf/models`](./agent/service/document_processor/impl/pdf/models)：
 
 ```text
-./agent/document_processor/impl/pdf/models
+./agent/service/document_processor/impl/pdf/models
   -> docling/
   -> huggingface/
   -> rapidocr/
@@ -69,24 +69,32 @@ python -m uvicorn main:app --reload --port 8000
 
 ## 模块说明
 
-### `document_processor`
+### `service.document_processor`
 
 负责把原始文档处理成统一的 Markdown 和 block 结果，给后续抽取使用。
 
 文档见：
 
-- [document_processor/README.md](document_processor/README.md)
-- [document_processor/docs/API.md](document_processor/docs/API.md)
-- [document_processor/docs/DESIGN.md](document_processor/docs/DESIGN.md)
+- [service/document_processor/README.md](service/document_processor/README.md)
+- [service/document_processor/docs/API.md](service/document_processor/docs/API.md)
+- [service/document_processor/docs/DESIGN.md](service/document_processor/docs/DESIGN.md)
 
-### `file_extraction_agent`
+### `service.file_extraction_agent`
 
 负责在标准化后的多文档内容上做字段抽取，输出候选和最终结果。
 
 文档见：
 
-- [file_extraction_agent/README.md](file_extraction_agent/README.md)
-- [file_extraction_agent/docs/API.md](file_extraction_agent/docs/API.md)
-- [file_extraction_agent/docs/DESIGN.md](file_extraction_agent/docs/DESIGN.md)
+- [service/file_extraction_agent/README.md](service/file_extraction_agent/README.md)
+- [service/file_extraction_agent/docs/API.md](service/file_extraction_agent/docs/API.md)
+- [service/file_extraction_agent/docs/DESIGN.md](service/file_extraction_agent/docs/DESIGN.md)
+
+### `service.route_policy_agent`
+
+负责字段抽取后的 route policy 设计，后续实现会在这里补齐评估入口和 HTTP route。
+
+文档见：
+
+- [service/route_policy_agent/docs/DESIGN.md](service/route_policy_agent/docs/DESIGN.md)
 
 更具体的服务级实现边界和流程说明见 [docs/DESIGN.md](docs/DESIGN.md)。

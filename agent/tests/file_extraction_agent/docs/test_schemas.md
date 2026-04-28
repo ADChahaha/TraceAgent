@@ -5,10 +5,10 @@
 这个测试文件同时约束两层 schema：
 
 ```text
-外部 `file_extraction_agent.schemas`
+外部 `service.file_extraction_agent.schemas`
   -> 定义稳定输入输出对象
   -> 包括 TaskSpec / NormalizedBlock / ExtractionResult
-内部 `file_extraction_agent.impl.schemas`
+内部 `service.file_extraction_agent.impl.schemas`
   -> 定义流程专用对象
   -> 包括 ExtractionInput / FieldEvidence / FieldResolutionDecision / FieldDecision / LookupRecord / FieldReferenceRecord
 ```

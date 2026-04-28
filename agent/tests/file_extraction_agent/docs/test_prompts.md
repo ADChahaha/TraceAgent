@@ -2,7 +2,7 @@
 
 ## 基本实现思路
 
-`file_extraction_agent.impl.prompts` 负责把内部 `ExtractionInput` 和 `EvidenceCollection` 组装成给模型调用层消费的消息列表。
+`service.file_extraction_agent.impl.prompts` 负责把内部 `ExtractionInput` 和 `EvidenceCollection` 组装成给模型调用层消费的消息列表。
 
 ```text
 ExtractionInput 或 EvidenceCollection

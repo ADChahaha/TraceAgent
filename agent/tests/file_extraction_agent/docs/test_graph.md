@@ -2,7 +2,7 @@
 
 ## 基本实现思路
 
-`file_extraction_agent.impl.graph` 负责串联内部节点，并把内部 `FieldDecision` 映射成对外 `ExtractionResult`。
+`service.file_extraction_agent.impl.graph` 负责串联内部节点，并把内部 `FieldDecision` 映射成对外 `ExtractionResult`。
 
 ```text
 ExtractionInput + ExtractorClient

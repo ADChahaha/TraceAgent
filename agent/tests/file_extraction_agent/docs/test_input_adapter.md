@@ -2,7 +2,7 @@
 
 ## 基本实现思路
 
-`file_extraction_agent.input_adapter` 负责把外部 blocks 主输入收敛成内部 `ExtractionInput`。
+`service.file_extraction_agent.input_adapter` 负责把外部 blocks 主输入收敛成内部 `ExtractionInput`。
 
 ```text
 调用方传入 blocks，可选再传 markdown / md_list，并必须显式传 task_spec

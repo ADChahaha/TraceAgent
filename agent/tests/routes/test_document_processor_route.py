@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from document_processor.schemas import ContentBlock, ProcessResult
+from service.document_processor.schemas import ContentBlock, ProcessResult
 from main import create_app
 
 
 def test_document_processor_process_route_calls_business_processor(monkeypatch):
-    from document_processor import processor as processor_module
+    from service.document_processor import processor as processor_module
 
     seen_call: dict[str, object] = {}
 

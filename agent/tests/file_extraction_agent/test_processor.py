@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from file_extraction_agent import extractor_client as extractor_client_module
-from file_extraction_agent import processor as processor_module
-from file_extraction_agent.impl.schemas import ExtractionInput
-from file_extraction_agent.schemas import (
+from service.file_extraction_agent import extractor_client as extractor_client_module
+from service.file_extraction_agent import processor as processor_module
+from service.file_extraction_agent.impl.schemas import ExtractionInput
+from service.file_extraction_agent.schemas import (
     EvidenceSummary,
     ExtractionContent,
     ExtractionResult,

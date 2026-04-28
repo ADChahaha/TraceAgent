@@ -1,6 +1,6 @@
 # test_document_processor_route.py
 
-这份测试文档对应 `tests/routes/test_document_processor_route.py`，覆盖 `document_processor` 的 HTTP 最终出口。
+这份测试文档对应 `tests/routes/test_document_processor_route.py`，覆盖 `service.document_processor` 的 HTTP 最终出口。
 
 ## 实现链路
 
@@ -8,7 +8,7 @@
 HTTP multipart 上传 file + file_type
   -> FastAPI app 挂载 document processor router
   -> route 层把 UploadFile 包装成业务层可读取的 file-like 对象
-  -> 调用 document_processor.processor.process(file_obj, file_type)
+  -> 调用 service.document_processor.processor.process(file_obj, file_type)
   -> 把 ProcessResult 映射成 JSON 响应
 ```
 

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from file_extraction_agent.impl.schemas import (
+from service.file_extraction_agent.impl.schemas import (
     EvidenceCollection,
     ExtractionInput,
     FieldDecision,
     FieldEvidence,
 )
-from file_extraction_agent.schemas import (
+from service.file_extraction_agent.schemas import (
     EvidenceSummary,
     ExtractionResult,
     FieldDefinition,
@@ -39,7 +39,7 @@ def _build_extraction_input() -> ExtractionInput:
 
 
 def test_run_extraction_graph_runs_broad_extraction_then_resolution(monkeypatch):
-    from file_extraction_agent.impl import graph as graph_module
+    from service.file_extraction_agent.impl import graph as graph_module
 
     extraction_input = _build_extraction_input()
     evidence_collection = EvidenceCollection(
@@ -91,7 +91,7 @@ def test_run_extraction_graph_runs_broad_extraction_then_resolution(monkeypatch)
 
 
 def test_run_extraction_graph_maps_internal_decisions_to_external_result(monkeypatch):
-    from file_extraction_agent.impl import graph as graph_module
+    from service.file_extraction_agent.impl import graph as graph_module
 
     extraction_input = _build_extraction_input()
 
@@ -160,7 +160,7 @@ def test_run_extraction_graph_maps_internal_decisions_to_external_result(monkeyp
 
 
 def test_run_extraction_graph_returns_failed_result_when_broad_fails(monkeypatch):
-    from file_extraction_agent.impl import graph as graph_module
+    from service.file_extraction_agent.impl import graph as graph_module
 
     extraction_input = _build_extraction_input()
 
@@ -184,7 +184,7 @@ def test_run_extraction_graph_returns_failed_result_when_broad_fails(monkeypatch
 
 
 def test_run_extraction_graph_preserves_trace_before_resolution_failure(monkeypatch):
-    from file_extraction_agent.impl import graph as graph_module
+    from service.file_extraction_agent.impl import graph as graph_module
 
     extraction_input = _build_extraction_input()
 

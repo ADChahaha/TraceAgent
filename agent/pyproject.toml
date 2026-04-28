@@ -30,12 +30,14 @@ dev = [
 [tool.setuptools]
 py-modules = ["main"]
 packages = [
-    "file_extraction_agent",
-    "file_extraction_agent.impl",
-    "document_processor",
-    "document_processor.impl",
-    "document_processor.impl.docx",
-    "document_processor.impl.pdf",
+    "service",
+    "service.document_processor",
+    "service.document_processor.impl",
+    "service.document_processor.impl.docx",
+    "service.document_processor.impl.pdf",
+    "service.file_extraction_agent",
+    "service.file_extraction_agent.impl",
+    "service.route_policy_agent",
     "routes",
 ]
 

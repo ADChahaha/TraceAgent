@@ -2,7 +2,7 @@
 
 ## 基本实现思路
 
-这个测试文件约束 `file_extraction_agent.impl.broad_extraction` 的第一阶段节点行为。
+这个测试文件约束 `service.file_extraction_agent.impl.broad_extraction` 的第一阶段节点行为。
 
 ```text
 GraphState(extraction_input=..., evidence_collection=None)

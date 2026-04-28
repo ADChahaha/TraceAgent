@@ -2,7 +2,7 @@
 
 ## 基本实现思路
 
-`file_extraction_agent.impl.validation` 负责模型完成字段定案之后的确定性后处理。
+`service.file_extraction_agent.impl.validation` 负责模型完成字段定案之后的确定性后处理。
 
 ```text
 FieldDecision + FieldDefinition + GraphState

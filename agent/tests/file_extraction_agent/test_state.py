@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from file_extraction_agent.impl.schemas import (
+from service.file_extraction_agent.impl.schemas import (
     EvidenceCollection,
     ExtractionInput,
     FieldDecision,
     FieldEvidence,
 )
-from file_extraction_agent.impl.state import GraphState, build_graph_state
-from file_extraction_agent.schemas import FieldDefinition, NormalizedBlock, TaskSpec
+from service.file_extraction_agent.impl.state import GraphState, build_graph_state
+from service.file_extraction_agent.schemas import FieldDefinition, NormalizedBlock, TaskSpec
 
 
 def test_build_graph_state_initializes_empty_execution_state():

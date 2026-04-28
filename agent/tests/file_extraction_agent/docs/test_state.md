@@ -2,7 +2,7 @@
 
 ## 基本实现思路
 
-`file_extraction_agent.impl.state` 负责承载图运行时的内部中间态。
+`service.file_extraction_agent.impl.state` 负责承载图运行时的内部中间态。
 
 ```text
 build_graph_state(extraction_input)

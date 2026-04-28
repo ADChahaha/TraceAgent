@@ -1,6 +1,6 @@
 from dataclasses import asdict, fields, is_dataclass
 
-from document_processor.schemas import BoundingBox, ContentBlock, ProcessResult
+from service.document_processor.schemas import BoundingBox, ContentBlock, ProcessResult
 
 
 def test_bounding_box_keeps_coordinate_field_order():

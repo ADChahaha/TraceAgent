@@ -1,14 +1,14 @@
 # test_file_extraction_agent_route.py
 
-这份测试文档对应 `tests/routes/test_file_extraction_agent_route.py`，覆盖 `file_extraction_agent` 的 HTTP 最终出口。
+这份测试文档对应 `tests/routes/test_file_extraction_agent_route.py`，覆盖 `service.file_extraction_agent` 的 HTTP 最终出口。
 
 ## 实现链路
 
 ```text
 HTTP JSON 请求传入 blocks、markdown、显式 task_spec、run_options 和 metadata
   -> FastAPI app 挂载 file extraction router
-  -> route 层用 file_extraction_agent.schemas 解析稳定输入对象
-  -> 调用 file_extraction_agent.processor.extract(...)
+  -> route 层用 service.file_extraction_agent.schemas 解析稳定输入对象
+  -> 调用 service.file_extraction_agent.processor.extract(...)
   -> 把 ExtractionResult 原样作为 JSON 响应返回
 ```
 

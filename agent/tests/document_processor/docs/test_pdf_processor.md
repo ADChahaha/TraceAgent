@@ -2,7 +2,7 @@
 
 ## 基本实现思路
 
-`impl/pdf/processor.py` 是 `document_processor` 里真正负责 PDF 标准化的实现文件。它的目标不是自己解析版面，而是把 PDF 二进制包装成 `docling` 能接受的 `DocumentStream`，再把 `docling` 产出的文档对象归一化成仓库内部统一的 `ProcessResult`。
+`impl/pdf/processor.py` 是 `service.document_processor` 里真正负责 PDF 标准化的实现文件。它的目标不是自己解析版面，而是把 PDF 二进制包装成 `docling` 能接受的 `DocumentStream`，再把 `docling` 产出的文档对象归一化成仓库内部统一的 `ProcessResult`。
 
 当前这条处理链路的 pipeline 是：
 
@@ -32,7 +32,7 @@
 
 - `PdfProcessor` 会调用 `docling` 转换 PDF，并生成 markdown 与 blocks
 - 当输入对象没有 `filename/name` 时，`PdfProcessor` 会补默认文件名 `document.pdf`
-- 顶层 `document_processor.process(...)` 在默认注册表里会把 `pdf` 路由到真正的 `PdfProcessor`
+- 顶层 `service.document_processor.processor.process(...)` 在默认注册表里会把 `pdf` 路由到真正的 `PdfProcessor`
 - `docling` 转换失败时，`PdfProcessor` 会直接抛出原始异常，不做任何降级或替代解析
 - 如果调用方没有显式配置模型目录，`PdfProcessor` 会默认把运行时模型目录指到 `impl/pdf/models/` 下
 - 如果调用方显式设置了缓存环境变量，`PdfProcessor` 不会覆盖这些配置
@@ -69,7 +69,7 @@
 `test_process_routes_pdf_files_to_docling_processor_by_default`
 
 - 清空 `InternalProcessorInterface` 的默认注册状态。
-- 直接走顶层 `document_processor.process(...)` 处理 `.pdf` 文件。
+- 直接走顶层 `service.document_processor.processor.process(...)` 处理 `.pdf` 文件。
 - 检查默认注册表最终绑定的是 `PdfProcessor`，而不是旧的占位处理器。
 
 `test_pdf_processor_propagates_docling_errors_without_fallback`

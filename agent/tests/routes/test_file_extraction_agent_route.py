@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from file_extraction_agent.schemas import (
+from service.file_extraction_agent.schemas import (
     EvidenceSummary,
     ExtractionContent,
     ExtractionResult,
@@ -12,12 +12,12 @@ from file_extraction_agent.schemas import (
     FieldTrace,
     TaskSpec,
 )
-from file_extraction_agent.impl.schemas import RunOptions
+from service.file_extraction_agent.impl.schemas import RunOptions
 from main import create_app
 
 
 def test_file_extraction_agent_route_calls_business_extractor(monkeypatch):
-    from file_extraction_agent import processor as processor_module
+    from service.file_extraction_agent import processor as processor_module
 
     seen_call: dict[str, object] = {}
 
@@ -100,7 +100,7 @@ def test_file_extraction_agent_route_calls_business_extractor(monkeypatch):
 
 
 def test_file_extraction_agent_route_passes_run_options_to_business_extractor(monkeypatch):
-    from file_extraction_agent import processor as processor_module
+    from service.file_extraction_agent import processor as processor_module
 
     seen_call: dict[str, object] = {}
 
@@ -151,7 +151,7 @@ def test_file_extraction_agent_route_passes_run_options_to_business_extractor(mo
 
 
 def test_file_extraction_agent_route_returns_422_for_missing_task_spec(monkeypatch):
-    from file_extraction_agent import processor as processor_module
+    from service.file_extraction_agent import processor as processor_module
 
     def fake_extract(**kwargs):
         del kwargs

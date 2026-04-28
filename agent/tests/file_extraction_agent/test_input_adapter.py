@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from file_extraction_agent.impl.schemas import ExtractionInput, RunOptions
-from file_extraction_agent.schemas import (
+from service.file_extraction_agent.impl.schemas import ExtractionInput, RunOptions
+from service.file_extraction_agent.schemas import (
     FieldDefinition,
     NormalizedBlock,
     TaskSpec,
@@ -9,7 +9,7 @@ from file_extraction_agent.schemas import (
 
 
 def test_build_graph_input_uses_explicit_task_spec():
-    from file_extraction_agent import input_adapter
+    from service.file_extraction_agent import input_adapter
 
     extraction_input = input_adapter.build_graph_input(
         blocks=[NormalizedBlock(document_id="doc-1", block_id="b-1", text="内容")],
@@ -38,7 +38,7 @@ def test_build_graph_input_uses_explicit_task_spec():
 
 
 def test_build_graph_input_requires_explicit_task_spec():
-    from file_extraction_agent import input_adapter
+    from service.file_extraction_agent import input_adapter
 
     try:
         input_adapter.build_graph_input(
@@ -51,7 +51,7 @@ def test_build_graph_input_requires_explicit_task_spec():
 
 
 def test_build_graph_input_requires_block_ids_from_upstream():
-    from file_extraction_agent import input_adapter
+    from service.file_extraction_agent import input_adapter
 
     task_spec = TaskSpec(
         task_name="invoice",
@@ -70,7 +70,7 @@ def test_build_graph_input_requires_block_ids_from_upstream():
 
 
 def test_build_graph_input_rejects_duplicate_block_ids():
-    from file_extraction_agent import input_adapter
+    from service.file_extraction_agent import input_adapter
 
     task_spec = TaskSpec(
         task_name="invoice",
@@ -92,7 +92,7 @@ def test_build_graph_input_rejects_duplicate_block_ids():
 
 
 def test_build_graph_input_preserves_valid_upstream_block_ids():
-    from file_extraction_agent import input_adapter
+    from service.file_extraction_agent import input_adapter
 
     task_spec = TaskSpec(
         task_name="invoice",
