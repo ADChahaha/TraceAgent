@@ -19,7 +19,7 @@ GraphState(extraction_input=..., evidence_collection=None)
 
 - 节点会请求 `EvidenceCollection`
 - 节点会拒绝缺失字段、重复字段和 schema 外字段
-- 节点会拒绝 broad 引用不存在的 block id
+- 节点会拒绝 broad 引用不存在的 block id，或返回缺少 `block_id` 的 evidence ref
 - 节点会把输出写回 `state.evidence_collection`
 - 返回值仍然是同一个 `GraphState`
 
@@ -47,6 +47,11 @@ GraphState(extraction_input=..., evidence_collection=None)
 - 第一段 fake 模型返回 schema 外字段。
 - 第二段 fake 模型返回不存在的 `relevant_block_ids`。
 - 确认 broad 校验会分别报错，保证字段集合和证据引用都可追踪。
+
+`test_run_broad_extraction_rejects_evidence_refs_without_block_id`
+
+- fake 模型返回的 `evidence_refs` 带有 `document_id/page`，但没有 `block_id`。
+- 确认 broad 校验会在进入 resolution 前拒绝这类 ref，避免 trace 中出现无法稳定回查到输入 block 的证据位置。
 
 ## 运行方式
 

@@ -4,7 +4,12 @@ import pytest
 
 from service.file_extraction_agent.impl.schemas import EvidenceCollection, ExtractionInput, FieldEvidence
 from service.file_extraction_agent.impl.state import build_graph_state
-from service.file_extraction_agent.schemas import FieldDefinition, NormalizedBlock, TaskSpec
+from service.file_extraction_agent.schemas import (
+    FieldDefinition,
+    FieldEvidenceRef,
+    NormalizedBlock,
+    TaskSpec,
+)
 
 
 def test_run_broad_extraction_invokes_client_and_writes_output_to_state():
@@ -154,3 +159,39 @@ def test_run_broad_extraction_rejects_unknown_fields_and_block_references():
 
     with pytest.raises(ValueError, match="unknown broad evidence block ids: b-missing"):
         run_broad_extraction(state=state, extractor_client=UnknownBlockClient())
+
+
+def test_run_broad_extraction_rejects_evidence_refs_without_block_id():
+    from service.file_extraction_agent.impl.broad_extraction import run_broad_extraction
+
+    extraction_input = ExtractionInput(
+        blocks=[NormalizedBlock(document_id="doc-1", block_id="b-1", text="发票号：INV-100")],
+        task_spec=TaskSpec(
+            task_name="invoice",
+            fields=[FieldDefinition(field_name="invoice_no", display_name="发票号", type="string")],
+        ),
+    )
+    state = build_graph_state(extraction_input)
+
+    class MissingRefBlockIdClient:
+        def invoke(self, *, output_schema, messages):
+            del output_schema, messages
+            return EvidenceCollection(
+                fields=[
+                    FieldEvidence(
+                        field_name="invoice_no",
+                        relevant_block_ids=["b-1"],
+                        evidence_texts=["发票号：INV-100"],
+                        evidence_refs=[
+                            FieldEvidenceRef(
+                                document_id="doc-1",
+                                page=1,
+                            )
+                        ],
+                        local_status="evidence_found",
+                    )
+                ]
+            )
+
+    with pytest.raises(ValueError, match="broad evidence refs missing block_id: invoice_no\\[0\\]"):
+        run_broad_extraction(state=state, extractor_client=MissingRefBlockIdClient())

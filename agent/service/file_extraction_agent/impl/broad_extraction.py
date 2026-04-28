@@ -59,17 +59,23 @@ def _validate_evidence_collection(
 
     known_block_ids = {require_block_id(block) for block in state.extraction_input.blocks}
     unknown_block_ids: set[str] = set()
+    missing_ref_block_ids: list[str] = []
     for field_evidence in evidence_collection.fields:
         unknown_block_ids.update(
             block_id
             for block_id in field_evidence.relevant_block_ids
             if block_id and block_id not in known_block_ids
         )
-        unknown_block_ids.update(
-            ref.block_id
-            for ref in field_evidence.evidence_refs
-            if ref.block_id and ref.block_id not in known_block_ids
-        )
+        for ref_index, ref in enumerate(field_evidence.evidence_refs):
+            if not ref.block_id:
+                missing_ref_block_ids.append(f"{field_evidence.field_name}[{ref_index}]")
+                continue
+            if ref.block_id not in known_block_ids:
+                unknown_block_ids.add(ref.block_id)
+
+    if missing_ref_block_ids:
+        missing_refs = ", ".join(missing_ref_block_ids)
+        raise ValueError(f"broad evidence refs missing block_id: {missing_refs}")
 
     if unknown_block_ids:
         unknown = ", ".join(sorted(unknown_block_ids))

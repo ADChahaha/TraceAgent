@@ -1,4 +1,26 @@
-last updated: 2026-04-28 14:19:45 CST
+last updated: 2026-04-28 15:07:09 CST
+
+## 2026-04-28 15:07:09
+
+### 已完成工作
+
+- 收紧 `broad_extraction.py` 的 evidence ref 校验：`evidence_refs[]` 必须携带来自输入 `blocks` 的 `block_id`，缺失或未知时在进入 resolution 前报错。
+- 修复已跟踪文明寝室 E2E 脚本的旧导入路径，统一改为 `service.document_processor` 和 `service.file_extraction_agent`。
+- 更新 broad extraction 和 packaging 回归测试，并同步对应 `tests/docs/` 测试说明文档。
+
+### 当前进展
+
+- broad 输出校验和包级 `service.*` 导入边界已与设计文档对齐。
+- 完整 agent 测试已通过：`128 passed, 2 warnings`。
+
+### 遇到的问题
+
+- 旧 broad 校验会跳过没有 `block_id` 的 `evidence_refs`，可能让 trace 中出现无法稳定回查到输入 block 的证据位置。
+- 已跟踪集成脚本仍使用旧顶层包导入路径，在干净安装环境下不符合当前打包和模块边界。
+
+### 下一步
+
+- 后续如果继续保留 `agent/output/` 下的可执行集成脚本，建议把它们纳入统一脚本目录或 CI smoke test，避免旧入口再次漂移。
 
 ## 2026-04-28 14:19:45
 
