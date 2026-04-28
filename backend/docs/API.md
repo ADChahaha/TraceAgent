@@ -108,8 +108,8 @@ curl -X POST "http://localhost:8000/tasks" \
 ```json
 {
   "task_id": "task-001",
-  "status": "pending",
-  "stage": "uploaded"
+  "status": "completed",
+  "stage": "done"
 }
 ```
 
@@ -121,9 +121,18 @@ curl -X POST "http://localhost:8000/tasks" \
   -> 创建 task 记录，状态设为 pending / uploaded
   -> 在当前请求中读取上传文件 bytes，调用 document_processor 生成 markdown、md_list 和 blocks
   -> 保存文档标准化结果并生成 document_id，不保存原始文件
-  -> 触发后续字段抽取和 agent route policy 流程
-  -> 返回 task_id
+  -> 调用 file_extraction_agent，保存 result 和 trace
+  -> 组装 field_outputs + refs_with_text 并调用 route_policy_agent
+  -> 按 route 写入 final result、review 状态或 reject / failed 状态
+  -> 返回 task_id 和当前 status/stage
 ```
+
+第一版为同步处理模型，`POST /tasks` 会在同一个请求内完成 document processing、extraction 和 route policy。响应中的 `status/stage` 可能是：
+
+- `completed / done`：字段已自动通过并写入 audit。
+- `waiting_review / review`：至少一个字段需要人工复核。
+- `rejected / done`：route policy 拒绝任务。
+- `failed / done`：agent 调用或后端流程失败。
 
 ## `GET /tasks/:task_id`
 
@@ -389,12 +398,12 @@ task_id
 
 ## 错误语义
 
-建议第一版保持简单：
+第一版保持简单：
 
-- 请求体或文件缺失：`400`
+- 请求体或文件缺失：FastAPI 参数校验返回 `422`
 - 文件类型或任务类型不支持：`422`
 - `task_id` 不存在：`404`
 - 当前任务状态不允许执行该操作：`409`
-- 后端或 agent 执行异常：`500`，同时任务状态更新为 `failed`
+- agent HTTP 调用或后端流程异常：`502`，如果任务已经创建则同步更新为 `failed / done`
 
-如果 agent 本身返回 `ExtractionResult.status="failed"`，后端不一定要返回 HTTP `500`。更推荐保存失败结果，然后让任务进入 `failed`、`waiting_review` 或 `rejected`，由 agent route policy 决定后续处置。
+如果 agent 本身返回 `ExtractionResult.status="failed"` 或 route policy 返回失败状态，后端保存失败结果并让任务进入 `failed / done`。

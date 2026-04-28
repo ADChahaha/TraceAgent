@@ -33,7 +33,7 @@
 
 ## 2. FastAPI 项目结构
 
-推荐结构如下：
+当前实现结构如下：
 
 ```text
 backend/
@@ -41,31 +41,32 @@ backend/
   core/
     config.py
     db.py
+    storage.py
   routes/
     tasks.py
     reviews.py
     capabilities.py
-  schemas/
-    tasks.py
-    reviews.py
-    results.py
+    errors.py
   crud/
     tasks.py
     extraction.py
     reviews.py
     audit.py
+    json_utils.py
   services/
     task_service.py
     agent_client.py
     route_policy.py
     review_service.py
     audit_service.py
+    errors.py
+    time_utils.py
   models/
-    task.py
-    document.py
-    extraction.py
-    review.py
-    audit.py
+    schema.py
+  tests/
+    test_task_flow.py
+    docs/
+      test_task_flow.md
   docs/
     API.md
     DESIGN.md
@@ -73,12 +74,13 @@ backend/
 
 模块边界：
 
-- `main.py` 创建 FastAPI app，挂载 `routes/`，不写业务流程。
+- `main.py` 创建 FastAPI app，通过 lifespan 初始化 SQLite 连接、agent client 和服务对象，挂载 `routes/`，不写业务流程。
 - `core/config.py` 管理数据库路径、agent service 地址等配置。
-- `core/db.py` 初始化 SQLite 连接和 session，不直接写业务查询。
+- `core/db.py` 初始化 SQLite 连接，不直接写业务查询。
+- `core/storage.py` 只保留上传文件元信息所需的哈希工具，不落盘保存原始文件。
 - `routes/` 只做 HTTP 入参出参适配，把请求转交给 `services/`。
-- `schemas/` 定义 FastAPI 请求和响应模型，不直接定义数据库表。
-- `models/` 定义 SQLite 表结构和 ORM 模型。
+- `routes/reviews.py` 定义 review 提交请求模型；其他响应暂按服务层字典返回。
+- `models/schema.py` 定义 SQLite DDL。第一版没有引入 ORM，CRUD 直接使用 `sqlite3.Row` 和参数化 SQL。
 - `crud/` 封装基础数据库读写，不写业务编排。
 - `services/` 负责任务创建、agent 调用、状态流转、route policy、review 和 audit。
 
@@ -89,11 +91,12 @@ backend/
 ```text
 POST /tasks 上传文件
   -> routes.tasks 接收 UploadFile、task_type、task_spec、metadata
-  -> task_service 校验文件类型和任务类型
-  -> task_service 读取上传文件 bytes，计算 size_bytes 和 sha256
+  -> routes.tasks 在当前请求中读取上传文件 bytes
+  -> task_service 校验文件类型和任务类型，计算 size_bytes 和 sha256
   -> SQLite 写入 tasks
   -> task_service 将任务置为 processing / document_processing
   -> agent_client 用上传文件 bytes 通过 HTTP 调用 agent service 的文档处理接口
+  -> task_service 为 blocks 补 document_id / block_id
   -> SQLite 写入 documents(markdown / md_list_json / blocks_json / meta_info_json / warnings_json)
   -> agent_client 再通过 HTTP 调用 agent service 的字段抽取接口
   -> SQLite 写入 agent_runs / extracted_fields / field_traces
@@ -103,8 +106,11 @@ POST /tasks 上传文件
   -> 如果全部字段可 accept，写入 field_commits 并将任务置为 completed / done
   -> 如果存在 review 字段，将任务置为 waiting_review / review
   -> 如果 route=reject，将任务置为 rejected / done
-  -> 如果 agent 或流程失败，将任务置为 failed、review 或 reject
+  -> 如果 agent 或流程失败，将任务置为 failed / done 并保存 error_message
+  -> 返回 task_id 和当前 status/stage
 ```
+
+第一版是同步处理模型：`POST /tasks` 不只创建任务，也会在同一个 HTTP 请求内完成 document processing、extraction 和 route policy。因此响应可能直接返回 `completed/done`、`waiting_review/review`、`rejected/done` 或 `failed/done`。
 
 人工审核流程如下：
 
@@ -139,9 +145,11 @@ POST /tasks/{task_id}/review
 
 ```text
 HTTP 请求
-  -> Pydantic schema 解析
+  -> FastAPI 解析 UploadFile/Form 参数
+  -> task_spec 和 metadata 如果存在就按 JSON object 解析
+  -> 读取上传文件 bytes
   -> 调用 task_service / audit_service
-  -> 将服务层对象映射成 API 响应
+  -> 返回服务层已组装的 API 响应
 ```
 
 ### `routes.reviews`
@@ -221,15 +229,21 @@ crud/audit.py
 负责任务创建和状态流转：
 
 ```text
-UploadFile + task_type + metadata
-  -> 读取文件 bytes
-  -> 创建 task
-  -> 调用 agent_client 生成 document_processor 结果
-  -> 保存 document markdown / blocks
-  -> 调用 agent_client 执行字段抽取
-  -> 保存 agent 输出
-  -> 调用 route_policy 组装请求并调用 agent route_policy_agent
-  -> 更新任务状态
+file_bytes + filename + task_type + task_spec + metadata
+  -> 从 filename 推断 pdf/docx，否则抛出 ValidationError
+  -> 如果未传 task_spec，就按 task_type 读取默认字段 schema
+  -> 创建 task_... 记录为 pending/uploaded
+  -> 调用 agent_client.process_document(file_bytes, filename, file_type)
+  -> 为返回 blocks 补 document_id 和 block_id
+  -> 写入 documents，只保存标准化文本结果和上传元信息
+  -> 调用 agent_client.extract_fields(blocks, markdown, task_spec)
+  -> 写入 agent_runs、extracted_fields、field_traces
+  -> route_policy.build_route_policy_request(...) 组装 field_outputs + refs_with_text
+  -> 调用 agent_client.evaluate_route_policy(...)
+  -> 写入 field_routes
+  -> accept 写 final_value/source 和 field_commits
+  -> review 只自动提交 accept 字段，其余等待 review_service
+  -> reject/failed 写任务终态
 ```
 
 ### `services.agent_client`

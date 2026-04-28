@@ -1,6 +1,31 @@
 # Backend Devlog
 
-last updated: 2026-04-28 10:56:45
+last updated: 2026-04-28 15:52:52
+
+## 2026-04-28 15:52:52
+
+### 已完成工作
+
+- 按当前设计实现 `backend` 第一版 FastAPI 服务，包含任务创建、状态查询、result、trace、review、audit 和 capabilities API。
+- 新增 SQLite 初始化、CRUD 分层、agent HTTP client、route policy 请求组装、人工审核提交和字段级审计记录。
+- 新增 `backend/tests/test_task_flow.py` 及对应测试说明，覆盖 accept 自动提交、review 人工修正、文件类型校验和 capabilities。
+- 同步更新 `README.md`、`docs/API.md` 和 `docs/DESIGN.md`，明确第一版是同步处理模型，且上传原始文件不持久化。
+
+### 当前进展
+
+- 单元级后端测试已通过：`PYTHONPATH=. pytest backend/tests -q`。
+- 已做真实 HTTP E2E：`backend` 调用运行中的 `agent/` 三个接口，完成 document processing、field extraction、route policy、review 提交和 audit 查询。
+- E2E 中确认 trace 链路贯通：agent trace 会拆入 `field_traces`，review handoff 使用证据文本和 refs，audit 保存最终提交对应的 evidence refs。
+
+### 遇到的问题
+
+- 正向 E2E 样本中，`room_numbers` 字段定义为 `string`，但 agent 抽取结果返回数组 `["1-101", "1-102", "2-203"]`，route policy 因字段 schema 与输出格式不一致进入 `review`。
+- 这不是 trace 断裂，而是字段类型契约需要收口：要么把字段定义改成列表型，要么让 extraction 输出稳定归一化为字符串。
+
+### 下一步
+
+- 固化真实 agent HTTP E2E 测试脚本，避免只依赖手工 curl 验证。
+- 明确 `room_numbers` 的最终字段类型和序列化格式，再同步更新 task spec、抽取提示和 route policy 判断口径。
 
 ## 2026-04-28 10:56:45
 

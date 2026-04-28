@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+import sqlite3
+import uuid
+from typing import Any
+
+from backend.crud import audit as audit_crud
+from backend.crud.json_utils import loads_json
+
+
+class AuditService:
+    def __init__(self, connection: sqlite3.Connection):
+        self.connection = connection
+
+    def commit_field(
+        self,
+        *,
+        task_id: str,
+        field: dict[str, Any],
+        trace: dict[str, Any] | None,
+        route: dict[str, Any],
+        final_value: Any,
+        reviewed: bool,
+        review_decision: str | None,
+        review_value: Any,
+        committed_by: str,
+        committed_at: str,
+    ) -> dict[str, Any]:
+        evidence = loads_json(trace["evidence_json"], {}) if trace else {}
+        actions = loads_json(trace["actions_json"], []) if trace else []
+        related_fields = loads_json(trace["related_fields_json"], []) if trace else []
+        action_types = {action.get("action_type") for action in actions}
+        return audit_crud.create_field_commit(
+            self.connection,
+            commit_id=f"commit_{uuid.uuid4().hex}",
+            task_id=task_id,
+            field_name=field["field_name"],
+            final_value=final_value,
+            route=route["route"],
+            reviewed=reviewed,
+            review_decision=review_decision,
+            agent_value=loads_json(field["agent_value_json"], None),
+            review_value=review_value,
+            evidence_refs=evidence.get("refs") or [],
+            used_global_lookup="global_lookup" in action_types,
+            used_validation_rule="validation_rule" in action_types,
+            related_fields=related_fields,
+            committed_by=committed_by,
+            committed_at=committed_at,
+        )
+
+    def list_audit(self, task: dict[str, Any]) -> dict[str, Any]:
+        commits = audit_crud.list_field_commits(self.connection, task["id"])
+        return {
+            "task_id": task["id"],
+            "status": task["status"],
+            "field_commits": [self._serialize_commit(commit) for commit in commits],
+        }
+
+    def has_commit(self, *, task_id: str, field_name: str) -> bool:
+        return audit_crud.field_commit_exists(
+            self.connection,
+            task_id=task_id,
+            field_name=field_name,
+        )
+
+    def _serialize_commit(self, commit: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "field_name": commit["field_name"],
+            "final_value": loads_json(commit["final_value_json"], None),
+            "route": commit["route"],
+            "reviewed": bool(commit["reviewed"]),
+            "review_decision": commit["review_decision"],
+            "agent_value": loads_json(commit["agent_value_json"], None),
+            "review_value": loads_json(commit["review_value_json"], None),
+            "evidence_refs": loads_json(commit["evidence_refs_json"], []),
+            "used_global_lookup": bool(commit["used_global_lookup"]),
+            "used_validation_rule": bool(commit["used_validation_rule"]),
+            "related_fields": loads_json(commit["related_fields_json"], []),
+            "committed_by": commit["committed_by"],
+            "committed_at": commit["committed_at"],
+        }
