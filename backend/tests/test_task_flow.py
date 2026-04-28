@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -7,6 +8,20 @@ from fastapi.testclient import TestClient
 
 from backend.core.config import BackendSettings
 from backend.main import create_app
+
+
+TASK_SPEC = {
+    "task_name": "civilized_dormitory",
+    "fields": [
+        {
+            "field_name": "room_numbers",
+            "display_name": "文明寝室房间号",
+            "type": "string",
+            "required": True,
+            "critical": True,
+        }
+    ],
+}
 
 
 class FakeAgentClient:
@@ -165,7 +180,10 @@ def test_create_task_accept_route_commits_agent_fields(tmp_path: Path):
     with TestClient(app) as client:
         response = client.post(
             "/tasks",
-            data={"task_type": "civilized_dormitory"},
+            data={
+                "task_type": "civilized_dormitory",
+                "task_spec": json.dumps(TASK_SPEC, ensure_ascii=False),
+            },
             files={"file": ("sample.pdf", b"%PDF-1.4 fake", "application/pdf")},
         )
 
@@ -199,6 +217,7 @@ def test_create_task_accept_route_commits_agent_fields(tmp_path: Path):
         assert commit["committed_by"] == "agent"
 
         extract_call = fake_agent.extraction_calls[0]
+        assert extract_call["task_spec"] == TASK_SPEC
         assert extract_call["blocks"][0]["document_id"].startswith("doc_")
         assert extract_call["blocks"][0]["block_id"].startswith("doc_")
         route_call = fake_agent.route_policy_calls[0]
@@ -214,7 +233,10 @@ def test_review_route_returns_handoff_and_accepts_revised_value(tmp_path: Path):
     with TestClient(app) as client:
         response = client.post(
             "/tasks",
-            data={"task_type": "civilized_dormitory"},
+            data={
+                "task_type": "civilized_dormitory",
+                "task_spec": json.dumps(TASK_SPEC, ensure_ascii=False),
+            },
             files={
                 "file": (
                     "sample.docx",
@@ -277,7 +299,10 @@ def test_create_task_rejects_unsupported_file_type(tmp_path: Path):
     with TestClient(app) as client:
         response = client.post(
             "/tasks",
-            data={"task_type": "civilized_dormitory"},
+            data={
+                "task_type": "civilized_dormitory",
+                "task_spec": json.dumps(TASK_SPEC, ensure_ascii=False),
+            },
             files={"file": ("notes.txt", b"plain text", "text/plain")},
         )
 
@@ -294,7 +319,26 @@ def test_capabilities_returns_supported_task_and_routes(tmp_path: Path):
         assert response.status_code == 200
         payload = response.json()
         assert payload["supported_file_types"] == ["pdf", "docx"]
+        assert payload["task_types"] == []
         assert payload["routes"] == ["accept", "review", "reject"]
         assert payload["review_decisions"] == ["approve", "revise_and_approve", "reject"]
-        assert payload["features"] == {"trace": True, "review": True, "audit": True}
-        assert payload["task_types"][0]["task_type"] == "civilized_dormitory"
+        assert payload["features"] == {
+            "trace": True,
+            "review": True,
+            "audit": True,
+            "external_task_spec": True,
+        }
+
+
+def test_create_task_requires_external_task_spec(tmp_path: Path):
+    app, _fake_agent = build_app(tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/tasks",
+            data={"task_type": "civilized_dormitory"},
+            files={"file": ("sample.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        )
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == "task_spec is required"

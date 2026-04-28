@@ -1,6 +1,24 @@
 # Backend Devlog
 
-last updated: 2026-04-28 15:52:52
+last updated: 2026-04-28 16:09:24
+
+## 2026-04-28 16:09:24
+
+### 已完成工作
+
+- 移除 `backend` 内置 task spec，不再在 `core/config.py` 写死 `civilized_dormitory` 字段 schema。
+- 调整 `POST /tasks`：调用方必须在 multipart 表单中显式传入 `task_spec` JSON，缺失时返回 `422`。
+- 调整 `GET /capabilities`：不再暴露内置 `task_types`，改为通过 `features.external_task_spec=true` 声明由调用方提供 schema。
+- 新增 `backend/tests/test_config.py` 及对应测试说明，验证配置层没有 `task_specs` 或 `task_specs_dir` 兜底。
+
+### 当前进展
+
+- 后端测试已通过：`PYTHONPATH=. pytest backend/tests -q`，共 6 个测试。
+- `backend` 只负责接收和透传外部 task spec，不再决定业务字段定义。
+
+### 下一步
+
+- 在前端或实验脚本侧维护具体业务 task spec，并随 `POST /tasks` 一起提交。
 
 ## 2026-04-28 15:52:52
 

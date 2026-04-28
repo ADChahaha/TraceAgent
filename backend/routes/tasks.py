@@ -27,7 +27,7 @@ async def create_task(
             filename=file.filename or "",
             content_type=file.content_type,
             task_type=task_type,
-            task_spec=_parse_json_form("task_spec", task_spec),
+            task_spec=_parse_required_json_form("task_spec", task_spec),
             metadata=_parse_json_form("metadata", metadata) or {},
         )
     except BackendServiceError as exc:
@@ -78,3 +78,9 @@ def _parse_json_form(name: str, value: str | None) -> dict[str, Any] | None:
         raise ValidationError(f"{name} must be a JSON object")
     return parsed
 
+
+def _parse_required_json_form(name: str, value: str | None) -> dict[str, Any]:
+    parsed = _parse_json_form(name, value)
+    if parsed is None:
+        raise ValidationError(f"{name} is required")
+    return parsed

@@ -495,9 +495,7 @@ class TaskService:
     ) -> dict[str, Any]:
         if task_spec is not None:
             return task_spec
-        if task_type not in self.settings.task_specs:
-            raise ValidationError(f"unsupported task_type: {task_type}")
-        return self.settings.task_specs[task_type]
+        raise ValidationError("task_spec is required")
 
     def _normalize_blocks(
         self,

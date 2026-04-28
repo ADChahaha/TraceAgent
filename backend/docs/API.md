@@ -91,8 +91,8 @@ reject
 请求类型建议使用 `multipart/form-data`：
 
 - `file`：必填，上传的 PDF 或 DOCX。
-- `task_type`：必填，任务类型，例如 `civilized_dormitory`。
-- `task_spec`：可选，显式字段 schema；如果省略，后端按 `task_type` 选择默认 schema。
+- `task_type`：必填，调用方定义的任务类型标识，例如 `civilized_dormitory`。
+- `task_spec`：必填，显式字段 schema；后端不提供默认 task spec，也不按 `task_type` 兜底选择 schema。
 - `metadata`：可选，前端或脚本传入的补充信息。
 
 请求示例：
@@ -100,7 +100,8 @@ reject
 ```bash
 curl -X POST "http://localhost:8000/tasks" \
   -F "file=@sample.pdf" \
-  -F "task_type=civilized_dormitory"
+  -F "task_type=civilized_dormitory" \
+  -F 'task_spec={"task_name":"civilized_dormitory","fields":[{"field_name":"room_numbers","display_name":"文明寝室房间号","type":"string","required":true,"critical":true}]}'
 ```
 
 响应示例：
@@ -117,7 +118,7 @@ curl -X POST "http://localhost:8000/tasks" \
 
 ```text
 上传文件和任务参数
-  -> 校验文件类型和任务类型
+  -> 校验文件类型和 task_spec
   -> 创建 task 记录，状态设为 pending / uploaded
   -> 在当前请求中读取上传文件 bytes，调用 document_processor 生成 markdown、md_list 和 blocks
   -> 保存文档标准化结果并生成 document_id，不保存原始文件
@@ -371,27 +372,14 @@ task_id
 ```json
 {
   "supported_file_types": ["pdf", "docx"],
-  "task_types": [
-    {
-      "task_type": "civilized_dormitory",
-      "display_name": "文明寝室通知抽取",
-      "fields": [
-        {
-          "field_name": "room_numbers",
-          "display_name": "文明寝室房间号",
-          "type": "string",
-          "required": true,
-          "critical": true
-        }
-      ]
-    }
-  ],
+  "task_types": [],
   "routes": ["accept", "review", "reject"],
   "review_decisions": ["approve", "revise_and_approve", "reject"],
   "features": {
     "trace": true,
     "review": true,
-    "audit": true
+    "audit": true,
+    "external_task_spec": true
   }
 }
 ```
@@ -401,7 +389,7 @@ task_id
 第一版保持简单：
 
 - 请求体或文件缺失：FastAPI 参数校验返回 `422`
-- 文件类型或任务类型不支持：`422`
+- 文件类型不支持、`task_spec` 缺失或 JSON 非法：`422`
 - `task_id` 不存在：`404`
 - 当前任务状态不允许执行该操作：`409`
 - agent HTTP 调用或后端流程异常：`502`，如果任务已经创建则同步更新为 `failed / done`

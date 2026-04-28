@@ -9,7 +9,7 @@
 核心链路是：
 
 ```text
-前端或脚本上传 PDF / DOCX
+前端或脚本上传 PDF / DOCX + task_type + task_spec
   -> backend 创建任务记录
   -> backend 通过 HTTP 调用 document_processor，把上传文件转成 markdown + blocks
   -> backend 保存标准化文本结果，不保存原始文件
@@ -29,6 +29,7 @@
 - `backend` 通过 HTTP 调用 `agent service`，不直接 import `agent/` 内部包。
 - `backend` 不持久化用户上传的原始文件；上传文件只在请求处理过程中用于调用 `document_processor`。
 - `agent service` 不直接访问 `backend` 的 SQLite 数据库。
+- `backend` 不内置业务 task spec，也不从默认目录兜底加载；字段 schema 必须由调用方在 `POST /tasks` 时传入。
 - 第一版不做登录、权限、多用户、批量任务、取消任务和重试任务。
 
 ## 2. FastAPI 项目结构
@@ -75,7 +76,7 @@ backend/
 模块边界：
 
 - `main.py` 创建 FastAPI app，通过 lifespan 初始化 SQLite 连接、agent client 和服务对象，挂载 `routes/`，不写业务流程。
-- `core/config.py` 管理数据库路径、agent service 地址等配置。
+- `core/config.py` 管理数据库路径、agent service 地址等配置，不管理业务 task spec。
 - `core/db.py` 初始化 SQLite 连接，不直接写业务查询。
 - `core/storage.py` 只保留上传文件元信息所需的哈希工具，不落盘保存原始文件。
 - `routes/` 只做 HTTP 入参出参适配，把请求转交给 `services/`。
@@ -92,7 +93,7 @@ backend/
 POST /tasks 上传文件
   -> routes.tasks 接收 UploadFile、task_type、task_spec、metadata
   -> routes.tasks 在当前请求中读取上传文件 bytes
-  -> task_service 校验文件类型和任务类型，计算 size_bytes 和 sha256
+  -> task_service 校验文件类型和外部传入的 task_spec，计算 size_bytes 和 sha256
   -> SQLite 写入 tasks
   -> task_service 将任务置为 processing / document_processing
   -> agent_client 用上传文件 bytes 通过 HTTP 调用 agent service 的文档处理接口
@@ -163,7 +164,7 @@ HTTP 请求
 
 ### `routes.capabilities`
 
-暴露 `GET /capabilities`，返回支持文件类型、任务类型、route 类型、review 决策类型和 feature flags。
+暴露 `GET /capabilities`，返回支持文件类型、route 类型、review 决策类型和 feature flags。因为 backend 不内置业务 schema，`task_types` 固定为空，调用方根据 `features.external_task_spec=true` 自行传入 `task_spec`。
 
 ### `crud`
 
@@ -231,7 +232,7 @@ crud/audit.py
 ```text
 file_bytes + filename + task_type + task_spec + metadata
   -> 从 filename 推断 pdf/docx，否则抛出 ValidationError
-  -> 如果未传 task_spec，就按 task_type 读取默认字段 schema
+  -> 如果未传 task_spec，抛出 ValidationError
   -> 创建 task_... 记录为 pending/uploaded
   -> 调用 agent_client.process_document(file_bytes, filename, file_type)
   -> 为返回 blocks 补 document_id 和 block_id
