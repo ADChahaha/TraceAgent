@@ -4,12 +4,13 @@
 
 ## 目标
 
-`agent/` 负责文档处理链路中的两个阶段：
+`agent/` 负责文档处理链路中的三个阶段：
 
 - `document_processor`
 - `file_extraction_agent`
+- `route_policy_agent`
 
-这一层的目标是把“原始文件处理”和“字段抽取”明确分开，避免一个模块同时承担文件解析、标准化、模型抽取和 HTTP 适配。
+这一层的目标是把“原始文件处理”“字段抽取”和“LLM route 判断”明确分开，避免一个模块同时承担文件解析、标准化、模型抽取、写库前治理判断和 HTTP 适配。
 
 ## 与 Backend 的关系
 
@@ -44,6 +45,9 @@ agent/
 └── file_extraction_agent/
     └── docs/
         ├── API.md
+        └── DESIGN.md
+└── route_policy_agent/
+    └── docs/
         └── DESIGN.md
 ```
 
@@ -119,6 +123,24 @@ agent/
 - `file_extraction_agent/schemas.py`
 - `file_extraction_agent/impl/resolution.py` 中的 `validation_rules` 后处理逻辑
 
+### `route_policy_agent`
+
+- 负责消费 `TaskSpec + field_outputs + refs_with_text`，用小 LLM 作为第三方评价者判断字段结果应 `accept / review / reject`
+- 不负责文档标准化
+- 不负责字段抽取或重新定案
+- 不直接访问 backend 数据库
+- 不写最终结果、不执行人工审核、不生成 audit
+- 不读取抽取 agent 的完整 prompt、raw model response、chain-of-thought、trace actions 或额外风险标记
+
+当前规划入口包括：
+
+- Python 入口：`route_policy_agent.processor.evaluate(...)`
+- HTTP 入口：`routes/route_policy_agent.py`
+
+这一层只看任务/字段定义、字段输出和 refs 中携带的证据文本与来源位置，不读取完整原文。更具体的设计见：
+
+- `route_policy_agent/docs/DESIGN.md`
+
 ## 主链路
 
 ```text
@@ -127,7 +149,9 @@ raw file
   -> normalized markdown + blocks
   -> backend session aggregation
   -> file_extraction_agent
-  -> extraction result
+  -> extraction result + trace
+  -> route_policy_agent
+  -> accept / review / reject
 ```
 
 整体流程可以展开为：
@@ -139,11 +163,13 @@ raw file
 5. `backend` 按 session 聚合多个文档的 block list。
 6. 先由外部独立输入适配文件完成 session 输入校验和协议适配，再将已校验聚合结果交给 `file_extraction_agent`。
 7. 输出字段 evidence、工具/规则留痕和字段最终结果。
-8. 将结果回传给 `backend`。
+8. backend 从字段结果和证据 refs 组装 `field_outputs + refs_with_text`，交给 `route_policy_agent`。
+9. `route_policy_agent` 先通过 `input_validator` 校验字段名、字段输出和 refs 文本完整性，再用小 LLM 输出字段级 `accept / review / reject`。
+10. 将抽取结果、trace 和 route 决策回传给 `backend`，由 backend 保存状态、review 和 audit。
 
 可以理解为：
 
-`raw file -> document_processor -> normalized markdown + blocks -> backend session aggregation -> file_extraction_agent -> extraction result`
+`raw file -> document_processor -> normalized markdown + blocks -> backend session aggregation -> file_extraction_agent -> extraction result + trace -> route_policy_agent -> route decisions`
 
 ## HTTP 出口
 
@@ -151,7 +177,7 @@ raw file
 
 ```text
 HTTP 请求
-  -> main.create_app() 挂载 routes/document_processor.py 和 routes/file_extraction_agent.py
+  -> main.create_app() 挂载 routes/document_processor.py、routes/file_extraction_agent.py 和 routes/route_policy_agent.py
   -> route 层完成 multipart 或 JSON 协议适配
   -> 调用对应业务入口 document_processor.processor.process(...) 或 file_extraction_agent.processor.extract(...)
   -> 把业务结果映射成 HTTP 响应
@@ -168,19 +194,26 @@ HTTP 请求
   - 接收标准化后的 `blocks`、可选 `markdown/md_list`、必填 `task_spec`、可选 `run_options`、`metadata` 以及可选模型连接参数
   - 调用 `file_extraction_agent.processor.extract(...)`
   - 返回 `ExtractionResult`
+- `POST /v1/route-policy-agent/evaluate`
+  - 接收 `TaskSpec`、`field_outputs` 和 `refs_with_text`
+  - 调用 `route_policy_agent.processor.evaluate(...)`
+  - 返回字段级 `accept / review / reject` route 决策
 
-当前暂不引入额外 `src/` 或 `app/` 目录。原因是 `agent/pyproject.toml` 已经按 `main.py`、`routes/` 和两个业务包打包；路由层新增文件即可保持业务代码和 HTTP 适配的边界清楚，目录迁移应当等到服务入口或包结构需要整体重排时再做。
+当前暂不引入额外 `src/` 或 `app/` 目录。原因是 `agent/pyproject.toml` 已经按 `main.py`、`routes/` 和业务包打包；路由层新增文件即可保持业务代码和 HTTP 适配的边界清楚，目录迁移应当等到服务入口或包结构需要整体重排时再做。
 
 ## 约束
 
 - route 层只做协议适配，不反向定义业务数据结构
 - `document_processor` 只负责文档标准化，不直接做字段抽取
+- `file_extraction_agent` 只负责字段抽取和 trace，不内置 route policy
+- `route_policy_agent` 只负责字段级 route 判断，不重新抽取字段、不写库
 - 任何目录结构或主链路变更，都需要同步更新对应层级的 `docs/DESIGN.md`
 
 ## 设计原则
 
 - 预处理和抽取分开
+- 抽取和 route 判断分开
 - 中间结果明确
 - 每个模块只负责单一阶段
 - 不直接访问 `backend` 数据库或底层 storage
-- 后续可以分别替换或优化两个阶段的实现
+- 后续可以分别替换或优化各阶段的实现
