@@ -111,6 +111,7 @@ POST /tasks 上传一个或多个文件
   -> SQLite 为 route_policy_agent 调用写入 agent_stage_runs
   -> SQLite 写入 field_routes
   -> GET /trace 从 documents、agent_runs、agent_stage_runs、field_traces、field_routes 组装字段证据、三段摘要步骤和原始 agent 调用记录
+  -> 字段级 agent_process/process_steps 从 field_traces 派生，不新增表结构
   -> 如果全部字段可 accept，写入 field_commits 并将任务置为 completed / done
   -> 如果存在 review 字段，将任务置为 waiting_review / review
   -> GET /tasks/{task_id} 的 needs_review 只以当前任务 status 是否为 waiting_review 为准
@@ -127,6 +128,7 @@ POST /tasks 上传一个或多个文件
 GET /tasks/{task_id}/review
   -> review_service 读取 extracted_fields、field_traces、field_routes
   -> 组装 handoff 包，返回字段值、证据、定位、route 原因、actions 和 agent_process
+  -> agent_process.process_steps 按 broad_extraction、field_resolution、final_result 回放字段抽取过程
 
 POST /tasks/{task_id}/review
   -> review_service 校验任务状态必须是 waiting_review
@@ -261,6 +263,7 @@ files/file + task_type + task_spec + metadata
   -> 保存 route_policy_agent 的 agent_stage_runs
   -> 写入 field_routes
   -> get_trace(task_id) 读取 documents、agent_runs、agent_stage_runs、field_traces、field_routes，并序列化 trace.steps 与 agent_trace
+  -> field_decisions、review handoff 和 audit 中的 agent_process 都复用同一套 process_steps 派生逻辑
   -> accept 写 final_value/source 和 field_commits
   -> review 只自动提交 accept 字段，其余等待 review_service
   -> reject/failed 写任务终态
@@ -427,7 +430,17 @@ task_service 准备某次 agent HTTP 调用
 
 ### `field_traces`
 
-保存字段级证据、动作和解释信息。
+保存字段级证据、动作和解释信息。`field_traces` 不直接保存展示用的 `process_steps`；backend 在序列化 `trace.fields[]`、`trace.steps[].field_decisions[]`、`review.fields[].agent_process` 和 `audit.field_commits[].agent_process` 时，从该表中的 evidence、actions、reason 和字段值派生三段过程。
+
+派生过程如下：
+
+```text
+field_traces.evidence_json + extracted_fields.agent_value_json
+  -> broad_extraction：展示 broad 阶段预选出的候选 block、候选证据文本、refs 和 notes
+  -> field_resolution：展示 resolution 阶段实际发生的 field_reference、global_lookup、validation_rule 等 actions
+  -> final_result：展示字段最终 status、agent value、reason 或 failure_reason
+  -> agent_process.process_steps
+```
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -618,10 +631,10 @@ review payload
 
 - `result`：面向业务展示和写库，保存最终字段结果。
 - `trace`：面向解释和调试，保存 agent 的证据、定位、actions 和失败原因。
-- `trace.steps`：面向过程回放，从已落库的文档、抽取 run 和 route 记录派生；其中 file_extraction_agent 步骤会带 `field_decisions`，展示字段值、证据、跨字段参考、lookup、validation rule 和定案原因。
+- `trace.steps`：面向过程回放，从已落库的文档、抽取 run 和 route 记录派生；其中 file_extraction_agent 步骤会带 `field_decisions`，每个字段决策再通过 `process_steps` 展示 `broad_extraction -> field_resolution -> final_result`。
 - `trace.agent_trace`：面向调试和论文展示，从 `agent_stage_runs` 返回每次 agent HTTP 调用的顺序、请求摘要、完整响应和 trace payload。它保存 agent service 返回的全部 JSON，但不会保存上传原始 bytes，也不会伪造 agent 未返回的 raw prompt 或 raw model response。
-- `review.fields[].agent_process`：面向人工复核，复用字段 trace 组装当前字段的 agent 决策过程，让审核人不只看到证据文本，还能看到模型为什么要参考其他字段、是否补查、是否规则校正。
-- `audit.field_commits[].agent_process`：面向责任链路，字段提交记录继续附带对应 agent 决策过程，方便审计最终值来自 agent 还是人工时回看原始定案依据。
+- `review.fields[].agent_process`：面向人工复核，复用字段 trace 组装当前字段的 agent 决策过程，让审核人不只看到最终证据文本，还能按三段过程看到 broad 预选了哪些证据、resolution 用了哪些 tool/action，以及最终输出是什么。
+- `audit.field_commits[].agent_process`：面向责任链路，字段提交记录继续附带对应 agent 决策过程和 `process_steps`，方便审计最终值来自 agent 还是人工时回看原始定案依据。
 - `audit`：面向责任链路，保存最终字段值由谁确认、何时确认、是否人工修改、对应证据来源和 agent 决策过程。
 
 对应关系：
@@ -639,6 +652,7 @@ documents + agent_runs + field_routes
   -> GET /tasks/{task_id}/trace.steps
   -> 前端展示 document_processor、file_extraction_agent、route_policy_agent 的执行过程
   -> file_extraction_agent step 从 trace_json/result_json 派生 field_decisions
+  -> field_decisions[].process_steps 回放 broad evidence、resolution actions 和 final result
 
 agent_stage_runs
   -> GET /tasks/{task_id}/trace.agent_trace

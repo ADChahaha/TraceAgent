@@ -81,13 +81,14 @@ class AuditService:
         commit: dict[str, Any],
         trace: dict[str, Any] | None,
     ) -> dict[str, Any]:
+        agent_value = loads_json(commit["agent_value_json"], None)
         return {
             "field_name": commit["field_name"],
             "final_value": loads_json(commit["final_value_json"], None),
             "route": commit["route"],
             "reviewed": bool(commit["reviewed"]),
             "review_decision": commit["review_decision"],
-            "agent_value": loads_json(commit["agent_value_json"], None),
+            "agent_value": agent_value,
             "review_value": loads_json(commit["review_value_json"], None),
             "evidence_refs": loads_json(commit["evidence_refs_json"], []),
             "used_global_lookup": bool(commit["used_global_lookup"]),
@@ -95,5 +96,5 @@ class AuditService:
             "related_fields": loads_json(commit["related_fields_json"], []),
             "committed_by": commit["committed_by"],
             "committed_at": commit["committed_at"],
-            "agent_process": serialize_field_agent_process(trace),
+            "agent_process": serialize_field_agent_process(trace, value=agent_value),
         }

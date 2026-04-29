@@ -14,6 +14,7 @@ import { updateRecentTask } from "@/lib/task-store";
 import type {
   AgentTraceRecord,
   AgentProcess,
+  AgentProcessStep,
   ReviewSubmitPayload,
   TaskDetailData,
   TaskSummary,
@@ -645,38 +646,120 @@ function AgentProcessList({
   return (
     <div className="mt-3 space-y-2">
       <p className="text-xs font-medium text-muted-foreground">{title}</p>
-      {processes.map((process) => (
-        <div key={process.field_name} className="rounded-md border border-dashed p-3 text-xs">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-foreground">{getFieldLabel(fieldLabels, process.field_name)}</span>
-            {process.status ? <Badge variant="outline">{process.status}</Badge> : null}
+      {processes.map((process) => {
+        const processSteps = process.process_steps ?? [];
+        return (
+          <div key={process.field_name} className="rounded-md border border-dashed p-3 text-xs">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-foreground">{getFieldLabel(fieldLabels, process.field_name)}</span>
+              {process.status ? <Badge variant="outline">{process.status}</Badge> : null}
+            </div>
+            {"value" in process ? (
+              <dl className="mt-2 grid gap-2 sm:grid-cols-2">
+                <div>
+                  <dt className="text-muted-foreground">定案值</dt>
+                  <dd className="mt-1 font-mono text-foreground">{stringifyValue(process.value)}</dd>
+                </div>
+                {process.evidence?.status ? (
+                  <div>
+                    <dt className="text-muted-foreground">证据状态</dt>
+                    <dd className="mt-1 font-mono text-foreground">{process.evidence.status}</dd>
+                  </div>
+                ) : null}
+              </dl>
+            ) : null}
+            {process.reason ? (
+              <p className="mt-2 text-muted-foreground">{process.reason}</p>
+            ) : null}
+            {process.failure_reason ? (
+              <p className="mt-2 text-destructive">{process.failure_reason}</p>
+            ) : null}
+            <ProcessStepList steps={processSteps} />
+            {processSteps.length === 0 ? <ProcessNotes notes={process.evidence?.notes ?? []} /> : null}
+            {processSteps.length === 0 ? <TraceActionList actions={process.actions ?? []} /> : null}
           </div>
-          {"value" in process ? (
+        );
+      })}
+    </div>
+  );
+}
+
+function ProcessStepList({ steps }: { steps: AgentProcessStep[] }) {
+  if (steps.length === 0) {
+    return null;
+  }
+  return (
+    <div className="mt-3 space-y-2">
+      {steps.map((step, index) => (
+        <div key={`${step.stage}-${index}`} className="rounded-md bg-muted px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline">{index + 1}</Badge>
+            <span className="font-medium text-foreground">{step.title ?? step.stage}</span>
+            {step.status ? <Badge variant="secondary">{step.status}</Badge> : null}
+          </div>
+          <StepEvidence evidence={step.evidence} />
+          {step.related_fields && step.related_fields.length > 0 ? (
+            <p className="mt-2 text-muted-foreground">
+              相关字段：{step.related_fields.join(", ")}
+            </p>
+          ) : null}
+          <TraceActionList actions={step.actions ?? []} />
+          {"value" in step ? (
             <dl className="mt-2 grid gap-2 sm:grid-cols-2">
               <div>
-                <dt className="text-muted-foreground">定案值</dt>
-                <dd className="mt-1 font-mono text-foreground">{stringifyValue(process.value)}</dd>
+                <dt className="text-muted-foreground">输出结果</dt>
+                <dd className="font-mono text-foreground">{stringifyValue(step.value)}</dd>
               </div>
-              {process.evidence?.status ? (
-                <div>
-                  <dt className="text-muted-foreground">证据状态</dt>
-                  <dd className="mt-1 font-mono text-foreground">{process.evidence.status}</dd>
-                </div>
-              ) : null}
             </dl>
           ) : null}
-          {process.reason ? (
-            <p className="mt-2 text-muted-foreground">{process.reason}</p>
-          ) : null}
-          {process.failure_reason ? (
-            <p className="mt-2 text-destructive">{process.failure_reason}</p>
-          ) : null}
-          <ProcessNotes notes={process.evidence?.notes ?? []} />
-          <TraceActionList actions={process.actions ?? []} />
+          {step.reason ? <p className="mt-2 text-muted-foreground">{step.reason}</p> : null}
+          {step.failure_reason ? <p className="mt-2 text-destructive">{step.failure_reason}</p> : null}
         </div>
       ))}
     </div>
   );
+}
+
+function StepEvidence({ evidence }: { evidence?: AgentProcessStep["evidence"] }) {
+  if (!evidence) {
+    return null;
+  }
+  const blockIds = evidence.block_ids ?? [];
+  return (
+    <div className="mt-2 space-y-1 text-muted-foreground">
+      {blockIds.length > 0 ? (
+        <p>
+          候选 blocks：<span className="font-mono text-foreground">{blockIds.join(", ")}</span>
+        </p>
+      ) : null}
+      <ProcessNotes notes={evidence.notes ?? []} />
+      <EvidencePreview texts={evidence.texts ?? []} />
+    </div>
+  );
+}
+
+function EvidencePreview({ texts }: { texts: string[] }) {
+  if (texts.length === 0) {
+    return null;
+  }
+  return (
+    <ul className="space-y-1">
+      {texts.slice(0, 2).map((text, index) => (
+        <li key={`${text}-${index}`} className="line-clamp-2">
+          候选文本：{compactMarkdown(text)}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function compactMarkdown(value: string): string {
+  return value
+    .replace(/^#{1,6}\s*/gm, "")
+    .replace(/\*\*/g, "")
+    .replace(/\|/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function ProcessNotes({ notes }: { notes: string[] }) {

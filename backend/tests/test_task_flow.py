@@ -321,6 +321,20 @@ def test_create_task_accepts_multiple_files_and_merges_document_blocks(tmp_path:
         assert steps[1]["summary"]["warning_count"] == 0
         assert steps[1]["field_decisions"][0]["field_name"] == "room_numbers"
         assert steps[1]["field_decisions"][0]["value"] == "1-101,1-102"
+        process_steps = steps[1]["field_decisions"][0]["process_steps"]
+        assert [step["stage"] for step in process_steps] == [
+            "broad_extraction",
+            "field_resolution",
+            "final_result",
+        ]
+        assert process_steps[0]["title"] == "第一步 broad extraction"
+        assert process_steps[0]["evidence"]["texts"] == ["1-101、1-102 被列为文明寝室"]
+        assert process_steps[1]["title"] == "第二步 resolution / tool"
+        assert process_steps[1]["status"] == "used"
+        assert process_steps[1]["actions"][1]["action_type"] == "global_lookup"
+        assert process_steps[2]["title"] == "第三步 final result"
+        assert process_steps[2]["value"] == "1-101,1-102"
+        assert process_steps[2]["reason"] == "模型定案后经过规则校正"
         assert steps[1]["field_decisions"][0]["actions"][1]["action_type"] == "global_lookup"
         assert steps[1]["field_decisions"][0]["actions"][1]["message"] == "补查文明寝室名单"
         assert steps[2]["stage"] == "route_policy"
@@ -338,6 +352,10 @@ def test_create_task_accepts_multiple_files_and_merges_document_blocks(tmp_path:
                 "route_reason": "测试 route policy 输出",
             }
         ]
+        trace_field = trace_response.json()["fields"][0]
+        assert trace_field["process_steps"][0]["stage"] == "broad_extraction"
+        assert trace_field["process_steps"][1]["stage"] == "field_resolution"
+        assert trace_field["process_steps"][2]["stage"] == "final_result"
 
         agent_trace = trace_response.json()["agent_trace"]
         assert [event["agent"] for event in agent_trace] == [
@@ -401,6 +419,9 @@ def test_review_route_returns_handoff_and_accepts_revised_value(tmp_path: Path):
             "validation_rule",
         ]
         assert handoff["fields"][0]["agent_process"]["actions"][0]["message"] == "模型请求参考字段 building"
+        assert handoff["fields"][0]["agent_process"]["process_steps"][0]["stage"] == "broad_extraction"
+        assert handoff["fields"][0]["agent_process"]["process_steps"][1]["actions"][1]["action_type"] == "global_lookup"
+        assert handoff["fields"][0]["agent_process"]["process_steps"][2]["value"] == "1-101,1-102"
 
         submit_response = client.post(
             f"/tasks/{task_id}/review",
@@ -441,6 +462,9 @@ def test_review_route_returns_handoff_and_accepts_revised_value(tmp_path: Path):
         assert commit["committed_by"] == "human"
         assert commit["agent_process"]["reason"] == "模型定案后经过规则校正"
         assert commit["agent_process"]["actions"][1]["metadata"]["lookup_hints"] == ["文明寝室"]
+        assert commit["agent_process"]["process_steps"][0]["title"] == "第一步 broad extraction"
+        assert commit["agent_process"]["process_steps"][1]["title"] == "第二步 resolution / tool"
+        assert commit["agent_process"]["process_steps"][2]["title"] == "第三步 final result"
         assert fake_agent.document_calls[0]["file_type"] == "docx"
 
 

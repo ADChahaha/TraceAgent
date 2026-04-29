@@ -97,6 +97,24 @@ export interface TraceField {
   failure_reason?: string | null;
 }
 
+export interface AgentProcessStep {
+  stage: string;
+  title?: string;
+  status?: string | null;
+  evidence?: {
+    block_ids?: string[];
+    texts?: string[];
+    refs?: EvidenceRef[];
+    status?: string;
+    notes?: string[];
+  };
+  related_fields?: string[];
+  actions?: TraceAction[];
+  value?: unknown;
+  reason?: string | null;
+  failure_reason?: string | null;
+}
+
 export interface AgentProcess {
   field_name: string;
   status?: string;
@@ -110,6 +128,7 @@ export interface AgentProcess {
   };
   related_fields?: string[];
   actions?: TraceAction[];
+  process_steps?: AgentProcessStep[];
   reason?: string | null;
   failure_reason?: string | null;
 }

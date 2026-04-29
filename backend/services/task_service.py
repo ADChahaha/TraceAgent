@@ -14,7 +14,7 @@ from backend.crud import extraction as extraction_crud
 from backend.crud import reviews as reviews_crud
 from backend.crud import tasks as tasks_crud
 from backend.crud.json_utils import loads_json
-from backend.services.agent_process import serialize_field_agent_process
+from backend.services.agent_process import build_field_agent_process, serialize_field_agent_process
 from backend.services.audit_service import AuditService
 from backend.services.errors import AgentServiceError, NotFoundError, ValidationError
 from backend.services.route_policy import build_route_policy_request
@@ -163,6 +163,10 @@ class TaskService:
     def get_trace(self, task_id: str) -> dict[str, Any]:
         task = self.get_task_or_raise(task_id)
         agent_run = extraction_crud.get_latest_agent_run(self.connection, task_id)
+        fields = {
+            field["field_name"]: field
+            for field in extraction_crud.list_extracted_fields(self.connection, task_id)
+        }
         traces = extraction_crud.list_field_traces(self.connection, task_id)
         trace_payload = loads_json(agent_run["trace_json"], {}) if agent_run else {}
         routes = extraction_crud.list_field_routes(self.connection, task_id)
@@ -186,7 +190,10 @@ class TaskService:
                 self._serialize_agent_stage_run(stage_run)
                 for stage_run in agent_stage_runs
             ],
-            "fields": [self._serialize_trace_field(trace) for trace in traces],
+            "fields": [
+                self._serialize_trace_field(trace, fields.get(trace["field_name"]))
+                for trace in traces
+            ],
             "metadata": trace_payload.get("metadata", {}),
         }
 
@@ -755,8 +762,13 @@ class TaskService:
             "committed": committed,
         }
 
-    def _serialize_trace_field(self, trace: dict[str, Any]) -> dict[str, Any]:
-        serialized = serialize_field_agent_process(trace)
+    def _serialize_trace_field(
+        self,
+        trace: dict[str, Any],
+        field: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        value = loads_json(field["agent_value_json"], None) if field else None
+        serialized = serialize_field_agent_process(trace, value=value)
         assert serialized is not None
         return serialized
 
@@ -887,16 +899,16 @@ class TaskService:
                 continue
             field_name = trace.get("field_name")
             result_field = result_by_name.get(field_name) or {}
-            decision = {
-                "field_name": field_name,
-                "status": trace.get("status") or result_field.get("status"),
-                "value": result_field.get("value"),
-                "evidence": trace.get("evidence") or {},
-                "related_fields": trace.get("related_fields") or [],
-                "actions": trace.get("actions") or [],
-                "reason": trace.get("reason"),
-                "failure_reason": trace.get("failure_reason"),
-            }
+            decision = build_field_agent_process(
+                field_name=field_name,
+                status=trace.get("status") or result_field.get("status"),
+                value=result_field.get("value"),
+                evidence=trace.get("evidence") or {},
+                related_fields=trace.get("related_fields") or [],
+                actions=trace.get("actions") or [],
+                reason=trace.get("reason"),
+                failure_reason=trace.get("failure_reason"),
+            )
             decisions.append(decision)
         return decisions
 

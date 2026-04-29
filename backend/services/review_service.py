@@ -195,10 +195,11 @@ class ReviewService:
     ) -> dict[str, Any]:
         evidence = loads_json(trace["evidence_json"], {}) if trace else {}
         actions = loads_json(trace["actions_json"], []) if trace else []
+        agent_value = loads_json(field["agent_value_json"], None)
         return {
             "field_name": field["field_name"],
             "display_name": field["display_name"],
-            "agent_value": loads_json(field["agent_value_json"], None),
+            "agent_value": agent_value,
             "field_status": field["agent_status"],
             "needs_review": bool(route["needs_review"]),
             "review_reason": route["route_reason"],
@@ -208,7 +209,7 @@ class ReviewService:
             "actions": [action.get("action_type") for action in actions],
             "reason": trace["reason"] if trace else None,
             "failure_reason": trace["failure_reason"] if trace else None,
-            "agent_process": serialize_field_agent_process(trace),
+            "agent_process": serialize_field_agent_process(trace, value=agent_value),
         }
 
     def _serialize_review_response(

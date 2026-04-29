@@ -112,9 +112,10 @@ frontend/
   -> 非 failed 状态尝试读取 audit，404/409 返回 null
   -> 页面用 Tabs 展示 result、review、trace、audit
   -> trace tab 先由 AgentExecutionSteps 渲染 trace.steps，按调用顺序展示 agent 名称、阶段、状态、时间、文件摘要、file_extraction_agent 字段决策过程和 route 统计
+  -> 字段决策过程优先展示 backend 返回的 agent_process.process_steps，按 broad_extraction、field_resolution/tool、final_result 三段说明候选证据、工具动作和最终结果
   -> AgentRawTrace 渲染 trace.agent_trace，按 sequence 展示每次 agent 调用的 agent/stage/status 和 request/response/trace key 摘要，JSON 明细放入可展开区域
-  -> review tab 对 waiting_review 字段展示 agent_process，包含字段值、证据状态、reason、field_reference/global_lookup/validation_rule 等 action 明细
-  -> audit tab 对 field_commits 展示最终提交记录，并在每条提交下方展示对应 agent_process
+  -> review tab 对 waiting_review 字段展示 agent_process，包含字段值、证据状态、三段过程、reason、field_reference/global_lookup/validation_rule 等 action 明细
+  -> audit tab 对 field_commits 展示最终提交记录，并在每条提交下方展示对应 agent_process 和三段过程
   -> review/trace 中的 evidence_texts/texts 先交给 MarkdownEvidence 渲染标题、列表、标准/紧凑表格、加粗和行内代码
   -> waiting_review 时把 agent_value 作为默认复核值
   -> 用户提交 revise_and_approve

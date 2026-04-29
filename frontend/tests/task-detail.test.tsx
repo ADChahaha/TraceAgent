@@ -15,36 +15,63 @@ const waitingReviewSummary: TaskSummary = {
   needs_review: true
 };
 
+const agentEvidence = {
+  status: "model_resolved",
+  notes: ["broad evidence 命中文明寝室表格"],
+  texts: [
+    "### 文明寝室名单\n\n| 房间 | 结论 | | --- | --- | | 1-101 | 通过 | | 1-102 | **文明寝室** |"
+  ],
+  refs: [{ document_id: "doc-1", page: 2, block_id: "doc-1:p2:b3" }]
+};
+
+const agentActions = [
+  {
+    action_type: "field_reference",
+    message: "模型请求参考字段 building",
+    used_in_final_decision: false,
+    metadata: { requested_field_name: "building", returned_to_model: true }
+  },
+  {
+    action_type: "global_lookup",
+    message: "补查文明寝室名单",
+    used_in_final_decision: true,
+    metadata: { lookup_hints: ["文明寝室"], returned_block_ids: ["doc-1:p2:b3"] }
+  },
+  {
+    action_type: "validation_rule",
+    message: "校正房间号列表",
+    used_in_final_decision: true
+  }
+];
+
 const agentProcess = {
   field_name: "room_numbers",
   status: "resolved",
   value: "1-101,1-102",
-  evidence: {
-    status: "model_resolved",
-    notes: ["broad evidence 命中文明寝室表格"],
-    texts: [
-      "### 文明寝室名单\n\n| 房间 | 结论 | | --- | --- | | 1-101 | 通过 | | 1-102 | **文明寝室** |"
-    ],
-    refs: [{ document_id: "doc-1", page: 2, block_id: "doc-1:p2:b3" }]
-  },
+  evidence: agentEvidence,
   related_fields: ["building"],
-  actions: [
+  actions: agentActions,
+  process_steps: [
     {
-      action_type: "field_reference",
-      message: "模型请求参考字段 building",
-      used_in_final_decision: false,
-      metadata: { requested_field_name: "building", returned_to_model: true }
+      stage: "broad_extraction",
+      title: "第一步 broad extraction",
+      status: "model_resolved",
+      evidence: agentEvidence
     },
     {
-      action_type: "global_lookup",
-      message: "补查文明寝室名单",
-      used_in_final_decision: true,
-      metadata: { lookup_hints: ["文明寝室"], returned_block_ids: ["doc-1:p2:b3"] }
+      stage: "field_resolution",
+      title: "第二步 resolution / tool",
+      status: "used",
+      related_fields: ["building"],
+      actions: agentActions
     },
     {
-      action_type: "validation_rule",
-      message: "校正房间号列表",
-      used_in_final_decision: true
+      stage: "final_result",
+      title: "第三步 final result",
+      status: "resolved",
+      value: "1-101,1-102",
+      reason: "模型定案后经过规则校正",
+      failure_reason: null
     }
   ],
   reason: "模型定案后经过规则校正",
@@ -280,6 +307,9 @@ it("waiting_review 任务会展示证据并提交 revise_and_approve 后刷新�
   expect(screen.getByText("1-102")).toBeInTheDocument();
   expect(screen.getByText("文明寝室")).toBeInTheDocument();
   expect(screen.getByText("Agent 决策过程")).toBeInTheDocument();
+  expect(screen.getByText("第一步 broad extraction")).toBeInTheDocument();
+  expect(screen.getByText("第二步 resolution / tool")).toBeInTheDocument();
+  expect(screen.getByText("第三步 final result")).toBeInTheDocument();
   expect(screen.getByText("模型请求参考字段 building")).toBeInTheDocument();
   expect(screen.getByText("补查文明寝室名单")).toBeInTheDocument();
   expect(screen.queryByText("### 文明寝室名单")).not.toBeInTheDocument();
@@ -288,6 +318,9 @@ it("waiting_review 任务会展示证据并提交 revise_and_approve 后刷新�
   await user.click(screen.getByRole("tab", { name: "证据" }));
   expect(screen.getByText("Agent 执行过程")).toBeInTheDocument();
   expect(screen.getByText("字段决策过程")).toBeInTheDocument();
+  expect(screen.getAllByText("第一步 broad extraction").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("第二步 resolution / tool").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("第三步 final result").length).toBeGreaterThan(0);
   expect(screen.getByText("document_processor")).toBeInTheDocument();
   expect(screen.getByText("file_extraction_agent")).toBeInTheDocument();
   expect(screen.getByText("route_policy_agent")).toBeInTheDocument();

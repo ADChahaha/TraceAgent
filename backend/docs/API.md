@@ -396,7 +396,16 @@ documents 表中的标准化结果
   -> route_policy_agent 步骤，返回 accept/review/reject 计数和每个字段的 route_reason
 ```
 
-`field_decisions` 来自 `agent_runs.trace_json` 和 `agent_runs.result_json`，用于把 file_extraction_agent 的字段定案过程透给前端。它包含字段值、证据摘要、跨字段参考、global lookup、validation rule、reason 和 failure_reason。当前 agent 契约不保存 raw prompt 或 raw model response，因此 backend 也不会在 trace 中伪造这类原始内容。
+`field_decisions` 来自 `agent_runs.trace_json` 和 `agent_runs.result_json`，用于把 file_extraction_agent 的字段定案过程透给前端。它包含字段值、证据摘要、跨字段参考、global lookup、validation rule、reason、failure_reason 和 `process_steps`。当前 agent 契约不保存 raw prompt 或 raw model response，因此 backend 也不会在 trace 中伪造这类原始内容。
+
+`process_steps` 是 backend 从现有字段 trace 派生的展示链路，不新增数据库字段：
+
+```text
+field evidence + actions + agent value
+  -> broad_extraction：候选证据 block、文本、refs 和 notes
+  -> field_resolution：field_reference / global_lookup / validation_rule 等动作
+  -> final_result：最终 status、agent value、reason 或 failure_reason
+```
 
 `agent_trace` 来自 `agent_stage_runs`，按每次 HTTP 调用单独保存并返回：
 

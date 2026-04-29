@@ -1,6 +1,21 @@
 # Backend Devlog
 
-last updated: 2026-04-29 18:06:03
+last updated: 2026-04-29 18:45:33
+
+## 2026-04-29 18:45:33
+
+### 已完成工作
+
+- 扩展字段级 `agent_process`，新增 `process_steps`，按 `broad_extraction -> field_resolution -> final_result` 展示 broad 候选证据、resolution/tool 动作和最终结果。
+- 让 `GET /trace`、review handoff 和 audit 中的字段决策过程复用同一套 `process_steps` 派生逻辑，不新增数据库表结构。
+- 前端任务详情页在 trace、review 和 audit 中展示三段式 agent 过程，并保留原有证据 markdown 渲染。
+
+### 验证
+
+- `python -m pytest backend/tests -q`
+- `pnpm test`
+- `pnpm build`
+- 临时 `8004/3002` 浏览器全流程验证：上传 DOCX、查看结果/证据/审计、人工复核 handoff 与提交后 audit。
 
 ## 2026-04-29 18:06:03
 
