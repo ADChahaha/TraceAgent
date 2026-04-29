@@ -40,6 +40,17 @@ GET  /capabilities
 
 ## 运行
 
+### 安装依赖
+
+`backend` 有独立的 Python 依赖入口。第一次运行前，从仓库根目录执行：
+
+```bash
+conda activate agent-gate
+cd backend
+pip install -e ".[dev]"
+cd ..
+```
+
 默认配置：
 
 - SQLite：`backend/backend.sqlite3`
@@ -58,7 +69,7 @@ AGENT_SERVICE_TIMEOUT_SECONDS=60
 启动方式：
 
 ```bash
-uvicorn backend.main:app --reload
+AGENT_SERVICE_BASE_URL=http://127.0.0.1:8001 uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 ## 测试

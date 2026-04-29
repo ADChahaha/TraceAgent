@@ -38,7 +38,9 @@ conda activate agent-gate
 ```bash
 cd /path/to/agent_gate
 cd agent
-pip install -e ".[dev]" httpx
+pip install -e ".[dev]"
+cd ../backend
+pip install -e ".[dev]"
 cd ..
 ```
 

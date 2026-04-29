@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-gate-backend"
+version = "0.1.0"
+description = "Backend governance API for Agent Gate."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "httpx>=0.27,<1",
+    "pydantic>=2,<3",
+    "python-multipart>=0.0.9",
+    "uvicorn>=0.30,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.setuptools]
+packages = [
+    "backend",
+    "backend.core",
+    "backend.crud",
+    "backend.models",
+    "backend.routes",
+    "backend.services",
+]
+
+[tool.setuptools.package-dir]
+backend = "."
+"backend.core" = "core"
+"backend.crud" = "crud"
+"backend.models" = "models"
+"backend.routes" = "routes"
+"backend.services" = "services"

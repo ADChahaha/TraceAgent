@@ -39,6 +39,7 @@
 
 ```text
 backend/
+  pyproject.toml
   main.py
   core/
     config.py
@@ -78,6 +79,7 @@ backend/
 模块边界：
 
 - `main.py` 创建 FastAPI app，通过 lifespan 初始化 SQLite 连接、agent client 和服务对象，挂载 `routes/`，不写业务流程。
+- `pyproject.toml` 定义 backend 独立 Python 包、运行依赖和测试依赖；从零启动时应先执行 `pip install -e ".[dev]"`。
 - `core/config.py` 管理数据库路径、agent service 地址等配置，不管理业务 task spec。
 - `core/db.py` 初始化 SQLite 连接，不直接写业务查询。
 - `core/storage.py` 只保留上传文件元信息所需的哈希工具，不落盘保存原始文件。
