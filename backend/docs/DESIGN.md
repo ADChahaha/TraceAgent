@@ -9,10 +9,11 @@
 核心链路是：
 
 ```text
-前端或脚本上传 PDF / DOCX + task_type + task_spec
+前端或脚本上传一个或多个 PDF / DOCX + task_type + task_spec
   -> backend 创建任务记录
-  -> backend 通过 HTTP 调用 document_processor，把上传文件转成 markdown + blocks
-  -> backend 保存标准化文本结果，不保存原始文件
+  -> backend 通过 HTTP 逐个调用 document_processor，把上传文件转成 markdown + blocks
+  -> backend 为每个文件保存标准化文本结果，不保存原始文件
+  -> backend 合并多个文件的 markdown、md_list 和 blocks
   -> backend 通过 HTTP 调用 file_extraction_agent
   -> agent service 返回 ExtractionResult(result + trace)
   -> backend 组装 field_outputs + refs_with_text 并调用 route_policy_agent
@@ -49,6 +50,7 @@ backend/
     capabilities.py
     errors.py
   crud/
+    agent_stage_runs.py
     tasks.py
     extraction.py
     reviews.py
@@ -90,22 +92,28 @@ backend/
 任务创建后的处理流程如下：
 
 ```text
-POST /tasks 上传文件
-  -> routes.tasks 接收 UploadFile、task_type、task_spec、metadata
-  -> routes.tasks 在当前请求中读取上传文件 bytes
-  -> task_service 校验文件类型和外部传入的 task_spec，计算 size_bytes 和 sha256
+POST /tasks 上传一个或多个文件
+  -> routes.tasks 接收 files/file、task_type、task_spec、metadata
+  -> routes.tasks 在当前请求中读取每个上传文件 bytes
+  -> task_service 校验至少一个文件、逐个校验文件类型和外部传入的 task_spec
   -> SQLite 写入 tasks
   -> task_service 将任务置为 processing / document_processing
-  -> agent_client 用上传文件 bytes 通过 HTTP 调用 agent service 的文档处理接口
-  -> task_service 为 blocks 补 document_id / block_id
-  -> SQLite 写入 documents(markdown / md_list_json / blocks_json / meta_info_json / warnings_json)
-  -> agent_client 再通过 HTTP 调用 agent service 的字段抽取接口
+  -> agent_client 逐个用上传文件 bytes 通过 HTTP 调用 agent service 的文档处理接口
+  -> SQLite 为每次 document_processor 调用写入 agent_stage_runs，不保存原始文件 bytes
+  -> task_service 为每个文件生成 document_id，并为 blocks 补 document_id / block_id
+  -> SQLite 为每个文件写入 documents(markdown / md_list_json / blocks_json / meta_info_json / warnings_json)
+  -> task_service 合并全部 markdown、md_list 和 blocks
+  -> agent_client 再通过 HTTP 调用 agent service 的字段抽取接口，metadata 包含 document_ids
+  -> SQLite 为 file_extraction_agent 调用写入 agent_stage_runs
   -> SQLite 写入 agent_runs / extracted_fields / field_traces
   -> route_policy 从字段结果和 trace refs 组装 field_outputs + refs_with_text
   -> agent_client 通过 HTTP 调用 agent service 的 route policy 接口
+  -> SQLite 为 route_policy_agent 调用写入 agent_stage_runs
   -> SQLite 写入 field_routes
+  -> GET /trace 从 documents、agent_runs、agent_stage_runs、field_traces、field_routes 组装字段证据、三段摘要步骤和原始 agent 调用记录
   -> 如果全部字段可 accept，写入 field_commits 并将任务置为 completed / done
   -> 如果存在 review 字段，将任务置为 waiting_review / review
+  -> GET /tasks/{task_id} 的 needs_review 只以当前任务 status 是否为 waiting_review 为准
   -> 如果 route=reject，将任务置为 rejected / done
   -> 如果 agent 或流程失败，将任务置为 failed / done 并保存 error_message
   -> 返回 task_id 和当前 status/stage
@@ -118,7 +126,7 @@ POST /tasks 上传文件
 ```text
 GET /tasks/{task_id}/review
   -> review_service 读取 extracted_fields、field_traces、field_routes
-  -> 组装 handoff 包，返回字段值、证据、定位、route 原因和 actions
+  -> 组装 handoff 包，返回字段值、证据、定位、route 原因、actions 和 agent_process
 
 POST /tasks/{task_id}/review
   -> review_service 校验任务状态必须是 waiting_review
@@ -128,6 +136,7 @@ POST /tasks/{task_id}/review
   -> reject 将任务置为 rejected，不生成对应字段提交
   -> audit_service 写入 field_commits
   -> 更新 tasks.status / stage / completed_at
+  -> 后续 summary 返回 completed / done / needs_review=false
 ```
 
 ## 4. 模块职责
@@ -146,9 +155,9 @@ POST /tasks/{task_id}/review
 
 ```text
 HTTP 请求
-  -> FastAPI 解析 UploadFile/Form 参数
+  -> FastAPI 解析 files/file/Form 参数
   -> task_spec 和 metadata 如果存在就按 JSON object 解析
-  -> 读取上传文件 bytes
+  -> 读取每个上传文件 bytes
   -> 调用 task_service / audit_service
   -> 返回服务层已组装的 API 响应
 ```
@@ -188,6 +197,9 @@ crud/tasks.py
   -> tasks
   -> documents
 
+crud/agent_stage_runs.py
+  -> agent_stage_runs
+
 crud/extraction.py
   -> agent_runs
   -> extracted_fields
@@ -207,6 +219,7 @@ crud/audit.py
 ```text
 创建任务
   -> 同时写 tasks 和 documents
+  -> 每次 agent HTTP 调用写 agent_stage_runs
 
 保存 agent 输出
   -> 同时写 agent_runs、extracted_fields、field_traces
@@ -230,18 +243,24 @@ crud/audit.py
 负责任务创建和状态流转：
 
 ```text
-file_bytes + filename + task_type + task_spec + metadata
-  -> 从 filename 推断 pdf/docx，否则抛出 ValidationError
+files/file + task_type + task_spec + metadata
+  -> 至少收集一个上传文件，否则抛出 ValidationError
+  -> 逐个从 filename 推断 pdf/docx，否则抛出 ValidationError
   -> 如果未传 task_spec，抛出 ValidationError
   -> 创建 task_... 记录为 pending/uploaded
-  -> 调用 agent_client.process_document(file_bytes, filename, file_type)
-  -> 为返回 blocks 补 document_id 和 block_id
-  -> 写入 documents，只保存标准化文本结果和上传元信息
-  -> 调用 agent_client.extract_fields(blocks, markdown, task_spec)
+  -> 逐个调用 agent_client.process_document(file_bytes, filename, file_type)
+  -> 每次 document_processor 调用保存 agent_stage_runs(request 摘要、完整 response、trace)
+  -> 每个文件生成独立 document_id，并为返回 blocks 补 document_id 和 block_id
+  -> 逐个写入 documents，只保存标准化文本结果和上传元信息
+  -> 合并全部 blocks、markdown 和 md_list
+  -> 调用 agent_client.extract_fields(blocks, markdown, md_list, task_spec)，metadata 携带 document_ids
+  -> 保存 file_extraction_agent 的 agent_stage_runs
   -> 写入 agent_runs、extracted_fields、field_traces
   -> route_policy.build_route_policy_request(...) 组装 field_outputs + refs_with_text
   -> 调用 agent_client.evaluate_route_policy(...)
+  -> 保存 route_policy_agent 的 agent_stage_runs
   -> 写入 field_routes
+  -> get_trace(task_id) 读取 documents、agent_runs、agent_stage_runs、field_traces、field_routes，并序列化 trace.steps 与 agent_trace
   -> accept 写 final_value/source 和 field_commits
   -> review 只自动提交 accept 字段，其余等待 review_service
   -> reject/failed 写任务终态
@@ -255,7 +274,7 @@ file_bytes + filename + task_type + task_spec + metadata
 upload file bytes + filename + file_type
   -> POST /v1/document-processor/process
   -> ProcessResult
-  -> backend 为 blocks 补 document_id / block_id
+  -> backend 为每个文件的 blocks 补 document_id / block_id
   -> POST /v1/file-extraction-agent/extract
   -> ExtractionResult(result + trace)
   -> POST /v1/route-policy-agent/evaluate
@@ -342,7 +361,7 @@ final field value + route + review decision + trace refs
 
 ### `agent_runs`
 
-保存一次 agent 执行的输入、输出和运行状态。
+保存 `file_extraction_agent` 的字段抽取输入、字段结果和字段 trace。它是字段结果落库的来源，保留这个表是为了兼容现有 result / field trace 组装逻辑。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -353,6 +372,36 @@ final field value + route + review decision + trace refs
 | `request_json` | `TEXT` | 传给 agent 的主要请求摘要 |
 | `result_json` | `TEXT` | `ExtractionResult.result` |
 | `trace_json` | `TEXT` | `ExtractionResult.trace` |
+| `started_at` | `DATETIME` | agent 调用开始时间 |
+| `finished_at` | `DATETIME NULL` | agent 调用结束时间 |
+
+### `agent_stage_runs`
+
+按真实 HTTP 调用顺序保存 `agent/` 服务每个阶段返回给 backend 的过程数据。它用于 `GET /trace.agent_trace`，比 `trace.steps` 更接近原始调用记录；为了不保存用户上传原始文件，`document_processor` 的 `request_json` 只保存文件名、类型、大小、sha256 和 backend 生成的 `document_id`，不保存 `file_bytes`。
+
+处理链路是：
+
+```text
+task_service 准备某次 agent HTTP 调用
+  -> 生成 sequence、stage、agent_name、started_at
+  -> request_json 保存 backend 实际发出的结构化请求或安全摘要
+  -> response_json 保存 agent service 返回的完整 JSON payload
+  -> trace_json 保存 response.trace；如果该 agent 没有 trace 字段，就保存 meta_info/warnings 或 field_routes 摘要
+  -> GET /tasks/{task_id}/trace 按 sequence 返回 agent_trace
+```
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | `TEXT PRIMARY KEY` | 阶段调用 ID |
+| `task_id` | `TEXT INDEX` | 所属任务 ID |
+| `sequence` | `INTEGER` | 当前任务内的 agent 调用顺序 |
+| `stage` | `TEXT` | `document_processing / extraction / route_policy` |
+| `agent_name` | `TEXT` | `document_processor / file_extraction_agent / route_policy_agent` |
+| `status` | `TEXT` | agent 返回状态；未显式返回时用 `completed` |
+| `failure_reason` | `TEXT NULL` | agent 返回的失败原因 |
+| `request_json` | `TEXT` | 请求摘要或结构化请求 |
+| `response_json` | `TEXT` | agent service 返回的完整 JSON payload |
+| `trace_json` | `TEXT` | agent trace 或可解释摘要 |
 | `started_at` | `DATETIME` | agent 调用开始时间 |
 | `finished_at` | `DATETIME NULL` | agent 调用结束时间 |
 
@@ -569,7 +618,11 @@ review payload
 
 - `result`：面向业务展示和写库，保存最终字段结果。
 - `trace`：面向解释和调试，保存 agent 的证据、定位、actions 和失败原因。
-- `audit`：面向责任链路，保存最终字段值由谁确认、何时确认、是否人工修改、对应证据来源。
+- `trace.steps`：面向过程回放，从已落库的文档、抽取 run 和 route 记录派生；其中 file_extraction_agent 步骤会带 `field_decisions`，展示字段值、证据、跨字段参考、lookup、validation rule 和定案原因。
+- `trace.agent_trace`：面向调试和论文展示，从 `agent_stage_runs` 返回每次 agent HTTP 调用的顺序、请求摘要、完整响应和 trace payload。它保存 agent service 返回的全部 JSON，但不会保存上传原始 bytes，也不会伪造 agent 未返回的 raw prompt 或 raw model response。
+- `review.fields[].agent_process`：面向人工复核，复用字段 trace 组装当前字段的 agent 决策过程，让审核人不只看到证据文本，还能看到模型为什么要参考其他字段、是否补查、是否规则校正。
+- `audit.field_commits[].agent_process`：面向责任链路，字段提交记录继续附带对应 agent 决策过程，方便审计最终值来自 agent 还是人工时回看原始定案依据。
+- `audit`：面向责任链路，保存最终字段值由谁确认、何时确认、是否人工修改、对应证据来源和 agent 决策过程。
 
 对应关系：
 
@@ -580,11 +633,20 @@ agent ExtractionResult.result
 
 agent ExtractionResult.trace
   -> field_traces
-  -> review handoff 使用证据和 actions
+  -> review handoff 使用证据、actions 和 agent_process
+
+documents + agent_runs + field_routes
+  -> GET /tasks/{task_id}/trace.steps
+  -> 前端展示 document_processor、file_extraction_agent、route_policy_agent 的执行过程
+  -> file_extraction_agent step 从 trace_json/result_json 派生 field_decisions
+
+agent_stage_runs
+  -> GET /tasks/{task_id}/trace.agent_trace
+  -> 前端展示每次 agent 调用的 request / response / trace 摘要和可展开 JSON
 
 field final value + route + review + trace refs
   -> field_commits
-  -> audit API 返回
+  -> audit API 返回，并按 field_name 补回 agent_process
 ```
 
 设计约束：
@@ -601,13 +663,16 @@ field final value + route + review + trace refs
 上传请求中的原始文件 bytes
   -> POST agent /v1/document-processor/process
   -> ProcessResult(blocks + markdown + md_list)
+  -> backend 写 agent_stage_runs(document_processor)，request 只含文件摘要
   -> backend 保存 markdown / md_list / blocks
   -> backend 为 blocks 补 document_id / block_id
   -> POST agent /v1/file-extraction-agent/extract
   -> ExtractionResult(result + trace)
+  -> backend 写 agent_stage_runs(file_extraction_agent)
   -> backend 组装 field_outputs + refs_with_text
   -> POST agent /v1/route-policy-agent/evaluate
   -> RoutePolicyResult(field_routes)
+  -> backend 写 agent_stage_runs(route_policy_agent)
 ```
 
 `agent_client.py` 负责：
@@ -638,7 +703,7 @@ agent 返回 ExtractionResult.status=failed
 
 需要覆盖：
 
-- 单文件 PDF / DOCX 上传。
+- 单任务多文件 PDF / DOCX 上传。
 - 单任务创建、状态查询、result、trace、review、audit。
 - SQLite 本地数据库。
 - SQLite 保存 markdown、blocks、trace 和审核结果，不保存用户上传的原始文件。

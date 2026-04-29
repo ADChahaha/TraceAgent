@@ -2,20 +2,30 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from backend.core.config import BackendSettings
 from backend.core.storage import compute_sha256
+from backend.crud import agent_stage_runs as agent_stage_runs_crud
 from backend.crud import audit as audit_crud
 from backend.crud import extraction as extraction_crud
 from backend.crud import reviews as reviews_crud
 from backend.crud import tasks as tasks_crud
 from backend.crud.json_utils import loads_json
+from backend.services.agent_process import serialize_field_agent_process
 from backend.services.audit_service import AuditService
 from backend.services.errors import AgentServiceError, NotFoundError, ValidationError
 from backend.services.route_policy import build_route_policy_request
 from backend.services.time_utils import utc_now
+
+
+@dataclass(frozen=True)
+class UploadedFilePayload:
+    file_bytes: bytes
+    filename: str
+    content_type: str | None
 
 
 class TaskService:
@@ -32,22 +42,42 @@ class TaskService:
         self.agent_client = agent_client
         self.audit_service = audit_service
 
-    def create_task(
+    def upload_file_payload(
         self,
         *,
         file_bytes: bytes,
         filename: str,
         content_type: str | None,
+    ) -> UploadedFilePayload:
+        return UploadedFilePayload(
+            file_bytes=file_bytes,
+            filename=filename,
+            content_type=content_type,
+        )
+
+    def create_task(
+        self,
+        *,
+        files: list[UploadedFilePayload] | None = None,
+        file_bytes: bytes | None = None,
+        filename: str = "",
+        content_type: str | None = None,
         task_type: str,
         task_spec: dict[str, Any] | None,
         metadata: dict[str, Any] | None,
     ) -> dict[str, Any]:
-        file_type = self._infer_file_type(filename)
+        upload_files = self._resolve_upload_files(
+            files=files,
+            file_bytes=file_bytes,
+            filename=filename,
+            content_type=content_type,
+        )
+        for upload_file in upload_files:
+            self._infer_file_type(upload_file.filename)
         resolved_task_spec = self._resolve_task_spec(task_type, task_spec)
         metadata = metadata or {}
         now = utc_now()
         task_id = f"task_{uuid.uuid4().hex}"
-        document_id = f"doc_{uuid.uuid4().hex}"
         tasks_crud.create_task(
             self.connection,
             task_id=task_id,
@@ -59,11 +89,7 @@ class TaskService:
         try:
             task = self._run_agent_pipeline(
                 task_id=task_id,
-                document_id=document_id,
-                file_bytes=file_bytes,
-                filename=filename,
-                content_type=content_type,
-                file_type=file_type,
+                upload_files=upload_files,
                 task_type=task_type,
                 task_spec=resolved_task_spec,
                 metadata=metadata,
@@ -90,9 +116,7 @@ class TaskService:
         fields = extraction_crud.list_extracted_fields(self.connection, task_id)
         traces = extraction_crud.list_field_traces(self.connection, task_id)
         routes = extraction_crud.list_field_routes(self.connection, task_id)
-        needs_review = task["status"] == "waiting_review" or any(
-            bool(route["needs_review"]) for route in routes
-        )
+        needs_review = task["status"] == "waiting_review"
         return {
             "task_id": task["id"],
             "status": task["status"],
@@ -141,10 +165,27 @@ class TaskService:
         agent_run = extraction_crud.get_latest_agent_run(self.connection, task_id)
         traces = extraction_crud.list_field_traces(self.connection, task_id)
         trace_payload = loads_json(agent_run["trace_json"], {}) if agent_run else {}
+        routes = extraction_crud.list_field_routes(self.connection, task_id)
+        documents = tasks_crud.list_documents_by_task(self.connection, task_id)
+        agent_stage_runs = agent_stage_runs_crud.list_agent_stage_runs(
+            self.connection,
+            task_id,
+        )
         return {
             "task_id": task["id"],
             "agent_status": agent_run["agent_status"] if agent_run else None,
             "failure_reason": agent_run["failure_reason"] if agent_run else None,
+            "steps": self._serialize_trace_steps(
+                task=task,
+                documents=documents,
+                agent_run=agent_run,
+                trace_payload=trace_payload,
+                routes=routes,
+            ),
+            "agent_trace": [
+                self._serialize_agent_stage_run(stage_run)
+                for stage_run in agent_stage_runs
+            ],
             "fields": [self._serialize_trace_field(trace) for trace in traces],
             "metadata": trace_payload.get("metadata", {}),
         }
@@ -162,15 +203,42 @@ class TaskService:
             "stage": task["stage"],
         }
 
+    def _save_agent_stage_run(
+        self,
+        *,
+        task_id: str,
+        sequence: int,
+        stage: str,
+        agent_name: str,
+        status: str,
+        failure_reason: str | None,
+        request: dict[str, Any],
+        response: dict[str, Any],
+        trace: dict[str, Any],
+        started_at: str,
+        finished_at: str,
+    ) -> dict[str, Any]:
+        return agent_stage_runs_crud.create_agent_stage_run(
+            self.connection,
+            run_id=f"stage_run_{uuid.uuid4().hex}",
+            task_id=task_id,
+            sequence=sequence,
+            stage=stage,
+            agent_name=agent_name,
+            status=status,
+            failure_reason=failure_reason,
+            request=request,
+            response=response,
+            trace=trace,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+
     def _run_agent_pipeline(
         self,
         *,
         task_id: str,
-        document_id: str,
-        file_bytes: bytes,
-        filename: str,
-        content_type: str | None,
-        file_type: str,
+        upload_files: list[UploadedFilePayload],
         task_type: str,
         task_spec: dict[str, Any],
         metadata: dict[str, Any],
@@ -183,34 +251,12 @@ class TaskService:
             stage="document_processing",
             now=now,
         )
-        document_result = self.agent_client.process_document(
-            file_bytes=file_bytes,
-            filename=filename,
-            content_type=content_type,
-            file_type=file_type,
-        )
-        blocks = self._normalize_blocks(
-            document_id=document_id,
-            raw_blocks=document_result.get("blocks") or [],
-            markdown=document_result.get("markdown") or "",
-        )
-        document_saved_at = utc_now()
-        tasks_crud.create_document(
-            self.connection,
-            document_id=document_id,
+        document_bundle = self._process_documents(
             task_id=task_id,
-            filename=filename,
-            file_type=file_type,
-            content_type=content_type,
-            upload_size_bytes=len(file_bytes),
-            upload_sha256=compute_sha256(file_bytes),
-            markdown=document_result.get("markdown") or "",
-            md_list=document_result.get("md_list") or [],
-            blocks=blocks,
-            processor_meta=document_result.get("meta_info") or {},
-            warnings=document_result.get("warnings") or [],
-            now=document_saved_at,
+            upload_files=upload_files,
+            sequence_start=1,
         )
+        next_trace_sequence = document_bundle["next_trace_sequence"]
 
         extraction_started_at = utc_now()
         tasks_crud.update_task(
@@ -219,20 +265,43 @@ class TaskService:
             stage="extraction",
             now=extraction_started_at,
         )
+        extraction_metadata = {
+            **metadata,
+            "task_id": task_id,
+            "task_type": task_type,
+            **document_bundle["metadata"],
+        }
+        extraction_request = {
+            "blocks": document_bundle["blocks"],
+            "markdown": document_bundle["markdown"],
+            "md_list": document_bundle["md_list"],
+            "task_spec": task_spec,
+            "metadata": extraction_metadata,
+            "run_options": None,
+        }
         extraction_result = self.agent_client.extract_fields(
-            blocks=blocks,
-            markdown=document_result.get("markdown") or "",
-            md_list=document_result.get("md_list") or [],
+            blocks=document_bundle["blocks"],
+            markdown=document_bundle["markdown"],
+            md_list=document_bundle["md_list"],
             task_spec=task_spec,
-            metadata={
-                **metadata,
-                "task_id": task_id,
-                "task_type": task_type,
-                "document_id": document_id,
-            },
+            metadata=extraction_metadata,
             run_options=None,
         )
         extraction_finished_at = utc_now()
+        self._save_agent_stage_run(
+            task_id=task_id,
+            sequence=next_trace_sequence,
+            stage="extraction",
+            agent_name="file_extraction_agent",
+            status=extraction_result.get("status") or "completed",
+            failure_reason=extraction_result.get("failure_reason"),
+            request=extraction_request,
+            response=extraction_result,
+            trace=extraction_result.get("trace") or {},
+            started_at=extraction_started_at,
+            finished_at=extraction_finished_at,
+        )
+        next_trace_sequence += 1
         extraction_crud.create_agent_run(
             self.connection,
             run_id=f"run_{uuid.uuid4().hex}",
@@ -242,7 +311,7 @@ class TaskService:
             request={
                 "task_spec": task_spec,
                 "metadata": metadata,
-                "document_id": document_id,
+                **document_bundle["metadata"],
             },
             result=extraction_result.get("result") or {},
             trace=extraction_result.get("trace") or {},
@@ -284,20 +353,37 @@ class TaskService:
                 **metadata,
                 "task_id": task_id,
                 "task_type": task_type,
-                "document_id": document_id,
+                **document_bundle["metadata"],
             },
         )
         route_result = self.agent_client.evaluate_route_policy(**route_request)
+        route_finished_at = utc_now()
+        self._save_agent_stage_run(
+            task_id=task_id,
+            sequence=next_trace_sequence,
+            stage="route_policy",
+            agent_name="route_policy_agent",
+            status=route_result.get("status") or "completed",
+            failure_reason=route_result.get("failure_reason"),
+            request=route_request,
+            response=route_result,
+            trace=route_result.get("trace") or {
+                "field_routes": route_result.get("field_routes") or [],
+                "warnings": route_result.get("warnings") or [],
+                "metadata": route_result.get("metadata") or {},
+            },
+            started_at=route_started_at,
+            finished_at=route_finished_at,
+        )
         if route_result.get("status") == "failed":
-            failed_at = utc_now()
             return tasks_crud.update_task(
                 self.connection,
                 task_id=task_id,
                 status="failed",
                 stage="done",
                 error_message=route_result.get("failure_reason"),
-                completed_at=failed_at,
-                now=failed_at,
+                completed_at=route_finished_at,
+                now=route_finished_at,
             )
         routes = self._save_field_routes(
             task_id=task_id,
@@ -310,6 +396,97 @@ class TaskService:
             traces=traces,
             routes=routes,
         )
+
+    def _process_documents(
+        self,
+        *,
+        task_id: str,
+        upload_files: list[UploadedFilePayload],
+        sequence_start: int,
+    ) -> dict[str, Any]:
+        next_trace_sequence = sequence_start
+        document_ids: list[str] = []
+        all_blocks: list[dict[str, Any]] = []
+        all_md_list: list[str] = []
+        markdown_parts: list[str] = []
+
+        for upload_file in upload_files:
+            document_id = f"doc_{uuid.uuid4().hex}"
+            file_type = self._infer_file_type(upload_file.filename)
+            upload_sha256 = compute_sha256(upload_file.file_bytes)
+            document_started_at = utc_now()
+            document_request = {
+                "document_id": document_id,
+                "filename": upload_file.filename,
+                "file_type": file_type,
+                "content_type": upload_file.content_type,
+                "upload_size_bytes": len(upload_file.file_bytes),
+                "upload_sha256": upload_sha256,
+            }
+            document_result = self.agent_client.process_document(
+                file_bytes=upload_file.file_bytes,
+                filename=upload_file.filename,
+                content_type=upload_file.content_type,
+                file_type=file_type,
+            )
+            document_finished_at = utc_now()
+            self._save_agent_stage_run(
+                task_id=task_id,
+                sequence=next_trace_sequence,
+                stage="document_processing",
+                agent_name="document_processor",
+                status=document_result.get("status") or "completed",
+                failure_reason=document_result.get("failure_reason"),
+                request=document_request,
+                response=document_result,
+                trace=document_result.get("trace") or {
+                    "meta_info": document_result.get("meta_info") or {},
+                    "warnings": document_result.get("warnings") or [],
+                },
+                started_at=document_started_at,
+                finished_at=document_finished_at,
+            )
+            next_trace_sequence += 1
+            markdown = document_result.get("markdown") or ""
+            md_list = document_result.get("md_list") or []
+            blocks = self._normalize_blocks(
+                document_id=document_id,
+                raw_blocks=document_result.get("blocks") or [],
+                markdown=markdown,
+            )
+            document_saved_at = utc_now()
+            tasks_crud.create_document(
+                self.connection,
+                document_id=document_id,
+                task_id=task_id,
+                filename=upload_file.filename,
+                file_type=file_type,
+                content_type=upload_file.content_type,
+                upload_size_bytes=len(upload_file.file_bytes),
+                upload_sha256=upload_sha256,
+                markdown=markdown,
+                md_list=md_list,
+                blocks=blocks,
+                processor_meta=document_result.get("meta_info") or {},
+                warnings=document_result.get("warnings") or [],
+                now=document_saved_at,
+            )
+            document_ids.append(document_id)
+            all_blocks.extend(blocks)
+            all_md_list.extend(md_list)
+            if markdown:
+                markdown_parts.append(markdown)
+
+        metadata = {"document_ids": document_ids}
+        if document_ids:
+            metadata["document_id"] = document_ids[0]
+        return {
+            "blocks": all_blocks,
+            "markdown": "\n\n".join(markdown_parts),
+            "md_list": all_md_list,
+            "metadata": metadata,
+            "next_trace_sequence": next_trace_sequence,
+        }
 
     def _save_extraction_result(
         self,
@@ -497,6 +674,26 @@ class TaskService:
             return task_spec
         raise ValidationError("task_spec is required")
 
+    def _resolve_upload_files(
+        self,
+        *,
+        files: list[UploadedFilePayload] | None,
+        file_bytes: bytes | None,
+        filename: str,
+        content_type: str | None,
+    ) -> list[UploadedFilePayload]:
+        if files:
+            return files
+        if file_bytes is not None:
+            return [
+                UploadedFilePayload(
+                    file_bytes=file_bytes,
+                    filename=filename,
+                    content_type=content_type,
+                )
+            ]
+        raise ValidationError("at least one file is required")
+
     def _normalize_blocks(
         self,
         *,
@@ -559,12 +756,174 @@ class TaskService:
         }
 
     def _serialize_trace_field(self, trace: dict[str, Any]) -> dict[str, Any]:
+        serialized = serialize_field_agent_process(trace)
+        assert serialized is not None
+        return serialized
+
+    def _serialize_agent_stage_run(self, stage_run: dict[str, Any]) -> dict[str, Any]:
         return {
-            "field_name": trace["field_name"],
-            "status": trace["trace_status"],
-            "evidence": loads_json(trace["evidence_json"], {}),
-            "related_fields": loads_json(trace["related_fields_json"], []),
-            "actions": loads_json(trace["actions_json"], []),
-            "reason": trace["reason"],
-            "failure_reason": trace["failure_reason"],
+            "id": stage_run["id"],
+            "sequence": stage_run["sequence"],
+            "stage": stage_run["stage"],
+            "agent": stage_run["agent_name"],
+            "status": stage_run["status"],
+            "failure_reason": stage_run["failure_reason"],
+            "request": loads_json(stage_run["request_json"], {}),
+            "response": loads_json(stage_run["response_json"], {}),
+            "trace": loads_json(stage_run["trace_json"], {}),
+            "started_at": stage_run["started_at"],
+            "finished_at": stage_run["finished_at"],
+        }
+
+    def _serialize_trace_steps(
+        self,
+        *,
+        task: dict[str, Any],
+        documents: list[dict[str, Any]],
+        agent_run: dict[str, Any] | None,
+        trace_payload: dict[str, Any],
+        routes: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        steps = [
+            self._serialize_document_step(documents),
+        ]
+        if agent_run is not None:
+            steps.append(
+                self._serialize_extraction_step(
+                    agent_run=agent_run,
+                    trace_payload=trace_payload,
+                )
+            )
+        if routes:
+            steps.append(self._serialize_route_policy_step(routes))
+        if task["status"] in {"completed", "waiting_review", "rejected", "failed"}:
+            steps[-1]["is_terminal_step"] = task["stage"] == "done"
+        return steps
+
+    def _serialize_document_step(self, documents: list[dict[str, Any]]) -> dict[str, Any]:
+        serialized_documents = []
+        warning_count = 0
+        block_count = 0
+        for document in documents:
+            blocks = loads_json(document["blocks_json"], [])
+            warnings = loads_json(document["warnings_json"], [])
+            block_count += len(blocks)
+            warning_count += len(warnings)
+            serialized_documents.append(
+                {
+                    "document_id": document["id"],
+                    "filename": document["filename"],
+                    "file_type": document["file_type"],
+                    "content_type": document["content_type"],
+                    "block_count": len(blocks),
+                    "markdown_chars": len(document["markdown"]),
+                    "warning_count": len(warnings),
+                    "processed_at": document["processed_at"],
+                }
+            )
+        return {
+            "stage": "document_processing",
+            "agent": "document_processor",
+            "status": "completed" if documents else "pending",
+            "started_at": documents[0]["created_at"] if documents else None,
+            "finished_at": documents[-1]["processed_at"] if documents else None,
+            "summary": {
+                "document_count": len(documents),
+                "block_count": block_count,
+                "warning_count": warning_count,
+            },
+            "documents": serialized_documents,
+        }
+
+    def _serialize_extraction_step(
+        self,
+        *,
+        agent_run: dict[str, Any],
+        trace_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        result_payload = loads_json(agent_run["result_json"], {})
+        fields = (result_payload.get("fields") or []) if isinstance(result_payload, dict) else []
+        warnings = trace_payload.get("warnings") or []
+        return {
+            "stage": "extraction",
+            "agent": "file_extraction_agent",
+            "status": agent_run["agent_status"],
+            "started_at": agent_run["started_at"],
+            "finished_at": agent_run["finished_at"],
+            "failure_reason": agent_run["failure_reason"],
+            "summary": {
+                "field_count": len(fields),
+                "warning_count": len(warnings),
+                "resolved_count": sum(1 for field in fields if field.get("status") == "resolved"),
+                "failed_count": sum(1 for field in fields if field.get("status") == "failed"),
+            },
+            "field_decisions": self._serialize_extraction_field_decisions(
+                trace_payload=trace_payload,
+                result_payload=result_payload,
+            ),
+            "warnings": warnings,
+            "metadata": trace_payload.get("metadata", {}),
+        }
+
+    def _serialize_extraction_field_decisions(
+        self,
+        *,
+        trace_payload: dict[str, Any],
+        result_payload: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        result_fields = (
+            result_payload.get("fields") or []
+            if isinstance(result_payload, dict)
+            else []
+        )
+        result_by_name = {
+            field.get("field_name"): field
+            for field in result_fields
+            if isinstance(field, dict)
+        }
+        decisions = []
+        for trace in trace_payload.get("fields") or []:
+            if not isinstance(trace, dict):
+                continue
+            field_name = trace.get("field_name")
+            result_field = result_by_name.get(field_name) or {}
+            decision = {
+                "field_name": field_name,
+                "status": trace.get("status") or result_field.get("status"),
+                "value": result_field.get("value"),
+                "evidence": trace.get("evidence") or {},
+                "related_fields": trace.get("related_fields") or [],
+                "actions": trace.get("actions") or [],
+                "reason": trace.get("reason"),
+                "failure_reason": trace.get("failure_reason"),
+            }
+            decisions.append(decision)
+        return decisions
+
+    def _serialize_route_policy_step(self, routes: list[dict[str, Any]]) -> dict[str, Any]:
+        route_counts = {"accept": 0, "review": 0, "reject": 0}
+        serialized_routes = []
+        for route in routes:
+            route_name = route["route"]
+            if route_name in route_counts:
+                route_counts[route_name] += 1
+            serialized_routes.append(
+                {
+                    "field_name": route["field_name"],
+                    "route": route_name,
+                    "needs_review": bool(route["needs_review"]),
+                    "route_reason": route["route_reason"],
+                }
+            )
+        return {
+            "stage": "route_policy",
+            "agent": "route_policy_agent",
+            "status": "completed",
+            "started_at": routes[0]["created_at"],
+            "finished_at": routes[-1]["created_at"],
+            "summary": {
+                "field_count": len(routes),
+                "routes": route_counts,
+            },
+            "routes": serialized_routes,
         }

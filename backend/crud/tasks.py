@@ -141,3 +141,13 @@ def get_document_by_task(
     ).fetchone()
     return row_to_dict(row)
 
+
+def list_documents_by_task(
+    connection: sqlite3.Connection,
+    task_id: str,
+) -> list[dict[str, Any]]:
+    rows = connection.execute(
+        "SELECT * FROM documents WHERE task_id = ? ORDER BY created_at, rowid",
+        (task_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]

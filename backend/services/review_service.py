@@ -8,6 +8,7 @@ from backend.crud import extraction as extraction_crud
 from backend.crud import reviews as reviews_crud
 from backend.crud import tasks as tasks_crud
 from backend.crud.json_utils import loads_json
+from backend.services.agent_process import serialize_field_agent_process
 from backend.services.audit_service import AuditService
 from backend.services.errors import ConflictError, NotFoundError, ValidationError
 from backend.services.time_utils import utc_now
@@ -207,6 +208,7 @@ class ReviewService:
             "actions": [action.get("action_type") for action in actions],
             "reason": trace["reason"] if trace else None,
             "failure_reason": trace["failure_reason"] if trace else None,
+            "agent_process": serialize_field_agent_process(trace),
         }
 
     def _serialize_review_response(

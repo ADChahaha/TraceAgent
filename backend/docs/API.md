@@ -7,10 +7,11 @@
 后端 API 围绕一次文档治理任务展开：
 
 ```text
-前端或脚本上传 PDF / DOCX 和任务参数
+前端或脚本上传一个或多个 PDF / DOCX 和任务参数
   -> POST /tasks 创建任务
-  -> 后端调用 document_processor，把上传文件转成 markdown + blocks
-  -> 后端保存 markdown / blocks，不保存用户上传的原始文件
+  -> 后端逐个调用 document_processor，把上传文件转成 markdown + blocks
+  -> 后端为每个文件保存 markdown / blocks，不保存用户上传的原始文件
+  -> 后端合并多个文件的 markdown、md_list 和 blocks
   -> 后端调用 file_extraction_agent 执行字段抽取
   -> agent 返回 ExtractionResult(result + trace)
   -> 后端组装 field_outputs + refs_with_text 并调用 route_policy_agent
@@ -24,7 +25,7 @@
 这里的核心边界是：
 
 - `result` 表示后端治理后的最终字段结果，可以包含 agent 原值、人工修正值和最终值。
-- `trace` 表示 Agent 执行层如何得到字段结果，包括证据、定位、补查、validation action 和失败原因。
+- `trace` 表示 Agent 执行层如何得到字段结果，包括三段 agent 执行过程、证据、定位、补查、validation action 和失败原因。
 - `review` 表示人工审核需要接管的信息包和人工提交的处理结论。
 - `audit` 表示字段最终进入或未进入正式数据区的责任链路。
 
@@ -90,16 +91,19 @@ reject
 
 请求类型建议使用 `multipart/form-data`：
 
-- `file`：必填，上传的 PDF 或 DOCX。
+- `files`：必填，上传的一个或多个 PDF / DOCX；multipart 中可以重复传入多个 `files` 字段。
 - `task_type`：必填，调用方定义的任务类型标识，例如 `civilized_dormitory`。
 - `task_spec`：必填，显式字段 schema；后端不提供默认 task spec，也不按 `task_type` 兜底选择 schema。
 - `metadata`：可选，前端或脚本传入的补充信息。
+
+兼容说明：旧版单文件字段名 `file` 仍可使用；新版前端应统一使用重复 `files` 字段。
 
 请求示例：
 
 ```bash
 curl -X POST "http://localhost:8000/tasks" \
-  -F "file=@sample.pdf" \
+  -F "files=@sample.pdf" \
+  -F "files=@supplement.docx" \
   -F "task_type=civilized_dormitory" \
   -F 'task_spec={"task_name":"civilized_dormitory","fields":[{"field_name":"room_numbers","display_name":"文明寝室房间号","type":"string","required":true,"critical":true}]}'
 ```
@@ -117,12 +121,16 @@ curl -X POST "http://localhost:8000/tasks" \
 处理步骤：
 
 ```text
-上传文件和任务参数
-  -> 校验文件类型和 task_spec
+上传一个或多个 files、task_type、task_spec 和 metadata
+  -> 校验至少存在一个文件，逐个从 filename 推断 pdf/docx
+  -> 校验 task_spec 必须是 JSON object
   -> 创建 task 记录，状态设为 pending / uploaded
-  -> 在当前请求中读取上传文件 bytes，调用 document_processor 生成 markdown、md_list 和 blocks
-  -> 保存文档标准化结果并生成 document_id，不保存原始文件
-  -> 调用 file_extraction_agent，保存 result 和 trace
+  -> 在当前请求中读取每个上传文件 bytes
+  -> 对每个文件调用 document_processor 生成 markdown、md_list 和 blocks
+  -> 每个文件生成一个 document_id 并保存标准化结果，不保存原始文件
+  -> 合并所有文件的 markdown、md_list 和 blocks
+  -> 调用 file_extraction_agent，并在 metadata 中传入 document_ids
+  -> 保存 result 和 trace
   -> 组装 field_outputs + refs_with_text 并调用 route_policy_agent
   -> 按 route 写入 final result、review 状态或 reject / failed 状态
   -> 返回 task_id 和当前 status/stage
@@ -138,6 +146,7 @@ curl -X POST "http://localhost:8000/tasks" \
 ## `GET /tasks/:task_id`
 
 查询任务当前状态和 route 摘要。这个接口用于前端轮询，不返回完整 result 或 trace。
+`needs_review` 以任务当前 `status` 为准：只有 `status=waiting_review` 时才为 `true`；人工复核提交后即使历史 route 仍为 `review`，任务 summary 也会返回 `completed / done / needs_review=false`。
 
 响应示例：
 
@@ -202,6 +211,145 @@ curl -X POST "http://localhost:8000/tasks" \
   "task_id": "task-001",
   "agent_status": "completed",
   "failure_reason": null,
+  "steps": [
+    {
+      "stage": "document_processing",
+      "agent": "document_processor",
+      "status": "completed",
+      "started_at": "2026-04-28T10:00:01Z",
+      "finished_at": "2026-04-28T10:00:08Z",
+      "summary": {
+        "document_count": 2,
+        "block_count": 24,
+        "warning_count": 0
+      },
+      "documents": [
+        {
+          "document_id": "doc-1",
+          "filename": "sample.pdf",
+          "file_type": "pdf",
+          "block_count": 12,
+          "markdown_chars": 3200,
+          "warning_count": 0
+        },
+        {
+          "document_id": "doc-2",
+          "filename": "supplement.docx",
+          "file_type": "docx",
+          "block_count": 12,
+          "markdown_chars": 2800,
+          "warning_count": 0
+        }
+      ]
+    },
+    {
+      "stage": "extraction",
+      "agent": "file_extraction_agent",
+      "status": "completed",
+      "started_at": "2026-04-28T10:00:08Z",
+      "finished_at": "2026-04-28T10:00:20Z",
+      "failure_reason": null,
+      "summary": {
+        "field_count": 1,
+        "resolved_count": 1,
+        "failed_count": 0,
+        "warning_count": 0
+      },
+      "field_decisions": [
+        {
+          "field_name": "room_numbers",
+          "status": "resolved",
+          "value": "1-101,1-102",
+          "evidence": {
+            "block_ids": ["doc-1:p2:b3"],
+            "texts": ["1-101、1-102 被列为文明寝室"],
+            "refs": [
+              {
+                "document_id": "doc-1",
+                "page": 2,
+                "block_id": "doc-1:p2:b3"
+              }
+            ],
+            "status": "model_resolved",
+            "notes": ["按模型 used_block_ids 绑定证据"]
+          },
+          "related_fields": ["building"],
+          "actions": [
+            {
+              "action_type": "global_lookup",
+              "message": "补查文明寝室名单",
+              "used_in_final_decision": true,
+              "metadata": {
+                "lookup_hints": ["文明寝室"],
+                "returned_block_ids": ["doc-1:p2:b3"]
+              }
+            },
+            {
+              "action_type": "validation_rule",
+              "message": "按表格规则校正房间号列表",
+              "used_in_final_decision": true
+            }
+          ],
+          "reason": "模型定案后经过规则校正",
+          "failure_reason": null
+        }
+      ],
+      "warnings": [],
+      "metadata": {}
+    },
+    {
+      "stage": "route_policy",
+      "agent": "route_policy_agent",
+      "status": "completed",
+      "started_at": "2026-04-28T10:00:20Z",
+      "finished_at": "2026-04-28T10:00:21Z",
+      "summary": {
+        "field_count": 1,
+        "routes": {
+          "accept": 0,
+          "review": 1,
+          "reject": 0
+        }
+      },
+      "routes": [
+        {
+          "field_name": "room_numbers",
+          "route": "review",
+          "needs_review": true,
+          "route_reason": "关键字段证据较弱，需要人工确认"
+        }
+      ]
+    }
+  ],
+  "agent_trace": [
+    {
+      "id": "stage_run_001",
+      "sequence": 1,
+      "stage": "document_processing",
+      "agent": "document_processor",
+      "status": "completed",
+      "failure_reason": null,
+      "request": {
+        "document_id": "doc-1",
+        "filename": "sample.pdf",
+        "file_type": "pdf",
+        "content_type": "application/pdf",
+        "upload_size_bytes": 20480,
+        "upload_sha256": "..."
+      },
+      "response": {
+        "markdown": "1-101、1-102 被列为文明寝室",
+        "md_list": ["1-101、1-102 被列为文明寝室"],
+        "blocks": []
+      },
+      "trace": {
+        "meta_info": {},
+        "warnings": []
+      },
+      "started_at": "2026-04-28T10:00:01Z",
+      "finished_at": "2026-04-28T10:00:08Z"
+    }
+  ],
   "fields": [
     {
       "field_name": "room_numbers",
@@ -237,6 +385,40 @@ curl -X POST "http://localhost:8000/tasks" \
 }
 ```
 
+`steps` 按 backend 实际调用顺序返回：
+
+```text
+documents 表中的标准化结果
+  -> document_processor 步骤，返回每个文件的 filename/file_type/block_count/warning_count
+  -> agent_runs 中的 result_json/trace_json
+  -> file_extraction_agent 步骤，返回字段数、resolved/failed 统计、warning 数和 field_decisions
+  -> field_routes 表中的 route 结果
+  -> route_policy_agent 步骤，返回 accept/review/reject 计数和每个字段的 route_reason
+```
+
+`field_decisions` 来自 `agent_runs.trace_json` 和 `agent_runs.result_json`，用于把 file_extraction_agent 的字段定案过程透给前端。它包含字段值、证据摘要、跨字段参考、global lookup、validation rule、reason 和 failure_reason。当前 agent 契约不保存 raw prompt 或 raw model response，因此 backend 也不会在 trace 中伪造这类原始内容。
+
+`agent_trace` 来自 `agent_stage_runs`，按每次 HTTP 调用单独保存并返回：
+
+```text
+document_processor 每个文件一次记录
+  -> request 保存 document_id、filename、file_type、content_type、upload_size_bytes、upload_sha256，不保存 file_bytes
+  -> response 保存 agent service 返回的完整 JSON
+  -> trace 保存 response.trace；没有 trace 时保存 meta_info/warnings
+
+file_extraction_agent 一次记录
+  -> request 保存 blocks、markdown、md_list、task_spec、metadata、run_options
+  -> response 保存 ExtractionResult 完整 JSON
+  -> trace 保存 ExtractionResult.trace
+
+route_policy_agent 一次记录
+  -> request 保存 task_spec、field_outputs、refs_with_text、metadata、policy_options
+  -> response 保存 RoutePolicyResult 完整 JSON
+  -> trace 保存 response.trace；没有 trace 时保存 field_routes/warnings/metadata 摘要
+```
+
+`trace.steps` 是给工作台展示的摘要视图；`agent_trace` 是更接近原始 agent 调用过程的调试视图。两者都只包含 agent service 已经返回给 backend 的内容，不包含 agent service 未暴露的 raw prompt 或 raw model response。
+
 ## `GET /tasks/:task_id/review`
 
 获取人工审核 handoff 包。只有任务进入 `waiting_review` 时才需要调用。
@@ -268,7 +450,38 @@ curl -X POST "http://localhost:8000/tasks" \
       "related_fields": ["building"],
       "actions": ["global_lookup", "validation_rule"],
       "reason": "模型定案后经过表格规则校正",
-      "failure_reason": null
+      "failure_reason": null,
+      "agent_process": {
+        "field_name": "room_numbers",
+        "status": "resolved",
+        "evidence": {
+          "block_ids": ["doc-1:p2:b3"],
+          "texts": ["1-101、1-102 被列为文明寝室"],
+          "refs": [
+            {
+              "document_id": "doc-1",
+              "page": 2,
+              "block_id": "doc-1:p2:b3"
+            }
+          ],
+          "status": "model_resolved",
+          "notes": ["按模型 used_block_ids 绑定证据"]
+        },
+        "related_fields": ["building"],
+        "actions": [
+          {
+            "action_type": "global_lookup",
+            "message": "补查文明寝室名单",
+            "used_in_final_decision": true,
+            "metadata": {
+              "lookup_hints": ["文明寝室"],
+              "returned_block_ids": ["doc-1:p2:b3"]
+            }
+          }
+        ],
+        "reason": "模型定案后经过表格规则校正",
+        "failure_reason": null
+      }
     }
   ]
 }
@@ -281,7 +494,7 @@ task_id
   -> 读取 agent result + trace
   -> 读取 route policy 输出
   -> 只挑出需要人工接管或需要展示的字段
-  -> 合并字段值、证据、定位和 route 原因
+  -> 合并字段值、证据、定位、route 原因和 agent_process
   -> 返回人工审核信息包
 ```
 
@@ -357,7 +570,38 @@ task_id
       "used_validation_rule": true,
       "related_fields": ["building"],
       "committed_by": "human",
-      "committed_at": "2026-04-28T10:05:00Z"
+      "committed_at": "2026-04-28T10:05:00Z",
+      "agent_process": {
+        "field_name": "room_numbers",
+        "status": "resolved",
+        "evidence": {
+          "block_ids": ["doc-1:p2:b3"],
+          "texts": ["1-101、1-102 被列为文明寝室"],
+          "refs": [
+            {
+              "document_id": "doc-1",
+              "page": 2,
+              "block_id": "doc-1:p2:b3"
+            }
+          ],
+          "status": "model_resolved",
+          "notes": ["按模型 used_block_ids 绑定证据"]
+        },
+        "related_fields": ["building"],
+        "actions": [
+          {
+            "action_type": "global_lookup",
+            "message": "补查文明寝室名单",
+            "used_in_final_decision": true,
+            "metadata": {
+              "lookup_hints": ["文明寝室"],
+              "returned_block_ids": ["doc-1:p2:b3"]
+            }
+          }
+        ],
+        "reason": "模型定案后经过表格规则校正",
+        "failure_reason": null
+      }
     }
   ]
 }
@@ -379,7 +623,8 @@ task_id
     "trace": true,
     "review": true,
     "audit": true,
-    "external_task_spec": true
+    "external_task_spec": true,
+    "multiple_files": true
   }
 }
 ```

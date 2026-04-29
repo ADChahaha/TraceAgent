@@ -51,6 +51,23 @@ SCHEMA_SQL = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS agent_stage_runs (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        stage TEXT NOT NULL,
+        agent_name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        failure_reason TEXT,
+        request_json TEXT NOT NULL,
+        response_json TEXT NOT NULL,
+        trace_json TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        FOREIGN KEY(task_id) REFERENCES tasks(id)
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS extracted_fields (
         id TEXT PRIMARY KEY,
         task_id TEXT NOT NULL,
@@ -142,6 +159,7 @@ SCHEMA_SQL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_documents_task_id ON documents(task_id)",
     "CREATE INDEX IF NOT EXISTS idx_agent_runs_task_id ON agent_runs(task_id)",
+    "CREATE INDEX IF NOT EXISTS idx_agent_stage_runs_task_id ON agent_stage_runs(task_id)",
     "CREATE INDEX IF NOT EXISTS idx_extracted_fields_task_id ON extracted_fields(task_id)",
     "CREATE INDEX IF NOT EXISTS idx_field_traces_task_id ON field_traces(task_id)",
     "CREATE INDEX IF NOT EXISTS idx_field_routes_task_id ON field_routes(task_id)",
@@ -149,4 +167,3 @@ SCHEMA_SQL = [
     "CREATE INDEX IF NOT EXISTS idx_review_fields_task_id ON review_fields(task_id)",
     "CREATE INDEX IF NOT EXISTS idx_field_commits_task_id ON field_commits(task_id)",
 ]
-

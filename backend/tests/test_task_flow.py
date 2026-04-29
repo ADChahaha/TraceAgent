@@ -47,14 +47,15 @@ class FakeAgentClient:
                 "file_type": file_type,
             }
         )
+        text = "2-201 被列为文明寝室补充材料" if filename == "supplement.docx" else "1-101、1-102 被列为文明寝室"
         return {
             "file_type": file_type,
             "filename": filename,
-            "markdown": "1-101、1-102 被列为文明寝室",
-            "md_list": ["1-101、1-102 被列为文明寝室"],
+            "markdown": text,
+            "md_list": [text],
             "blocks": [
                 {
-                    "text": "1-101、1-102 被列为文明寝室",
+                    "text": text,
                     "page_no": 2,
                     "kind": "text",
                     "meta_info": {"source": "fake-agent"},
@@ -115,6 +116,26 @@ class FakeAgentClient:
                         },
                         "related_fields": ["building"],
                         "actions": [
+                            {
+                                "action_type": "field_reference",
+                                "message": "模型请求参考字段 building",
+                                "refs": [ref],
+                                "used_in_final_decision": False,
+                                "metadata": {
+                                    "requested_field_name": "building",
+                                    "returned_to_model": True,
+                                },
+                            },
+                            {
+                                "action_type": "global_lookup",
+                                "message": "补查文明寝室名单",
+                                "refs": [ref],
+                                "used_in_final_decision": True,
+                                "metadata": {
+                                    "lookup_hints": ["文明寝室"],
+                                    "returned_block_ids": [blocks[0]["block_id"]],
+                                },
+                            },
                             {
                                 "action_type": "validation_rule",
                                 "message": "校正房间号列表",
@@ -213,8 +234,10 @@ def test_create_task_accept_route_commits_agent_fields(tmp_path: Path):
         assert commit["field_name"] == "room_numbers"
         assert commit["route"] == "accept"
         assert commit["reviewed"] is False
+        assert commit["used_global_lookup"] is True
         assert commit["used_validation_rule"] is True
         assert commit["committed_by"] == "agent"
+        assert commit["agent_process"]["actions"][0]["message"] == "模型请求参考字段 building"
 
         extract_call = fake_agent.extraction_calls[0]
         assert extract_call["task_spec"] == TASK_SPEC
@@ -225,6 +248,120 @@ def test_create_task_accept_route_commits_agent_fields(tmp_path: Path):
             {"field_name": "room_numbers", "status": "resolved", "value": "1-101,1-102"}
         ]
         assert route_call["refs_with_text"][0]["refs"][0]["text"] == "1-101、1-102 被列为文明寝室"
+
+
+def test_create_task_accepts_multiple_files_and_merges_document_blocks(tmp_path: Path):
+    app, fake_agent = build_app(tmp_path, route="accept")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/tasks",
+            data={
+                "task_type": "civilized_dormitory",
+                "task_spec": json.dumps(TASK_SPEC, ensure_ascii=False),
+            },
+            files=[
+                ("files", ("sample.pdf", b"%PDF-1.4 fake", "application/pdf")),
+                (
+                    "files",
+                    (
+                        "supplement.docx",
+                        b"fake docx",
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    ),
+                ),
+            ],
+        )
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "completed"
+        assert [call["filename"] for call in fake_agent.document_calls] == [
+            "sample.pdf",
+            "supplement.docx",
+        ]
+
+        extract_call = fake_agent.extraction_calls[0]
+        assert extract_call["markdown"] == (
+            "1-101、1-102 被列为文明寝室\n\n"
+            "2-201 被列为文明寝室补充材料"
+        )
+        assert extract_call["md_list"] == [
+            "1-101、1-102 被列为文明寝室",
+            "2-201 被列为文明寝室补充材料",
+        ]
+        assert [block["text"] for block in extract_call["blocks"]] == [
+            "1-101、1-102 被列为文明寝室",
+            "2-201 被列为文明寝室补充材料",
+        ]
+        assert len({block["document_id"] for block in extract_call["blocks"]}) == 2
+        assert extract_call["metadata"]["document_ids"] == [
+            extract_call["blocks"][0]["document_id"],
+            extract_call["blocks"][1]["document_id"],
+        ]
+
+        trace_response = client.get(f"/tasks/{response.json()['task_id']}/trace")
+        assert trace_response.status_code == 200
+        steps = trace_response.json()["steps"]
+        assert [step["agent"] for step in steps] == [
+            "document_processor",
+            "file_extraction_agent",
+            "route_policy_agent",
+        ]
+        assert steps[0]["stage"] == "document_processing"
+        assert steps[0]["status"] == "completed"
+        assert steps[0]["summary"]["document_count"] == 2
+        assert [document["filename"] for document in steps[0]["documents"]] == [
+            "sample.pdf",
+            "supplement.docx",
+        ]
+        assert steps[0]["documents"][0]["block_count"] == 1
+        assert steps[1]["stage"] == "extraction"
+        assert steps[1]["status"] == "completed"
+        assert steps[1]["summary"]["field_count"] == 1
+        assert steps[1]["summary"]["warning_count"] == 0
+        assert steps[1]["field_decisions"][0]["field_name"] == "room_numbers"
+        assert steps[1]["field_decisions"][0]["value"] == "1-101,1-102"
+        assert steps[1]["field_decisions"][0]["actions"][1]["action_type"] == "global_lookup"
+        assert steps[1]["field_decisions"][0]["actions"][1]["message"] == "补查文明寝室名单"
+        assert steps[2]["stage"] == "route_policy"
+        assert steps[2]["status"] == "completed"
+        assert steps[2]["summary"]["routes"] == {
+            "accept": 1,
+            "review": 0,
+            "reject": 0,
+        }
+        assert steps[2]["routes"] == [
+            {
+                "field_name": "room_numbers",
+                "route": "accept",
+                "needs_review": False,
+                "route_reason": "测试 route policy 输出",
+            }
+        ]
+
+        agent_trace = trace_response.json()["agent_trace"]
+        assert [event["agent"] for event in agent_trace] == [
+            "document_processor",
+            "document_processor",
+            "file_extraction_agent",
+            "route_policy_agent",
+        ]
+        assert [event["sequence"] for event in agent_trace] == [1, 2, 3, 4]
+        assert agent_trace[0]["request"]["filename"] == "sample.pdf"
+        assert agent_trace[0]["request"]["file_type"] == "pdf"
+        assert agent_trace[0]["request"]["upload_size_bytes"] == len(b"%PDF-1.4 fake")
+        assert "file_bytes" not in agent_trace[0]["request"]
+        assert agent_trace[0]["response"]["markdown"] == "1-101、1-102 被列为文明寝室"
+        assert agent_trace[1]["request"]["filename"] == "supplement.docx"
+        assert agent_trace[1]["response"]["blocks"][0]["text"] == "2-201 被列为文明寝室补充材料"
+        assert agent_trace[2]["request"]["task_spec"] == TASK_SPEC
+        assert agent_trace[2]["request"]["metadata"]["document_ids"] == extract_call["metadata"]["document_ids"]
+        assert agent_trace[2]["response"]["trace"]["fields"][0]["actions"][1]["action_type"] == "global_lookup"
+        assert agent_trace[2]["trace"]["fields"][0]["field_name"] == "room_numbers"
+        assert agent_trace[3]["request"]["field_outputs"] == [
+            {"field_name": "room_numbers", "status": "resolved", "value": "1-101,1-102"}
+        ]
+        assert agent_trace[3]["response"]["field_routes"][0]["route"] == "accept"
 
 
 def test_review_route_returns_handoff_and_accepts_revised_value(tmp_path: Path):
@@ -258,7 +395,12 @@ def test_review_route_returns_handoff_and_accepts_revised_value(tmp_path: Path):
         assert handoff["route"] == "review"
         assert handoff["fields"][0]["needs_review"] is True
         assert handoff["fields"][0]["evidence_texts"] == ["1-101、1-102 被列为文明寝室"]
-        assert handoff["fields"][0]["actions"] == ["validation_rule"]
+        assert handoff["fields"][0]["actions"] == [
+            "field_reference",
+            "global_lookup",
+            "validation_rule",
+        ]
+        assert handoff["fields"][0]["agent_process"]["actions"][0]["message"] == "模型请求参考字段 building"
 
         submit_response = client.post(
             f"/tasks/{task_id}/review",
@@ -277,6 +419,13 @@ def test_review_route_returns_handoff_and_accepts_revised_value(tmp_path: Path):
         assert submit_response.status_code == 200
         assert submit_response.json()["status"] == "completed"
 
+        summary_response = client.get(f"/tasks/{task_id}")
+        assert summary_response.status_code == 200
+        summary = summary_response.json()
+        assert summary["status"] == "completed"
+        assert summary["stage"] == "done"
+        assert summary["needs_review"] is False
+
         result_response = client.get(f"/tasks/{task_id}/result")
         result_field = result_response.json()["fields"][0]
         assert result_field["review_value"] == "1-101,1-102,1-103"
@@ -290,6 +439,8 @@ def test_review_route_returns_handoff_and_accepts_revised_value(tmp_path: Path):
         assert commit["review_decision"] == "revise_and_approve"
         assert commit["review_value"] == "1-101,1-102,1-103"
         assert commit["committed_by"] == "human"
+        assert commit["agent_process"]["reason"] == "模型定案后经过规则校正"
+        assert commit["agent_process"]["actions"][1]["metadata"]["lookup_hints"] == ["文明寝室"]
         assert fake_agent.document_calls[0]["file_type"] == "docx"
 
 
@@ -327,6 +478,7 @@ def test_capabilities_returns_supported_task_and_routes(tmp_path: Path):
             "review": True,
             "audit": True,
             "external_task_spec": True,
+            "multiple_files": True,
         }
 
 

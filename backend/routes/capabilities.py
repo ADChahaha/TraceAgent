@@ -18,5 +18,6 @@ def get_capabilities(request: Request):
             "review": True,
             "audit": True,
             "external_task_spec": True,
+            "multiple_files": True,
         },
     }

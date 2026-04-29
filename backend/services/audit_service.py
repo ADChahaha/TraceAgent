@@ -5,7 +5,9 @@ import uuid
 from typing import Any
 
 from backend.crud import audit as audit_crud
+from backend.crud import extraction as extraction_crud
 from backend.crud.json_utils import loads_json
+from backend.services.agent_process import serialize_field_agent_process
 
 
 class AuditService:
@@ -51,10 +53,20 @@ class AuditService:
 
     def list_audit(self, task: dict[str, Any]) -> dict[str, Any]:
         commits = audit_crud.list_field_commits(self.connection, task["id"])
+        traces = {
+            trace["field_name"]: trace
+            for trace in extraction_crud.list_field_traces(self.connection, task["id"])
+        }
         return {
             "task_id": task["id"],
             "status": task["status"],
-            "field_commits": [self._serialize_commit(commit) for commit in commits],
+            "field_commits": [
+                self._serialize_commit(
+                    commit,
+                    traces.get(commit["field_name"]),
+                )
+                for commit in commits
+            ],
         }
 
     def has_commit(self, *, task_id: str, field_name: str) -> bool:
@@ -64,7 +76,11 @@ class AuditService:
             field_name=field_name,
         )
 
-    def _serialize_commit(self, commit: dict[str, Any]) -> dict[str, Any]:
+    def _serialize_commit(
+        self,
+        commit: dict[str, Any],
+        trace: dict[str, Any] | None,
+    ) -> dict[str, Any]:
         return {
             "field_name": commit["field_name"],
             "final_value": loads_json(commit["final_value_json"], None),
@@ -79,4 +95,5 @@ class AuditService:
             "related_fields": loads_json(commit["related_fields_json"], []),
             "committed_by": commit["committed_by"],
             "committed_at": commit["committed_at"],
+            "agent_process": serialize_field_agent_process(trace),
         }

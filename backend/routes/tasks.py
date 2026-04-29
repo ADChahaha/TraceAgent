@@ -14,18 +14,24 @@ router = APIRouter(tags=["tasks"])
 @router.post("/tasks")
 async def create_task(
     request: Request,
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(default=None),
+    files: list[UploadFile] | None = File(default=None),
     task_type: str = Form(...),
     task_spec: str | None = Form(default=None),
     metadata: str | None = Form(default=None),
 ):
     service = request.app.state.task_service
     try:
-        file_bytes = await file.read()
+        upload_files = _collect_upload_files(file=file, files=files)
         return service.create_task(
-            file_bytes=file_bytes,
-            filename=file.filename or "",
-            content_type=file.content_type,
+            files=[
+                service.upload_file_payload(
+                    file_bytes=await upload_file.read(),
+                    filename=upload_file.filename or "",
+                    content_type=upload_file.content_type,
+                )
+                for upload_file in upload_files
+            ],
             task_type=task_type,
             task_spec=_parse_required_json_form("task_spec", task_spec),
             metadata=_parse_json_form("metadata", metadata) or {},
@@ -84,3 +90,16 @@ def _parse_required_json_form(name: str, value: str | None) -> dict[str, Any]:
     if parsed is None:
         raise ValidationError(f"{name} is required")
     return parsed
+
+
+def _collect_upload_files(
+    *,
+    file: UploadFile | None,
+    files: list[UploadFile] | None,
+) -> list[UploadFile]:
+    upload_files = [*(files or [])]
+    if file is not None:
+        upload_files.append(file)
+    if not upload_files:
+        raise ValidationError("at least one file is required")
+    return upload_files
