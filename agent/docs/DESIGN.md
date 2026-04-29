@@ -93,6 +93,7 @@ agent/
 
 - 负责原始 `pdf/docx` 的读取、OCR、结构化块提取和 Markdown 标准化
 - 输出统一 `ProcessResult(blocks + md_list + markdown + meta_info + warnings)`
+- PDF 默认走 `docling + RapidOCR`；启动前设置 `DOCUMENT_PROCESSOR_PDF_ENGINE=pdf-paddle` 时，可切到不依赖 docling 的 `pypdfium2 + PaddleOCR` 路径
 - 提供两类入口：
   - Python 入口：`service.document_processor.processor.process(...)`
   - HTTP 入口：`routes/document_processor.py`
@@ -114,6 +115,48 @@ agent/
 
 1. broad extraction：一次读取全部 block，为每个 schema 字段生成证据 bundle
 2. field resolution：逐字段读取 broad evidence，必要时请求工具补查，再输出字段最终结果
+
+当前已实现的“一次性 broad extraction + field resolution”流程作为 `file_extraction_agent v1` 保留，用于回归对比和稳定基线。
+
+下一版抽取链路仍保留 broad 和 resolution 的阶段边界，但 broad 不再设计成一次性模型输出，而是演进为工具化的 `Broad Agent Loop`。它的目标是提高候选证据召回率，不负责字段最终定案：
+
+```text
+backend 聚合后的 blocks + task_spec
+  -> input_adapter.py 组装 ExtractionInput
+  -> 对每个 FieldDefinition 启动 broad agent loop
+  -> broad agent 只能调用 search_text / search_table_rows / add_candidate / finish_broad
+  -> search_text 在普通 text、section_header、text_line block 中做关键词检索
+  -> search_table_rows 专门扫描 kind=table 的 block，解析 markdown table 行并返回紧凑候选行
+  -> add_candidate 把命中的 block、table row 或 cell refs 写入字段候选池
+  -> finish_broad 是 broad 的唯一正常出口，记录 enough_evidence / partial_evidence / no_evidence 和结束原因
+  -> graph 把 candidate_evidence、broad_search_history 和 finish_broad 结果交给 resolution
+  -> resolution agent 先读取候选池；如果候选不足，可以继续调用 search_text / search_table_rows / add_candidate 补查
+  -> resolution 最终返回 final_decision，且必须引用支撑结果的 candidate/block/row id
+  -> graph 映射成 ExtractionResult(result + trace)
+```
+
+这个设计不承诺 100% 召回。它的目标是让系统从“单次 broad 漏了就无法恢复”改成“broad 主动查找候选，resolution 还能二次补查，证据仍不足时交给 route/review”。所有搜索、候选写入、阶段退出和最终定案都必须进入 trace，方便后续审核和调试。
+
+工具边界保持精简：
+
+- `search_text(query, top_k)`：只查普通文本类 block，返回 `block_id/page/text_snippet`，不做最终字段判断。
+- `search_table_rows(query, top_k)`：只查表格 block，返回 `table_id/row_id/block_id/page/row_text/cells` 等紧凑行级证据，不把整张表发给模型。
+- `add_candidate(field_name, refs, reason)`：只写候选证据和写入原因，不改字段值。
+- `finish_broad(field_name, status, reason)`：结束当前字段 broad；`status=enough_evidence` 时必须已有候选证据。
+- `get_candidate_bundle(field_name)`：供 resolution 读取 broad 已写入的候选证据。
+- `final_decision(...)`：只允许 resolution 调用，用候选 refs 支撑字段最终值或失败原因。
+
+表格处理是 `file_extraction_agent` 内部的专用检索能力，而不是业务特例。它只理解通用表格结构和字段提示，不硬编码“学术论文”“文明寝室”等业务词。对于列名不固定的表格，`search_table_rows` 应优先做宽召回：根据 `field_name`、`display_name`、`lookup_hints`、`cross_field_hints` 形成查询词，在表头、单元格文本、行文本和邻近标题中做匹配，再把候选行交给 resolution 精筛。
+
+当前不把 image 作为抽取对象。文档内容类型先收敛为：
+
+```text
+section_header / heading
+text / text_line
+table
+```
+
+OCR 或表格结构质量提示不参与 broad、resolution 或 route policy 的自动判断。它只在 backend 组装 review handoff 时作为人工审核辅助信息展示，例如提示某个表格 block 行列错位、空 cell 比例高、文本异常字符多或 block 过长。主抽取链路仍以证据召回、字段定案和 route policy 为准。
 
 两阶段都使用结构化输出，但不再假设所有 OpenAI 兼容接口都支持同一种结构化协议。`impl/graph.py` 负责编排阶段流转，模型调用层当前由 `service/file_extraction_agent/extractor_client.py` 统一处理：
 

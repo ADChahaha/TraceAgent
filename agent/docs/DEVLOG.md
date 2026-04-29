@@ -1,4 +1,17 @@
-last updated: 2026-04-29 20:32:22
+last updated: 2026-04-30 02:11:37
+
+## 2026-04-30 02:11:37
+
+### 已完成工作
+
+- 更新 `agent/docs/DESIGN.md`，记录 `file_extraction_agent` 下一版受约束 agentic workflow 设计：`Broad Agent Loop` 通过 `search_text`、`search_table_rows`、`add_candidate`、`finish_broad` 做候选证据召回。
+- 明确 `resolution agent` 可以读取 broad 候选，并在候选不足时继续用文本/表格检索工具补查，最终定案必须引用候选或 block/row id。
+- 明确表格检索是通用结构化检索能力，不硬编码具体业务词；当前内容类型先收敛为 heading/text/table，不处理 image。
+- 明确 OCR/表格质量提示只用于 backend review handoff 的人工审核辅助，不影响 broad、resolution 或 route policy 自动判断。
+
+### 验证
+
+- 本次只更新设计文档，不涉及运行时代码或测试文件。
 
 ## 2026-04-29 20:32:22
 
