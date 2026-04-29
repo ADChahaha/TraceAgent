@@ -92,14 +92,23 @@ def test_run_broad_extraction_rejects_missing_task_field():
         run_broad_extraction(state=state, extractor_client=FakeExtractorClient())
 
 
-def test_run_broad_extraction_rejects_duplicate_fields_before_resolution():
+def test_run_broad_extraction_merges_duplicate_field_evidence_before_resolution():
     from service.file_extraction_agent.impl.broad_extraction import run_broad_extraction
 
     extraction_input = ExtractionInput(
-        blocks=[NormalizedBlock(document_id="doc-1", block_id="b-1", text="发票号：INV-100")],
+        blocks=[
+            NormalizedBlock(document_id="doc-1", block_id="b-1", text="论文 A"),
+            NormalizedBlock(document_id="doc-1", block_id="b-2", text="论文 B"),
+        ],
         task_spec=TaskSpec(
-            task_name="invoice",
-            fields=[FieldDefinition(field_name="invoice_no", display_name="发票号", type="string")],
+            task_name="academic_paper_extraction",
+            fields=[
+                FieldDefinition(
+                    field_name="academic_paper_titles",
+                    display_name="学术论文名称",
+                    type="list",
+                )
+            ],
         ),
     )
     state = build_graph_state(extraction_input)
@@ -109,13 +118,39 @@ def test_run_broad_extraction_rejects_duplicate_fields_before_resolution():
             del output_schema, messages
             return EvidenceCollection(
                 fields=[
-                    FieldEvidence(field_name="invoice_no", local_status="evidence_found"),
-                    FieldEvidence(field_name="invoice_no", local_status="evidence_found"),
+                    FieldEvidence(
+                        field_name="academic_paper_titles",
+                        relevant_block_ids=["b-1"],
+                        evidence_texts=["论文 A"],
+                        evidence_refs=[
+                            FieldEvidenceRef(document_id="doc-1", block_id="b-1")
+                        ],
+                        local_status="evidence_found",
+                        local_notes=["第一条论文证据"],
+                    ),
+                    FieldEvidence(
+                        field_name="academic_paper_titles",
+                        relevant_block_ids=["b-2"],
+                        evidence_texts=["论文 B"],
+                        evidence_refs=[
+                            FieldEvidenceRef(document_id="doc-1", block_id="b-2")
+                        ],
+                        local_status="evidence_found",
+                        local_notes=["第二条论文证据"],
+                    ),
                 ]
             )
 
-    with pytest.raises(ValueError, match="duplicate broad evidence fields: invoice_no"):
-        run_broad_extraction(state=state, extractor_client=FakeExtractorClient())
+    returned_state = run_broad_extraction(state=state, extractor_client=FakeExtractorClient())
+
+    assert returned_state.evidence_collection is not None
+    merged = returned_state.evidence_collection.fields[0]
+    assert merged.field_name == "academic_paper_titles"
+    assert merged.relevant_block_ids == ["b-1", "b-2"]
+    assert merged.evidence_texts == ["论文 A", "论文 B"]
+    assert [ref.block_id for ref in merged.evidence_refs] == ["b-1", "b-2"]
+    assert "第一条论文证据" in merged.local_notes
+    assert "第二条论文证据" in merged.local_notes
 
 
 def test_run_broad_extraction_rejects_unknown_fields_and_block_references():

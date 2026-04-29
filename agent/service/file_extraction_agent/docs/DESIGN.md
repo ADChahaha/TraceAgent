@@ -325,7 +325,7 @@ broad 输出后的代码校验必须执行：
 ```text
 EvidenceCollection
   -> 提取 task_spec.fields 中声明的字段集合
-  -> 检查 broad 是否返回重复 field_name
+  -> 如果 broad 对同一 field_name 返回多条 FieldEvidence，先按原顺序合并证据
   -> 检查 broad 是否返回 schema 外 field_name
   -> 检查 broad 是否覆盖所有 task_spec 字段
   -> 提取 ExtractionInput.blocks 中可引用的 block_id 集合
@@ -337,10 +337,9 @@ EvidenceCollection
 
 - broad 少返回字段：抛 `ValueError("missing broad evidence fields: ...")`
 - broad 返回 schema 外字段：抛 `ValueError("unknown broad evidence fields: ...")`
-- broad 返回重复字段：抛 `ValueError("duplicate broad evidence fields: ...")`
 - broad 引用了不存在的 block：抛 `ValueError("unknown broad evidence block ids: ...")`
 
-这一步的意义是：模型可以犯错，但进入 resolution 之前，字段集合和证据引用必须先被系统校验。
+这一步的意义是：模型可以犯错，但进入 resolution 之前，字段集合和证据引用必须先被系统校验。同名 evidence 合并只合并同一个 schema 字段的 `relevant_block_ids / evidence_texts / evidence_refs / local_notes`，不会接受 schema 外字段或未知 block。
 
 ### 处理单元 3：resolution model
 
@@ -550,7 +549,7 @@ FieldDecision + validation_rules
   -> 记录 validation_rule action，说明规则访问了 blocks 并覆盖/校正了模型结果
   -> 如果 operation=count_items，从 source_field 的已定案结果计算条目数
   -> 记录 validation_rule action，说明结果来自跨字段计数
-  -> apply_field_constraints(...) 检查 required / enum_values / money / date / boolean
+  -> apply_field_constraints(...) 检查 required / enum_values / money / date / boolean / list
   -> 如果字段基础约束不满足，返回 status=failed 的 FieldDecision，并追加 field_constraint action
   -> resolution 按最终 FieldDecision.evidence 重新标记 lookup_records.used_in_final_decision
   -> 返回最终 FieldDecision
@@ -1355,11 +1354,12 @@ agent 中途失败
 - `enum`
 - `money`
 - `boolean`
+- `list`
 
 这样：
 
 - broad 可以围绕字段 hints 做证据预选
-- resolution 可以围绕字段约束做最终定案
+- resolution 可以围绕字段约束做最终定案；`list` 字段的 resolved value 必须是字符串数组
 - tool 可以围绕字段 hints 做一次定向 lookup
 
 ## 与外层治理的关系

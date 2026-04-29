@@ -19,7 +19,7 @@ FieldDecision + FieldDefinition + GraphState
 
 - `validation_rules.table_rows` 会从标准化表格 block 中筛选命中行，排除 rejected 行，并记录 `validation_rule` action。
 - `validation_rules.table_rows` 命中行但目标列为空时，不会用空字符串覆盖模型原始定案。
-- 字段基础约束会把不在 `enum_values` 内的 resolved 值降级为 failed，并记录 `field_constraint` action。
+- 字段基础约束会把不在 `enum_values` 内或类型形状不匹配的 resolved 值降级为 failed，并记录 `field_constraint` action。
 
 ## 每个函数在干什么
 
@@ -40,6 +40,12 @@ FieldDecision + FieldDefinition + GraphState
 - 构造 enum 字段和一个模型返回的非法 resolved 决策。
 - 确认 `apply_field_constraints(...)` 会把该字段降级为 failed。
 - 确认失败 trace action 标记为 `field_constraint`。
+
+`test_apply_field_constraints_downgrades_string_value_for_list_field`
+
+- 构造 `type=list` 的学术论文名称字段。
+- fake 模型把多值字段误输出成分隔符字符串。
+- 确认基础字段约束会把该字段降级为 failed，并在 trace action 中记录 `field_type=list`。
 
 ## 怎么跑
 

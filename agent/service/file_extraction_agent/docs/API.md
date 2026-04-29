@@ -200,6 +200,7 @@ HTTP 错误语义：
 - `enum`
 - `money`
 - `boolean`
+- `list`：字符串列表，适合论文题名、房间号、名单条目等多值字段；resolution 的 resolved `value` 必须是 `string[]`，不能用分隔符拼成单个字符串。
 
 ### run_options
 

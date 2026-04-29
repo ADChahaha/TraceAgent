@@ -11,7 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
-FieldType = Literal["string", "date", "enum", "money", "boolean"]
+FieldType = Literal["string", "date", "enum", "money", "boolean", "list"]
 FieldStatus = Literal["resolved", "failed"]
 RunStatus = Literal["completed", "failed"]
 

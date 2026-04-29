@@ -42,6 +42,34 @@ def test_task_spec_rejects_duplicate_field_names():
         raise AssertionError("TaskSpec 应拒绝重复 field_name")
 
 
+def test_task_spec_accepts_list_field_and_resolution_value_list():
+    task_spec = TaskSpec(
+        task_name="academic_paper_extraction",
+        fields=[
+            FieldDefinition(
+                field_name="academic_paper_titles",
+                display_name="学术论文名称",
+                type="list",
+                required=True,
+            )
+        ],
+    )
+    action = FieldResolutionAction(
+        action="final_decision",
+        target_field_name="academic_paper_titles",
+        decision=FieldResolutionDecision(
+            status="resolved",
+            value=["论文 A", "论文 B"],
+            used_block_ids=["b-paper"],
+            reason="模型按原文顺序抽取出两篇学术论文",
+        ),
+    )
+
+    assert task_spec.fields[0].type == "list"
+    assert action.decision is not None
+    assert action.decision.value == ["论文 A", "论文 B"]
+
+
 def test_extraction_input_accepts_blocks_with_safe_defaults():
     extraction_input = ExtractionInput(
         blocks=[

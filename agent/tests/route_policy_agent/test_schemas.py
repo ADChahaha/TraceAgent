@@ -45,6 +45,38 @@ def test_route_policy_input_rejects_extraction_trace_payload():
         raise AssertionError("route policy 输入不应接收 extraction trace")
 
 
+def test_route_policy_input_accepts_list_field_output():
+    route_input = RoutePolicyInput(
+        task_spec=TaskSpec(
+            task_name="academic_paper_extraction",
+            fields=[
+                FieldDefinition(
+                    field_name="academic_paper_titles",
+                    display_name="学术论文名称",
+                    type="list",
+                    required=True,
+                )
+            ],
+        ),
+        field_outputs=[
+            RouteFieldOutput(
+                field_name="academic_paper_titles",
+                status="resolved",
+                value=["论文 A", "论文 B"],
+            )
+        ],
+        refs_with_text=[
+            FieldRefsWithText(
+                field_name="academic_paper_titles",
+                refs=[],
+            )
+        ],
+    )
+
+    assert route_input.task_spec.fields[0].type == "list"
+    assert route_input.field_outputs[0].value == ["论文 A", "论文 B"]
+
+
 def test_route_policy_decision_rejects_new_field_value_payload():
     try:
         RoutePolicyDecision(

@@ -9,8 +9,9 @@ GraphState(extraction_input=..., evidence_collection=None)
   -> run_broad_extraction(...) 读取 state.extraction_input
   -> build_broad_extraction_messages(extraction_input)
   -> extractor_client.invoke(output_schema=EvidenceCollection, messages=...)
+  -> 如果模型对同一个 field_name 返回多条 evidence，先按原文顺序合并成一个 bundle
   -> 校验 EvidenceCollection 覆盖 task_spec 中的所有字段
-  -> 校验 broad 没有返回重复字段或 schema 外字段
+  -> 校验 broad 没有返回 schema 外字段
   -> 校验 relevant_block_ids / evidence_refs.block_id 都来自输入 blocks
   -> 将返回的 EvidenceCollection 写入 state.evidence_collection
 ```
@@ -18,7 +19,8 @@ GraphState(extraction_input=..., evidence_collection=None)
 ## 覆盖点
 
 - 节点会请求 `EvidenceCollection`
-- 节点会拒绝缺失字段、重复字段和 schema 外字段
+- 节点会拒绝缺失字段和 schema 外字段
+- 节点会把同名字段的多条 evidence 合并成一个 bundle，再进入 resolution
 - 节点会拒绝 broad 引用不存在的 block id，或返回缺少 `block_id` 的 evidence ref
 - 节点会把输出写回 `state.evidence_collection`
 - 返回值仍然是同一个 `GraphState`
@@ -37,10 +39,10 @@ GraphState(extraction_input=..., evidence_collection=None)
 - fake 模型只返回其中一个字段的 evidence。
 - 确认 broad 校验会在进入 resolution 前拒绝缺失字段。
 
-`test_run_broad_extraction_rejects_duplicate_fields_before_resolution`
+`test_run_broad_extraction_merges_duplicate_field_evidence_before_resolution`
 
 - fake 模型对同一个 `field_name` 返回两份 evidence。
-- 确认 broad 校验会拒绝重复字段，避免后续定案阶段拿到含糊 bundle。
+- 确认 broad 节点会合并 `relevant_block_ids`、`evidence_texts`、`evidence_refs` 和 notes，避免多值字段因为 evidence 被拆条而整单失败。
 
 `test_run_broad_extraction_rejects_unknown_fields_and_block_references`
 

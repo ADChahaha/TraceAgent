@@ -1,4 +1,23 @@
-last updated: 2026-04-28 15:07:09 CST
+last updated: 2026-04-29 23:15:29 CST
+
+## 2026-04-29 23:15:29
+
+### 已完成工作
+
+- 为 `TaskSpec.fields[].type` 增加 `list` 字段类型，支持学术论文名称、名单条目等多值字段。
+- 约束 `type=list` 的 resolved `value` 必须是字符串数组；模型把列表字段输出成分隔符字符串时会降级为 failed，并记录 `field_constraint` action。
+- 调整 broad extraction 输出处理：同一个 `field_name` 返回多条 `FieldEvidence` 时，按原顺序合并 `relevant_block_ids / evidence_texts / evidence_refs / local_notes`，不再因多值字段 evidence 被拆条而整单失败。
+- 同步更新 file extraction API / DESIGN / README、route policy DESIGN，以及对应测试说明文档。
+
+### 当前进展
+
+- `academic_paper_titles` 这类字段可以声明为 `type=list`，并要求 resolution 返回 `["论文 A", "论文 B"]` 这类数组值。
+- schema 外字段、缺失字段、未知 block 引用和缺少 `block_id` 的 evidence ref 仍继续按原规则拒绝。
+
+### 验证
+
+- `python -m pytest tests/file_extraction_agent/test_schemas.py tests/file_extraction_agent/test_validation.py tests/file_extraction_agent/test_broad_extraction.py tests/route_policy_agent/test_schemas.py -q`
+- `python -m pytest tests -q`，结果为 `131 passed, 2 warnings`。
 
 ## 2026-04-28 15:07:09
 

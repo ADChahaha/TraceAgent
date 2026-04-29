@@ -123,6 +123,7 @@ print(result.trace.fields[0].evidence.block_ids)
 - `enum`
 - `money`
 - `boolean`
+- `list`：字符串列表，多值字段必须返回数组而不是分隔符字符串。
 
 字段还可以声明：
 
@@ -161,7 +162,7 @@ print(result.trace.fields[0].evidence.block_ids)
 FieldDecision
   -> 检查 required / allow_missing
   -> 检查 enum 值是否在 enum_values 中
-  -> 检查 money / date / boolean 的基本类型形状
+  -> 检查 money / date / boolean / list 的基本类型形状
   -> 不满足时把该字段降级为 failed，并记录 field_constraint action
 ```
 

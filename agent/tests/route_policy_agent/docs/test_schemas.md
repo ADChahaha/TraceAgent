@@ -15,6 +15,7 @@ backend 传入 task_spec、field_outputs、refs_with_text
 ## 测什么
 
 - route policy 输入不接收抽取 trace。
+- route policy 输入可以消费 `type=list` 字段和数组字段值。
 - route policy 模型输出不允许给出新的字段值。
 
 ## 每个函数在干什么
@@ -23,6 +24,12 @@ backend 传入 task_spec、field_outputs、refs_with_text
 
 - 构造带 `trace` 的输入。
 - 确认 Pydantic 解析会拒绝这个额外字段。
+
+`test_route_policy_input_accepts_list_field_output`
+
+- 构造 `type=list` 的学术论文名称字段。
+- 字段输出使用 `["论文 A", "论文 B"]` 数组。
+- 确认 route policy 阶段能接收 file extraction 已定案的 list 值。
 
 `test_route_policy_decision_rejects_new_field_value_payload`
 

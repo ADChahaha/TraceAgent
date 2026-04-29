@@ -305,6 +305,10 @@ def _field_constraint_violation(
     if field.type == "boolean" and not isinstance(value, bool):
         return "boolean", f"字段 {field.field_name} 的布尔值格式无效: {value}"
 
+    if field.type == "list":
+        if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+            return "list", f"字段 {field.field_name} 的列表值格式无效: {value}"
+
     return None
 
 

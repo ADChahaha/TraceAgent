@@ -18,6 +18,7 @@
 ## 测什么
 
 - `TaskSpec` 不允许重复字段名
+- `TaskSpec` 支持 `list` 字段类型，resolution 模型可以为这类字段返回 `string[]`
 - `ExtractionInput` 能接住 blocks 主输入并提供安全默认值
 - `ExtractionInput.blocks` 会把序列化后的 block 字典解析成结构化模型
 - `FieldEvidence` 保留 broad 阶段的证据信息
@@ -35,6 +36,12 @@
 
 - 构造两个同名字段。
 - 确认 `TaskSpec` 会拒绝重复 `field_name`。
+
+`test_task_spec_accepts_list_field_and_resolution_value_list`
+
+- 构造 `type=list` 的学术论文名称字段。
+- 构造 resolution 模型返回的 `string[]` 值。
+- 确认 schema 允许多值字段用数组表达，而不是要求调用方拼接成字符串。
 
 `test_extraction_input_accepts_blocks_with_safe_defaults`
 

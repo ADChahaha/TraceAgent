@@ -147,3 +147,33 @@ def test_apply_field_constraints_downgrades_invalid_enum_in_dedicated_module():
     assert constrained.value is None
     assert "enum_values" in constrained.failure_reason
     assert constrained.trace_actions[0].action_type == "field_constraint"
+
+
+def test_apply_field_constraints_downgrades_string_value_for_list_field():
+    from service.file_extraction_agent.impl.validation import apply_field_constraints
+
+    field = FieldDefinition(
+        field_name="academic_paper_titles",
+        display_name="学术论文名称",
+        type="list",
+        required=True,
+    )
+    decision = FieldDecision(
+        field_name="academic_paper_titles",
+        status="resolved",
+        value="论文 A；论文 B",
+        evidence=FieldEvidence(
+            field_name="academic_paper_titles",
+            relevant_block_ids=["b-paper"],
+            evidence_texts=["论文 A；论文 B"],
+            local_status="model_resolved",
+        ),
+        reason="模型把列表字段误输出成字符串",
+    )
+
+    constrained = apply_field_constraints(decision=decision, field=field)
+
+    assert constrained.status == "failed"
+    assert constrained.value is None
+    assert "列表值格式无效" in constrained.failure_reason
+    assert constrained.trace_actions[0].metadata["field_type"] == "list"
