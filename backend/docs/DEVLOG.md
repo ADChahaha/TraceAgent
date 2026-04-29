@@ -1,6 +1,18 @@
 # Backend Devlog
 
-last updated: 2026-04-29 20:22:12
+last updated: 2026-04-29 20:32:22
+
+## 2026-04-29 20:32:22
+
+### 已完成工作
+
+- 同步根 `README.md`，将项目总览从早期服务拆分说明更新为当前毕业设计 MVP 闭环。
+- 在 `backend/docs/DESIGN.md` 中补充 route 术语映射：`accept -> pass`、`review -> human_review`、`reject -> reject`，并说明第一版 MVP 暂不单独实现 `fallback`。
+- 同步外部毕业设计文档的当前实现程度，把状态从 Agent PoC 更新为可运行 MVP 闭环，并标明剩余重点是实验、baseline、proxy review rule 和固定 demo 材料。
+
+### 验证
+
+- 本次只更新文档，不涉及运行时代码或测试文件。
 
 ## 2026-04-29 20:22:12
 

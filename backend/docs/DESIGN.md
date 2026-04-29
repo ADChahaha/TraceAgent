@@ -586,6 +586,16 @@ reject
   -> 关键字段不可用，或 refs 文本不足以支持字段值，不允许进入最终提交
 ```
 
+与毕业设计文本中的治理术语对应关系是：
+
+```text
+accept -> pass
+review -> human_review
+reject -> reject
+```
+
+第一版 MVP 暂不单独实现 `fallback` route；需要人工补录、人工修正或后续重跑的情况先并入 `review`，由 review handoff 和人工提交结果承接。
+
 执行流程：
 
 ```text

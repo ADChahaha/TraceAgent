@@ -1,4 +1,16 @@
-last updated: 2026-04-28 14:19:45
+last updated: 2026-04-29 20:32:22
+
+## 2026-04-29 20:32:22
+
+### 已完成工作
+
+- 同步 `agent/README.md` 和 `agent/docs/DESIGN.md`，把 agent service 明确为 `document_processor -> file_extraction_agent -> route_policy_agent` 三阶段服务。
+- 修正 agent 与 backend 的交互描述：当前由 backend 通过 HTTP 传入文件 bytes、聚合 blocks、调用字段抽取和 route policy，agent 不直接拉取 backend 文件或访问 SQLite。
+- 明确 `route_policy_agent` 已实现 `accept / review / reject` 字段级判断，不再描述为后续规划。
+
+### 验证
+
+- 本次只更新文档，不涉及运行时代码或测试文件。
 
 ## 2026-04-28 14:19:45
 

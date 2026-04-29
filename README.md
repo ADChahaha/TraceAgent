@@ -2,9 +2,9 @@
 
 ## 项目简介
 
-Agent Gate 是一个文档处理系统，计划拆分为前端、后端和 agent 服务三个部分。
+Agent Gate 是一个面向毕业设计 MVP 的文档抽取可信治理系统，由 `frontend`、`backend` 和 `agent` 三层组成。
 
-它用于承接文档上传、任务处理、结果查看、人工复核和处理留痕，形成一套职责清晰、方便扩展的服务结构。
+它不把 LLM 抽取结果直接视为可写库答案，而是把字段结果拆成可追踪、可审核、可路由的治理对象。当前主链路已经覆盖文档上传、文档标准化、字段抽取、route policy、人工复核、字段级提交和审计留痕。
 
 ## Quickstart
 
@@ -24,54 +24,72 @@ cd agent
 pip install -e ".[dev]"
 ```
 
+## MVP 链路
+
+当前 MVP 的基本流程是：
+
+```text
+前端上传一个或多个 PDF / DOCX + task_type + task_spec
+  -> backend 创建任务并调用 agent service
+  -> document_processor 输出 markdown、md_list、blocks 和处理元信息
+  -> file_extraction_agent 执行 broad evidence bundle 和 field resolution
+  -> route_policy_agent 输出字段级 accept / review / reject
+  -> backend 保存 result、trace、review、audit 和字段级提交记录
+  -> frontend 展示结果、证据、复核入口、agent 执行过程和审计记录
+```
+
+这个流程服务于“写库前治理”：字段只有在 route policy 自动通过，或人工复核确认后，才进入最终提交记录。
+
 ## 系统架构
 
 ### 前端 `frontend`
 
 负责用户界面相关工作，包括：
 
-- 文档上传
-- 任务发起
-- 结果展示
-- 人工复核
-- 处理记录查看
+- 上传 PDF / DOCX 和外部 `task_spec`
+- 查看任务状态、结果、trace、review 和 audit
+- 展示 `document_processor`、`file_extraction_agent`、`route_policy_agent` 的执行过程
+- 展示 broad 候选 blocks 正文、resolution 字段输出、route validation 和复核证据
+- 提交人工复核决策
 
 ### 后端 `backend`
 
 负责业务系统和数据层相关工作，包括：
 
-- 提供 API
-- 管理任务和文档
-- 持久化处理结果
-- 记录审核与操作日志
-- 对接数据库和权限体系
+- 提供任务、结果、trace、review、audit 和 capabilities API
+- 管理任务状态和 SQLite 数据记录
+- 调用 `agent` 的三个 HTTP 阶段
+- 持久化标准化文档、字段结果、字段 trace、route 输出、复核记录和字段级 audit
+- 根据 `accept / review / reject` 驱动自动提交、人工复核或拒绝流程
 
-### Agent 服务 `agent-service`
+### Agent 服务 `agent`
 
 负责文档处理能力相关工作，包括：
 
-- 文档解析与预处理
-- 任务执行
-- 结果生成
-- 与后端进行服务通信
+- `document_processor`：PDF / DOCX 标准化，输出 blocks 和 markdown
+- `file_extraction_agent`：执行 broad evidence bundle、field resolution、tool/action 留痕和 validation rules
+- `route_policy_agent`：基于字段输出和证据文本判断 `accept / review / reject`
+- 通过 HTTP 接口供 `backend` 调用，不直接访问 backend 数据库
 
 ## 服务协作流程
 
 系统的基本流程如下：
 
-1. 前端上传文档并发起任务。
-2. 后端接收请求并创建处理任务。
-3. Agent 服务执行文档处理并返回结果。
-4. 后端保存结果并提供查询与审核接口。
-5. 前端展示处理结果，并在需要时提供人工复核入口。
-6. 后端记录最终处理状态和相关日志。
+1. 前端上传一个或多个文档，并提交 `task_type` 和外部 `task_spec`。
+2. 后端接收请求并创建任务，不持久化用户上传的原始文件。
+3. 后端逐个调用 `document_processor`，保存 markdown、md_list、blocks 和处理元信息。
+4. 后端合并多文档 blocks，调用 `file_extraction_agent` 得到字段级 `result + trace`。
+5. 后端组装字段输出和证据文本，调用 `route_policy_agent` 得到字段级 route。
+6. `accept` 字段自动生成提交记录；`review` 字段等待人工审核；`reject` 字段终止自动写入。
+7. 前端展示完整执行过程、复核 handoff 和字段级 audit。
 
 ## 设计目标
 
 - 服务边界清晰
-- 处理链路可追踪
-- 支持人工介入
-- 便于后续独立开发、部署和扩展
+- 字段级结果可追踪、可审核、可追责
+- 写库前通过 route policy 分层处置风险
+- 人工复核接收证据包，而不是只看到最终字段值
+- MVP 保持同步处理和本地 SQLite，避免提前引入生产级复杂度
 
 ## 目录规划
 
@@ -80,5 +98,5 @@ pip install -e ".[dev]"
 ├── README.md
 ├── frontend/
 ├── backend/
-└── agent-service/
+└── agent/
 ```

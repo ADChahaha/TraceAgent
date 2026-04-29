@@ -1,13 +1,22 @@
 # Agent Service
 
-`agent/` 提供文档处理与字段抽取服务，供 `backend` 调用。
+`agent/` 提供文档标准化、字段抽取和字段级 route policy 三个 HTTP 阶段，供 `backend` 调用。
 
 ## Overview
 
-- 接收 `pdf`、`docx` 等文档输入
-- 调用 `service.document_processor` 做文档标准化
-- 调用 `service.file_extraction_agent` 做字段抽取
-- 通过 HTTP 接口对外提供服务
+主链路是：
+
+```text
+backend 上传 PDF / DOCX bytes
+  -> service.document_processor 输出 markdown、md_list、blocks、meta_info、warnings
+  -> backend 聚合多文档 blocks 并补齐 document_id / block_id
+  -> service.file_extraction_agent 执行 broad evidence bundle 和 field resolution
+  -> backend 从字段 result/trace 组装 field_outputs + refs_with_text
+  -> service.route_policy_agent 判断字段级 accept / review / reject
+  -> backend 保存 route、review、final result 和 audit
+```
+
+`agent/` 不直接访问 backend 的 SQLite，不执行人工审核，也不写最终业务库；它只返回后端可治理的标准化结果、字段抽取结果和字段 route 决策。
 
 ## Quick Start
 
@@ -81,7 +90,7 @@ python -m uvicorn main:app --reload --port 8000
 
 ### `service.file_extraction_agent`
 
-负责在标准化后的多文档内容上做字段抽取，输出候选和最终结果。
+负责在标准化后的多文档内容上做字段抽取，输出字段级 `result + trace`。当前流程包含 broad evidence bundle、field resolution、跨字段/全局补查 action 和 validation rules 后处理。
 
 文档见：
 
@@ -91,7 +100,7 @@ python -m uvicorn main:app --reload --port 8000
 
 ### `service.route_policy_agent`
 
-负责字段抽取后的 route policy 设计，后续实现会在这里补齐评估入口和 HTTP route。
+负责字段抽取后的 route policy 判断。它消费 `TaskSpec + field_outputs + refs_with_text`，只基于字段输出和证据文本判断 `accept / review / reject`，不重新抽取字段、不读取完整原文、不生成 audit。
 
 文档见：
 

@@ -18,11 +18,15 @@
 
 它和 `backend` 的交互方式应当是：
 
-- 从 `backend` 的内部 API 获取任务输入
-- 从 `backend` 的内部 API 获取原始文件
-- 处理完成后再把结果回传给 `backend`
+- `backend` 通过 HTTP 把上传文件 bytes 传给 `document_processor`
+- `agent service` 返回标准化后的 markdown、md_list、blocks、meta_info 和 warnings
+- `backend` 为多文档任务聚合 blocks，并为每个 block 补齐 `document_id / block_id`
+- `backend` 通过 HTTP 把已聚合的 blocks、markdown 和外部 `task_spec` 传给 `file_extraction_agent`
+- `agent service` 返回字段级 `ExtractionResult(result + trace)`
+- `backend` 从字段结果和 trace refs 组装 `field_outputs + refs_with_text`，再通过 HTTP 调用 `route_policy_agent`
+- `route_policy_agent` 返回字段级 `accept / review / reject`，后续 review、final result 和 audit 都由 `backend` 保存和驱动
 
-也就是说，`agent service` 只负责处理，不负责数据存储管理。
+也就是说，`agent service` 只负责文档标准化、字段抽取和 route 判断，不负责任务状态、人工审核、字段提交或数据存储管理。
 
 ## 当前结构
 
@@ -176,16 +180,15 @@ raw file
 
 整体流程可以展开为：
 
-1. `backend` 创建任务并保存原始文件。
-2. `agent service` 通过 `backend` 内部 API 获取任务输入和文件。
-3. 交给 `document_processor` 做文档标准化。
-4. 得到 Markdown 优先的标准化结果。
-5. `backend` 按 session 聚合多个文档的 block list。
-6. 先由外部独立输入适配文件完成 session 输入校验和协议适配，再将已校验聚合结果交给 `file_extraction_agent`。
-7. 输出字段 evidence、工具/规则留痕和字段最终结果。
-8. backend 从字段结果和证据 refs 组装 `field_outputs + refs_with_text`，交给 `route_policy_agent`。
-9. `route_policy_agent` 先通过 `input_validator` 校验字段名、字段输出和 refs 文本完整性，再用小 LLM 输出字段级 `accept / review / reject`。
-10. 将抽取结果、trace 和 route 决策回传给 `backend`，由 backend 保存状态、review 和 audit。
+1. `backend` 创建任务，并在当前请求内读取上传文件 bytes；原始文件不持久化。
+2. `backend` 逐个 HTTP 调用 `document_processor`，把 PDF / DOCX 标准化成 Markdown 和 blocks。
+3. `backend` 保存每个文档的 markdown、md_list、blocks、meta_info 和 warnings。
+4. `backend` 按任务聚合多个文档的 block list，并补齐 `document_id / block_id`。
+5. `backend` 将已校验聚合结果和外部 `task_spec` 交给 `file_extraction_agent`。
+6. `file_extraction_agent` 输出字段 evidence、工具/规则留痕和字段最终结果。
+7. `backend` 从字段结果和证据 refs 组装 `field_outputs + refs_with_text`，交给 `route_policy_agent`。
+8. `route_policy_agent` 先通过 `input_validator` 校验字段名、字段输出和 refs 文本完整性，再用小 LLM 输出字段级 `accept / review / reject`。
+9. `backend` 保存抽取结果、trace 和 route 决策，并继续驱动 review、field commit 和 audit。
 
 可以理解为：
 
