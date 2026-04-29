@@ -1,6 +1,20 @@
 # Backend Devlog
 
-last updated: 2026-04-29 20:10:55
+last updated: 2026-04-29 20:22:12
+
+## 2026-04-29 20:22:12
+
+### 已完成工作
+
+- 将前端复核页的字段证据文本改为默认收起的可折叠区域，标题显示 `证据文本（N）`，展开后继续按受控 markdown 渲染证据表格和正文。
+- 保持 trace 页证据展示方式不变，只收敛 waiting_review 复核区的长证据文本占屏问题。
+- 同步更新 `frontend/docs/DESIGN.md` 和 `frontend/tests/docs/task-detail.test.md`，说明复核证据折叠交互。
+
+### 验证
+
+- `pnpm test`
+- `pnpm lint`
+- `pnpm build`
 
 ## 2026-04-29 20:10:55
 

@@ -117,7 +117,7 @@ frontend/
   -> field_resolution 展示 output_fields、related_fields、notes 和 actions；没有额外 tool/action 时展示 backend 的 completed 直接定案说明，不把 resolution 渲染成 skipped
   -> route_validation 单独展示 route、needs_review 和 route_reason，避免把 agent final result 误读成 route policy 验证结论
   -> AgentRawTrace 渲染 trace.agent_trace，按 sequence 展示每次 agent 调用的 agent/stage/status 和 request/response/trace key 摘要，JSON 明细放入可展开区域
-  -> review tab 对 waiting_review 字段展示 agent_process，包含字段值、证据状态、四段过程、reason、field_reference/global_lookup/validation_rule 等 action 明细
+  -> review tab 对 waiting_review 字段展示 agent_process，包含字段值、证据状态、四段过程、reason、field_reference/global_lookup/validation_rule 等 action 明细；复核证据文本默认放在可折叠区域，展开后按 markdown 渲染
   -> audit tab 对 field_commits 展示最终提交记录，并在每条提交下方展示对应 agent_process 和三段过程
   -> review/trace 中的 evidence_texts/texts 先交给 MarkdownEvidence 渲染标题、列表、标准/紧凑表格、加粗和行内代码
   -> waiting_review 时把 agent_value 作为默认复核值

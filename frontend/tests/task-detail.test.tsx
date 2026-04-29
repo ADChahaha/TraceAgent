@@ -337,6 +337,12 @@ it("waiting_review 任务会展示证据并提交 revise_and_approve 后刷新�
   expect(screen.getAllByText("1-101").length).toBeGreaterThan(0);
   expect(screen.getAllByText("1-102").length).toBeGreaterThan(0);
   expect(screen.getAllByText("文明寝室").length).toBeGreaterThan(0);
+  const reviewEvidenceSummary = screen.getByText("证据文本（1）");
+  const reviewEvidenceDetails = reviewEvidenceSummary.closest("details");
+  expect(reviewEvidenceDetails).not.toBeNull();
+  expect(reviewEvidenceDetails).not.toHaveAttribute("open");
+  await user.click(reviewEvidenceSummary);
+  expect(reviewEvidenceDetails).toHaveAttribute("open");
   expect(screen.getByText("Agent 决策过程")).toBeInTheDocument();
   expect(screen.getByText("第一步 broad extraction")).toBeInTheDocument();
   expect(screen.getAllByText("候选 blocks（1）").length).toBeGreaterThan(0);

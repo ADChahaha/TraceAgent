@@ -219,7 +219,7 @@ export function TaskDetail({
                             </dd>
                           </div>
                         </dl>
-                        <EvidenceList texts={field.evidence_texts ?? []} />
+                        <EvidenceList texts={field.evidence_texts ?? []} collapsible />
                         <AgentProcessList
                           title="Agent 决策过程"
                           processes={field.agent_process ? [field.agent_process] : []}
@@ -960,13 +960,37 @@ function ActionMetadata({ metadata }: { metadata?: Record<string, unknown> }) {
   );
 }
 
-function EvidenceList({ texts }: { texts: string[] }) {
+function EvidenceList({
+  texts,
+  collapsible = false
+}: {
+  texts: string[];
+  collapsible?: boolean;
+}) {
   if (texts.length === 0) {
     return null;
+  }
+  if (collapsible) {
+    return (
+      <details className="mt-3 rounded-md border bg-background px-3 py-2">
+        <summary className="cursor-pointer text-xs font-medium text-foreground">
+          证据文本（{texts.length}）
+        </summary>
+        <EvidenceTextBlocks texts={texts} />
+      </details>
+    );
   }
   return (
     <div className="mt-3 space-y-2">
       <p className="text-xs font-medium text-muted-foreground">证据文本</p>
+      <EvidenceTextBlocks texts={texts} />
+    </div>
+  );
+}
+
+function EvidenceTextBlocks({ texts }: { texts: string[] }) {
+  return (
+    <div className="mt-2 space-y-2">
       {texts.map((text, index) => (
         <blockquote key={`${text}-${index}`} className="border-l-2 border-primary pl-3">
           <MarkdownEvidence markdown={text} />
