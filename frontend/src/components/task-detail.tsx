@@ -15,6 +15,7 @@ import type {
   AgentTraceRecord,
   AgentProcess,
   AgentProcessStep,
+  EvidenceBlock,
   ReviewSubmitPayload,
   TaskDetailData,
   TaskSummary,
@@ -674,7 +675,7 @@ function AgentProcessList({
             {process.failure_reason ? (
               <p className="mt-2 text-destructive">{process.failure_reason}</p>
             ) : null}
-            <ProcessStepList steps={processSteps} />
+            <ProcessStepList steps={processSteps} fieldLabels={fieldLabels} />
             {processSteps.length === 0 ? <ProcessNotes notes={process.evidence?.notes ?? []} /> : null}
             {processSteps.length === 0 ? <TraceActionList actions={process.actions ?? []} /> : null}
           </div>
@@ -684,40 +685,131 @@ function AgentProcessList({
   );
 }
 
-function ProcessStepList({ steps }: { steps: AgentProcessStep[] }) {
+function ProcessStepList({ steps, fieldLabels }: { steps: AgentProcessStep[]; fieldLabels: FieldLabelMap }) {
   if (steps.length === 0) {
     return null;
   }
   return (
     <div className="mt-3 space-y-2">
-      {steps.map((step, index) => (
-        <div key={`${step.stage}-${index}`} className="rounded-md bg-muted px-3 py-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline">{index + 1}</Badge>
-            <span className="font-medium text-foreground">{step.title ?? step.stage}</span>
-            {step.status ? <Badge variant="secondary">{step.status}</Badge> : null}
+      {steps.map((step, index) => {
+        const outputFields = step.output_fields ?? [];
+        return (
+          <div key={`${step.stage}-${index}`} className="rounded-md bg-muted px-3 py-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline">{index + 1}</Badge>
+              <span className="font-medium text-foreground">{step.title ?? step.stage}</span>
+              {step.status ? <Badge variant="secondary">{step.status}</Badge> : null}
+            </div>
+            <StepEvidence evidence={step.evidence} />
+            {step.related_fields && step.related_fields.length > 0 ? (
+              <p className="mt-2 text-muted-foreground">
+                相关字段：{step.related_fields.join(", ")}
+              </p>
+            ) : null}
+            <StepOutputFields outputFields={outputFields} fieldLabels={fieldLabels} />
+            <StepRouteValidation step={step} />
+            <ProcessNotes notes={step.notes ?? []} />
+            <TraceActionList actions={step.actions ?? []} />
+            {"value" in step && outputFields.length === 0 ? (
+              <dl className="mt-2 grid gap-2 sm:grid-cols-2">
+                <div>
+                  <dt className="text-muted-foreground">输出结果</dt>
+                  <dd className="font-mono text-foreground">{stringifyValue(step.value)}</dd>
+                </div>
+              </dl>
+            ) : null}
+            {step.reason ? <p className="mt-2 text-muted-foreground">{step.reason}</p> : null}
+            {step.failure_reason ? <p className="mt-2 text-destructive">{step.failure_reason}</p> : null}
           </div>
-          <StepEvidence evidence={step.evidence} />
-          {step.related_fields && step.related_fields.length > 0 ? (
-            <p className="mt-2 text-muted-foreground">
-              相关字段：{step.related_fields.join(", ")}
-            </p>
-          ) : null}
-          <TraceActionList actions={step.actions ?? []} />
-          {"value" in step ? (
-            <dl className="mt-2 grid gap-2 sm:grid-cols-2">
-              <div>
-                <dt className="text-muted-foreground">输出结果</dt>
-                <dd className="font-mono text-foreground">{stringifyValue(step.value)}</dd>
-              </div>
-            </dl>
-          ) : null}
-          {step.reason ? <p className="mt-2 text-muted-foreground">{step.reason}</p> : null}
-          {step.failure_reason ? <p className="mt-2 text-destructive">{step.failure_reason}</p> : null}
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
+}
+
+function StepOutputFields({
+  outputFields,
+  fieldLabels
+}: {
+  outputFields: NonNullable<AgentProcessStep["output_fields"]>;
+  fieldLabels: FieldLabelMap;
+}) {
+  if (outputFields.length === 0) {
+    return null;
+  }
+  return (
+    <div className="mt-2 space-y-2">
+      <p className="text-muted-foreground">Agent 输出字段（route 前）</p>
+      <div className="space-y-2">
+        {outputFields.map((field, index) => (
+          <div key={`${field.field_name}-${index}`} className="border-t pt-2">
+            <dl className="grid gap-2 sm:grid-cols-3">
+              <div>
+                <dt className="text-muted-foreground">字段</dt>
+                <dd className="mt-1 text-foreground">{getFieldLabel(fieldLabels, field.field_name)}</dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">值</dt>
+                <dd className="mt-1 font-mono text-foreground">
+                  {"value" in field ? stringifyValue(field.value) : "未输出值"}
+                </dd>
+              </div>
+              {field.status ? (
+                <div>
+                  <dt className="text-muted-foreground">状态</dt>
+                  <dd className="mt-1">
+                    <Badge variant="outline">{field.status}</Badge>
+                  </dd>
+                </div>
+              ) : null}
+            </dl>
+            {(field.reason || field.failure_reason) ? (
+              <div className="mt-2">
+                {field.reason ? <p className="text-muted-foreground">{field.reason}</p> : null}
+                {field.failure_reason ? <p className="text-destructive">{field.failure_reason}</p> : null}
+              </div>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function StepRouteValidation({ step }: { step: AgentProcessStep }) {
+  if (step.stage !== "route_validation" && !step.route && typeof step.needs_review === "undefined") {
+    return null;
+  }
+  return (
+    <dl className="mt-2 grid gap-2 sm:grid-cols-2">
+      {step.route ? (
+        <div>
+          <dt className="text-muted-foreground">Route 结论</dt>
+          <dd className="mt-1">
+            <Badge variant={getRouteStepBadgeVariant(step.route)}>
+              {step.route}
+            </Badge>
+          </dd>
+        </div>
+      ) : null}
+      {typeof step.needs_review !== "undefined" ? (
+        <div>
+          <dt className="text-muted-foreground">需要人工复核</dt>
+          <dd className="mt-1 font-mono text-foreground">{step.needs_review ? "true" : "false"}</dd>
+        </div>
+      ) : null}
+    </dl>
+  );
+}
+
+function getRouteStepBadgeVariant(route: string): "success" | "warning" | "destructive" {
+  if (route === "accept") {
+    return "success";
+  }
+  if (route === "review") {
+    return "warning";
+  }
+  return "destructive";
 }
 
 function StepEvidence({ evidence }: { evidence?: AgentProcessStep["evidence"] }) {
@@ -725,17 +817,67 @@ function StepEvidence({ evidence }: { evidence?: AgentProcessStep["evidence"] })
     return null;
   }
   const blockIds = evidence.block_ids ?? [];
+  const candidateBlocks = buildCandidateBlocks(evidence);
   return (
     <div className="mt-2 space-y-1 text-muted-foreground">
-      {blockIds.length > 0 ? (
-        <p>
-          候选 blocks：<span className="font-mono text-foreground">{blockIds.join(", ")}</span>
-        </p>
+      <CandidateBlockDetails blocks={candidateBlocks} />
+      {candidateBlocks.length === 0 && blockIds.length > 0 ? (
+        <p>候选 block 正文未返回</p>
       ) : null}
       <ProcessNotes notes={evidence.notes ?? []} />
-      <EvidencePreview texts={evidence.texts ?? []} />
+      {candidateBlocks.length === 0 ? <EvidencePreview texts={evidence.texts ?? []} /> : null}
     </div>
   );
+}
+
+function CandidateBlockDetails({ blocks }: { blocks: EvidenceBlock[] }) {
+  if (blocks.length === 0) {
+    return null;
+  }
+  return (
+    <details open className="rounded-md border bg-background px-3 py-2">
+      <summary className="cursor-pointer text-xs font-medium text-foreground">
+        候选 blocks（{blocks.length}）
+      </summary>
+      <div className="mt-2 space-y-2">
+        {blocks.map((block, index) => (
+          <div key={`${block.block_id ?? "block"}-${index}`} className="rounded-md bg-muted px-3 py-2">
+            {block.text ? <MarkdownEvidence markdown={block.text} /> : null}
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function buildCandidateBlocks(evidence: NonNullable<AgentProcessStep["evidence"]>): EvidenceBlock[] {
+  const explicitBlocks = (evidence.blocks ?? []).filter((block) => block.text);
+  if (explicitBlocks.length > 0) {
+    return explicitBlocks;
+  }
+
+  const refsWithText = (evidence.refs ?? [])
+    .filter((ref) => ref.text)
+    .map((ref) => ({
+      document_id: ref.document_id,
+      block_id: ref.block_id,
+      page: ref.page,
+      text: ref.text,
+      kind: "text"
+    }));
+  if (refsWithText.length > 0) {
+    return refsWithText;
+  }
+
+  const blockIds = evidence.block_ids ?? [];
+  const refs = evidence.refs ?? [];
+  return (evidence.texts ?? []).map((text, index) => ({
+    document_id: refs[index]?.document_id,
+    block_id: blockIds[index] ?? refs[index]?.block_id,
+    page: refs[index]?.page,
+    text,
+    kind: "text"
+  }));
 }
 
 function EvidencePreview({ texts }: { texts: string[] }) {

@@ -74,6 +74,23 @@ export interface EvidenceRef {
   text?: string;
 }
 
+export interface EvidenceBlock {
+  document_id?: string;
+  block_id?: string;
+  page?: number;
+  text?: string;
+  kind?: string;
+}
+
+export interface EvidencePayload {
+  block_ids?: string[];
+  blocks?: EvidenceBlock[];
+  texts?: string[];
+  refs?: EvidenceRef[];
+  status?: string;
+  notes?: string[];
+}
+
 export interface TraceAction {
   action_type?: string;
   message?: string;
@@ -84,15 +101,10 @@ export interface TraceAction {
 export interface TraceField {
   field_name: string;
   status?: string;
-  evidence?: {
-    block_ids?: string[];
-    texts?: string[];
-    refs?: EvidenceRef[];
-    status?: string;
-    notes?: string[];
-  };
+  evidence?: EvidencePayload;
   related_fields?: string[];
   actions?: TraceAction[];
+  process_steps?: AgentProcessStep[];
   reason?: string | null;
   failure_reason?: string | null;
 }
@@ -101,15 +113,21 @@ export interface AgentProcessStep {
   stage: string;
   title?: string;
   status?: string | null;
-  evidence?: {
-    block_ids?: string[];
-    texts?: string[];
-    refs?: EvidenceRef[];
-    status?: string;
-    notes?: string[];
-  };
+  evidence?: EvidencePayload;
   related_fields?: string[];
   actions?: TraceAction[];
+  output_fields?: AgentProcessOutputField[];
+  route?: string | null;
+  needs_review?: boolean;
+  notes?: string[];
+  value?: unknown;
+  reason?: string | null;
+  failure_reason?: string | null;
+}
+
+export interface AgentProcessOutputField {
+  field_name: string;
+  status?: string | null;
   value?: unknown;
   reason?: string | null;
   failure_reason?: string | null;
@@ -119,13 +137,7 @@ export interface AgentProcess {
   field_name: string;
   status?: string;
   value?: unknown;
-  evidence?: {
-    block_ids?: string[];
-    texts?: string[];
-    refs?: EvidenceRef[];
-    status?: string;
-    notes?: string[];
-  };
+  evidence?: EvidencePayload;
   related_fields?: string[];
   actions?: TraceAction[];
   process_steps?: AgentProcessStep[];

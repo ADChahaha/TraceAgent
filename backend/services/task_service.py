@@ -14,7 +14,11 @@ from backend.crud import extraction as extraction_crud
 from backend.crud import reviews as reviews_crud
 from backend.crud import tasks as tasks_crud
 from backend.crud.json_utils import loads_json
-from backend.services.agent_process import build_field_agent_process, serialize_field_agent_process
+from backend.services.agent_process import (
+    build_document_block_lookup,
+    build_field_agent_process,
+    serialize_field_agent_process,
+)
 from backend.services.audit_service import AuditService
 from backend.services.errors import AgentServiceError, NotFoundError, ValidationError
 from backend.services.route_policy import build_route_policy_request
@@ -170,7 +174,9 @@ class TaskService:
         traces = extraction_crud.list_field_traces(self.connection, task_id)
         trace_payload = loads_json(agent_run["trace_json"], {}) if agent_run else {}
         routes = extraction_crud.list_field_routes(self.connection, task_id)
+        routes_by_name = {route["field_name"]: route for route in routes}
         documents = tasks_crud.list_documents_by_task(self.connection, task_id)
+        block_lookup = build_document_block_lookup(documents)
         agent_stage_runs = agent_stage_runs_crud.list_agent_stage_runs(
             self.connection,
             task_id,
@@ -185,13 +191,19 @@ class TaskService:
                 agent_run=agent_run,
                 trace_payload=trace_payload,
                 routes=routes,
+                block_lookup=block_lookup,
             ),
             "agent_trace": [
                 self._serialize_agent_stage_run(stage_run)
                 for stage_run in agent_stage_runs
             ],
             "fields": [
-                self._serialize_trace_field(trace, fields.get(trace["field_name"]))
+                self._serialize_trace_field(
+                    trace,
+                    fields.get(trace["field_name"]),
+                    block_lookup=block_lookup,
+                    route=routes_by_name.get(trace["field_name"]),
+                )
                 for trace in traces
             ],
             "metadata": trace_payload.get("metadata", {}),
@@ -766,9 +778,17 @@ class TaskService:
         self,
         trace: dict[str, Any],
         field: dict[str, Any] | None = None,
+        *,
+        block_lookup: dict[str, dict[str, Any]] | None = None,
+        route: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         value = loads_json(field["agent_value_json"], None) if field else None
-        serialized = serialize_field_agent_process(trace, value=value)
+        serialized = serialize_field_agent_process(
+            trace,
+            value=value,
+            block_lookup=block_lookup,
+            route=route,
+        )
         assert serialized is not None
         return serialized
 
@@ -795,6 +815,7 @@ class TaskService:
         agent_run: dict[str, Any] | None,
         trace_payload: dict[str, Any],
         routes: list[dict[str, Any]],
+        block_lookup: dict[str, dict[str, Any]],
     ) -> list[dict[str, Any]]:
         steps = [
             self._serialize_document_step(documents),
@@ -804,6 +825,8 @@ class TaskService:
                 self._serialize_extraction_step(
                     agent_run=agent_run,
                     trace_payload=trace_payload,
+                    routes=routes,
+                    block_lookup=block_lookup,
                 )
             )
         if routes:
@@ -852,6 +875,8 @@ class TaskService:
         *,
         agent_run: dict[str, Any],
         trace_payload: dict[str, Any],
+        routes: list[dict[str, Any]],
+        block_lookup: dict[str, dict[str, Any]],
     ) -> dict[str, Any]:
         result_payload = loads_json(agent_run["result_json"], {})
         fields = (result_payload.get("fields") or []) if isinstance(result_payload, dict) else []
@@ -872,6 +897,8 @@ class TaskService:
             "field_decisions": self._serialize_extraction_field_decisions(
                 trace_payload=trace_payload,
                 result_payload=result_payload,
+                routes=routes,
+                block_lookup=block_lookup,
             ),
             "warnings": warnings,
             "metadata": trace_payload.get("metadata", {}),
@@ -882,6 +909,8 @@ class TaskService:
         *,
         trace_payload: dict[str, Any],
         result_payload: dict[str, Any],
+        routes: list[dict[str, Any]],
+        block_lookup: dict[str, dict[str, Any]],
     ) -> list[dict[str, Any]]:
         result_fields = (
             result_payload.get("fields") or []
@@ -893,6 +922,7 @@ class TaskService:
             for field in result_fields
             if isinstance(field, dict)
         }
+        routes_by_name = {route["field_name"]: route for route in routes}
         decisions = []
         for trace in trace_payload.get("fields") or []:
             if not isinstance(trace, dict):
@@ -908,6 +938,8 @@ class TaskService:
                 actions=trace.get("actions") or [],
                 reason=trace.get("reason"),
                 failure_reason=trace.get("failure_reason"),
+                block_lookup=block_lookup,
+                route=routes_by_name.get(field_name),
             )
             decisions.append(decision)
         return decisions

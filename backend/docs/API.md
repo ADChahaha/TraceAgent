@@ -25,7 +25,7 @@
 这里的核心边界是：
 
 - `result` 表示后端治理后的最终字段结果，可以包含 agent 原值、人工修正值和最终值。
-- `trace` 表示 Agent 执行层如何得到字段结果，包括三段 agent 执行过程、证据、定位、补查、validation action 和失败原因。
+- `trace` 表示 Agent 执行层如何得到字段结果，包括 agent 抽取过程、route policy 验证过程、证据、定位、补查、validation action 和失败原因。
 - `review` 表示人工审核需要接管的信息包和人工提交的处理结论。
 - `audit` 表示字段最终进入或未进入正式数据区的责任链路。
 
@@ -401,10 +401,11 @@ documents 表中的标准化结果
 `process_steps` 是 backend 从现有字段 trace 派生的展示链路，不新增数据库字段：
 
 ```text
-field evidence + actions + agent value
-  -> broad_extraction：候选证据 block、文本、refs 和 notes
-  -> field_resolution：field_reference / global_lookup / validation_rule 等动作
-  -> final_result：最终 status、agent value、reason 或 failure_reason
+field evidence + documents.blocks_json + actions + agent value
+  -> broad_extraction：按 evidence.block_ids / refs[].block_id 回查候选 block 正文，并返回 blocks、文本、refs 和 notes
+  -> field_resolution：返回本阶段产出的 route 前 output_fields(field_name/status/value/reason)，并说明读取了哪些 related_fields、执行了哪些 field_reference / global_lookup / validation_rule 动作；没有额外 tool/action 时返回 completed 和直接定案说明，不返回 skipped
+  -> final_result：route policy 之前的 agent 抽取结果，包含 status、agent value、reason 或 failure_reason
+  -> route_validation：route_policy_agent 的验证/路由结论，包含 route、needs_review 和 route_reason
 ```
 
 `agent_trace` 来自 `agent_stage_runs`，按每次 HTTP 调用单独保存并返回：

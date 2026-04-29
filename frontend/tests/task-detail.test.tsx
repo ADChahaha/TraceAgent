@@ -21,7 +21,16 @@ const agentEvidence = {
   texts: [
     "### 文明寝室名单\n\n| 房间 | 结论 | | --- | --- | | 1-101 | 通过 | | 1-102 | **文明寝室** |"
   ],
-  refs: [{ document_id: "doc-1", page: 2, block_id: "doc-1:p2:b3" }]
+  blocks: [
+    {
+      document_id: "doc-1",
+      block_id: "candidate-block-id-should-not-render",
+      page: 2,
+      text: "### 候选 block 原文\n\n| 房间 | 结论 | | --- | --- | | 1-101 | 通过 | | 1-102 | **文明寝室** |",
+      kind: "text"
+    }
+  ],
+  refs: [{ document_id: "doc-1", page: 2, block_id: "candidate-block-id-should-not-render" }]
 };
 
 const agentActions = [
@@ -63,15 +72,37 @@ const agentProcess = {
       title: "第二步 resolution / tool",
       status: "used",
       related_fields: ["building"],
+      output_fields: [
+        {
+          field_name: "room_numbers",
+          status: "resolved",
+          value: "1-101,1-102",
+          reason: "模型定案后经过规则校正"
+        }
+      ],
+      notes: [
+        "读取相关字段：building",
+        "执行 global_lookup：补查文明寝室名单，参与最终定案。",
+        "执行 validation_rule：校正房间号列表，参与最终定案。"
+      ],
       actions: agentActions
     },
     {
       stage: "final_result",
-      title: "第三步 final result",
+      title: "第三步 agent result（route 前）",
       status: "resolved",
       value: "1-101,1-102",
       reason: "模型定案后经过规则校正",
       failure_reason: null
+    },
+    {
+      stage: "route_validation",
+      title: "第四步 route validation",
+      status: "review",
+      route: "review",
+      needs_review: true,
+      reason: "关键字段证据较弱，需要人工确认",
+      notes: ["route_policy_agent 判定该字段需要人工复核。"]
     }
   ],
   reason: "模型定案后经过规则校正",
@@ -300,18 +331,27 @@ it("waiting_review 任务会展示证据并提交 revise_and_approve 后刷新�
   );
 
   expect(await screen.findByRole("heading", { name: "文明寝室名单" })).toBeInTheDocument();
-  expect(screen.getByRole("table")).toBeInTheDocument();
+  expect(screen.getAllByRole("table").length).toBeGreaterThan(0);
   expect(screen.getAllByText("文明寝室房间号").length).toBeGreaterThan(0);
   expect(screen.queryByText("room_numbers")).not.toBeInTheDocument();
-  expect(screen.getByText("1-101")).toBeInTheDocument();
-  expect(screen.getByText("1-102")).toBeInTheDocument();
-  expect(screen.getByText("文明寝室")).toBeInTheDocument();
+  expect(screen.getAllByText("1-101").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("1-102").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("文明寝室").length).toBeGreaterThan(0);
   expect(screen.getByText("Agent 决策过程")).toBeInTheDocument();
   expect(screen.getByText("第一步 broad extraction")).toBeInTheDocument();
+  expect(screen.getAllByText("候选 blocks（1）").length).toBeGreaterThan(0);
+  expect(screen.getAllByRole("heading", { name: "候选 block 原文" }).length).toBeGreaterThan(0);
+  expect(screen.queryByText("candidate-block-id-should-not-render")).not.toBeInTheDocument();
   expect(screen.getByText("第二步 resolution / tool")).toBeInTheDocument();
-  expect(screen.getByText("第三步 final result")).toBeInTheDocument();
+  expect(screen.getByText("第三步 agent result（route 前）")).toBeInTheDocument();
+  expect(screen.getByText("第四步 route validation")).toBeInTheDocument();
   expect(screen.getByText("模型请求参考字段 building")).toBeInTheDocument();
   expect(screen.getByText("补查文明寝室名单")).toBeInTheDocument();
+  expect(screen.getAllByText("Agent 输出字段（route 前）").length).toBeGreaterThan(0);
+  expect(screen.getByText("Route 结论")).toBeInTheDocument();
+  expect(screen.getAllByText("resolved").length).toBeGreaterThan(0);
+  expect(screen.getByText("读取相关字段：building")).toBeInTheDocument();
+  expect(screen.getByText("执行 global_lookup：补查文明寝室名单，参与最终定案。")).toBeInTheDocument();
   expect(screen.queryByText("### 文明寝室名单")).not.toBeInTheDocument();
   expect(screen.queryByText("| 房间 | 结论 |")).not.toBeInTheDocument();
 
@@ -319,8 +359,11 @@ it("waiting_review 任务会展示证据并提交 revise_and_approve 后刷新�
   expect(screen.getByText("Agent 执行过程")).toBeInTheDocument();
   expect(screen.getByText("字段决策过程")).toBeInTheDocument();
   expect(screen.getAllByText("第一步 broad extraction").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("候选 blocks（1）").length).toBeGreaterThan(0);
+  expect(screen.queryByText("candidate-block-id-should-not-render")).not.toBeInTheDocument();
   expect(screen.getAllByText("第二步 resolution / tool").length).toBeGreaterThan(0);
-  expect(screen.getAllByText("第三步 final result").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("第三步 agent result（route 前）").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("第四步 route validation").length).toBeGreaterThan(0);
   expect(screen.getByText("document_processor")).toBeInTheDocument();
   expect(screen.getByText("file_extraction_agent")).toBeInTheDocument();
   expect(screen.getByText("route_policy_agent")).toBeInTheDocument();
@@ -433,4 +476,73 @@ it("审计记录会展示字段提交对应的 agent 决策过程", async () => 
   expect(screen.getByText("Agent 决策过程")).toBeInTheDocument();
   expect(screen.getByText("模型请求参考字段 building")).toBeInTheDocument();
   expect(screen.getByText("补查文明寝室名单")).toBeInTheDocument();
+});
+
+it("没有额外 tool/action 时不会把 resolution 显示成 skipped", async () => {
+  const noToolProcess = {
+    ...agentProcess,
+    related_fields: [],
+    actions: [],
+    process_steps: agentProcess.process_steps.map((step) =>
+      step.stage === "field_resolution"
+        ? {
+            stage: "field_resolution",
+            title: "第二步 resolution / tool",
+            status: "completed",
+            related_fields: [],
+            actions: [],
+            output_fields: [
+              {
+                field_name: "room_numbers",
+                status: "resolved",
+                value: "1-101,1-102",
+                reason: "模型定案后经过规则校正"
+              }
+            ],
+            notes: ["未记录额外 tool/action；resolution 直接将候选证据定案为字段输出。"]
+          }
+        : step
+    )
+  };
+  const loadTaskDetail = jest.fn(async (): Promise<TaskDetailData> => ({
+    ...detailData,
+    trace: detailData.trace
+      ? {
+          ...detailData.trace,
+          steps: detailData.trace.steps?.map((step) =>
+            step.agent === "file_extraction_agent"
+              ? { ...step, field_decisions: [noToolProcess] }
+              : step
+          ),
+          fields: [
+            {
+              field_name: "room_numbers",
+              status: "resolved",
+              evidence: agentEvidence,
+              actions: [],
+              reason: "字段由候选 block 直接定案",
+              process_steps: noToolProcess.process_steps
+            }
+          ]
+        }
+      : null,
+    review: null,
+    audit: null
+  }));
+
+  render(
+    <TaskDetail
+      taskId="task-001"
+      initialSummary={{ ...waitingReviewSummary, status: "completed", stage: "done", needs_review: false }}
+      loadTaskDetail={loadTaskDetail}
+    />
+  );
+
+  await screen.findByText("completed");
+  await userEvent.click(screen.getByRole("tab", { name: "证据" }));
+
+  expect(screen.getByText("第二步 resolution / tool")).toBeInTheDocument();
+  expect(screen.getAllByText("未记录额外 tool/action；resolution 直接将候选证据定案为字段输出。").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Agent 输出字段（route 前）").length).toBeGreaterThan(0);
+  expect(screen.queryByText("skipped")).not.toBeInTheDocument();
 });

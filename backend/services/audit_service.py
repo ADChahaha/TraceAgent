@@ -6,8 +6,12 @@ from typing import Any
 
 from backend.crud import audit as audit_crud
 from backend.crud import extraction as extraction_crud
+from backend.crud import tasks as tasks_crud
 from backend.crud.json_utils import loads_json
-from backend.services.agent_process import serialize_field_agent_process
+from backend.services.agent_process import (
+    build_document_block_lookup,
+    serialize_field_agent_process,
+)
 
 
 class AuditService:
@@ -57,6 +61,13 @@ class AuditService:
             trace["field_name"]: trace
             for trace in extraction_crud.list_field_traces(self.connection, task["id"])
         }
+        routes = {
+            route["field_name"]: route
+            for route in extraction_crud.list_field_routes(self.connection, task["id"])
+        }
+        block_lookup = build_document_block_lookup(
+            tasks_crud.list_documents_by_task(self.connection, task["id"])
+        )
         return {
             "task_id": task["id"],
             "status": task["status"],
@@ -64,6 +75,8 @@ class AuditService:
                 self._serialize_commit(
                     commit,
                     traces.get(commit["field_name"]),
+                    routes.get(commit["field_name"]),
+                    block_lookup=block_lookup,
                 )
                 for commit in commits
             ],
@@ -80,6 +93,9 @@ class AuditService:
         self,
         commit: dict[str, Any],
         trace: dict[str, Any] | None,
+        route: dict[str, Any] | None,
+        *,
+        block_lookup: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         agent_value = loads_json(commit["agent_value_json"], None)
         return {
@@ -96,5 +112,10 @@ class AuditService:
             "related_fields": loads_json(commit["related_fields_json"], []),
             "committed_by": commit["committed_by"],
             "committed_at": commit["committed_at"],
-            "agent_process": serialize_field_agent_process(trace, value=agent_value),
+            "agent_process": serialize_field_agent_process(
+                trace,
+                value=agent_value,
+                block_lookup=block_lookup,
+                route=route,
+            ),
         }

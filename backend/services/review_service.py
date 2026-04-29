@@ -8,7 +8,10 @@ from backend.crud import extraction as extraction_crud
 from backend.crud import reviews as reviews_crud
 from backend.crud import tasks as tasks_crud
 from backend.crud.json_utils import loads_json
-from backend.services.agent_process import serialize_field_agent_process
+from backend.services.agent_process import (
+    build_document_block_lookup,
+    serialize_field_agent_process,
+)
 from backend.services.audit_service import AuditService
 from backend.services.errors import ConflictError, NotFoundError, ValidationError
 from backend.services.time_utils import utc_now
@@ -38,6 +41,9 @@ class ReviewService:
             for route in extraction_crud.list_field_routes(self.connection, task_id)
             if bool(route["needs_review"])
         ]
+        block_lookup = build_document_block_lookup(
+            tasks_crud.list_documents_by_task(self.connection, task_id)
+        )
         return {
             "task_id": task["id"],
             "status": task["status"],
@@ -48,6 +54,7 @@ class ReviewService:
                     field,
                     traces.get(field["field_name"]),
                     route,
+                    block_lookup=block_lookup,
                 )
                 for route in routes
                 for field in fields
@@ -192,6 +199,8 @@ class ReviewService:
         field: dict[str, Any],
         trace: dict[str, Any] | None,
         route: dict[str, Any],
+        *,
+        block_lookup: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         evidence = loads_json(trace["evidence_json"], {}) if trace else {}
         actions = loads_json(trace["actions_json"], []) if trace else []
@@ -209,7 +218,12 @@ class ReviewService:
             "actions": [action.get("action_type") for action in actions],
             "reason": trace["reason"] if trace else None,
             "failure_reason": trace["failure_reason"] if trace else None,
-            "agent_process": serialize_field_agent_process(trace, value=agent_value),
+            "agent_process": serialize_field_agent_process(
+                trace,
+                value=agent_value,
+                block_lookup=block_lookup,
+                route=route,
+            ),
         }
 
     def _serialize_review_response(

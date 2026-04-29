@@ -1,6 +1,22 @@
 # Backend Devlog
 
-last updated: 2026-04-29 18:45:33
+last updated: 2026-04-29 20:10:55
+
+## 2026-04-29 20:10:55
+
+### 已完成工作
+
+- 扩展字段级 `process_steps`，将 `final_result` 明确为 route policy 前的 agent 抽取结果，并新增 `route_validation` 步骤单独展示 route policy 的 `route / needs_review / route_reason`。
+- `field_resolution` 现在展示 route 前 agent 输出字段、读取的相关字段和实际执行的 action，避免把 extraction 定案和 route validation 混在一起。
+- 前端任务详情页同步展示 `Agent 输出字段（route 前）` 和 `Route 结论`，候选 blocks 继续以可折叠 markdown 正文展示且不暴露 block id。
+
+### 验证
+
+- `python -m pytest backend/tests -q`
+- `pnpm test`
+- `pnpm lint`
+- `pnpm build`
+- 使用 `agent/scripts` 文明寝室 task spec 和真实 PDF 在 `8004/3002` 验证：`civilized_dormitory_count` 的 agent 输出为 `14`，route policy 因证据可见 12 个文明寝室将字段路由到 `review`。
 
 ## 2026-04-29 18:45:33
 
