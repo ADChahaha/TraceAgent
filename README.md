@@ -1,30 +1,10 @@
 # Agent Gate
 
-## 项目简介
+## Overview
 
 Agent Gate 是一个面向毕业设计 MVP 的文档抽取可信治理系统，由 `frontend`、`backend` 和 `agent` 三层组成。
 
 它不把 LLM 抽取结果直接视为可写库答案，而是把字段结果拆成可追踪、可审核、可路由的治理对象。当前主链路已经覆盖文档上传、文档标准化、字段抽取、route policy、人工复核、字段级提交和审计留痕。
-
-## Quickstart
-
-开始前，建议先在本地创建一个名为 `agent-gate` 的 Conda 环境，并在后续开发或运行时始终使用它：
-
-```bash
-conda create -n agent-gate python=3.11 -y
-conda activate agent-gate
-```
-
-进入仓库后，再按需要安装对应子项目依赖。
-
-例如启动 `agent service` 前：
-
-```bash
-cd agent
-pip install -e ".[dev]"
-```
-
-## MVP 链路
 
 当前 MVP 的基本流程是：
 
@@ -40,7 +20,104 @@ pip install -e ".[dev]"
 
 这个流程服务于“写库前治理”：字段只有在 route policy 自动通过，或人工复核确认后，才进入最终提交记录。
 
-## 系统架构
+## Quickstart
+
+### 1. 准备环境
+
+以下命令默认从仓库根目录执行。新开终端时，先把 `/path/to/agent_gate` 替换为本机仓库路径并进入仓库根目录。
+
+建议先在本地创建一个名为 `agent-gate` 的 Conda 环境，并在后续开发或运行时始终使用它：
+
+```bash
+conda create -n agent-gate python=3.11 -y
+conda activate agent-gate
+```
+
+安装 Python 依赖：
+
+```bash
+cd /path/to/agent_gate
+cd agent
+pip install -e ".[dev]" httpx
+cd ..
+```
+
+安装前端依赖：
+
+```bash
+cd /path/to/agent_gate
+cd frontend
+pnpm install
+cd ..
+```
+
+如果要连接真实 LLM，在启动 `agent` 前设置模型服务环境变量：
+
+```bash
+export BASE_URL="https://your-model-endpoint/v1"
+export OPENAI_API_KEY="your-api-key"
+export MODEL="your-model-name"
+```
+
+### 2. 启动 agent service
+
+新开一个终端：
+
+```bash
+conda activate agent-gate
+cd /path/to/agent_gate
+cd agent
+python -m uvicorn main:app --reload --host 127.0.0.1 --port 8001
+```
+
+启动后可访问：
+
+- `http://127.0.0.1:8001/healthz`
+- `http://127.0.0.1:8001/docs`
+
+### 3. 启动 backend
+
+再开一个终端：
+
+```bash
+conda activate agent-gate
+cd /path/to/agent_gate
+AGENT_SERVICE_BASE_URL=http://127.0.0.1:8001 uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+backend 默认使用本地 SQLite，数据库文件为 `backend/backend.sqlite3`。如需改路径：
+
+```bash
+BACKEND_DATABASE_PATH=/private/tmp/agent_gate.sqlite3 \
+AGENT_SERVICE_BASE_URL=http://127.0.0.1:8001 \
+uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+### 4. 启动 frontend
+
+再开一个终端：
+
+```bash
+cd /path/to/agent_gate
+cd frontend
+BACKEND_BASE_URL=http://127.0.0.1:8000 pnpm dev -- --port 3000
+```
+
+打开：
+
+```text
+http://127.0.0.1:3000/
+```
+
+如果 `3000` 被占用，可以改用：
+
+```bash
+BACKEND_BASE_URL=http://127.0.0.1:8000 pnpm dev -- --port 3002
+```
+
+然后打开 `http://127.0.0.1:3002/`。
+
+## 项目架构
 
 ### 前端 `frontend`
 
