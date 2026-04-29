@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { UploadWorkbench } from "@/components/upload-workbench";
-import type { Capabilities, TaskCreated } from "@/lib/types";
+import type { Capabilities, TaskCreated, TaskSummary } from "@/lib/types";
 
 const capabilities: Capabilities = {
   supported_file_types: ["pdf", "docx"],
@@ -19,57 +19,54 @@ const capabilities: Capabilities = {
 };
 
 type CreateTaskFn = (formData: FormData) => Promise<TaskCreated>;
+type GetTaskSummaryFn = (taskId: string) => Promise<TaskSummary>;
 
-function setup(createTask: CreateTaskFn = jest.fn<CreateTaskFn>()) {
+function setup(
+  createTask: CreateTaskFn = jest.fn<CreateTaskFn>(),
+  getTaskSummary: GetTaskSummaryFn = jest.fn<GetTaskSummaryFn>(async (taskId) => ({
+    task_id: taskId,
+    status: "completed",
+    stage: "done",
+    route: "accept",
+    route_reason: null,
+    error_message: null,
+    has_result: true,
+    has_trace: true,
+    needs_review: false
+  }))
+) {
   const onCreated = jest.fn();
   render(
     <UploadWorkbench
       capabilities={capabilities}
       createTask={createTask}
+      getTaskSummary={getTaskSummary}
       onCreated={onCreated}
     />
   );
-  return { createTask: createTask as jest.MockedFunction<CreateTaskFn>, onCreated };
+  return {
+    createTask: createTask as jest.MockedFunction<CreateTaskFn>,
+    getTaskSummary: getTaskSummary as jest.MockedFunction<GetTaskSummaryFn>,
+    onCreated
+  };
 }
 
-it("默认 task_spec 使用 scripts 里的文明寝室模板", () => {
+it("默认 task_spec 不预置字段", () => {
   setup();
 
   const taskSpec = JSON.parse((screen.getByLabelText("task_spec JSON") as HTMLTextAreaElement).value);
-  expect(taskSpec).toMatchObject({
-    task_name: "civilized_dormitory",
-    fields: [
-      {
-        field_name: "document_title",
-        display_name: "文档标题",
-        type: "string",
-        required: true
-      },
-      {
-        field_name: "building_name",
-        display_name: "楼栋",
-        type: "string",
-        required: true
-      },
-      {
-        field_name: "civilized_dormitory_rooms",
-        display_name: "文明寝室房间号",
-        type: "string",
-        required: true,
-        cross_field_hints: [
-          "只抽取表格里“模范/文明”列明确标注为“文明寝室”的房间号。",
-          "多个房间号请按出现顺序输出为中文逗号分隔字符串，例如 212、214、302。"
-        ]
-      },
-      {
-        field_name: "civilized_dormitory_count",
-        display_name: "文明寝室数量",
-        type: "string",
-        required: true,
-        cross_field_hints: ["数量应与文明寝室房间号列表对应。"]
-      }
-    ]
+  expect(taskSpec).toEqual({
+    task_name: "",
+    fields: []
   });
+});
+
+it("默认 task_type 为空且不展示内置类型提示", () => {
+  setup();
+
+  const taskType = screen.getByLabelText("task_type");
+  expect(taskType).toHaveValue("");
+  expect(taskType).not.toHaveAttribute("placeholder");
 });
 
 it("非法 task_spec 会阻止提交并提示 JSON object 错误", async () => {
@@ -80,6 +77,7 @@ it("非法 task_spec 会阻止提交并提示 JSON object 错误", async () => {
     screen.getByLabelText("上传文件（可多选）"),
     new File(["%PDF-1.4 fake"], "sample.pdf", { type: "application/pdf" })
   );
+  await user.type(screen.getByLabelText("task_type"), "paper");
   await user.clear(screen.getByLabelText("task_spec JSON"));
   fireEvent.change(screen.getByLabelText("task_spec JSON"), {
     target: { value: "{bad json" }
@@ -94,8 +92,9 @@ it("合法 PDF/DOCX 和 JSON 会构造 backend 需要的 FormData", async () => 
   const user = userEvent.setup();
   const created: TaskCreated = {
     task_id: "task-001",
-    status: "waiting_review",
-    stage: "review"
+    status: "pending",
+    stage: "uploaded",
+    error_message: null
   };
   const createTask = jest.fn(async () => created);
   const { onCreated } = setup(createTask);
@@ -110,6 +109,26 @@ it("合法 PDF/DOCX 和 JSON 会构造 backend 需要的 FormData", async () => 
   await user.upload(screen.getByLabelText("上传文件（可多选）"), files);
   await user.clear(screen.getByLabelText("task_type"));
   await user.type(screen.getByLabelText("task_type"), "civilized_dormitory");
+  const taskSpec = {
+    task_name: "civilized_dormitory",
+    fields: [
+      {
+        field_name: "civilized_dormitory_rooms",
+        display_name: "文明寝室房间号",
+        type: "string",
+        required: true
+      },
+      {
+        field_name: "civilized_dormitory_count",
+        display_name: "文明寝室数量",
+        type: "string",
+        required: true
+      }
+    ]
+  };
+  fireEvent.change(screen.getByLabelText("task_spec JSON"), {
+    target: { value: JSON.stringify(taskSpec) }
+  });
   await user.clear(screen.getByLabelText("metadata JSON"));
   fireEvent.change(screen.getByLabelText("metadata JSON"), {
     target: { value: "{\"source\":\"demo\"}" }
@@ -119,18 +138,144 @@ it("合法 PDF/DOCX 和 JSON 会构造 backend 需要的 FormData", async () => 
   await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
   const formData = createTask.mock.calls[0][0];
   expect(formData.get("task_type")).toBe("civilized_dormitory");
-  expect(JSON.parse(String(formData.get("task_spec")))).toMatchObject({
-    task_name: "civilized_dormitory",
-    fields: expect.arrayContaining([
-      expect.objectContaining({ field_name: "civilized_dormitory_rooms" }),
-      expect.objectContaining({ field_name: "civilized_dormitory_count" })
-    ])
-  });
+  expect(JSON.parse(String(formData.get("task_spec")))).toEqual(taskSpec);
   expect(JSON.parse(String(formData.get("metadata")))).toEqual({ source: "demo" });
   expect(formData.getAll("files")).toHaveLength(2);
   expect((formData.getAll("files")[0] as File).name).toBe("sample.pdf");
   expect((formData.getAll("files")[1] as File).name).toBe("supplement.docx");
   await waitFor(() => expect(onCreated).toHaveBeenCalledWith(created));
+});
+
+it("创建任务后右侧列表先显示处理中，轮询完成后显示处理结果", async () => {
+  const user = userEvent.setup();
+  window.localStorage.clear();
+  const created: TaskCreated = {
+    task_id: "task-queue",
+    status: "pending",
+    stage: "uploaded",
+    error_message: null
+  };
+  let resolveSummary: (value: TaskSummary) => void = () => {};
+  const createTask = jest.fn(async () => created);
+  const getTaskSummary = jest.fn(
+    () =>
+      new Promise<TaskSummary>((resolve) => {
+        resolveSummary = resolve;
+      })
+  );
+  setup(createTask, getTaskSummary);
+
+  await user.upload(
+    screen.getByLabelText("上传文件（可多选）"),
+    new File(["%PDF-1.4 fake"], "sample.pdf", { type: "application/pdf" })
+  );
+  await user.clear(screen.getByLabelText("task_type"));
+  await user.type(screen.getByLabelText("task_type"), "paper");
+  fireEvent.change(screen.getByLabelText("task_spec JSON"), {
+    target: {
+      value: JSON.stringify({
+        task_name: "paper",
+        fields: [
+          {
+            field_name: "paper_titles",
+            display_name: "论文名称",
+            type: "string",
+            required: true
+          }
+        ]
+      })
+    }
+  });
+  await user.click(screen.getByRole("button", { name: "创建任务" }));
+
+  expect(await screen.findByText("task-queue")).toBeInTheDocument();
+  expect(screen.getByText("处理中")).toBeInTheDocument();
+  await waitFor(() => expect(getTaskSummary).toHaveBeenCalledWith("task-queue"));
+
+  resolveSummary({
+    task_id: "task-queue",
+    status: "completed",
+    stage: "done",
+    route: "accept",
+    route_reason: null,
+    error_message: null,
+    has_result: true,
+    has_trace: true,
+    needs_review: false
+  });
+
+  expect(await screen.findByText("处理结果")).toBeInTheDocument();
+  expect(screen.getByText("accept")).toBeInTheDocument();
+});
+
+it("轮询旧任务完成时不会把它移动到最新任务上方", async () => {
+  const user = userEvent.setup();
+  window.localStorage.clear();
+  const createdTasks: TaskCreated[] = [
+    {
+      task_id: "task-old",
+      status: "pending",
+      stage: "uploaded",
+      error_message: null
+    },
+    {
+      task_id: "task-new",
+      status: "pending",
+      stage: "uploaded",
+      error_message: null
+    }
+  ];
+  const summaryResolvers: Record<string, (value: TaskSummary) => void> = {};
+  const createTask = jest.fn(async () => createdTasks.shift() as TaskCreated);
+  const getTaskSummary = jest.fn(
+    (taskId: string) =>
+      new Promise<TaskSummary>((resolve) => {
+        summaryResolvers[taskId] = resolve;
+      })
+  );
+  setup(createTask, getTaskSummary);
+
+  await user.upload(
+    screen.getByLabelText("上传文件（可多选）"),
+    new File(["%PDF-1.4 fake"], "sample.pdf", { type: "application/pdf" })
+  );
+  await user.type(screen.getByLabelText("task_type"), "paper");
+  fireEvent.change(screen.getByLabelText("task_spec JSON"), {
+    target: {
+      value: JSON.stringify({
+        task_name: "paper",
+        fields: [
+          {
+            field_name: "paper_titles",
+            display_name: "论文名称",
+            type: "string",
+            required: true
+          }
+        ]
+      })
+    }
+  });
+
+  await user.click(screen.getByRole("button", { name: "创建任务" }));
+  await user.click(screen.getByRole("button", { name: "创建任务" }));
+
+  await screen.findByText("task-new");
+  expect(getRecentTaskIds()).toEqual(["task-new", "task-old"]);
+
+  summaryResolvers["task-old"]({
+    task_id: "task-old",
+    status: "completed",
+    stage: "done",
+    route: "accept",
+    route_reason: null,
+    error_message: null,
+    has_result: true,
+    has_trace: true,
+    needs_review: false
+  });
+
+  expect(await screen.findByText("处理结果")).toBeInTheDocument();
+  await waitFor(() => expect(getRecentTaskIds()).toEqual(["task-new", "task-old"]));
 });
 
 it("能力边界会显示支持文件类型和 external task_spec 约束", () => {
@@ -142,3 +287,10 @@ it("能力边界会显示支持文件类型和 external task_spec 约束", () =>
   expect(screen.getByText("multipart 字段：files（可重复）")).toBeInTheDocument();
   expect(screen.getByText("旧版 file 字段仅后端兼容，前端固定提交 files。")).toBeInTheDocument();
 });
+
+function getRecentTaskIds(): string[] {
+  return screen
+    .getAllByRole("link")
+    .map((link) => link.textContent ?? "")
+    .filter((text) => text.startsWith("task-"));
+}

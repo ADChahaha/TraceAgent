@@ -411,6 +411,39 @@ it("waiting_review 任务会展示证据并提交 revise_and_approve 后刷新�
   expect(recentTasks[0].created_at).toBe("2026-04-29T08:00:00Z");
 });
 
+it("failed 任务会展示 backend 返回的失败原因", async () => {
+  const failedSummary: TaskSummary = {
+    task_id: "task-failed",
+    status: "failed",
+    stage: "done",
+    route: null,
+    route_reason: null,
+    has_result: false,
+    has_trace: true,
+    needs_review: false,
+    error_message: "resolution 执行失败: lookup_blocks action exceeded limit"
+  };
+  const loadTaskDetail = jest.fn(async (): Promise<TaskDetailData> => ({
+    summary: failedSummary,
+    result: null,
+    trace: null,
+    review: null,
+    audit: null
+  }));
+
+  render(
+    <TaskDetail
+      taskId="task-failed"
+      initialSummary={failedSummary}
+      loadTaskDetail={loadTaskDetail}
+    />
+  );
+
+  expect(await screen.findByText("failed")).toBeInTheDocument();
+  expect(screen.getByText("任务失败")).toBeInTheDocument();
+  expect(screen.getByText("resolution 执行失败: lookup_blocks action exceeded limit")).toBeInTheDocument();
+});
+
 it("审计记录会展示字段提交对应的 agent 决策过程", async () => {
   const user = userEvent.setup();
   const completedSummary: TaskSummary = {

@@ -69,6 +69,7 @@ class TaskService:
         task_type: str,
         task_spec: dict[str, Any] | None,
         metadata: dict[str, Any] | None,
+        run_pipeline: bool = True,
     ) -> dict[str, Any]:
         upload_files = self._resolve_upload_files(
             files=files,
@@ -82,7 +83,7 @@ class TaskService:
         metadata = metadata or {}
         now = utc_now()
         task_id = f"task_{uuid.uuid4().hex}"
-        tasks_crud.create_task(
+        task = tasks_crud.create_task(
             self.connection,
             task_id=task_id,
             task_type=task_type,
@@ -90,12 +91,34 @@ class TaskService:
             now=now,
         )
 
+        if not run_pipeline:
+            return self.serialize_created_task(task)
+
+        return self.run_created_task(
+            task_id=task_id,
+            upload_files=upload_files,
+            task_type=task_type,
+            task_spec=resolved_task_spec,
+            metadata=metadata,
+            raise_on_error=True,
+        )
+
+    def run_created_task(
+        self,
+        *,
+        task_id: str,
+        upload_files: list[UploadedFilePayload],
+        task_type: str,
+        task_spec: dict[str, Any],
+        metadata: dict[str, Any],
+        raise_on_error: bool = False,
+    ) -> dict[str, Any]:
         try:
             task = self._run_agent_pipeline(
                 task_id=task_id,
                 upload_files=upload_files,
                 task_type=task_type,
-                task_spec=resolved_task_spec,
+                task_spec=task_spec,
                 metadata=metadata,
             )
         except Exception as exc:
@@ -109,9 +132,11 @@ class TaskService:
                 completed_at=failed_at,
                 now=failed_at,
             )
-            if isinstance(exc, (ValidationError, AgentServiceError)):
-                raise
-            raise AgentServiceError(str(exc)) from exc
+            if raise_on_error:
+                if isinstance(exc, (ValidationError, AgentServiceError)):
+                    raise
+                raise AgentServiceError(str(exc)) from exc
+            task = self.get_task_or_raise(task_id)
 
         return self.serialize_created_task(task)
 
@@ -127,6 +152,7 @@ class TaskService:
             "stage": task["stage"],
             "route": task["route"],
             "route_reason": task["route_reason"],
+            "error_message": task["error_message"],
             "has_result": bool(fields),
             "has_trace": bool(traces),
             "needs_review": needs_review,
@@ -220,6 +246,7 @@ class TaskService:
             "task_id": task["id"],
             "status": task["status"],
             "stage": task["stage"],
+            "error_message": task["error_message"],
         }
 
     def _save_agent_stage_run(

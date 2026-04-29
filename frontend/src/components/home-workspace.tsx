@@ -1,16 +1,14 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
 
 import { getCapabilities } from "@/lib/api";
-import type { Capabilities, TaskCreated } from "@/lib/types";
+import type { Capabilities } from "@/lib/types";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { UploadWorkbench } from "@/components/upload-workbench";
 
 export function HomeWorkspace() {
-  const router = useRouter();
   const [capabilities, setCapabilities] = React.useState<Capabilities | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -32,10 +30,6 @@ export function HomeWorkspace() {
     };
   }, []);
 
-  function handleCreated(task: TaskCreated) {
-    router.push(`/tasks/${task.task_id}`);
-  }
-
   if (error) {
     return (
       <Alert variant="destructive">
@@ -55,5 +49,5 @@ export function HomeWorkspace() {
     );
   }
 
-  return <UploadWorkbench capabilities={capabilities} onCreated={handleCreated} />;
+  return <UploadWorkbench capabilities={capabilities} />;
 }

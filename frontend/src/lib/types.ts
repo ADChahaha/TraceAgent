@@ -36,6 +36,7 @@ export interface TaskCreated {
   task_id: string;
   status: TaskStatus;
   stage: TaskStage;
+  error_message?: string | null;
 }
 
 export interface TaskSummary extends TaskCreated {

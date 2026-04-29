@@ -159,6 +159,13 @@ export function TaskDetail({
         </Alert>
       ) : null}
 
+      {summary?.status === "failed" && summary.error_message ? (
+        <Alert variant="destructive">
+          <AlertTitle>任务失败</AlertTitle>
+          <AlertDescription>{summary.error_message}</AlertDescription>
+        </Alert>
+      ) : null}
+
       {isLoading && !detail ? (
         <div className="rounded-md border border-dashed p-8 text-sm text-muted-foreground">正在加载任务详情...</div>
       ) : null}

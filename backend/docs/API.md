@@ -9,7 +9,8 @@
 ```text
 前端或脚本上传一个或多个 PDF / DOCX 和任务参数
   -> POST /tasks 创建任务
-  -> 后端逐个调用 document_processor，把上传文件转成 markdown + blocks
+  -> POST /tasks 立即返回 task_id 和 pending/uploaded
+  -> 后端在后台逐个调用 document_processor，把上传文件转成 markdown + blocks
   -> 后端为每个文件保存 markdown / blocks，不保存用户上传的原始文件
   -> 后端合并多个文件的 markdown、md_list 和 blocks
   -> 后端调用 file_extraction_agent 执行字段抽取
@@ -113,8 +114,9 @@ curl -X POST "http://localhost:8000/tasks" \
 ```json
 {
   "task_id": "task-001",
-  "status": "completed",
-  "stage": "done"
+  "status": "pending",
+  "stage": "uploaded",
+  "error_message": null
 }
 ```
 
@@ -124,24 +126,30 @@ curl -X POST "http://localhost:8000/tasks" \
 上传一个或多个 files、task_type、task_spec 和 metadata
   -> 校验至少存在一个文件，逐个从 filename 推断 pdf/docx
   -> 校验 task_spec 必须是 JSON object
+  -> 在当前请求中读取每个上传文件 bytes，避免响应后 UploadFile 被关闭
   -> 创建 task 记录，状态设为 pending / uploaded
-  -> 在当前请求中读取每个上传文件 bytes
-  -> 对每个文件调用 document_processor 生成 markdown、md_list 和 blocks
+  -> 响应 task_id、pending/uploaded 和 error_message=null
+  -> 后台任务对每个文件调用 document_processor 生成 markdown、md_list 和 blocks
   -> 每个文件生成一个 document_id 并保存标准化结果，不保存原始文件
   -> 合并所有文件的 markdown、md_list 和 blocks
   -> 调用 file_extraction_agent，并在 metadata 中传入 document_ids
   -> 保存 result 和 trace
   -> 组装 field_outputs + refs_with_text 并调用 route_policy_agent
   -> 按 route 写入 final result、review 状态或 reject / failed 状态
-  -> 返回 task_id 和当前 status/stage
+  -> 如果后台流程抛错，任务会变成 failed/done，并把失败原因写入 error_message
 ```
 
-第一版为同步处理模型，`POST /tasks` 会在同一个请求内完成 document processing、extraction 和 route policy。响应中的 `status/stage` 可能是：
+第一版为请求内创建、后台处理模型。`POST /tasks` 不等待 OCR、字段抽取和 route policy 完成，响应中的 `status/stage` 固定表示任务刚入队：
 
+- `pending / uploaded`：任务已创建，后台处理即将开始或正在排队。
+
+调用方应使用 `GET /tasks/:task_id` 轮询最终状态：
+
+- `processing / document_processing|extraction|route_policy`：后台处理中。
 - `completed / done`：字段已自动通过并写入 audit。
 - `waiting_review / review`：至少一个字段需要人工复核。
 - `rejected / done`：route policy 拒绝任务。
-- `failed / done`：agent 调用或后端流程失败。
+- `failed / done`：agent 调用或后端流程失败，`error_message` 会返回失败原因。
 
 ## `GET /tasks/:task_id`
 
@@ -157,6 +165,7 @@ curl -X POST "http://localhost:8000/tasks" \
   "stage": "review",
   "route": "review",
   "route_reason": "关键字段经过补查后定案，需要人工确认",
+  "error_message": null,
   "has_result": true,
   "has_trace": true,
   "needs_review": true,
@@ -647,6 +656,7 @@ task_id
 - 文件类型不支持、`task_spec` 缺失或 JSON 非法：`422`
 - `task_id` 不存在：`404`
 - 当前任务状态不允许执行该操作：`409`
-- agent HTTP 调用或后端流程异常：`502`，如果任务已经创建则同步更新为 `failed / done`
+- agent HTTP 调用或后端流程异常：`502`；如果任务已经创建，后台流程会把任务更新为 `failed / done`
 
 如果 agent 本身返回 `ExtractionResult.status="failed"` 或 route policy 返回失败状态，后端保存失败结果并让任务进入 `failed / done`。
+`POST /tasks` 只返回入队状态；失败原因以 `GET /tasks/:task_id` summary 中的 `error_message` 为准。

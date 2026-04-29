@@ -187,6 +187,70 @@ class FakeAgentClient:
         }
 
 
+class FakeFailedExtractionAgentClient(FakeAgentClient):
+    def extract_fields(
+        self,
+        *,
+        blocks: list[dict[str, Any]],
+        markdown: str,
+        md_list: list[str],
+        task_spec: dict[str, Any],
+        metadata: dict[str, Any],
+        run_options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self.extraction_calls.append(
+            {
+                "blocks": blocks,
+                "markdown": markdown,
+                "md_list": md_list,
+                "task_spec": task_spec,
+                "metadata": metadata,
+                "run_options": run_options,
+            }
+        )
+        return {
+            "status": "failed",
+            "failure_reason": "resolution 执行失败: lookup_blocks action exceeded limit",
+            "result": {
+                "fields": [
+                    {
+                        "field_name": "room_numbers",
+                        "status": "failed",
+                        "value": None,
+                    }
+                ]
+            },
+            "trace": {
+                "fields": [
+                    {
+                        "field_name": "room_numbers",
+                        "status": "failed",
+                        "evidence": {
+                            "block_ids": [blocks[0]["block_id"]],
+                            "texts": ["1-101、1-102 被列为文明寝室"],
+                            "refs": [],
+                            "status": "partial",
+                            "notes": ["resolution 失败，沿用 broad evidence"],
+                        },
+                        "related_fields": [],
+                        "actions": [
+                            {
+                                "action_type": "model_call_error",
+                                "message": "resolution 执行失败: lookup_blocks action exceeded limit",
+                                "refs": [],
+                                "used_in_final_decision": False,
+                            }
+                        ],
+                        "reason": None,
+                        "failure_reason": "resolution 执行失败: lookup_blocks action exceeded limit",
+                    }
+                ],
+                "warnings": [],
+                "metadata": {"source": "fake-agent"},
+            },
+        }
+
+
 def build_app(tmp_path: Path, route: str = "accept"):
     fake_agent = FakeAgentClient(route=route)
     app = create_app(
@@ -194,6 +258,62 @@ def build_app(tmp_path: Path, route: str = "accept"):
         agent_client=fake_agent,
     )
     return app, fake_agent
+
+
+def test_failed_task_summary_returns_error_message(tmp_path: Path):
+    fake_agent = FakeFailedExtractionAgentClient()
+    app = create_app(
+        settings=BackendSettings(database_path=tmp_path / "backend.sqlite3"),
+        agent_client=fake_agent,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/tasks",
+            data={
+                "task_type": "civilized_dormitory",
+                "task_spec": json.dumps(TASK_SPEC, ensure_ascii=False),
+            },
+            files={"file": ("sample.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        )
+
+        assert response.status_code == 200
+        created = response.json()
+        assert created["status"] == "pending"
+        assert created["stage"] == "uploaded"
+        assert created["error_message"] is None
+
+        summary_response = client.get(f"/tasks/{created['task_id']}")
+        assert summary_response.status_code == 200
+        summary = summary_response.json()
+        assert summary["status"] == "failed"
+        assert summary["stage"] == "done"
+        assert summary["error_message"] == "resolution 执行失败: lookup_blocks action exceeded limit"
+
+
+def test_create_task_returns_pending_before_background_pipeline_finishes(tmp_path: Path):
+    app, fake_agent = build_app(tmp_path, route="accept")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/tasks",
+            data={
+                "task_type": "civilized_dormitory",
+                "task_spec": json.dumps(TASK_SPEC, ensure_ascii=False),
+            },
+            files={"file": ("sample.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        )
+
+        assert response.status_code == 200
+        created = response.json()
+        assert created["status"] == "pending"
+        assert created["stage"] == "uploaded"
+        assert created["error_message"] is None
+
+        assert fake_agent.document_calls
+        summary_response = client.get(f"/tasks/{created['task_id']}")
+        assert summary_response.status_code == 200
+        assert summary_response.json()["status"] == "completed"
 
 
 def test_create_task_accept_route_commits_agent_fields(tmp_path: Path):
@@ -211,14 +331,17 @@ def test_create_task_accept_route_commits_agent_fields(tmp_path: Path):
 
         assert response.status_code == 200
         created = response.json()
-        assert created["status"] == "completed"
-        assert created["stage"] == "done"
+        assert created["status"] == "pending"
+        assert created["stage"] == "uploaded"
 
         task_id = created["task_id"]
         task_response = client.get(f"/tasks/{task_id}")
         assert task_response.status_code == 200
-        assert task_response.json()["needs_review"] is False
-        assert task_response.json()["route"] == "accept"
+        task_summary = task_response.json()
+        assert task_summary["status"] == "completed"
+        assert task_summary["stage"] == "done"
+        assert task_summary["needs_review"] is False
+        assert task_summary["route"] == "accept"
 
         result_response = client.get(f"/tasks/{task_id}/result")
         assert result_response.status_code == 200
@@ -275,7 +398,8 @@ def test_create_task_accepts_multiple_files_and_merges_document_blocks(tmp_path:
         )
 
         assert response.status_code == 200
-        assert response.json()["status"] == "completed"
+        assert response.json()["status"] == "pending"
+        assert response.json()["stage"] == "uploaded"
         assert [call["filename"] for call in fake_agent.document_calls] == [
             "sample.pdf",
             "supplement.docx",
@@ -431,9 +555,15 @@ def test_review_route_returns_handoff_and_accepts_revised_value(tmp_path: Path):
 
         assert response.status_code == 200
         created = response.json()
-        assert created["status"] == "waiting_review"
-        assert created["stage"] == "review"
+        assert created["status"] == "pending"
+        assert created["stage"] == "uploaded"
         task_id = created["task_id"]
+
+        task_response = client.get(f"/tasks/{task_id}")
+        assert task_response.status_code == 200
+        task_summary = task_response.json()
+        assert task_summary["status"] == "waiting_review"
+        assert task_summary["stage"] == "review"
 
         review_response = client.get(f"/tasks/{task_id}/review")
         assert review_response.status_code == 200

@@ -11,6 +11,8 @@
 ```text
 前端或脚本上传一个或多个 PDF / DOCX + task_type + task_spec
   -> backend 创建任务记录
+  -> POST /tasks 立即返回 task_id 和 pending/uploaded
+  -> backend 后台继续执行文档处理、字段抽取和 route policy
   -> backend 通过 HTTP 逐个调用 document_processor，把上传文件转成 markdown + blocks
   -> backend 为每个文件保存标准化文本结果，不保存原始文件
   -> backend 合并多个文件的 markdown、md_list 和 blocks
@@ -98,7 +100,9 @@ POST /tasks 上传一个或多个文件
   -> routes.tasks 接收 files/file、task_type、task_spec、metadata
   -> routes.tasks 在当前请求中读取每个上传文件 bytes
   -> task_service 校验至少一个文件、逐个校验文件类型和外部传入的 task_spec
-  -> SQLite 写入 tasks
+  -> SQLite 写入 tasks，状态为 pending / uploaded
+  -> POST /tasks 先返回 task_id/status/stage/error_message
+  -> FastAPI BackgroundTasks 调用 task_service.run_created_task(...)
   -> task_service 将任务置为 processing / document_processing
   -> agent_client 逐个用上传文件 bytes 通过 HTTP 调用 agent service 的文档处理接口
   -> SQLite 为每次 document_processor 调用写入 agent_stage_runs，不保存原始文件 bytes
@@ -119,10 +123,10 @@ POST /tasks 上传一个或多个文件
   -> GET /tasks/{task_id} 的 needs_review 只以当前任务 status 是否为 waiting_review 为准
   -> 如果 route=reject，将任务置为 rejected / done
   -> 如果 agent 或流程失败，将任务置为 failed / done 并保存 error_message
-  -> 返回 task_id 和当前 status/stage
+  -> GET /tasks/{task_id} 返回当前 status/stage/route/error_message，供前端轮询
 ```
 
-第一版是同步处理模型：`POST /tasks` 不只创建任务，也会在同一个 HTTP 请求内完成 document processing、extraction 和 route policy。因此响应可能直接返回 `completed/done`、`waiting_review/review`、`rejected/done` 或 `failed/done`。
+第一版任务执行模型是“请求内创建、后台处理”：`POST /tasks` 只保证任务已经入库并返回 `pending/uploaded`，耗时的 document processing、extraction 和 route policy 在响应发出后继续执行。调用方需要轮询 `GET /tasks/{task_id}` 获取 `completed/done`、`waiting_review/review`、`rejected/done` 或 `failed/done`；失败原因统一从 summary 的 `error_message` 读取。
 
 人工审核流程如下：
 
@@ -222,7 +226,8 @@ crud/audit.py
 
 ```text
 创建任务
-  -> 同时写 tasks 和 documents
+  -> 先写 tasks
+  -> 后台处理文件时再写 documents
   -> 每次 agent HTTP 调用写 agent_stage_runs
 
 保存 agent 输出
@@ -252,6 +257,8 @@ files/file + task_type + task_spec + metadata
   -> 逐个从 filename 推断 pdf/docx，否则抛出 ValidationError
   -> 如果未传 task_spec，抛出 ValidationError
   -> 创建 task_... 记录为 pending/uploaded
+  -> 如果调用方要求立即返回，create_task(run_pipeline=False) 直接序列化 task_id/status/stage/error_message
+  -> routes.tasks 把上传文件 bytes 和 task_spec 交给 BackgroundTasks，后台调用 run_created_task(...)
   -> 逐个调用 agent_client.process_document(file_bytes, filename, file_type)
   -> 每次 document_processor 调用保存 agent_stage_runs(request 摘要、完整 response、trace)
   -> 每个文件生成独立 document_id，并为返回 blocks 补 document_id 和 block_id
@@ -268,7 +275,7 @@ files/file + task_type + task_spec + metadata
   -> field_decisions、review handoff 和 audit 中的 agent_process 都复用同一套 process_steps 派生逻辑，并把 route_validation 与 agent 抽取结果分开展示
   -> accept 写 final_value/source 和 field_commits
   -> review 只自动提交 accept 字段，其余等待 review_service
-  -> reject/failed 写任务终态
+  -> reject/failed 写任务终态；后台异常会被捕获并写入 failed/done/error_message
 ```
 
 ### `services.agent_client`

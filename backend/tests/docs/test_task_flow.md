@@ -7,17 +7,19 @@
 ```text
 TestClient 上传 PDF / DOCX
   -> 请求表单显式传入 task_type 和 task_spec
-  -> backend 创建 SQLite 任务
-  -> fake agent 返回 document / extraction / route policy 结果
-  -> backend 保存 result、trace、route、review 和 audit
-  -> HTTP 接口返回任务状态、复核包、最终结果和审计记录
+  -> backend 创建 SQLite 任务并让 POST /tasks 先返回 pending/uploaded
+  -> 后台任务调用 fake agent 返回 document / extraction / route policy 结果
+  -> backend 保存 result、trace、route、review、audit 和失败原因
+  -> GET /tasks/{task_id} 返回最终任务状态、失败原因、复核包、最终结果和审计记录
 ```
 
 ## 测试函数
 
-- `test_create_task_accept_route_commits_agent_fields`：验证 `POST /tasks` 在 route 为 `accept` 时会同步完成任务，给标准化 block 补 `document_id/block_id`，把字段结果提交为 agent 来源，并在 audit 中记录证据、lookup 使用、规则使用和字段级 agent 决策过程。
-- `test_create_task_accepts_multiple_files_and_merges_document_blocks`：验证 `POST /tasks` 支持重复 `files` 上传多个 PDF/DOCX，backend 会逐个调用 document processor，合并 markdown、md_list 和 blocks 后再执行字段抽取，并把所有 `document_id` 传入抽取 metadata；同时验证 `GET /trace` 会返回 document processor、file extraction agent 和 route policy agent 三段执行过程，其中 extraction 字段决策必须包含 `process_steps`，按 `broad_extraction -> field_resolution -> final_result -> route_validation` 展示 broad 候选 block 正文、resolution/tool 动作、route 前的 agent 输出、route policy 验证结论和最终 route 原因，并额外返回按调用顺序保存的 `agent_trace` 原始请求摘要、完整 agent 响应和 trace payload。
-- `test_review_route_returns_handoff_and_accepts_revised_value`：验证 route 为 `review` 时任务进入 `waiting_review`，`GET /review` 返回证据、动作、route 原因和 agent 决策过程；字段过程会把 agent 抽取结果和 route validation 分开展示，提交 `revise_and_approve` 后任务 summary 必须变成 `completed/done` 且 `needs_review=false`，最终值改为人工来源并在审计记录中保留 agent 决策过程。
+- `test_failed_task_summary_returns_error_message`：验证 agent 抽取阶段返回 `failed` 时，`POST /tasks` 先返回 `pending/uploaded/error_message=null`，后台处理结束后 `GET /tasks/{task_id}` summary 会变成 `failed/done` 并带出 `error_message`，让前端能解释任务为什么失败。
+- `test_create_task_returns_pending_before_background_pipeline_finishes`：验证创建接口不等待耗时 pipeline，响应体先返回 `pending/uploaded`；TestClient 中后台任务执行完后，summary 能查询到最终 `completed` 状态。
+- `test_create_task_accept_route_commits_agent_fields`：验证 `POST /tasks` 在 route 为 `accept` 时先返回入队状态，后台 pipeline 会给标准化 block 补 `document_id/block_id`，把字段结果提交为 agent 来源，并在 audit 中记录证据、lookup 使用、规则使用和字段级 agent 决策过程。
+- `test_create_task_accepts_multiple_files_and_merges_document_blocks`：验证 `POST /tasks` 支持重复 `files` 上传多个 PDF/DOCX，并且先返回入队状态；后台会逐个调用 document processor，合并 markdown、md_list 和 blocks 后再执行字段抽取，并把所有 `document_id` 传入抽取 metadata；同时验证 `GET /trace` 会返回 document processor、file extraction agent 和 route policy agent 三段执行过程，其中 extraction 字段决策必须包含 `process_steps`，按 `broad_extraction -> field_resolution -> final_result -> route_validation` 展示 broad 候选 block 正文、resolution/tool 动作、route 前的 agent 输出、route policy 验证结论和最终 route 原因，并额外返回按调用顺序保存的 `agent_trace` 原始请求摘要、完整 agent 响应和 trace payload。
+- `test_review_route_returns_handoff_and_accepts_revised_value`：验证 route 为 `review` 时 `POST /tasks` 先返回入队状态，后台处理后任务进入 `waiting_review`，`GET /review` 返回证据、动作、route 原因和 agent 决策过程；字段过程会把 agent 抽取结果和 route validation 分开展示，提交 `revise_and_approve` 后任务 summary 必须变成 `completed/done` 且 `needs_review=false`，最终值改为人工来源并在审计记录中保留 agent 决策过程。
 - `test_agent_process_without_tool_actions_keeps_resolution_step_completed`：验证字段没有额外 tool/action 时，`field_resolution` 步骤不能被标成 `skipped`，而是保留为已完成，说明 resolution 直接把候选证据定案为字段输出，并返回该阶段产出的字段名和值；同时验证 broad 阶段会把候选 block 正文写入 `evidence.blocks`。
 - `test_create_task_rejects_unsupported_file_type`：验证上传非 PDF/DOCX 文件时返回 `422`，不会进入 agent 调用链路。
 - `test_capabilities_returns_supported_task_and_routes`：验证 `GET /capabilities` 返回文件类型、空任务类型列表、route 类型、review 决策、`external_task_spec` 和 `multiple_files` 能力开关。

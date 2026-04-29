@@ -4,10 +4,15 @@ import * as React from "react";
 import { AlertCircle, FileUp, History, Loader2, SendHorizonal } from "lucide-react";
 import { toast } from "sonner";
 
-import { createTask as defaultCreateTask } from "@/lib/api";
+import { createTask as defaultCreateTask, getTaskSummary as defaultGetTaskSummary } from "@/lib/api";
 import { parseJsonObject } from "@/lib/json";
-import { addRecentTask, getRecentTasks, type RecentTask } from "@/lib/task-store";
-import type { Capabilities, TaskCreated } from "@/lib/types";
+import {
+  addRecentTask,
+  getRecentTasks,
+  updateRecentTask,
+  type RecentTask
+} from "@/lib/task-store";
+import type { Capabilities, TaskCreated, TaskSummary } from "@/lib/types";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,56 +24,71 @@ import { Textarea } from "@/components/ui/textarea";
 export interface UploadWorkbenchProps {
   capabilities: Capabilities;
   createTask?: (formData: FormData) => Promise<TaskCreated>;
+  getTaskSummary?: (taskId: string) => Promise<TaskSummary>;
   onCreated?: (task: TaskCreated) => void;
 }
 
-const TASK_SPEC_TEMPLATE = {
-  task_name: "civilized_dormitory",
-  fields: [
-    {
-      field_name: "document_title",
-      display_name: "文档标题",
-      type: "string",
-      required: true
-    },
-    {
-      field_name: "building_name",
-      display_name: "楼栋",
-      type: "string",
-      required: true
-    },
-    {
-      field_name: "civilized_dormitory_rooms",
-      display_name: "文明寝室房间号",
-      type: "string",
-      required: true,
-      cross_field_hints: [
-        "只抽取表格里“模范/文明”列明确标注为“文明寝室”的房间号。",
-        "多个房间号请按出现顺序输出为中文逗号分隔字符串，例如 212、214、302。"
-      ]
-    },
-    {
-      field_name: "civilized_dormitory_count",
-      display_name: "文明寝室数量",
-      type: "string",
-      required: true,
-      cross_field_hints: ["数量应与文明寝室房间号列表对应。"]
-    }
-  ]
+const EMPTY_TASK_SPEC = {
+  task_name: "",
+  fields: []
 };
+
+const TERMINAL_STATUSES = new Set(["waiting_review", "completed", "rejected", "failed"]);
+const POLL_INTERVAL_MS = 1500;
+const MAX_POLL_ATTEMPTS = 120;
 
 export function UploadWorkbench({
   capabilities,
   createTask = defaultCreateTask,
+  getTaskSummary = defaultGetTaskSummary,
   onCreated
 }: UploadWorkbenchProps) {
-  const [taskType, setTaskType] = React.useState("civilized_dormitory");
-  const [taskSpec, setTaskSpec] = React.useState(JSON.stringify(TASK_SPEC_TEMPLATE, null, 2));
+  const [taskType, setTaskType] = React.useState("");
+  const [taskSpec, setTaskSpec] = React.useState(JSON.stringify(EMPTY_TASK_SPEC, null, 2));
   const [metadata, setMetadata] = React.useState("{}");
   const [files, setFiles] = React.useState<File[]>([]);
   const [error, setError] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [recentTasks, setRecentTasks] = React.useState<RecentTask[]>(() => getRecentTasks());
+  const pollTimeouts = React.useRef<ReturnType<typeof setTimeout>[]>([]);
+  const mounted = React.useRef(true);
+
+  React.useEffect(() => {
+    const trackedTimeouts = pollTimeouts.current;
+    return () => {
+      mounted.current = false;
+      for (const timeout of trackedTimeouts) {
+        clearTimeout(timeout);
+      }
+      trackedTimeouts.length = 0;
+    };
+  }, []);
+
+  const refreshTaskSummary = React.useCallback(
+    async (taskId: string) => {
+      for (let attempt = 0; attempt <= MAX_POLL_ATTEMPTS; attempt += 1) {
+        try {
+          const summary = await getTaskSummary(taskId);
+          if (!mounted.current) {
+            return;
+          }
+          setRecentTasks(updateRecentTask(summary));
+          if (isTaskTerminal(summary)) {
+            return;
+          }
+        } catch {
+          if (!mounted.current) {
+            return;
+          }
+        }
+
+        if (attempt < MAX_POLL_ATTEMPTS) {
+          await waitForPollInterval(pollTimeouts);
+        }
+      }
+    },
+    [getTaskSummary]
+  );
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -108,6 +128,7 @@ export function UploadWorkbench({
     try {
       const created = await createTask(formData);
       setRecentTasks(addRecentTask(created));
+      void refreshTaskSummary(created.task_id);
       toast.success("任务已创建", {
         description: `${created.task_id} / ${created.status}`
       });
@@ -131,7 +152,7 @@ export function UploadWorkbench({
           </div>
           <h1 className="text-3xl font-semibold tracking-normal text-foreground">上传工作台</h1>
           <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
-            上传一个或多个 PDF/DOCX，显式提交字段 schema，由 backend 同步完成抽取、路由、复核和审计链路。
+            上传一个或多个 PDF/DOCX，显式提交字段 schema；任务创建后立即入队，右侧列表会跟随处理进度更新。
           </p>
         </div>
 
@@ -189,7 +210,6 @@ export function UploadWorkbench({
                   id="task_type"
                   value={taskType}
                   onChange={(event) => setTaskType(event.target.value)}
-                  placeholder="civilized_dormitory"
                 />
               </div>
               <div className="space-y-2">
@@ -227,7 +247,7 @@ export function UploadWorkbench({
               创建任务
             </Button>
             <span className="text-xs text-muted-foreground">
-              POST /tasks 会同步返回 completed、waiting_review、rejected 或 failed。
+              POST /tasks 返回任务入队结果，处理状态通过右侧列表和任务详情刷新。
             </span>
           </div>
         </form>
@@ -248,10 +268,19 @@ export function UploadWorkbench({
                 <a className="font-medium text-foreground hover:text-primary" href={`/tasks/${task.task_id}`}>
                   {task.task_id}
                 </a>
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline">{task.status}</Badge>
-                  <span className="text-xs text-muted-foreground">{task.stage}</span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant={isTaskTerminal(task) ? "secondary" : "outline"}>
+                    {isTaskTerminal(task) ? "处理结果" : "处理中"}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground">
+                    {isTaskTerminal(task) ? getTaskResultLabel(task) : task.stage}
+                  </span>
                 </div>
+                {task.error_message ? (
+                  <p className="line-clamp-2 text-xs leading-5 text-destructive">
+                    失败原因：{task.error_message}
+                  </p>
+                ) : null}
               </li>
             ))}
           </ul>
@@ -259,4 +288,33 @@ export function UploadWorkbench({
       </aside>
     </div>
   );
+}
+
+function isTaskTerminal(task: Pick<RecentTask, "status"> | TaskSummary): boolean {
+  return TERMINAL_STATUSES.has(task.status);
+}
+
+function getTaskResultLabel(task: RecentTask): string {
+  if (task.route) {
+    return task.route;
+  }
+  if (task.status === "failed") {
+    return "failed";
+  }
+  return task.status;
+}
+
+function waitForPollInterval(
+  pollTimeouts: React.MutableRefObject<ReturnType<typeof setTimeout>[]>
+): Promise<void> {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      const index = pollTimeouts.current.indexOf(timeout);
+      if (index >= 0) {
+        pollTimeouts.current.splice(index, 1);
+      }
+      resolve();
+    }, POLL_INTERVAL_MS);
+    pollTimeouts.current.push(timeout);
+  });
 }

@@ -13,8 +13,10 @@
   -> UploadWorkbench 校验 task_type、task_spec JSON 和 metadata JSON
   -> createTask 组装 multipart FormData
   -> Next route handler /api/backend/* 代理请求到 backend
-  -> backend 同步创建任务并返回 task_id/status/stage
-  -> 前端保存最近任务到 localStorage 并跳转 /tasks/{task_id}
+  -> backend 创建任务后立即返回 task_id/pending/uploaded
+  -> 前端把任务写入右侧最近任务列表并显示处理中
+  -> UploadWorkbench 轮询 getTaskSummary(task_id)，终态后把最近任务更新为处理结果
+  -> 用户点击最近任务进入 /tasks/{task_id}
   -> TaskDetail 读取 summary/result/trace/review/audit
   -> trace.steps 展示 document_processor、file_extraction_agent、route_policy_agent 的执行过程
   -> trace.agent_trace 展示 backend 持久化的每次 agent 调用 request/response/trace 摘要
@@ -79,15 +81,21 @@ frontend/
 ```text
 用户在 / 看到多文件上传说明和 multipart 字段契约
   -> 选择一个或多个文件、填写 task_type、task_spec JSON、metadata JSON
-  -> task_spec JSON 默认填入 agent/scripts/run_civilized_dormitory_extraction.py 中的文明寝室四字段模板
+  -> task_type 输入框默认值和内置类型提示都为空，由用户自己决定任务类型
+  -> task_spec JSON 默认只有空 task_name 和空 fields，不预置任何业务字段
   -> UploadWorkbench 检查 files 至少存在一个、task_type 非空
   -> parseJsonObject(task_spec, "task_spec") 校验必须是 JSON object
   -> parseJsonObject(metadata || "{}", "metadata") 校验可选 metadata
   -> FormData 以重复 files 字段写入每个文件，再写入 task_type、task_spec，metadata 非空时写入 metadata
   -> createTask POST /api/backend/tasks
-  -> backend 返回 task_id/status/stage
-  -> addRecentTask 写 localStorage，失败时不阻断任务创建
-  -> onCreated 跳转 /tasks/{task_id}
+  -> backend 返回 task_id、pending/uploaded、error_message=null
+  -> addRecentTask 写 localStorage，把新创建任务插到右侧最近任务顶部并显示“处理中”
+  -> 不跳转页面，避免用户误以为上传表单卡住
+  -> getTaskSummary(task_id) 轮询 summary
+  -> pending/processing 继续显示“处理中”和当前 stage
+  -> waiting_review/completed/rejected/failed 显示“处理结果”、route 或失败状态
+  -> updateRecentTask 只更新原位置的状态，不因为旧任务完成就把它移动到新任务上方
+  -> failed 额外显示 error_message，点击 task_id 可进入详情页看完整原因
 ```
 
 代理转发流程：
@@ -110,6 +118,7 @@ frontend/
   -> 先 GET /tasks/{task_id} 读取 summary
   -> 根据 summary.has_result/has_trace/status 决定是否读取 result、trace、review
   -> 非 failed 状态尝试读取 audit，404/409 返回 null
+  -> 如果 summary.status=failed 且带有 error_message，在详情页顶部展示失败原因
   -> 页面用 Tabs 展示 result、review、trace、audit
   -> trace tab 先由 AgentExecutionSteps 渲染 trace.steps，按调用顺序展示 agent 名称、阶段、状态、时间、文件摘要、file_extraction_agent 字段决策过程和 route 统计
   -> 字段决策过程优先展示 backend 返回的 agent_process.process_steps，按 broad_extraction、field_resolution/tool、final_result、route_validation 说明候选 block 正文、route 前 resolution 字段输出、工具动作、route 前 agent 结果和 route policy 验证结论

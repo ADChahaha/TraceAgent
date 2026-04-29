@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, Request, UploadFile
 
 from backend.routes.errors import raise_http_error
 from backend.services.errors import BackendServiceError, ValidationError
@@ -14,6 +14,7 @@ router = APIRouter(tags=["tasks"])
 @router.post("/tasks")
 async def create_task(
     request: Request,
+    background_tasks: BackgroundTasks,
     file: UploadFile | None = File(default=None),
     files: list[UploadFile] | None = File(default=None),
     task_type: str = Form(...),
@@ -23,19 +24,32 @@ async def create_task(
     service = request.app.state.task_service
     try:
         upload_files = _collect_upload_files(file=file, files=files)
-        return service.create_task(
-            files=[
-                service.upload_file_payload(
-                    file_bytes=await upload_file.read(),
-                    filename=upload_file.filename or "",
-                    content_type=upload_file.content_type,
-                )
-                for upload_file in upload_files
-            ],
+        upload_payloads = [
+            service.upload_file_payload(
+                file_bytes=await upload_file.read(),
+                filename=upload_file.filename or "",
+                content_type=upload_file.content_type,
+            )
+            for upload_file in upload_files
+        ]
+        parsed_task_spec = _parse_required_json_form("task_spec", task_spec)
+        parsed_metadata = _parse_json_form("metadata", metadata) or {}
+        created = service.create_task(
+            files=upload_payloads,
             task_type=task_type,
-            task_spec=_parse_required_json_form("task_spec", task_spec),
-            metadata=_parse_json_form("metadata", metadata) or {},
+            task_spec=parsed_task_spec,
+            metadata=parsed_metadata,
+            run_pipeline=False,
         )
+        background_tasks.add_task(
+            service.run_created_task,
+            task_id=created["task_id"],
+            upload_files=upload_payloads,
+            task_type=task_type,
+            task_spec=parsed_task_spec,
+            metadata=parsed_metadata,
+        )
+        return created
     except BackendServiceError as exc:
         raise_http_error(exc)
 

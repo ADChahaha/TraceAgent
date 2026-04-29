@@ -1,6 +1,22 @@
 # Backend Devlog
 
-last updated: 2026-04-29 20:32:22
+last updated: 2026-04-29 22:52:10
+
+## 2026-04-29 22:52:10
+
+### 已完成工作
+
+- 将 `POST /tasks` 调整为创建任务后立即返回 `pending / uploaded`，后台继续执行 document processing、field extraction 和 route policy。
+- 后台 pipeline 失败时会把任务写成 `failed / done`，并通过 `GET /tasks/{task_id}` summary 的 `error_message` 暴露失败原因。
+- 前端上传工作台不再预置 `task_type` 或业务字段；`task_spec` 默认只有空 `task_name` 和空 `fields`。
+- 任务创建后右侧最近任务立即新增“处理中”记录，最新创建的任务固定显示在最上方；后续轮询只更新原位置的状态，完成后显示“处理结果”和 route / 失败状态。
+- 同步更新 `backend/docs/API.md`、`backend/docs/DESIGN.md`、`frontend/docs/DESIGN.md` 和对应测试说明文档。
+
+### 验证
+
+- `PYTHONPATH=. pytest backend/tests -q`
+- `pnpm test`
+- `pnpm lint`
 
 ## 2026-04-29 20:32:22
 
