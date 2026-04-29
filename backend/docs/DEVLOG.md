@@ -1,6 +1,32 @@
 # Backend Devlog
 
-last updated: 2026-04-28 16:09:24
+last updated: 2026-04-29 18:06:03
+
+## 2026-04-29 18:06:03
+
+### 已完成工作
+
+- 新增 `agent_stage_runs`，按顺序保存 `document_processor`、`file_extraction_agent`、`route_policy_agent` 的请求摘要、完整响应和 trace payload，并通过 `GET /tasks/{task_id}/trace.agent_trace` 返回给前端。
+- 扩展 trace / review / audit 响应中的 `agent_process`，让前端能展示 file extraction 字段决策过程、证据、跨字段参考、global lookup 和 validation action。
+- 新增 `frontend` Next.js + Tailwind + shadcn/ui 工作台，支持多文件上传、外部 `task_spec`、Markdown 证据渲染、人工复核、trace 和 audit 展示。
+- 修复 review 后状态展示：任务完成后 `GET /tasks/{task_id}` 返回 `completed / done / needs_review=false`，前端刷新详情时同步更新最近任务缓存。
+
+### 当前进展
+
+- 已分开提交 backend 与 frontend 改动：`8375837 feat(backend): persist agent trace process`、`64a3dba feat(frontend): add Next.js workbench`。
+- 当前本地服务使用 frontend `3000`、agent service `8002`、backend `8003`；前端代理已连到 backend。
+
+### 遇到的问题
+
+- 历史任务在新增 `agent_stage_runs` 之前创建，因此旧任务的 `agent_trace` 为空；新任务才会持久化完整 agent 调用记录。
+- 复核完成后历史 route 仍可能是 `review`，所以 summary 的 `needs_review` 不能再从历史 `field_routes.needs_review` 推断，已改为只看当前任务状态。
+
+### 验证
+
+- `PYTHONPATH=. pytest backend/tests -q`
+- `pnpm test`
+- `pnpm lint`
+- `pnpm build`
 
 ## 2026-04-28 16:09:24
 
