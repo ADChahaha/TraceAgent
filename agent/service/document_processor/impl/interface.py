@@ -109,7 +109,11 @@ def _resolve_pdf_processor_type() -> type[BaseDocumentProcessor]:
         from service.document_processor.impl.pdf.paddle_processor import PdfPaddleProcessor
 
         return PdfPaddleProcessor
+    if engine in {"marker", "marker-pdf", "pdf-marker"}:
+        from service.document_processor.impl.pdf.marker_processor import PdfMarkerProcessor
+
+        return PdfMarkerProcessor
     raise ValueError(
         "unsupported DOCUMENT_PROCESSOR_PDF_ENGINE: "
-        f"{engine!r}; expected one of docling, rapidocr, pdf-paddle"
+        f"{engine!r}; expected one of docling, rapidocr, pdf-paddle, pdf-marker"
     )

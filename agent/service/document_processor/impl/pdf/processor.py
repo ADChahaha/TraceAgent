@@ -5,6 +5,7 @@
 ```text
 调用方把 pdf file_obj 交给 `PdfProcessor.process(...)`
   -> 基类先校验 file_obj 至少提供可调用的 read()
+  -> 初始化时按环境变量组装 docling/RapidOCR 运行参数和模型缓存目录
   -> `PdfProcessor` 读取 PDF 二进制，并从 filename/name 推出输出文件名，没有就回退成 `document.pdf`
   -> 把二进制包装成 `DocumentStream(name, BytesIO(...))`
   -> 调用 `DocumentConverter.convert(...)` 走 docling 的唯一解析链路
@@ -32,6 +33,8 @@ InputFormat = None
 PdfFormatOption = None
 PdfPipelineOptions = None
 RapidOcrOptions = None
+AcceleratorOptions = None
+TableStructureOptions = None
 
 
 class PdfProcessor(BaseDocumentProcessor):
@@ -47,25 +50,18 @@ class PdfProcessor(BaseDocumentProcessor):
             pdf_format_option_cls,
             pdf_pipeline_options_cls,
             rapid_ocr_options_cls,
+            accelerator_options_cls,
+            table_structure_options_cls,
         ) = _load_docling_runtime()
         self._document_stream_cls = document_stream_cls
         self._converter = document_converter_cls(
             format_options={
                 input_format_enum.PDF: pdf_format_option_cls(
-                    pipeline_options=pdf_pipeline_options_cls(
-                        do_table_structure=True,
-                        ocr_options=rapid_ocr_options_cls(
-                            backend="torch",
-                            lang=["chinese", "english"],
-                            rec_keys_path=str(
-                                _package_models_root() / "rapidocr" / "ppocr_keys_v1.txt"
-                            ),
-                            rapidocr_params={
-                                "Global.model_root_dir": (
-                                    _package_models_root() / "rapidocr"
-                                )
-                            },
-                        ),
+                    pipeline_options=_build_pdf_pipeline_options(
+                        pdf_pipeline_options_cls,
+                        rapid_ocr_options_cls,
+                        accelerator_options_cls,
+                        table_structure_options_cls,
                     )
                 )
             }
@@ -191,7 +187,7 @@ class PdfProcessor(BaseDocumentProcessor):
 
 
 def _load_docling_runtime():
-    global DocumentConverter, DocumentStream, InputFormat, PdfFormatOption, PdfPipelineOptions, RapidOcrOptions
+    global DocumentConverter, DocumentStream, InputFormat, PdfFormatOption, PdfPipelineOptions, RapidOcrOptions, AcceleratorOptions, TableStructureOptions
 
     _configure_runtime_cache_dirs()
     if DocumentStream is None:
@@ -220,6 +216,18 @@ def _load_docling_runtime():
         from docling.datamodel.pipeline_options import RapidOcrOptions as _RapidOcrOptions
         RapidOcrOptions = _RapidOcrOptions
 
+    if TableStructureOptions is None:
+        from docling.datamodel.pipeline_options import (
+            TableStructureOptions as _TableStructureOptions,
+        )
+        TableStructureOptions = _TableStructureOptions
+
+    if AcceleratorOptions is None:
+        from docling.datamodel.accelerator_options import (
+            AcceleratorOptions as _AcceleratorOptions,
+        )
+        AcceleratorOptions = _AcceleratorOptions
+
     return (
         DocumentStream,
         DocumentConverter,
@@ -227,7 +235,121 @@ def _load_docling_runtime():
         PdfFormatOption,
         PdfPipelineOptions,
         RapidOcrOptions,
+        AcceleratorOptions,
+        TableStructureOptions,
     )
+
+
+def _build_pdf_pipeline_options(
+    pdf_pipeline_options_cls,
+    rapid_ocr_options_cls,
+    accelerator_options_cls,
+    table_structure_options_cls,
+):
+    accelerator_options = _build_accelerator_options(accelerator_options_cls)
+    rapidocr_params = _build_rapidocr_params(accelerator_options)
+    return pdf_pipeline_options_cls(
+        do_table_structure=True,
+        accelerator_options=accelerator_options,
+        table_structure_options=_build_table_structure_options(
+            table_structure_options_cls,
+        ),
+        ocr_options=rapid_ocr_options_cls(
+            backend=_resolve_rapidocr_backend(),
+            lang=["chinese", "english"],
+            force_full_page_ocr=_env_flag(
+                "DOCUMENT_PROCESSOR_RAPIDOCR_FORCE_FULL_PAGE_OCR",
+                False,
+            ),
+            rec_keys_path=_resolve_rapidocr_rec_keys_path(),
+            rapidocr_params=rapidocr_params,
+        ),
+        **_pdf_batch_options_from_env(),
+    )
+
+
+def _build_accelerator_options(accelerator_options_cls):
+    kwargs: dict[str, Any] = {}
+    device = os.getenv("DOCUMENT_PROCESSOR_DOCLING_DEVICE")
+    if device:
+        kwargs["device"] = device.strip().lower()
+
+    num_threads = os.getenv("DOCUMENT_PROCESSOR_DOCLING_NUM_THREADS")
+    if num_threads:
+        kwargs["num_threads"] = _parse_positive_int(
+            "DOCUMENT_PROCESSOR_DOCLING_NUM_THREADS",
+            num_threads,
+        )
+
+    return accelerator_options_cls(**kwargs)
+
+
+def _build_table_structure_options(table_structure_options_cls):
+    return table_structure_options_cls(
+        do_cell_matching=_env_flag(
+            "DOCUMENT_PROCESSOR_PDF_TABLE_DO_CELL_MATCHING",
+            True,
+        ),
+    )
+
+
+def _build_rapidocr_params(accelerator_options) -> dict[str, Any]:
+    device = str(getattr(accelerator_options, "device", "")).strip().lower()
+    use_mps = _env_flag(
+        "DOCUMENT_PROCESSOR_RAPIDOCR_TORCH_USE_MPS",
+        device == "mps",
+    )
+    use_coreml = _env_flag(
+        "DOCUMENT_PROCESSOR_RAPIDOCR_ONNX_USE_COREML",
+        False,
+    )
+    return {
+        "Global.model_root_dir": _package_models_root() / "rapidocr",
+        "EngineConfig.onnxruntime.use_coreml": use_coreml,
+        "EngineConfig.torch.use_mps": use_mps,
+    }
+
+
+def _resolve_rapidocr_backend() -> str:
+    backend = os.getenv("DOCUMENT_PROCESSOR_RAPIDOCR_BACKEND", "onnxruntime")
+    normalized = backend.strip().lower()
+    if normalized not in {"onnxruntime", "openvino", "paddle", "torch"}:
+        raise ValueError(
+            "unsupported DOCUMENT_PROCESSOR_RAPIDOCR_BACKEND: "
+            f"{backend!r}; expected one of onnxruntime, openvino, paddle, torch"
+        )
+    return normalized
+
+
+def _pdf_batch_options_from_env() -> dict[str, int]:
+    env_to_option = {
+        "DOCUMENT_PROCESSOR_PDF_OCR_BATCH_SIZE": "ocr_batch_size",
+        "DOCUMENT_PROCESSOR_PDF_LAYOUT_BATCH_SIZE": "layout_batch_size",
+        "DOCUMENT_PROCESSOR_PDF_TABLE_BATCH_SIZE": "table_batch_size",
+    }
+    options: dict[str, int] = {}
+    for env_name, option_name in env_to_option.items():
+        raw_value = os.getenv(env_name)
+        if raw_value:
+            options[option_name] = _parse_positive_int(env_name, raw_value)
+    return options
+
+
+def _parse_positive_int(env_name: str, raw_value: str) -> int:
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{env_name} must be a positive integer.") from exc
+    if value < 1:
+        raise ValueError(f"{env_name} must be a positive integer.")
+    return value
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _configure_runtime_cache_dirs() -> None:
@@ -256,6 +378,13 @@ def _configure_runtime_cache_dirs() -> None:
 
 def _package_models_root() -> Path:
     return Path(__file__).resolve().parent / "models"
+
+
+def _resolve_rapidocr_rec_keys_path() -> str | None:
+    rec_keys_path = _package_models_root() / "rapidocr" / "ppocr_keys_v1.txt"
+    if rec_keys_path.exists():
+        return str(rec_keys_path)
+    return None
 
 
 def resolve_docling_artifacts_path() -> Path:

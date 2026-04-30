@@ -61,6 +61,35 @@ export OPENAI_API_KEY="your-api-key"
 export MODEL="your-model-name"
 ```
 
+如果要处理真实 PDF，尤其是扫描件或带坏 OCR/text layer 的表格 PDF，也应在启动 `agent` 前设置 PDF 抽取配置。默认链路是跨平台的 `docling + RapidOCR + onnxruntime`：
+
+```bash
+export DOCUMENT_PROCESSOR_RAPIDOCR_BACKEND=onnxruntime
+export DOCUMENT_PROCESSOR_RAPIDOCR_ONNX_USE_COREML=0
+```
+
+对文本层很差的 PDF，可以强制整页 OCR；例如论文替代名单这类 8 页表格 PDF，开启后末页序号、学号和姓名抽取更稳定：
+
+```bash
+export DOCUMENT_PROCESSOR_RAPIDOCR_FORCE_FULL_PAGE_OCR=1
+```
+
+PDF 相关配置在 `agent service` 启动时读取，修改后需要重启 `agent` 才会生效。常用配置如下：
+
+| 环境变量 | 默认值 | 作用 |
+| --- | --- | --- |
+| `DOCUMENT_PROCESSOR_RAPIDOCR_BACKEND` | `onnxruntime` | RapidOCR 后端，支持 `onnxruntime`、`openvino`、`paddle`、`torch`。 |
+| `DOCUMENT_PROCESSOR_RAPIDOCR_ONNX_USE_COREML` | `0` | 是否让 onnxruntime 尝试 CoreML；当前样本上不建议默认开启。 |
+| `DOCUMENT_PROCESSOR_RAPIDOCR_FORCE_FULL_PAGE_OCR` | `0` | 是否忽略 PDF 内置文本层并整页 OCR，适合坏文本层或扫描件。 |
+| `DOCUMENT_PROCESSOR_PDF_TABLE_DO_CELL_MATCHING` | `1` | docling 表格 cell matching；密集表格列粘连时可临时设为 `0` 做对照。 |
+| `DOCUMENT_PROCESSOR_DOCLING_DEVICE` | docling 默认值 | docling 加速设备，例如 `cpu` 或 `mps`。 |
+| `DOCUMENT_PROCESSOR_DOCLING_NUM_THREADS` | docling 默认值 | docling 线程数，必须是正整数。 |
+| `DOCUMENT_PROCESSOR_PDF_OCR_BATCH_SIZE` | docling 默认值 | OCR batch size，必须是正整数。 |
+| `DOCUMENT_PROCESSOR_PDF_LAYOUT_BATCH_SIZE` | docling 默认值 | layout batch size，必须是正整数。 |
+| `DOCUMENT_PROCESSOR_PDF_TABLE_BATCH_SIZE` | docling 默认值 | table batch size，必须是正整数。 |
+
+模型缓存默认写到 `agent/service/document_processor/impl/pdf/models/` 下；可用 `DOCLING_CACHE_DIR`、`RAPIDOCR_MODEL_ROOT`、`HF_HOME` 覆盖。更完整的 PDF 引擎说明见 `agent/service/document_processor/README.md`。
+
 ### 2. 启动 agent service
 
 新开一个终端：

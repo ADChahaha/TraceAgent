@@ -65,7 +65,7 @@ file_obj
 
 ## PDF 实现
 
-当前 `PDF` 默认实现入口在 `impl/pdf/processor.py`，可选 PaddleOCR 实现入口在 `impl/pdf/paddle_processor.py`。默认路径仍然是 `docling + RapidOCR`；当启动前设置 `DOCUMENT_PROCESSOR_PDF_ENGINE=pdf-paddle` 时，内部注册表会把 `FileType.PDF` 绑定到 `PdfPaddleProcessor`。
+当前 `PDF` 默认实现入口在 `impl/pdf/processor.py`，可选 PaddleOCR 实现入口在 `impl/pdf/paddle_processor.py`，可选 Marker 实现入口在 `impl/pdf/marker_processor.py`。默认路径仍然是 `docling + RapidOCR`；当启动前设置 `DOCUMENT_PROCESSOR_PDF_ENGINE=pdf-paddle` 时，内部注册表会把 `FileType.PDF` 绑定到 `PdfPaddleProcessor`；当设置为 `pdf-marker` 时，内部注册表会把 `FileType.PDF` 绑定到 `PdfMarkerProcessor`。
 
 实现步骤：
 
@@ -75,7 +75,8 @@ file_obj
   -> `InternalProcessorInterface` 从默认注册表里拿到 `PdfProcessor`
   -> `PdfProcessor` 先检查 `DOCLING_CACHE_DIR` / `RAPIDOCR_MODEL_ROOT` / `HF_HOME` 一类环境变量；如果调用方没配，就自动落到 `impl/pdf/models/` 下的模型目录
   -> `PdfProcessor` 再延迟导入 docling 运行时，避免 import 阶段就绑定到开发者本机默认缓存路径
-  -> 初始化 `DocumentConverter` 时显式配置 `RapidOcrOptions(backend="torch", lang=["chinese", "english"], rapidocr_params={"Global.model_root_dir": ...})`，把中文 PDF 的文字抽取固定到同一条 OCR 路径，并把 RapidOCR 模型下载到 `impl/pdf/models/rapidocr`
+  -> 初始化 `DocumentConverter` 时显式配置 `RapidOcrOptions(backend="onnxruntime", lang=["chinese", "english"], rapidocr_params={"Global.model_root_dir": ...})`，把中文 PDF 的文字抽取固定到 RapidOCR 路径，并把 RapidOCR 模型下载到 `impl/pdf/models/rapidocr`
+  -> 如果启动前设置 `DOCUMENT_PROCESSOR_RAPIDOCR_FORCE_FULL_PAGE_OCR=1`，就让 RapidOCR 忽略 PDF 内置文本层并整页重识别；如果设置 `DOCUMENT_PROCESSOR_PDF_TABLE_DO_CELL_MATCHING=0`，就关闭 docling 表格 cell matching
   -> `PdfProcessor` 读取 file_obj 的二进制内容，并从 filename/name 推出输出文件名，没有就回退成 `document.pdf`
   -> 把二进制包装成 `DocumentStream(name, BytesIO(...))`
   -> 调用 `docling.document_converter.DocumentConverter.convert(...)`
@@ -91,6 +92,9 @@ file_obj
 - 如果默认 `docling` 路径失败，就直接向上抛错，不做任何兜底解析
 - 如果调用方没有显式配置模型目录，默认把 docling / Hugging Face / RapidOCR 相关下载产物都放到 `impl/pdf/models/` 下
 - PDF 文字抽取当前显式使用 `RapidOCR`，不再依赖 `docling` 的自动 OCR 选择
+- `DOCUMENT_PROCESSOR_RAPIDOCR_FORCE_FULL_PAGE_OCR` 只作为扫描件质量开关，默认关闭，避免对原生文本 PDF 造成额外 OCR 成本和识别误差
+- `DOCUMENT_PROCESSOR_PDF_TABLE_DO_CELL_MATCHING` 默认开启；在密集表格页列粘连时可以临时关闭做对照实验
+- RapidOCR 字典路径只有在 `impl/pdf/models/rapidocr/ppocr_keys_v1.txt` 真实存在时才会传给运行时，避免把不存在的路径传入后产生噪声 warning
 - 当前 block 归一化优先保留文本、页码和 bbox，不在这一层扩展额外业务字段
 
 可选 PaddleOCR 路径的处理流程是：
@@ -112,6 +116,23 @@ file_obj
 ```
 
 PaddleOCR 路径不依赖 docling，也不读取 docling/RapidOCR 缓存目录；它要求运行环境额外安装 `agent-service[paddle]` 依赖。默认初始化 PaddleOCR PPStructureV3 时会关闭文档方向分类、文档矫正和文本行方向分类，启用表格识别，并使用 `PP-OCRv4` mobile 模型，先把速度控制在可接受范围内。如果需要更高精度但更慢的 PP-OCRv5，可通过 `DOCUMENT_PROCESSOR_PADDLE_OCR_VERSION=PP-OCRv5` 覆盖。这个路径主要用于对比密集表格 PDF 的 OCR 质量，默认不替代现有 docling 路径。
+
+可选 Marker 路径的处理流程是：
+
+```text
+调用方传入 pdf file_obj
+  -> `InternalProcessorInterface` 读取 `DOCUMENT_PROCESSOR_PDF_ENGINE`
+  -> 如果值为 `pdf-marker` / `marker-pdf` / `marker`，选择 `PdfMarkerProcessor`
+  -> `PdfMarkerProcessor` 复用默认 PDF helper 读取文件名和二进制
+  -> 如果调用方没设置 `MODEL_CACHE_DIR` / `HF_HOME` / `XDG_CACHE_HOME`，先把 Marker、Surya 和 Hugging Face 缓存收口到 `impl/pdf/models/marker`
+  -> 因为 Marker 当前公开入口接收路径而不是 file-like object，所以把 PDF 二进制写入临时 pdf 文件
+  -> 调用 Marker converter 生成 rendered document
+  -> 调用 `marker.output.text_from_rendered(...)` 导出整篇 markdown
+  -> 按 markdown 的标题、连续 table row 和普通段落轻量拆成 `ContentBlock`
+  -> 返回 `ProcessResult(meta_info.ocr_engine="marker", marker_output_format=...)`
+```
+
+Marker 路径当前用于高精度扫描件和表格抽取实验，不替代默认 docling 路径。它不能放进主依赖：当前 `marker-pdf` 会拉低 `openai` 到 1.x，和项目主依赖 `openai>=2.28,<3` 冲突。因此生产上应把 Marker 放在隔离环境或 sidecar runtime 中，通过 `DOCUMENT_PROCESSOR_PDF_ENGINE=pdf-marker` 显式启用。实测它对密集表格的列结构保留明显优于当前 RapidOCR/docling 路径，但模型重、启动和 CPU 推理都慢，不能作为“8 页 1 分钟”的默认方案。
 
 ## DOCX 实现
 
@@ -157,6 +178,8 @@ PaddleOCR 路径不依赖 docling，也不读取 docling/RapidOCR 缓存目录�
 - `impl/pdf/`
   - `processor.py`：基于 `docling` 的 PDF 处理器
   - 只负责 `PDF` 的二进制读取、`DocumentStream` 包装、docling 调用和 block 归一化
+  - `paddle_processor.py`：基于 `pypdfium2 + PaddleOCR PPStructureV3` 的可选 PDF 处理器
+  - `marker_processor.py`：基于 `Marker/marker-pdf` 的可选 PDF 处理器
 - `impl/docx/`
   - `processor.py`：基于 `python-docx` 的 DOCX 处理器
   - 只负责 `DOCX` 的二进制读取、段落/表格遍历、markdown 导出和 block 归一化

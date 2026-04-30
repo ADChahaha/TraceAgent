@@ -219,6 +219,20 @@ pdf file_obj
 
 可在启动服务前通过环境变量覆盖这些目录。
 
+PDF 默认参数优先保证跨平台和速度：RapidOCR 后端默认为 `onnxruntime`，docling 表格结构识别默认开启。扫描件自带 OCR 文本层质量很差时，可以在启动前打开整页重识别：
+
+```bash
+export DOCUMENT_PROCESSOR_RAPIDOCR_FORCE_FULL_PAGE_OCR=1
+```
+
+密集表格列粘连时，可以临时关闭 docling 的 cell matching 做对照：
+
+```bash
+export DOCUMENT_PROCESSOR_PDF_TABLE_DO_CELL_MATCHING=0
+```
+
+其他性能相关开关包括 `DOCUMENT_PROCESSOR_RAPIDOCR_BACKEND`、`DOCUMENT_PROCESSOR_RAPIDOCR_ONNX_USE_COREML`、`DOCUMENT_PROCESSOR_DOCLING_NUM_THREADS`、`DOCUMENT_PROCESSOR_PDF_OCR_BATCH_SIZE`、`DOCUMENT_PROCESSOR_PDF_LAYOUT_BATCH_SIZE` 和 `DOCUMENT_PROCESSOR_PDF_TABLE_BATCH_SIZE`。这些参数会影响速度和质量，建议按样本集实测后再改默认值。
+
 如果启动前设置 `DOCUMENT_PROCESSOR_PDF_ENGINE=pdf-paddle`，PDF 会改走可选 PaddleOCR 路径：
 
 ```text
@@ -239,6 +253,20 @@ PaddleOCR 相关模型默认缓存到 `service/document_processor/impl/pdf/model
 ```bash
 export DOCUMENT_PROCESSOR_PADDLE_OCR_VERSION=PP-OCRv5
 ```
+
+如果启动前设置 `DOCUMENT_PROCESSOR_PDF_ENGINE=pdf-marker`，PDF 会改走可选 Marker 路径：
+
+```text
+pdf file_obj
+  -> PdfMarkerProcessor 读取二进制
+  -> 写入临时 pdf 文件
+  -> Marker converter 解析扫描件版面和文字
+  -> text_from_rendered(...) 导出 markdown
+  -> 按 markdown 结构生成 ContentBlock(kind="section_header" | "table" | "text", meta_info.ocr_engine="marker")
+  -> ProcessResult(file_type="pdf")
+```
+
+这一路径适合对扫描件和密集表格做高质量实验，但当前不进入主依赖：`marker-pdf` 会引入与项目 `openai>=2.28,<3` 冲突的依赖版本。生产启用时建议把 Marker 放进隔离环境或 sidecar runtime。模型和运行时缓存默认收口到 `service/document_processor/impl/pdf/models/marker/`，可通过 `MODEL_CACHE_DIR`、`HF_HOME` 和 `XDG_CACHE_HOME` 覆盖。
 
 ## DOCX 行为
 

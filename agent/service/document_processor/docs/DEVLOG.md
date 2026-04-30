@@ -1,4 +1,22 @@
-last updated: 2026-04-28 14:19:45 CST
+last updated: 2026-05-01 01:21:58 CST
+
+## 2026-05-01 01:21:58 CST
+- completed work:
+  - 将默认 PDF OCR 链路从 RapidOCR `torch` 后端切到 `onnxruntime` 后端，并新增 RapidOCR / docling 运行参数的环境变量配置，覆盖 backend、device、batch size、CoreML、MPS、整页 OCR 和表格 cell matching。
+  - 补齐 `onnxruntime` 依赖，避免默认配置在全平台环境里缺少运行时。
+  - 调整 RapidOCR 字典路径传参逻辑：只有 `impl/pdf/models/rapidocr/ppocr_keys_v1.txt` 真实存在时才传给运行时，避免无效路径 warning。
+  - 保留 Marker/marker-pdf 作为可选 PDF 引擎入口，用于高精度但较慢的对照实验，不替代默认 RapidOCR 路径。
+  - 前端上传代理增加 `proxyClientMaxBodySize=10mb`，修复 2MB 级 PDF 通过 Next proxy 上传时后端不可达的问题。
+  - 使用论文替代 PDF 走前端上传 -> backend -> agent 端到端验证，任务 `task_443c3d1a79674da59beb5f34b5b51369` 完成并被 route policy 自动接受，确认 `111` 人、首位 `王运达`、末位学号 `22270227`、末位姓名 `沈邵杰` 可提交。
+- current progress:
+  - 默认 PDF 实现继续走 `docling + RapidOCR`，启动时可用环境变量切换后端和精度/速度参数；对该论文替代 PDF，设置 `DOCUMENT_PROCESSOR_RAPIDOCR_FORCE_FULL_PAGE_OCR=1` 后末页表格质量明显改善。
+  - 当前完整文档处理结果能产出 111 行表格和约 2.8 万字符 markdown，足够支撑字段抽取端到端提交。
+- encountered problems:
+  - 该 PDF 的内置文本层质量不稳定，末页会出现学号拆分或序号学号粘连；不强制整页 OCR 时第 8 页表格更容易坍缩。
+  - `DOCUMENT_PROCESSOR_RAPIDOCR_ONNX_USE_COREML=1` 在当前样本上可用但更慢，暂不作为默认值。
+  - Next 默认 proxy body 限制会让较大的 multipart PDF 上传失败，前端表现为 `backend unavailable`。
+- next step:
+  - 后续可把 `DOCUMENT_PROCESSOR_RAPIDOCR_FORCE_FULL_PAGE_OCR` 从全局环境开关升级为按 PDF 或按页判断，只在文本层明显异常的页面触发整页 OCR。
 
 ## 2026-04-28 14:19:45 CST
 - completed work:

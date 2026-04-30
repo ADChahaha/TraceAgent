@@ -153,12 +153,134 @@ def test_pdf_processor_uses_explicit_rapidocr_for_text_extraction(monkeypatch):
     repo_pdf_dir = Path(processor_module.__file__).resolve().parent / "models"
 
     assert type(ocr_options).__name__ == "RapidOcrOptions"
-    assert ocr_options.backend == "torch"
+    assert ocr_options.backend == "onnxruntime"
     assert ocr_options.lang == ["chinese", "english"]
     assert Path(ocr_options.rapidocr_params["Global.model_root_dir"]) == (
         repo_pdf_dir / "rapidocr"
     )
-    assert Path(ocr_options.rec_keys_path) == (repo_pdf_dir / "rapidocr" / "ppocr_keys_v1.txt")
+    assert ocr_options.rec_keys_path is None
+    assert ocr_options.force_full_page_ocr is False
+    assert ocr_options.rapidocr_params["EngineConfig.onnxruntime.use_coreml"] is False
+
+
+def test_pdf_processor_can_force_full_page_rapidocr(monkeypatch):
+    from service.document_processor.impl.pdf import processor as processor_module
+    from service.document_processor.impl.pdf.processor import PdfProcessor
+
+    FakeDocumentConverter.instances.clear()
+    monkeypatch.setattr(
+        processor_module,
+        "DocumentConverter",
+        FakeDocumentConverter,
+    )
+    monkeypatch.setenv("DOCUMENT_PROCESSOR_RAPIDOCR_FORCE_FULL_PAGE_OCR", "1")
+
+    PdfProcessor()
+
+    converter = FakeDocumentConverter.instances[0]
+    format_options = converter.init_kwargs["format_options"]
+    pdf_option = format_options[processor_module.InputFormat.PDF]
+    ocr_options = pdf_option.pipeline_options.ocr_options
+
+    assert ocr_options.force_full_page_ocr is True
+
+
+def test_pdf_processor_can_disable_table_cell_matching(monkeypatch):
+    from service.document_processor.impl.pdf import processor as processor_module
+    from service.document_processor.impl.pdf.processor import PdfProcessor
+
+    FakeDocumentConverter.instances.clear()
+    monkeypatch.setattr(
+        processor_module,
+        "DocumentConverter",
+        FakeDocumentConverter,
+    )
+    monkeypatch.setenv("DOCUMENT_PROCESSOR_PDF_TABLE_DO_CELL_MATCHING", "0")
+
+    PdfProcessor()
+
+    converter = FakeDocumentConverter.instances[0]
+    format_options = converter.init_kwargs["format_options"]
+    pdf_option = format_options[processor_module.InputFormat.PDF]
+    table_options = pdf_option.pipeline_options.table_structure_options
+
+    assert table_options.do_cell_matching is False
+
+
+def test_pdf_processor_can_enable_onnxruntime_coreml(monkeypatch):
+    from service.document_processor.impl.pdf import processor as processor_module
+    from service.document_processor.impl.pdf.processor import PdfProcessor
+
+    FakeDocumentConverter.instances.clear()
+    monkeypatch.setattr(
+        processor_module,
+        "DocumentConverter",
+        FakeDocumentConverter,
+    )
+    monkeypatch.setenv("DOCUMENT_PROCESSOR_RAPIDOCR_ONNX_USE_COREML", "1")
+
+    PdfProcessor()
+
+    converter = FakeDocumentConverter.instances[0]
+    format_options = converter.init_kwargs["format_options"]
+    pdf_option = format_options[processor_module.InputFormat.PDF]
+    ocr_options = pdf_option.pipeline_options.ocr_options
+
+    assert ocr_options.rapidocr_params["EngineConfig.onnxruntime.use_coreml"] is True
+
+
+def test_pdf_processor_allows_rapidocr_backend_override(monkeypatch):
+    from service.document_processor.impl.pdf import processor as processor_module
+    from service.document_processor.impl.pdf.processor import PdfProcessor
+
+    FakeDocumentConverter.instances.clear()
+    monkeypatch.setattr(
+        processor_module,
+        "DocumentConverter",
+        FakeDocumentConverter,
+    )
+    monkeypatch.setenv("DOCUMENT_PROCESSOR_RAPIDOCR_BACKEND", "torch")
+    monkeypatch.setenv("DOCUMENT_PROCESSOR_DOCLING_DEVICE", "mps")
+
+    PdfProcessor()
+
+    converter = FakeDocumentConverter.instances[0]
+    format_options = converter.init_kwargs["format_options"]
+    pdf_option = format_options[processor_module.InputFormat.PDF]
+    ocr_options = pdf_option.pipeline_options.ocr_options
+
+    assert ocr_options.backend == "torch"
+    assert ocr_options.rapidocr_params["EngineConfig.torch.use_mps"] is True
+
+
+def test_pdf_processor_passes_docling_accelerator_and_batch_options(monkeypatch):
+    from service.document_processor.impl.pdf import processor as processor_module
+    from service.document_processor.impl.pdf.processor import PdfProcessor
+
+    FakeDocumentConverter.instances.clear()
+    monkeypatch.setattr(
+        processor_module,
+        "DocumentConverter",
+        FakeDocumentConverter,
+    )
+    monkeypatch.setenv("DOCUMENT_PROCESSOR_DOCLING_DEVICE", "mps")
+    monkeypatch.setenv("DOCUMENT_PROCESSOR_DOCLING_NUM_THREADS", "8")
+    monkeypatch.setenv("DOCUMENT_PROCESSOR_PDF_OCR_BATCH_SIZE", "2")
+    monkeypatch.setenv("DOCUMENT_PROCESSOR_PDF_LAYOUT_BATCH_SIZE", "3")
+    monkeypatch.setenv("DOCUMENT_PROCESSOR_PDF_TABLE_BATCH_SIZE", "5")
+
+    PdfProcessor()
+
+    converter = FakeDocumentConverter.instances[0]
+    format_options = converter.init_kwargs["format_options"]
+    pdf_option = format_options[processor_module.InputFormat.PDF]
+    pipeline_options = pdf_option.pipeline_options
+
+    assert pipeline_options.accelerator_options.device == "mps"
+    assert pipeline_options.accelerator_options.num_threads == 8
+    assert pipeline_options.ocr_batch_size == 2
+    assert pipeline_options.layout_batch_size == 3
+    assert pipeline_options.table_batch_size == 5
 
 
 def test_pdf_processor_uses_default_filename_when_input_has_no_name(monkeypatch):
@@ -241,6 +363,110 @@ def test_process_can_route_pdf_files_to_paddle_processor(monkeypatch):
         InternalProcessorInterface._processor_instances.clear()
         InternalProcessorInterface._processor_instances.update(original_instances)
         InternalProcessorInterface._defaults_registered = original_defaults_flag
+
+
+def test_process_can_route_pdf_files_to_marker_processor(monkeypatch):
+    from service.document_processor.impl.interface import InternalProcessorInterface
+    from service.document_processor.impl.pdf.marker_processor import PdfMarkerProcessor
+    from service.document_processor.types import FileType
+
+    monkeypatch.setenv("DOCUMENT_PROCESSOR_PDF_ENGINE", "pdf-marker")
+
+    original_types = InternalProcessorInterface._processor_types.copy()
+    original_instances = InternalProcessorInterface._processor_instances.copy()
+    original_defaults_flag = InternalProcessorInterface._defaults_registered
+    try:
+        InternalProcessorInterface._processor_types.clear()
+        InternalProcessorInterface._processor_instances.clear()
+        InternalProcessorInterface._defaults_registered = False
+
+        InternalProcessorInterface._ensure_default_processors_registered()
+
+        assert InternalProcessorInterface._processor_types[FileType.PDF] is PdfMarkerProcessor
+    finally:
+        InternalProcessorInterface._processor_types.clear()
+        InternalProcessorInterface._processor_types.update(original_types)
+        InternalProcessorInterface._processor_instances.clear()
+        InternalProcessorInterface._processor_instances.update(original_instances)
+        InternalProcessorInterface._defaults_registered = original_defaults_flag
+
+
+def test_pdf_marker_processor_generates_markdown_blocks_from_marker_runtime():
+    from service.document_processor.impl.pdf.marker_processor import PdfMarkerProcessor
+
+    class FakeMarkerConverter:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def __call__(self, source_path: str):
+            self.calls.append(Path(source_path).name)
+            return SimpleNamespace(pages=[object(), object()])
+
+    fake_converter = FakeMarkerConverter()
+
+    def fake_text_from_rendered(rendered):
+        assert len(rendered.pages) == 2
+        return (
+            "## 测试名单\n\n"
+            "| 学号 | 姓名 |\n"
+            "| --- | --- |\n"
+            "| 21036117 | 陈帅文 |\n\n"
+            "备注文本",
+            "md",
+            {"page-1-table": object()},
+        )
+
+    processor = PdfMarkerProcessor(
+        converter=fake_converter,
+        text_extractor=fake_text_from_rendered,
+    )
+
+    result = processor.process(NamedBytesIO(b"%PDF-1.4", filename="marker.pdf"))
+
+    assert fake_converter.calls == ["marker.pdf"]
+    assert result.file_type == "pdf"
+    assert result.filename == "marker.pdf"
+    assert result.markdown.startswith("## 测试名单")
+    assert result.md_list == [result.markdown]
+    assert [block.kind for block in result.blocks] == ["section_header", "table", "text"]
+    assert result.blocks[1].text == (
+        "| 学号 | 姓名 |\n"
+        "| --- | --- |\n"
+        "| 21036117 | 陈帅文 |"
+    )
+    assert result.meta_info == {
+        "ocr_engine": "marker",
+        "marker_output_format": "md",
+        "block_count": 3,
+        "page_count": 2,
+        "image_count": 1,
+    }
+
+
+def test_pdf_marker_processor_falls_back_to_pdfium_for_page_count(monkeypatch):
+    from service.document_processor.impl.pdf.marker_processor import PdfMarkerProcessor
+
+    class FakePdfDocument:
+        def __init__(self, stream) -> None:
+            self.stream = stream
+
+        def __len__(self) -> int:
+            return 6
+
+    monkeypatch.setitem(
+        sys.modules,
+        "pypdfium2",
+        SimpleNamespace(PdfDocument=FakePdfDocument),
+    )
+
+    processor = PdfMarkerProcessor(
+        converter=lambda source_path: SimpleNamespace(),
+        text_extractor=lambda rendered: ("正文", "md", {}),
+    )
+
+    result = processor.process(NamedBytesIO(b"%PDF-1.4", filename="marker.pdf"))
+
+    assert result.meta_info["page_count"] == 6
 
 
 def test_pdf_paddle_processor_generates_structured_markdown_blocks(monkeypatch):
