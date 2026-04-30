@@ -1,4 +1,30 @@
-last updated: 2026-04-30 02:11:37
+last updated: 2026-04-30 20:42:20
+
+## 2026-04-30 20:42:20
+
+### 已完成工作
+
+- 将 agent 抽取链路收口到统一 `search_grep`：一次工具调用同时检索正文 paragraph 和表格 row，查询词固定使用 `term1 OR term2 OR term3`。
+- 为 broad / resolution prompt 注入明确 `tool_contract`，让模型按工具描述理解 `search_grep`、候选写入、候选复制、候选计数和最终定案语义。
+- route policy 输入扩展为 `field_outputs + refs_with_text + field_processes`，并让派生字段通过 `related_field_processes` 看到来源字段前序 agent 查过什么、写入过多少候选和如何定案。
+- 将字段抽取和 route policy 的结构化输出策略都收口为 `tool_call`，不再保留 `json_schema/auto`。
+- 候选写入工具收到未知 ref 时不再直接终止整单，runner 记录 `tool_error` 并把错误作为下一轮工具结果返回给模型修正。
+
+### 验证
+
+- `conda run -n agent-gate python -m pytest tests/file_extraction_agent tests/route_policy_agent tests/routes/test_route_policy_agent_route.py -q`，结果 `90 passed`。
+- `conda run -n agent-gate python -m pytest backend/tests/test_task_flow.py -q`，结果 `10 passed`。
+- `pnpm test -- task-detail.test.tsx --runInBand`，结果 `7 passed`。
+- 真实前端全流程任务 `task_ff50dfeab89a4923bdc4cbbd257c0a25` 完成 `completed / done / accept`，抽取 `academic_paper_count=9` 和 9 个 `academic_paper_names`。
+
+### 遇到的问题
+
+- route policy 之前只看当前字段过程，导致 `academic_paper_count` 这类派生字段看不到 `academic_paper_names` broad 阶段实际查询词。
+- 真实 E2E 中模型曾把不存在的表格行 ref 传给候选写入工具，旧逻辑会把整个 extraction 标记为 failed。
+
+### 下一步
+
+- 后续可继续优化 Paddle 表格行切分和 query 召回口径，减少模型从大表格中选择错误 ref 的概率。
 
 ## 2026-04-30 02:11:37
 

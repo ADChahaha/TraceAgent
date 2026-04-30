@@ -1,6 +1,31 @@
 # Route Policy Agent Devlog
 
-last updated: 2026-04-28 14:19:45
+last updated: 2026-04-30 20:42:20
+
+## 2026-04-30 20:42:20
+
+### 已完成工作
+
+- route policy 输入正式消费 `field_processes`，每个字段包含 broad / resolution 两阶段过程摘要：search 查询词、候选写入数量、count 摘要、finish/final_decision 状态和失败原因。
+- 对 `validation_rules.source_field/source_fields` 声明的派生字段，mapper 会把来源字段过程摘要注入为 `related_field_processes`。
+- prompt system 文案明确解释 `field_process` 和 `related_field_processes` 的用途：只判断 agent 是否查过合理关键词、是否写入候选、是否计数和定案，不作为原文证据。
+- route policy 的证据文本仍只来自 `refs_with_text.text`，不接收 search 工具返回正文、表格行、cell、block_id 列表或 raw trace。
+- route policy 结构化输出策略固定为 `tool_call`，显式传入 `json_schema` 或 `auto` 会被拒绝。
+- `policy_options.max_refs_per_field` 默认从 8 调整为 50，避免列表字段 route 判断时过早裁剪证据。
+
+### 当前进展
+
+- `academic_paper_count` route prompt 能看到来源字段 `academic_paper_names` 的 broad 查询词，例如 `学术论文 OR 论文题目 OR 论文替代`。
+- 真实前端 E2E 中 route policy 对 `academic_paper_count` 和 `academic_paper_names` 均返回 `accept`，并在 count 字段原因中明确提到 `related_field_processes`。
+
+### 验证
+
+- `conda run -n agent-gate python -m pytest tests/route_policy_agent -q`，结果 `19 passed`。
+- `conda run -n agent-gate python -m pytest tests/file_extraction_agent tests/route_policy_agent tests/routes/test_route_policy_agent_route.py -q`，结果 `90 passed`。
+
+### 下一步
+
+- 后续可以继续围绕 route policy prompt 做小模型消融，比较只看当前字段过程和同时看来源字段过程的 review/accept 差异。
 
 ## 2026-04-28 14:19:45
 

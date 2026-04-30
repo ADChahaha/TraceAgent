@@ -1,6 +1,30 @@
 # Backend Devlog
 
-last updated: 2026-04-29 22:52:10
+last updated: 2026-04-30 20:42:20
+
+## 2026-04-30 20:42:20
+
+### 已完成工作
+
+- `services/route_policy.py` 从抽取 trace actions 组装 `field_processes`，传给 agent service 的 `route_policy_agent`。
+- broad 阶段过程摘要会记录统一 `search_grep` 查询词、候选写入数量、`copy_field_candidates` 数量和 `finish_broad` 原因。
+- resolution 阶段过程摘要会记录二次 `search_grep` 查询词、`add_resolution_candidate` 数量、`count_field_candidates` 统计结果和 `final_decision` 是否执行。
+- backend 继续只保存 route policy 返回的 `field_routes` 并驱动 `accept / review / reject`，不在本地重做 LLM route 判断。
+- 前端 trace 详情修复 action refs 渲染 key：用户界面仍只展示 document/page/span，不暴露 block_id，但 React key 会包含 block_id/index，避免同页同 span 的不同表格行触发重复 key warning。
+
+### 当前进展
+
+- 真实前端全流程任务 `task_ff50dfeab89a4923bdc4cbbd257c0a25` 已跑通：document processing、field extraction、route policy 三段均 completed，最终 `completed / done / accept`。
+- route policy request 中可看到 `academic_paper_names` 的 broad 查询词和 count 摘要，`academic_paper_count` 的 route 原因会引用 `related_field_processes`。
+
+### 验证
+
+- `conda run -n agent-gate python -m pytest backend/tests/test_task_flow.py -q`，结果 `10 passed`。
+- `pnpm test -- task-detail.test.tsx --runInBand`，结果 `7 passed`。
+
+### 遇到的问题
+
+- 前端 dev server 在真实长表格 trace 中提示 duplicate key，原因是 action refs 可能具有相同 document/page/span；已改为仅渲染 key 使用 block_id/index，展示文本不变。
 
 ## 2026-04-29 22:52:10
 

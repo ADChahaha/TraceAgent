@@ -1,4 +1,30 @@
-last updated: 2026-04-30 10:45:35 CST
+last updated: 2026-04-30 20:42:20 CST
+
+## 2026-04-30 20:42:20
+
+### 已完成工作
+
+- 落地共享 broad / resolution agent loop：每轮模型返回结构化 action，runner 注入当前阶段允许的工具并把工具结果反馈给下一轮。
+- 将检索工具统一为 `search_grep`，同时搜索正文段落和表格行；prompt 和 `tool_contract` 明确要求查询词统一使用大写 `OR`。
+- broad 阶段支持 `copy_field_candidates`，可在 state 内把来源字段候选复制给派生字段，工具结果只返回复制数量和 candidate id，不返回候选正文。
+- resolution 阶段支持 `count_field_candidates`，返回指定字段当前候选数量；模型需要显式用 `add_resolution_candidate(values=[...])` 把数字写入目标字段候选池后再 `final_decision`。
+- `add_broad_candidate` / `add_resolution_candidate` 收到未知 ref 时，runner 记录 `tool_error` 并把错误作为下一轮工具结果返回给模型修正，不再直接终止整单。
+- 抽取端结构化输出策略固定为 `tool_call`，显式传入 `json_schema` 或 `auto` 会被拒绝。
+
+### 当前进展
+
+- 真实学术论文 PDF 前端 E2E 已能完成字段抽取：`academic_paper_count=9`，`academic_paper_names` 返回 9 个论文名称。
+- trace 中保留 `search_grep`、`copy_field_candidates`、`count_field_candidates`、`final_decision` 等 action，供 backend route policy 和前端证据页展示。
+
+### 遇到的问题
+
+- PaddleOCR 生成的大表格 row ref 数量较多，模型可能把相邻页或相邻行的 ref 写入候选工具；现在会作为 `tool_error` 反馈给模型继续修正。
+- 学术论文样例的 OCR 表格仍存在英文标题连写、个别列错位的问题，当前由 evidence 和 route policy 承接，不在抽取工具层做业务特例修正。
+
+### 验证
+
+- `conda run -n agent-gate python -m pytest tests/file_extraction_agent -q`，结果 `69 passed`。
+- `conda run -n agent-gate python -m pytest tests/file_extraction_agent tests/route_policy_agent tests/routes/test_route_policy_agent_route.py -q`，结果 `90 passed`。
 
 ## 2026-04-30 10:45:35
 
