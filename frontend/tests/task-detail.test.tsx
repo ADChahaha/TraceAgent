@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { TaskDetail } from "@/components/task-detail";
@@ -16,8 +16,8 @@ const waitingReviewSummary: TaskSummary = {
 };
 
 const agentEvidence = {
-  status: "model_resolved",
-  notes: ["broad evidence 命中文明寝室表格"],
+  status: "candidate_resolved",
+  notes: ["field decision referenced candidate_ids: c1"],
   texts: [
     "### 文明寝室名单\n\n| 房间 | 结论 | | --- | --- | | 1-101 | 通过 | | 1-102 | **文明寝室** |"
   ],
@@ -35,21 +35,32 @@ const agentEvidence = {
 
 const agentActions = [
   {
-    action_type: "field_reference",
-    message: "模型请求参考字段 building",
+    action_type: "search_grep",
+    message: "文明寝室 OR 房间号",
     used_in_final_decision: false,
-    metadata: { requested_field_name: "building", returned_to_model: true }
+    refs: [{ document_id: "doc-1", page: 2, span: "p:p1", block_id: "candidate-block-id-should-not-render" }],
+    metadata: { stage: "broad", refs: ["doc-1:p2:b3:p:p1"] }
   },
   {
-    action_type: "global_lookup",
-    message: "补查文明寝室名单",
+    action_type: "add_broad_candidate",
+    message: "召回文明寝室房间号候选",
     used_in_final_decision: true,
-    metadata: { lookup_hints: ["文明寝室"], returned_block_ids: ["doc-1:p2:b3"] }
+    refs: [{ document_id: "doc-1", page: 2, span: "p:p1", block_id: "candidate-block-id-should-not-render" }],
+    metadata: { stage: "broad", candidate_ids: ["c1"], refs: ["doc-1:p2:b3:p:p1"] }
   },
   {
-    action_type: "validation_rule",
-    message: "校正房间号列表",
-    used_in_final_decision: true
+    action_type: "finish_broad",
+    message: "候选足够，结束 broad",
+    used_in_final_decision: false,
+    refs: [],
+    metadata: { stage: "broad", candidate_ids: [], refs: [] }
+  },
+  {
+    action_type: "final_decision",
+    message: "候选证据支持字段值",
+    used_in_final_decision: true,
+    refs: [{ document_id: "doc-1", page: 2, span: "p:p1", block_id: "candidate-block-id-should-not-render" }],
+    metadata: { stage: "resolution", candidate_ids: ["c1"], refs: ["doc-1:p2:b3:p:p1"] }
   }
 ];
 
@@ -58,41 +69,40 @@ const agentProcess = {
   status: "resolved",
   value: "1-101,1-102",
   evidence: agentEvidence,
-  related_fields: ["building"],
+  related_fields: [],
   actions: agentActions,
   process_steps: [
     {
       stage: "broad_extraction",
       title: "第一步 broad extraction",
-      status: "model_resolved",
-      evidence: agentEvidence
+      status: "candidate_resolved",
+      evidence: agentEvidence,
+      actions: [agentActions[0], agentActions[1], agentActions[2]]
     },
     {
       stage: "field_resolution",
       title: "第二步 resolution / tool",
       status: "used",
-      related_fields: ["building"],
+      related_fields: [],
       output_fields: [
         {
           field_name: "room_numbers",
           status: "resolved",
           value: "1-101,1-102",
-          reason: "模型定案后经过规则校正"
+          reason: "候选证据支持字段值"
         }
       ],
       notes: [
-        "读取相关字段：building",
-        "执行 global_lookup：补查文明寝室名单，参与最终定案。",
-        "执行 validation_rule：校正房间号列表，参与最终定案。"
+        "执行 final_decision：候选证据支持字段值，参与最终定案。"
       ],
-      actions: agentActions
+      actions: [agentActions[3]]
     },
     {
       stage: "final_result",
       title: "第三步 agent result（route 前）",
       status: "resolved",
       value: "1-101,1-102",
-      reason: "模型定案后经过规则校正",
+      reason: "候选证据支持字段值",
       failure_reason: null
     },
     {
@@ -105,7 +115,7 @@ const agentProcess = {
       notes: ["route_policy_agent 判定该字段需要人工复核。"]
     }
   ],
-  reason: "模型定案后经过规则校正",
+  reason: "候选证据支持字段值",
   failure_reason: null
 };
 
@@ -239,7 +249,7 @@ const detailData: TaskDetailData = {
           refs: [{ document_id: "doc-1", page: 2, block_id: "doc-1:p2:b3" }]
         },
         actions: agentProcess.actions,
-        reason: "模型定案后经过规则校正"
+        reason: "候选证据支持字段值"
       }
     ]
   },
@@ -260,8 +270,8 @@ const detailData: TaskDetailData = {
           "### 文明寝室名单\n\n| 房间 | 结论 | | --- | --- | | 1-101 | 通过 | | 1-102 | **文明寝室** |"
         ],
         evidence_refs: [{ document_id: "doc-1", page: 2, block_id: "doc-1:p2:b3" }],
-        actions: ["field_reference", "global_lookup", "validation_rule"],
-        reason: "模型定案后经过规则校正",
+        actions: ["search_grep", "add_broad_candidate", "finish_broad", "final_decision"],
+        reason: "候选证据支持字段值",
         agent_process: agentProcess
       }
     ]
@@ -351,13 +361,13 @@ it("waiting_review 任务会展示证据并提交 revise_and_approve 后刷新�
   expect(screen.getByText("第二步 resolution / tool")).toBeInTheDocument();
   expect(screen.getByText("第三步 agent result（route 前）")).toBeInTheDocument();
   expect(screen.getByText("第四步 route validation")).toBeInTheDocument();
-  expect(screen.getByText("模型请求参考字段 building")).toBeInTheDocument();
-  expect(screen.getByText("补查文明寝室名单")).toBeInTheDocument();
+  expect(screen.getByText("文明寝室 OR 房间号")).toBeInTheDocument();
+  expect(screen.getByText("召回文明寝室房间号候选")).toBeInTheDocument();
+  expect(screen.getAllByText("引用 1 条").length).toBeGreaterThan(0);
   expect(screen.getAllByText("Agent 输出字段（route 前）").length).toBeGreaterThan(0);
   expect(screen.getByText("Route 结论")).toBeInTheDocument();
   expect(screen.getAllByText("resolved").length).toBeGreaterThan(0);
-  expect(screen.getByText("读取相关字段：building")).toBeInTheDocument();
-  expect(screen.getByText("执行 global_lookup：补查文明寝室名单，参与最终定案。")).toBeInTheDocument();
+  expect(screen.getByText("执行 final_decision：候选证据支持字段值，参与最终定案。")).toBeInTheDocument();
   expect(screen.queryByText("### 文明寝室名单")).not.toBeInTheDocument();
   expect(screen.queryByText("| 房间 | 结论 |")).not.toBeInTheDocument();
 
@@ -373,10 +383,10 @@ it("waiting_review 任务会展示证据并提交 revise_and_approve 后刷新�
   expect(screen.getByText("document_processor")).toBeInTheDocument();
   expect(screen.getByText("file_extraction_agent")).toBeInTheDocument();
   expect(screen.getByText("route_policy_agent")).toBeInTheDocument();
-  expect(screen.getByText("sample.pdf")).toBeInTheDocument();
-  expect(screen.getByText("supplement.docx")).toBeInTheDocument();
+  expect(screen.getAllByText("sample.pdf").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("supplement.docx").length).toBeGreaterThan(0);
   expect(screen.getByText("review: 1")).toBeInTheDocument();
-  expect(screen.getAllByText("validation_rule").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("final_decision").length).toBeGreaterThan(0);
   expect(screen.getByText("Agent 原始 trace")).toBeInTheDocument();
   expect(screen.getByText("document_processor / document_processing")).toBeInTheDocument();
   expect(screen.getByText("file_extraction_agent / extraction")).toBeInTheDocument();
@@ -444,6 +454,128 @@ it("failed 任务会展示 backend 返回的失败原因", async () => {
   expect(screen.getByText("resolution 执行失败: lookup_blocks action exceeded limit")).toBeInTheDocument();
 });
 
+it("list 字段在结果页按条目分行展示", async () => {
+  const completedSummary: TaskSummary = {
+    ...waitingReviewSummary,
+    task_id: "task-list",
+    status: "completed",
+    stage: "done",
+    route: "accept",
+    needs_review: false
+  };
+  const paperTitles = [
+    "Cascading failures in multiple-to-multiple interdependent networks",
+    "Multi-Model Synergistic Gaussian Splatting for Sparse View Synthesis"
+  ];
+  const loadTaskDetail = jest.fn(async (): Promise<TaskDetailData> => ({
+    summary: completedSummary,
+    result: {
+      task_id: "task-list",
+      status: "completed",
+      route: "accept",
+      fields: [
+        {
+          field_name: "academic_paper_titles",
+          display_name: "学术论文名称",
+          agent_value: paperTitles,
+          review_value: null,
+          final_value: paperTitles,
+          field_status: "resolved",
+          route: "accept",
+          source: "agent",
+          committed: true
+        }
+      ]
+    },
+    trace: null,
+    review: null,
+    audit: null
+  }));
+
+  render(
+    <TaskDetail
+      taskId="task-list"
+      initialSummary={completedSummary}
+      loadTaskDetail={loadTaskDetail}
+    />
+  );
+
+  await screen.findByText("completed");
+  const row = screen.getByRole("row", { name: /学术论文名称/ });
+  const listItems = within(row).getAllByRole("listitem");
+  expect(listItems.map((item) => item.textContent)).toEqual([
+    paperTitles[0],
+    paperTitles[1],
+    paperTitles[0],
+    paperTitles[1]
+  ]);
+  expect(within(row).queryByText(/\["Cascading failures/)).not.toBeInTheDocument();
+});
+
+it("trace 会直接展示 document_processor 返回的完整原始 Markdown", async () => {
+  const user = userEvent.setup();
+  const completedSummary: TaskSummary = {
+    ...waitingReviewSummary,
+    task_id: "task-markdown",
+    status: "completed",
+    stage: "done",
+    route: "accept",
+    needs_review: false
+  };
+  const rawMarkdown = [
+    "## 2026届本科生科研作品替代毕业论文（设计）名单汇总表",
+    "",
+    "| 序号 | 作品类型 | 论文题目 |",
+    "| --- | --- | --- |",
+    "| 1 | 学术论文 | Cascading failures in multiple-to-multiple interdependent networks |"
+  ].join("\n");
+  const loadTaskDetail = jest.fn(async (): Promise<TaskDetailData> => ({
+    summary: completedSummary,
+    result: null,
+    trace: {
+      task_id: "task-markdown",
+      agent_status: "completed",
+      steps: [],
+      agent_trace: [
+        {
+          id: "stage-run-markdown",
+          sequence: 1,
+          stage: "document_processing",
+          agent: "document_processor",
+          status: "completed",
+          request: {
+            filename: "academic-paper.pdf",
+            file_type: "pdf"
+          },
+          response: {
+            markdown: rawMarkdown
+          },
+          trace: {
+            warnings: []
+          }
+        }
+      ],
+      fields: []
+    },
+    review: null,
+    audit: null
+  }));
+
+  render(
+    <TaskDetail
+      taskId="task-markdown"
+      initialSummary={completedSummary}
+      loadTaskDetail={loadTaskDetail}
+    />
+  );
+
+  await screen.findByText("completed");
+  await user.click(screen.getByRole("tab", { name: "证据" }));
+  const markdownRegion = screen.getByRole("region", { name: "academic-paper.pdf 原始 Markdown" });
+  expect(within(markdownRegion).getByText("原始 Markdown")).toBeInTheDocument();
+  expect(markdownRegion.querySelector("pre")?.textContent).toBe(rawMarkdown);
+});
+
 it("审计记录会展示字段提交对应的 agent 决策过程", async () => {
   const user = userEvent.setup();
   const completedSummary: TaskSummary = {
@@ -488,9 +620,10 @@ it("审计记录会展示字段提交对应的 agent 决策过程", async () => 
           agent_value: "1-101,1-102",
           review_value: null,
           evidence_refs: [{ document_id: "doc-1", page: 2, block_id: "doc-1:p2:b3" }],
-          used_global_lookup: true,
-          used_validation_rule: true,
-          related_fields: ["building"],
+          used_global_lookup: false,
+          used_validation_rule: false,
+          action_types: ["search_grep", "add_broad_candidate", "finish_broad", "final_decision"],
+          related_fields: [],
           committed_by: "agent",
           committed_at: "2026-04-29T08:00:00Z",
           agent_process: agentProcess
@@ -513,8 +646,8 @@ it("审计记录会展示字段提交对应的 agent 决策过程", async () => 
   expect(screen.getAllByText("文明寝室房间号").length).toBeGreaterThan(0);
   expect(screen.queryByText("room_numbers")).not.toBeInTheDocument();
   expect(screen.getByText("Agent 决策过程")).toBeInTheDocument();
-  expect(screen.getByText("模型请求参考字段 building")).toBeInTheDocument();
-  expect(screen.getByText("补查文明寝室名单")).toBeInTheDocument();
+  expect(screen.getByText("文明寝室 OR 房间号")).toBeInTheDocument();
+  expect(screen.getByText("召回文明寝室房间号候选")).toBeInTheDocument();
 });
 
 it("没有额外 tool/action 时不会把 resolution 显示成 skipped", async () => {
@@ -535,7 +668,7 @@ it("没有额外 tool/action 时不会把 resolution 显示成 skipped", async (
                 field_name: "room_numbers",
                 status: "resolved",
                 value: "1-101,1-102",
-                reason: "模型定案后经过规则校正"
+                reason: "候选证据支持字段值"
               }
             ],
             notes: ["未记录额外 tool/action；resolution 直接将候选证据定案为字段输出。"]

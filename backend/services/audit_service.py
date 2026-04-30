@@ -98,6 +98,7 @@ class AuditService:
         block_lookup: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         agent_value = loads_json(commit["agent_value_json"], None)
+        actions = loads_json(trace["actions_json"], []) if trace else []
         return {
             "field_name": commit["field_name"],
             "final_value": loads_json(commit["final_value_json"], None),
@@ -109,6 +110,11 @@ class AuditService:
             "evidence_refs": loads_json(commit["evidence_refs_json"], []),
             "used_global_lookup": bool(commit["used_global_lookup"]),
             "used_validation_rule": bool(commit["used_validation_rule"]),
+            "action_types": [
+                action_type
+                for action_type in (action.get("action_type") for action in actions)
+                if action_type
+            ],
             "related_fields": loads_json(commit["related_fields_json"], []),
             "committed_by": commit["committed_by"],
             "committed_at": commit["committed_at"],

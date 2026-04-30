@@ -89,6 +89,7 @@ class FakeAgentClient:
         ref = {
             "document_id": blocks[0]["document_id"],
             "page": blocks[0]["page_no"],
+            "span": "p:p1",
             "block_id": blocks[0]["block_id"],
         }
         return {
@@ -112,39 +113,56 @@ class FakeAgentClient:
                             "block_ids": [blocks[0]["block_id"]],
                             "texts": ["1-101、1-102 被列为文明寝室"],
                             "refs": [ref],
-                            "status": "model_resolved",
-                            "notes": ["测试证据"],
+                            "status": "candidate_resolved",
+                            "notes": ["field decision referenced candidate_ids: c1"],
                         },
-                        "related_fields": ["building"],
+                        "related_fields": [],
                         "actions": [
                             {
-                                "action_type": "field_reference",
-                                "message": "模型请求参考字段 building",
+                                "action_type": "search_grep",
+                                "message": "文明寝室 OR 房间号",
                                 "refs": [ref],
                                 "used_in_final_decision": False,
                                 "metadata": {
-                                    "requested_field_name": "building",
-                                    "returned_to_model": True,
+                                    "stage": "broad",
+                                    "refs": [f"{blocks[0]['block_id']}:p:p1"],
                                 },
                             },
                             {
-                                "action_type": "global_lookup",
-                                "message": "补查文明寝室名单",
+                                "action_type": "add_broad_candidate",
+                                "message": "召回文明寝室房间号候选",
                                 "refs": [ref],
                                 "used_in_final_decision": True,
                                 "metadata": {
-                                    "lookup_hints": ["文明寝室"],
-                                    "returned_block_ids": [blocks[0]["block_id"]],
+                                    "stage": "broad",
+                                    "candidate_ids": ["c1"],
+                                    "refs": [f"{blocks[0]['block_id']}:p:p1"],
                                 },
                             },
                             {
-                                "action_type": "validation_rule",
-                                "message": "校正房间号列表",
+                                "action_type": "finish_broad",
+                                "message": "候选足够，结束 broad",
+                                "refs": [],
+                                "used_in_final_decision": False,
+                                "metadata": {
+                                    "stage": "broad",
+                                    "candidate_ids": [],
+                                    "refs": [],
+                                },
+                            },
+                            {
+                                "action_type": "final_decision",
+                                "message": "候选证据支持字段值",
                                 "refs": [ref],
                                 "used_in_final_decision": True,
+                                "metadata": {
+                                    "stage": "resolution",
+                                    "candidate_ids": ["c1"],
+                                    "refs": [f"{blocks[0]['block_id']}:p:p1"],
+                                },
                             }
                         ],
-                        "reason": "模型定案后经过规则校正",
+                        "reason": "候选证据支持字段值",
                         "failure_reason": None,
                     }
                 ],
@@ -358,10 +376,16 @@ def test_create_task_accept_route_commits_agent_fields(tmp_path: Path):
         assert commit["field_name"] == "room_numbers"
         assert commit["route"] == "accept"
         assert commit["reviewed"] is False
-        assert commit["used_global_lookup"] is True
-        assert commit["used_validation_rule"] is True
+        assert commit["used_global_lookup"] is False
+        assert commit["used_validation_rule"] is False
+        assert commit["action_types"] == [
+            "search_grep",
+            "add_broad_candidate",
+            "finish_broad",
+            "final_decision",
+        ]
         assert commit["committed_by"] == "agent"
-        assert commit["agent_process"]["actions"][0]["message"] == "模型请求参考字段 building"
+        assert commit["agent_process"]["actions"][0]["message"] == "文明寝室 OR 房间号"
 
         extract_call = fake_agent.extraction_calls[0]
         assert extract_call["task_spec"] == TASK_SPEC
@@ -454,6 +478,12 @@ def test_create_task_accepts_multiple_files_and_merges_document_blocks(tmp_path:
             "route_validation",
         ]
         assert process_steps[0]["title"] == "第一步 broad extraction"
+        assert process_steps[0]["evidence"]["status"] == "candidate_resolved"
+        assert [action["action_type"] for action in process_steps[0]["actions"]] == [
+            "search_grep",
+            "add_broad_candidate",
+            "finish_broad",
+        ]
         assert process_steps[0]["evidence"]["texts"] == ["1-101、1-102 被列为文明寝室"]
         assert process_steps[0]["evidence"]["blocks"] == [
             {
@@ -471,23 +501,21 @@ def test_create_task_accepts_multiple_files_and_merges_document_blocks(tmp_path:
                 "field_name": "room_numbers",
                 "status": "resolved",
                 "value": "1-101,1-102",
-                "reason": "模型定案后经过规则校正",
+                "reason": "候选证据支持字段值",
             }
         ]
-        assert "读取相关字段：building" in process_steps[1]["notes"]
-        assert "执行 global_lookup：补查文明寝室名单，参与最终定案。" in process_steps[1]["notes"]
-        assert "执行 validation_rule：校正房间号列表，参与最终定案。" in process_steps[1]["notes"]
-        assert process_steps[1]["actions"][1]["action_type"] == "global_lookup"
+        assert "执行 final_decision：候选证据支持字段值，参与最终定案。" in process_steps[1]["notes"]
+        assert process_steps[1]["actions"][0]["action_type"] == "final_decision"
         assert process_steps[2]["title"] == "第三步 agent result（route 前）"
         assert process_steps[2]["value"] == "1-101,1-102"
-        assert process_steps[2]["reason"] == "模型定案后经过规则校正"
+        assert process_steps[2]["reason"] == "候选证据支持字段值"
         assert process_steps[3]["title"] == "第四步 route validation"
         assert process_steps[3]["status"] == "accept"
         assert process_steps[3]["route"] == "accept"
         assert process_steps[3]["needs_review"] is False
         assert process_steps[3]["reason"] == "测试 route policy 输出"
-        assert steps[1]["field_decisions"][0]["actions"][1]["action_type"] == "global_lookup"
-        assert steps[1]["field_decisions"][0]["actions"][1]["message"] == "补查文明寝室名单"
+        assert steps[1]["field_decisions"][0]["actions"][1]["action_type"] == "add_broad_candidate"
+        assert steps[1]["field_decisions"][0]["actions"][1]["message"] == "召回文明寝室房间号候选"
         assert steps[2]["stage"] == "route_policy"
         assert steps[2]["status"] == "completed"
         assert steps[2]["summary"]["routes"] == {
@@ -526,7 +554,11 @@ def test_create_task_accepts_multiple_files_and_merges_document_blocks(tmp_path:
         assert agent_trace[1]["response"]["blocks"][0]["text"] == "2-201 被列为文明寝室补充材料"
         assert agent_trace[2]["request"]["task_spec"] == TASK_SPEC
         assert agent_trace[2]["request"]["metadata"]["document_ids"] == extract_call["metadata"]["document_ids"]
-        assert agent_trace[2]["response"]["trace"]["fields"][0]["actions"][1]["action_type"] == "global_lookup"
+        assert agent_trace[2]["response"]["result"]["fields"] == [
+            {"field_name": "room_numbers", "status": "resolved", "value": "1-101,1-102"}
+        ]
+        assert "evidence" not in agent_trace[2]["response"]["result"]["fields"][0]
+        assert agent_trace[2]["response"]["trace"]["fields"][0]["actions"][1]["action_type"] == "add_broad_candidate"
         assert agent_trace[2]["trace"]["fields"][0]["field_name"] == "room_numbers"
         assert agent_trace[3]["request"]["field_outputs"] == [
             {"field_name": "room_numbers", "status": "resolved", "value": "1-101,1-102"}
@@ -572,13 +604,14 @@ def test_review_route_returns_handoff_and_accepts_revised_value(tmp_path: Path):
         assert handoff["fields"][0]["needs_review"] is True
         assert handoff["fields"][0]["evidence_texts"] == ["1-101、1-102 被列为文明寝室"]
         assert handoff["fields"][0]["actions"] == [
-            "field_reference",
-            "global_lookup",
-            "validation_rule",
+            "search_grep",
+            "add_broad_candidate",
+            "finish_broad",
+            "final_decision",
         ]
-        assert handoff["fields"][0]["agent_process"]["actions"][0]["message"] == "模型请求参考字段 building"
+        assert handoff["fields"][0]["agent_process"]["actions"][0]["message"] == "文明寝室 OR 房间号"
         assert handoff["fields"][0]["agent_process"]["process_steps"][0]["stage"] == "broad_extraction"
-        assert handoff["fields"][0]["agent_process"]["process_steps"][1]["actions"][1]["action_type"] == "global_lookup"
+        assert handoff["fields"][0]["agent_process"]["process_steps"][1]["actions"][0]["action_type"] == "final_decision"
         assert handoff["fields"][0]["agent_process"]["process_steps"][2]["value"] == "1-101,1-102"
         assert handoff["fields"][0]["agent_process"]["process_steps"][3]["status"] == "review"
         assert handoff["fields"][0]["agent_process"]["process_steps"][3]["reason"] == "测试 route policy 输出"
@@ -620,8 +653,14 @@ def test_review_route_returns_handoff_and_accepts_revised_value(tmp_path: Path):
         assert commit["review_decision"] == "revise_and_approve"
         assert commit["review_value"] == "1-101,1-102,1-103"
         assert commit["committed_by"] == "human"
-        assert commit["agent_process"]["reason"] == "模型定案后经过规则校正"
-        assert commit["agent_process"]["actions"][1]["metadata"]["lookup_hints"] == ["文明寝室"]
+        assert commit["agent_process"]["reason"] == "候选证据支持字段值"
+        assert commit["action_types"] == [
+            "search_grep",
+            "add_broad_candidate",
+            "finish_broad",
+            "final_decision",
+        ]
+        assert commit["agent_process"]["actions"][1]["metadata"]["candidate_ids"] == ["c1"]
         assert commit["agent_process"]["process_steps"][0]["title"] == "第一步 broad extraction"
         assert commit["agent_process"]["process_steps"][1]["title"] == "第二步 resolution / tool"
         assert commit["agent_process"]["process_steps"][2]["title"] == "第三步 agent result（route 前）"

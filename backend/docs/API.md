@@ -26,7 +26,7 @@
 这里的核心边界是：
 
 - `result` 表示后端治理后的最终字段结果，可以包含 agent 原值、人工修正值和最终值。
-- `trace` 表示 Agent 执行层如何得到字段结果，包括 agent 抽取过程、route policy 验证过程、证据、定位、补查、validation action 和失败原因。
+- `trace` 表示 Agent 执行层如何得到字段结果，包括 agent 抽取过程、route policy 验证过程、证据、定位、搜索、候选写入、最终定案 action 和失败原因。
 - `review` 表示人工审核需要接管的信息包和人工提交的处理结论。
 - `audit` 表示字段最终进入或未进入正式数据区的责任链路。
 
@@ -164,7 +164,7 @@ curl -X POST "http://localhost:8000/tasks" \
   "status": "waiting_review",
   "stage": "review",
   "route": "review",
-  "route_reason": "关键字段经过补查后定案，需要人工确认",
+  "route_reason": "关键字段由候选证据定案，需要人工确认",
   "error_message": null,
   "has_result": true,
   "has_trace": true,
@@ -279,27 +279,43 @@ curl -X POST "http://localhost:8000/tasks" \
                 "block_id": "doc-1:p2:b3"
               }
             ],
-            "status": "model_resolved",
-            "notes": ["按模型 used_block_ids 绑定证据"]
+            "status": "candidate_resolved",
+            "notes": ["field decision referenced candidate_ids: c1"]
           },
-          "related_fields": ["building"],
+          "related_fields": [],
           "actions": [
             {
-              "action_type": "global_lookup",
-              "message": "补查文明寝室名单",
-              "used_in_final_decision": true,
+              "action_type": "search_grep",
+              "message": "文明寝室 OR 房间号",
+              "refs": [
+                {
+                  "document_id": "doc-1",
+                  "page": 2,
+                  "span": "p:p1",
+                  "block_id": "doc-1:p2:b3"
+                }
+              ],
+              "used_in_final_decision": false,
               "metadata": {
-                "lookup_hints": ["文明寝室"],
-                "returned_block_ids": ["doc-1:p2:b3"]
+                "stage": "broad"
               }
             },
             {
-              "action_type": "validation_rule",
-              "message": "按表格规则校正房间号列表",
+              "action_type": "add_broad_candidate",
+              "message": "召回文明寝室房间号候选",
+              "used_in_final_decision": true,
+              "metadata": {
+                "stage": "broad",
+                "candidate_ids": ["c1"]
+              }
+            },
+            {
+              "action_type": "final_decision",
+              "message": "候选证据支持字段值",
               "used_in_final_decision": true
             }
           ],
-          "reason": "模型定案后经过规则校正",
+          "reason": "候选证据支持字段值",
           "failure_reason": null
         }
       ],
@@ -373,18 +389,18 @@ curl -X POST "http://localhost:8000/tasks" \
             "block_id": "doc-1:p2:b3"
           }
         ],
-        "status": "model_resolved",
-        "notes": ["按模型 used_block_ids 绑定证据"]
+        "status": "candidate_resolved",
+        "notes": ["field decision referenced candidate_ids: c1"]
       },
-      "related_fields": ["building"],
+      "related_fields": [],
       "actions": [
         {
-          "action_type": "validation_rule",
-          "message": "按表格规则校正房间号列表",
+          "action_type": "final_decision",
+          "message": "候选证据支持字段值",
           "used_in_final_decision": true
         }
       ],
-      "reason": "模型定案后经过规则校正",
+      "reason": "候选证据支持字段值",
       "failure_reason": null
     }
   ],
@@ -405,14 +421,14 @@ documents 表中的标准化结果
   -> route_policy_agent 步骤，返回 accept/review/reject 计数和每个字段的 route_reason
 ```
 
-`field_decisions` 来自 `agent_runs.trace_json` 和 `agent_runs.result_json`，用于把 file_extraction_agent 的字段定案过程透给前端。它包含字段值、证据摘要、跨字段参考、global lookup、validation rule、reason、failure_reason 和 `process_steps`。当前 agent 契约不保存 raw prompt 或 raw model response，因此 backend 也不会在 trace 中伪造这类原始内容。
+`field_decisions` 来自 `agent_runs.trace_json` 和 `agent_runs.result_json`，用于把 file_extraction_agent 的字段定案过程透给前端。它包含字段值、证据摘要、相关字段、搜索与候选动作、最终定案动作、reason、failure_reason 和 `process_steps`。当前 agent 契约不保存 raw prompt 或 raw model response，因此 backend 也不会在 trace 中伪造这类原始内容。
 
 `process_steps` 是 backend 从现有字段 trace 派生的展示链路，不新增数据库字段：
 
 ```text
 field evidence + documents.blocks_json + actions + agent value
-  -> broad_extraction：按 evidence.block_ids / refs[].block_id 回查候选 block 正文，并返回 blocks、文本、refs 和 notes
-  -> field_resolution：返回本阶段产出的 route 前 output_fields(field_name/status/value/reason)，并说明读取了哪些 related_fields、执行了哪些 field_reference / global_lookup / validation_rule 动作；没有额外 tool/action 时返回 completed 和直接定案说明，不返回 skipped
+  -> broad_extraction：按 evidence.block_ids / refs[].block_id 回查候选 block 正文，并返回 blocks、文本、refs、notes 和 broad 阶段 actions，例如 search_grep / add_broad_candidate / finish_broad
+  -> field_resolution：返回本阶段产出的 route 前 output_fields(field_name/status/value/reason)，并说明读取了哪些 related_fields、执行了哪些 resolution actions，例如 final_decision；没有额外 action 时返回 completed 和直接定案说明，不返回 skipped
   -> final_result：route policy 之前的 agent 抽取结果，包含 status、agent value、reason 或 failure_reason
   -> route_validation：route_policy_agent 的验证/路由结论，包含 route、needs_review 和 route_reason
 ```
@@ -457,7 +473,7 @@ route_policy_agent 一次记录
       "agent_value": "1-101,1-102",
       "field_status": "resolved",
       "needs_review": true,
-      "review_reason": "字段经过 global_lookup 后才定案",
+      "review_reason": "字段由候选证据定案，需要人工确认",
       "evidence_texts": ["1-101、1-102 被列为文明寝室"],
       "evidence_refs": [
         {
@@ -466,9 +482,9 @@ route_policy_agent 一次记录
           "block_id": "doc-1:p2:b3"
         }
       ],
-      "related_fields": ["building"],
-      "actions": ["global_lookup", "validation_rule"],
-      "reason": "模型定案后经过表格规则校正",
+      "related_fields": [],
+      "actions": ["search_grep", "add_broad_candidate", "finish_broad", "final_decision"],
+      "reason": "候选证据支持字段值",
       "failure_reason": null,
       "agent_process": {
         "field_name": "room_numbers",
@@ -483,22 +499,56 @@ route_policy_agent 一次记录
               "block_id": "doc-1:p2:b3"
             }
           ],
-          "status": "model_resolved",
-          "notes": ["按模型 used_block_ids 绑定证据"]
+          "status": "candidate_resolved",
+          "notes": ["field decision referenced candidate_ids: c1"]
         },
-        "related_fields": ["building"],
+        "related_fields": [],
         "actions": [
           {
-            "action_type": "global_lookup",
-            "message": "补查文明寝室名单",
+            "action_type": "search_grep",
+            "message": "文明寝室 OR 房间号",
+            "refs": [
+              {
+                "document_id": "doc-1",
+                "page": 2,
+                "span": "p:p1",
+                "block_id": "doc-1:p2:b3"
+              }
+            ],
+            "used_in_final_decision": false,
+            "metadata": {
+              "stage": "broad"
+            }
+          },
+          {
+            "action_type": "add_broad_candidate",
+            "message": "召回文明寝室房间号候选",
             "used_in_final_decision": true,
             "metadata": {
-              "lookup_hints": ["文明寝室"],
-              "returned_block_ids": ["doc-1:p2:b3"]
+              "stage": "broad",
+              "candidate_ids": ["c1"]
+            }
+          },
+          {
+            "action_type": "finish_broad",
+            "message": "候选足够，结束 broad",
+            "used_in_final_decision": false,
+            "metadata": {
+              "stage": "broad",
+              "candidate_ids": []
+            }
+          },
+          {
+            "action_type": "final_decision",
+            "message": "候选证据支持字段值",
+            "used_in_final_decision": true,
+            "metadata": {
+              "stage": "resolution",
+              "candidate_ids": ["c1"]
             }
           }
         ],
-        "reason": "模型定案后经过表格规则校正",
+        "reason": "候选证据支持字段值",
         "failure_reason": null
       }
     }
@@ -585,9 +635,10 @@ task_id
           "block_id": "doc-1:p2:b3"
         }
       ],
-      "used_global_lookup": true,
-      "used_validation_rule": true,
-      "related_fields": ["building"],
+      "used_global_lookup": false,
+      "used_validation_rule": false,
+      "action_types": ["search_grep", "add_broad_candidate", "finish_broad", "final_decision"],
+      "related_fields": [],
       "committed_by": "human",
       "committed_at": "2026-04-28T10:05:00Z",
       "agent_process": {
@@ -603,22 +654,56 @@ task_id
               "block_id": "doc-1:p2:b3"
             }
           ],
-          "status": "model_resolved",
-          "notes": ["按模型 used_block_ids 绑定证据"]
+          "status": "candidate_resolved",
+          "notes": ["field decision referenced candidate_ids: c1"]
         },
-        "related_fields": ["building"],
+        "related_fields": [],
         "actions": [
           {
-            "action_type": "global_lookup",
-            "message": "补查文明寝室名单",
+            "action_type": "search_grep",
+            "message": "文明寝室 OR 房间号",
+            "refs": [
+              {
+                "document_id": "doc-1",
+                "page": 2,
+                "span": "p:p1",
+                "block_id": "doc-1:p2:b3"
+              }
+            ],
+            "used_in_final_decision": false,
+            "metadata": {
+              "stage": "broad"
+            }
+          },
+          {
+            "action_type": "add_broad_candidate",
+            "message": "召回文明寝室房间号候选",
             "used_in_final_decision": true,
             "metadata": {
-              "lookup_hints": ["文明寝室"],
-              "returned_block_ids": ["doc-1:p2:b3"]
+              "stage": "broad",
+              "candidate_ids": ["c1"]
+            }
+          },
+          {
+            "action_type": "finish_broad",
+            "message": "候选足够，结束 broad",
+            "used_in_final_decision": false,
+            "metadata": {
+              "stage": "broad",
+              "candidate_ids": []
+            }
+          },
+          {
+            "action_type": "final_decision",
+            "message": "候选证据支持字段值",
+            "used_in_final_decision": true,
+            "metadata": {
+              "stage": "resolution",
+              "candidate_ids": ["c1"]
             }
           }
         ],
-        "reason": "模型定案后经过表格规则校正",
+        "reason": "候选证据支持字段值",
         "failure_reason": null
       }
     }

@@ -120,15 +120,18 @@ frontend/
   -> 非 failed 状态尝试读取 audit，404/409 返回 null
   -> 如果 summary.status=failed 且带有 error_message，在详情页顶部展示失败原因
   -> 页面用 Tabs 展示 result、review、trace、audit
+  -> result tab 只展示 backend 治理后的字段值、来源和提交状态，不混入 evidence/actions
   -> trace tab 先由 AgentExecutionSteps 渲染 trace.steps，按调用顺序展示 agent 名称、阶段、状态、时间、文件摘要、file_extraction_agent 字段决策过程和 route 统计
+  -> trace tab 从 trace.agent_trace 中读取 document_processor.response.markdown，按文件直接展示完整原始 Markdown，便于排查 OCR 和表格结构问题
   -> 字段决策过程优先展示 backend 返回的 agent_process.process_steps，按 broad_extraction、field_resolution/tool、final_result、route_validation 说明候选 block 正文、route 前 resolution 字段输出、工具动作、route 前 agent 结果和 route policy 验证结论
   -> broad_extraction 的候选 blocks 用默认展开的 details 区域展示 markdown 正文，可手动折叠；正文区域不展示 document_id/block_id，backend 没返回 blocks 时从 refs.text 或 evidence.texts 兜底显示正文
   -> field_resolution 展示 output_fields、related_fields、notes 和 actions；没有额外 tool/action 时展示 backend 的 completed 直接定案说明，不把 resolution 渲染成 skipped
   -> route_validation 单独展示 route、needs_review 和 route_reason，避免把 agent final result 误读成 route policy 验证结论
-  -> AgentRawTrace 渲染 trace.agent_trace，按 sequence 展示每次 agent 调用的 agent/stage/status 和 request/response/trace key 摘要，JSON 明细放入可展开区域
-  -> review tab 对 waiting_review 字段展示 agent_process，包含字段值、证据状态、四段过程、reason、field_reference/global_lookup/validation_rule 等 action 明细；复核证据文本默认放在可折叠区域，展开后按 markdown 渲染
+  -> AgentRawTrace 渲染 trace.agent_trace，按 sequence 展示每次 agent 调用的 agent/stage/status 和 request/response/trace key 摘要，JSON 明细放入可展开区域；document_processor 的完整 markdown 会额外在原始 Markdown 区域直接显示
+  -> review tab 对 waiting_review 字段展示 agent_process，包含字段值、证据状态、四段过程、reason、search_grep/add_broad_candidate/final_decision 等 action 明细；action refs 只展示引用数量、文档、页码和 span，不展示 block_id；复核证据文本默认放在可折叠区域，展开后按 markdown 渲染
   -> audit tab 对 field_commits 展示最终提交记录，并在每条提交下方展示对应 agent_process 和三段过程
   -> review/trace 中的 evidence_texts/texts 先交给 MarkdownEvidence 渲染标题、列表、标准/紧凑表格、加粗和行内代码
+  -> result、review、trace 和 audit 中的字段值统一经过 ValueDisplay 展示；数组值按 list item 分行渲染，避免 list 字段被压成 JSON 单行
   -> waiting_review 时把 agent_value 作为默认复核值
   -> 用户提交 revise_and_approve
   -> submitTaskReview POST /tasks/{task_id}/review

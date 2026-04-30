@@ -324,7 +324,7 @@ extracted_fields + field_traces + task_spec
 
 ```text
 final field value + route + review decision + trace refs
-  -> 提取 evidence_refs、related_fields、lookup / validation 标记
+  -> 提取 evidence_refs、related_fields、action_types 和旧版兼容标记
   -> 写入 field_commits
 ```
 
@@ -447,7 +447,7 @@ task_service 准备某次 agent HTTP 调用
 field_traces.evidence_json + documents.blocks_json + extracted_fields.agent_value_json
   -> 用 evidence.block_ids / refs[].block_id 回查 documents.blocks_json，补出候选 blocks 的正文、页码和 kind
   -> broad_extraction：展示 broad 阶段预选出的候选 block 正文、证据文本、refs 和 notes
-  -> field_resolution：展示 resolution 阶段产出的 route 前 output_fields(field_name/status/value/reason)，并说明读取了哪些 related_fields、实际执行了哪些 field_reference、global_lookup、validation_rule 等 actions；如果没有额外 tool/action，只标记 completed 并说明 resolution 直接把候选证据定案为字段输出
+  -> field_resolution：展示 resolution 阶段产出的 route 前 output_fields(field_name/status/value/reason)，并说明读取了哪些 related_fields、实际执行了哪些 final_decision / add_resolution_candidate 等 actions；如果没有额外 action，只标记 completed 并说明 resolution 直接把候选证据定案为字段输出
   -> final_result：展示 route policy 之前的 agent 抽取 status、agent value、reason 或 failure_reason
   -> route_validation：展示 route_policy_agent 的 route、needs_review 和 route_reason，让验证结论与 agent final result 分离
   -> agent_process.process_steps
@@ -460,7 +460,7 @@ field_traces.evidence_json + documents.blocks_json + extracted_fields.agent_valu
 | `field_name` | `TEXT` | 字段名 |
 | `evidence_json` | `TEXT` | 证据文本和 refs |
 | `related_fields_json` | `TEXT` | 相关字段列表 |
-| `actions_json` | `TEXT` | `field_reference / global_lookup / validation_rule / model_call_error` 等动作 |
+| `actions_json` | `TEXT` | `search_grep / add_broad_candidate / finish_broad / final_decision / model_call_error` 等动作 |
 | `trace_status` | `TEXT` | trace 字段状态 |
 | `reason` | `TEXT NULL` | 成功定案原因 |
 | `failure_reason` | `TEXT NULL` | 失败原因 |
@@ -524,8 +524,8 @@ field_traces.evidence_json + documents.blocks_json + extracted_fields.agent_valu
 | `agent_value_json` | `TEXT NULL` | agent 原始值 |
 | `review_value_json` | `TEXT NULL` | 人工修正值 |
 | `evidence_refs_json` | `TEXT` | 最终字段证据定位 |
-| `used_global_lookup` | `BOOLEAN` | 是否使用过全局补查 |
-| `used_validation_rule` | `BOOLEAN` | 是否使用过 validation rule |
+| `used_global_lookup` | `BOOLEAN` | 旧版兼容字段；新 file_extraction_agent 不再产生 global_lookup |
+| `used_validation_rule` | `BOOLEAN` | 旧版兼容字段；新 file_extraction_agent 不再产生 validation_rule |
 | `related_fields_json` | `TEXT` | 定案参考字段 |
 | `committed_by` | `TEXT` | `agent / human` |
 | `committed_at` | `DATETIME` | 提交时间 |

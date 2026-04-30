@@ -16,6 +16,7 @@ import type {
   AgentProcess,
   AgentProcessStep,
   EvidenceBlock,
+  EvidenceRef,
   ReviewSubmitPayload,
   TaskDetailData,
   TaskSummary,
@@ -213,7 +214,9 @@ export function TaskDetail({
                         <dl className="mb-4 grid gap-3 text-sm md:grid-cols-2">
                           <div>
                             <dt className="text-muted-foreground">Agent 值</dt>
-                            <dd className="mt-1 font-mono">{stringifyValue(field.agent_value)}</dd>
+                            <dd className="mt-1">
+                              <ValueDisplay value={field.agent_value} />
+                            </dd>
                           </div>
                           <div>
                             <dt className="text-muted-foreground">动作</dt>
@@ -313,8 +316,12 @@ function ResultTable({
                 {getFieldLabel(fieldLabels, field.field_name, field.display_name)}
               </div>
             </TableCell>
-            <TableCell className="font-mono text-xs">{stringifyValue(field.agent_value)}</TableCell>
-            <TableCell className="font-mono text-xs">{stringifyValue(field.final_value)}</TableCell>
+            <TableCell>
+              <ValueDisplay value={field.agent_value} />
+            </TableCell>
+            <TableCell>
+              <ValueDisplay value={field.final_value} />
+            </TableCell>
             <TableCell>{field.source ?? "-"}</TableCell>
             <TableCell>{field.committed ? "已提交" : "未提交"}</TableCell>
           </TableRow>
@@ -340,6 +347,7 @@ function TraceView({
   return (
     <div className="space-y-6">
       <AgentExecutionSteps steps={steps} fieldLabels={fieldLabels} />
+      <DocumentProcessorMarkdown records={agentTrace} />
       <AgentRawTrace records={agentTrace} />
       {fields.map((field) => (
         <section key={field.field_name} className="rounded-md border p-4">
@@ -356,6 +364,28 @@ function TraceView({
         </section>
       ))}
     </div>
+  );
+}
+
+function ValueDisplay({ value }: { value: unknown }) {
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return <span className="font-mono text-xs text-muted-foreground">[]</span>;
+    }
+    return (
+      <ol className="list-decimal space-y-1 pl-5 font-mono text-xs text-foreground">
+        {value.map((item, index) => (
+          <li key={index} className="break-words">
+            {stringifyValue(item)}
+          </li>
+        ))}
+      </ol>
+    );
+  }
+  return (
+    <span className="whitespace-pre-wrap break-words font-mono text-xs text-foreground">
+      {stringifyValue(value)}
+    </span>
   );
 }
 
@@ -397,6 +427,58 @@ function AgentRawTrace({ records }: { records: AgentTraceRecord[] }) {
               <TracePayload title="trace" payload={record.trace} />
             </div>
           </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function DocumentProcessorMarkdown({ records }: { records: AgentTraceRecord[] }) {
+  const markdownRecords = records
+    .map((record) => {
+      const markdown = record.response?.markdown;
+      if (typeof markdown !== "string" || markdown.length === 0) {
+        return null;
+      }
+      const filename =
+        typeof record.request?.filename === "string"
+          ? record.request.filename
+          : `document_processor #${record.sequence}`;
+      return {
+        key: record.id ?? `${record.sequence}-${filename}`,
+        filename,
+        markdown
+      };
+    })
+    .filter((record): record is { key: string; filename: string; markdown: string } => record !== null);
+
+  if (markdownRecords.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="space-y-3">
+      <div>
+        <h2 className="text-sm font-semibold text-foreground">文档原始 Markdown</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          document_processor 返回的完整 markdown 文本，用于排查 OCR 和表格结构。
+        </p>
+      </div>
+      <div className="space-y-3">
+        {markdownRecords.map((record) => (
+          <section
+            key={record.key}
+            aria-label={`${record.filename} 原始 Markdown`}
+            className="rounded-md border bg-background p-3"
+          >
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-xs font-medium text-foreground">原始 Markdown</h3>
+              <span className="text-xs text-muted-foreground">{record.filename}</span>
+            </div>
+            <pre className="whitespace-pre-wrap break-words rounded-md bg-muted p-3 font-mono text-[11px] leading-5 text-foreground">
+              {record.markdown}
+            </pre>
+          </section>
         ))}
       </div>
     </section>
@@ -616,7 +698,9 @@ function AuditTable({
           <React.Fragment key={`${commit.field_name}-${commit.committed_at ?? ""}`}>
             <TableRow>
               <TableCell>{getFieldLabel(fieldLabels, commit.field_name)}</TableCell>
-              <TableCell className="font-mono text-xs">{stringifyValue(commit.final_value)}</TableCell>
+              <TableCell>
+                <ValueDisplay value={commit.final_value} />
+              </TableCell>
               <TableCell>{commit.route ?? "-"}</TableCell>
               <TableCell>{commit.reviewed ? commit.review_decision ?? "reviewed" : "否"}</TableCell>
               <TableCell>{commit.committed_by ?? "-"}</TableCell>
@@ -666,7 +750,9 @@ function AgentProcessList({
               <dl className="mt-2 grid gap-2 sm:grid-cols-2">
                 <div>
                   <dt className="text-muted-foreground">定案值</dt>
-                  <dd className="mt-1 font-mono text-foreground">{stringifyValue(process.value)}</dd>
+                  <dd className="mt-1">
+                    <ValueDisplay value={process.value} />
+                  </dd>
                 </div>
                 {process.evidence?.status ? (
                   <div>
@@ -721,7 +807,9 @@ function ProcessStepList({ steps, fieldLabels }: { steps: AgentProcessStep[]; fi
               <dl className="mt-2 grid gap-2 sm:grid-cols-2">
                 <div>
                   <dt className="text-muted-foreground">输出结果</dt>
-                  <dd className="font-mono text-foreground">{stringifyValue(step.value)}</dd>
+                  <dd>
+                    <ValueDisplay value={step.value} />
+                  </dd>
                 </div>
               </dl>
             ) : null}
@@ -757,8 +845,8 @@ function StepOutputFields({
               </div>
               <div>
                 <dt className="text-muted-foreground">值</dt>
-                <dd className="mt-1 font-mono text-foreground">
-                  {"value" in field ? stringifyValue(field.value) : "未输出值"}
+                <dd className="mt-1">
+                  {"value" in field ? <ValueDisplay value={field.value} /> : "未输出值"}
                 </dd>
               </div>
               {field.status ? (
@@ -940,11 +1028,39 @@ function TraceActionList({ actions }: { actions: TraceAction[] }) {
           {action.message ? (
             <p className="mt-1 text-muted-foreground">{action.message}</p>
           ) : null}
+          <ActionRefs refs={action.refs ?? []} />
           <ActionMetadata metadata={action.metadata} />
         </div>
       ))}
     </div>
   );
+}
+
+function ActionRefs({ refs }: { refs: EvidenceRef[] }) {
+  if (refs.length === 0) {
+    return null;
+  }
+  return (
+    <div className="mt-2 space-y-1 text-muted-foreground">
+      <p>引用 {refs.length} 条</p>
+      <ul className="list-disc space-y-1 pl-4">
+        {refs.map((ref, index) => (
+          <li key={`${ref.document_id ?? "ref"}-${ref.page ?? "p"}-${ref.span ?? index}`}>
+            {formatEvidenceRef(ref)}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function formatEvidenceRef(ref: EvidenceRef): string {
+  const parts = [
+    ref.document_id,
+    typeof ref.page === "number" ? `第 ${ref.page} 页` : null,
+    ref.span
+  ].filter((part): part is string => typeof part === "string" && part.length > 0);
+  return parts.length > 0 ? parts.join(" / ") : "来源定位";
 }
 
 function ActionMetadata({ metadata }: { metadata?: Record<string, unknown> }) {

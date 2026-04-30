@@ -84,12 +84,13 @@ def build_field_process_steps(
     value: Any = _MISSING,
     route: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
+    broad_actions, resolution_actions = _split_process_actions(actions)
     resolution_step: dict[str, Any] = {
         "stage": "field_resolution",
         "title": "第二步 resolution / tool",
-        "status": "used" if actions or related_fields else "completed",
+        "status": "used" if resolution_actions or related_fields else "completed",
         "related_fields": related_fields,
-        "actions": actions,
+        "actions": resolution_actions,
         "output_fields": _build_resolution_output_fields(
             field_name=field_name,
             status=status,
@@ -99,7 +100,7 @@ def build_field_process_steps(
         ),
         "notes": _build_resolution_notes(
             related_fields=related_fields,
-            actions=actions,
+            actions=resolution_actions,
         ),
     }
 
@@ -119,6 +120,7 @@ def build_field_process_steps(
             "title": "第一步 broad extraction",
             "status": evidence.get("status") or status,
             "evidence": evidence,
+            "actions": broad_actions,
         },
         resolution_step,
         final_step,
@@ -127,6 +129,27 @@ def build_field_process_steps(
     if route_step is not None:
         steps.append(route_step)
     return steps
+
+
+def _split_process_actions(
+    actions: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    broad_actions: list[dict[str, Any]] = []
+    resolution_actions: list[dict[str, Any]] = []
+    for action in actions:
+        if _action_belongs_to_broad(action):
+            broad_actions.append(action)
+        else:
+            resolution_actions.append(action)
+    return broad_actions, resolution_actions
+
+
+def _action_belongs_to_broad(action: dict[str, Any]) -> bool:
+    metadata = action.get("metadata") if isinstance(action.get("metadata"), dict) else {}
+    stage = metadata.get("stage")
+    if stage:
+        return stage == "broad"
+    return action.get("action_type") in {"search_grep", "add_broad_candidate", "finish_broad"}
 
 
 def _build_route_validation_step(route: dict[str, Any] | None) -> dict[str, Any] | None:

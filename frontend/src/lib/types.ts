@@ -71,6 +71,7 @@ export interface TaskResult {
 export interface EvidenceRef {
   document_id?: string;
   page?: number;
+  span?: string | null;
   block_id?: string;
   text?: string;
 }
@@ -95,6 +96,7 @@ export interface EvidencePayload {
 export interface TraceAction {
   action_type?: string;
   message?: string;
+  refs?: EvidenceRef[];
   used_in_final_decision?: boolean;
   metadata?: Record<string, unknown>;
 }
@@ -235,6 +237,7 @@ export interface AuditCommit {
   evidence_refs?: EvidenceRef[];
   used_global_lookup?: boolean;
   used_validation_rule?: boolean;
+  action_types?: string[];
   related_fields?: string[];
   committed_by?: string;
   committed_at?: string;
