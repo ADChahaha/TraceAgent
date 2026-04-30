@@ -3,10 +3,10 @@
 实现步骤：
 
 ```text
-调用方传入 task_spec、field_outputs 和 refs_with_text
+调用方传入 task_spec、field_outputs、refs_with_text 和 field_processes
   -> RoutePolicyInput 解析，只保留 route 判断需要的输入
-  -> input_validator 校验字段名、字段输出和 refs 文本完整性
-  -> mapper 按 field_name 合并字段定义、字段输出和 refs 文本
+  -> input_validator 校验字段名、字段输出、refs 文本和过程摘要完整性
+  -> mapper 按 field_name 合并字段定义、字段输出、refs 文本和两阶段过程摘要
   -> failed 且 critical/required 的字段直接 reject
   -> resolved 字段构造单字段 route prompt，并调用 policy_client 输出 RoutePolicyDecision
   -> 汇总成 RoutePolicyResult(field_routes[])
@@ -27,6 +27,7 @@ from service.route_policy_agent.schemas import (
     FieldRefsWithText,
     FieldRouteDecision,
     PolicyOptions,
+    RouteFieldProcess,
     RouteFieldOutput,
     RoutePolicyDecision,
     RoutePolicyInput,
@@ -34,7 +35,7 @@ from service.route_policy_agent.schemas import (
 )
 
 
-StructuredOutputStrategy = Literal["json_schema", "tool_call", "auto"]
+StructuredOutputStrategy = Literal["tool_call"]
 
 
 def evaluate(
@@ -42,12 +43,13 @@ def evaluate(
     task_spec: TaskSpec | dict[str, Any],
     field_outputs: list[RouteFieldOutput | dict[str, Any]],
     refs_with_text: list[FieldRefsWithText | dict[str, Any]],
+    field_processes: list[RouteFieldProcess | dict[str, Any]],
     policy_options: PolicyOptions | dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
     base_url: str | None = None,
     openai_api_key: str | None = None,
     model: str | None = None,
-    structured_output_strategy: StructuredOutputStrategy = "auto",
+    structured_output_strategy: StructuredOutputStrategy = "tool_call",
     policy_client: Any | None = None,
 ) -> RoutePolicyResult:
     """消费外部已校验主输入，执行字段级 route policy 判断。"""
@@ -56,6 +58,7 @@ def evaluate(
         task_spec=task_spec,
         field_outputs=field_outputs,
         refs_with_text=refs_with_text,
+        field_processes=field_processes,
         policy_options=policy_options or PolicyOptions(),
         metadata=metadata or {},
     )

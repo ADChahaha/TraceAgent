@@ -8,7 +8,9 @@ from service.route_policy_agent.input_validator import (
 from service.route_policy_agent.schemas import (
     EvidenceTextRef,
     FieldRefsWithText,
+    RouteFieldProcess,
     RouteFieldOutput,
+    RouteProcessStage,
     RoutePolicyInput,
 )
 
@@ -50,6 +52,21 @@ def _valid_input() -> RoutePolicyInput:
                 ],
             )
         ],
+        field_processes=[
+            RouteFieldProcess(
+                field_name="invoice_no",
+                broad_extraction=RouteProcessStage(
+                    search_queries=["发票号 OR 发票号码"],
+                    candidate_action_count=1,
+                    finish_reason="候选足够，结束 broad",
+                ),
+                field_resolution=RouteProcessStage(
+                    search_queries=[],
+                    final_decision_used=True,
+                    reason="候选证据支持字段值",
+                ),
+            )
+        ],
     )
 
 
@@ -59,6 +76,9 @@ def test_validate_route_policy_input_builds_field_indexes():
     assert validated.field_definitions_by_name["invoice_no"].display_name == "发票号"
     assert validated.field_outputs_by_name["invoice_no"].value == "INV-001"
     assert validated.refs_by_field_name["invoice_no"][0].text == "发票号码：INV-001"
+    assert validated.processes_by_field_name["invoice_no"].broad_extraction.search_queries == [
+        "发票号 OR 发票号码"
+    ]
 
 
 def test_validate_route_policy_input_rejects_unknown_field_output():
@@ -91,6 +111,17 @@ def test_validate_route_policy_input_requires_refs_group_for_every_field_output(
         assert "missing refs_with_text for field: invoice_no" in str(exc)
     else:
         raise AssertionError("每个待评估字段都必须有 refs_with_text 分组")
+
+
+def test_validate_route_policy_input_requires_process_group_for_every_field_output():
+    route_input = _valid_input().model_copy(update={"field_processes": []})
+
+    try:
+        validate_route_policy_input(route_input)
+    except RoutePolicyInputError as exc:
+        assert "missing field_processes for field: invoice_no" in str(exc)
+    else:
+        raise AssertionError("每个待评估字段都必须有 field_processes 分组")
 
 
 def test_validate_route_policy_input_rejects_resolved_field_without_ref_text():

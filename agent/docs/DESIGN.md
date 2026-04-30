@@ -23,7 +23,7 @@
 - `backend` 为多文档任务聚合 blocks，并为每个 block 补齐 `document_id / block_id`
 - `backend` 通过 HTTP 把已聚合的 blocks、markdown 和外部 `task_spec` 传给 `file_extraction_agent`
 - `agent service` 返回字段级 `ExtractionResult(result + trace)`
-- `backend` 从字段结果和 trace refs 组装 `field_outputs + refs_with_text`，再通过 HTTP 调用 `route_policy_agent`
+- `backend` 从字段结果、trace refs 和 trace actions 组装 `field_outputs + refs_with_text + field_processes`，再通过 HTTP 调用 `route_policy_agent`
 - `route_policy_agent` 返回字段级 `accept / review / reject`，后续 review、final result 和 audit 都由 `backend` 保存和驱动
 
 也就是说，`agent service` 只负责文档标准化、字段抽取和 route 判断，不负责任务状态、人工审核、字段提交或数据存储管理。
@@ -120,15 +120,18 @@ agent/
 ```text
 backend 聚合后的 blocks + task_spec
   -> input_adapter.py 组装 ExtractionInput
-  -> 对每个 FieldDefinition 启动 broad agent loop
-  -> broad agent 只能调用 search_text / search_table_rows / add_candidate / finish_broad
-  -> search_text 在普通 text、section_header、text_line block 中做关键词检索
-  -> search_table_rows 专门扫描 kind=table 的 block，解析 markdown table 行并返回紧凑候选行
-  -> add_candidate 把命中的 block、table row 或 cell refs 写入字段候选池
-  -> finish_broad 是 broad 的唯一正常出口，记录 enough_evidence / partial_evidence / no_evidence 和结束原因
+  -> 启动一个共享 broad agent loop，prompt 同时包含所有字段、pending_fields 和全字段候选池
+  -> broad agent 只能调用 search_grep / add_broad_candidate / copy_field_candidates / finish_broad
+  -> search_grep 同时搜索正文 paragraph 和表格行，query 固定使用 term1 OR term2 OR term3
+  -> add_broad_candidate 把命中的 paragraph 或 table row refs 写入指定字段候选池
+  -> 如果模型把不存在的 ref 传给候选写入工具，runner 记录 tool_error 并把错误作为下一轮工具结果返回给模型修正
+  -> 每个字段用 finish_broad 正常退出，记录 enough_evidence / partial_evidence / no_evidence 和结束原因
   -> graph 把 candidate_evidence、broad_search_history 和 finish_broad 结果交给 resolution
-  -> resolution agent 先读取候选池；如果候选不足，可以继续调用 search_text / search_table_rows / add_candidate 补查
-  -> resolution 最终返回 final_decision，且必须引用支撑结果的 candidate_id
+  -> 启动一个共享 resolution agent loop，prompt 同时包含所有字段、候选池和已完成定案
+  -> resolution agent 可读取候选池；如果候选不足，可以继续调用 search_grep / add_resolution_candidate 补查
+  -> broad 可调用 copy_field_candidates 把来源字段候选复制到目标字段，工具结果不返回候选正文
+  -> resolution 可调用 count_field_candidates 统计指定字段候选数量，再用 add_resolution_candidate(values=[...]) 把数字写入目标字段候选池
+  -> 每个字段最终返回 final_decision，且必须引用对应字段候选池里的 candidate_id
   -> graph 映射成 ExtractionResult(result + trace)
 ```
 
@@ -136,15 +139,16 @@ backend 聚合后的 blocks + task_spec
 
 工具边界保持精简：
 
-- `search_text_grep(query)`：只查普通文本类 block，返回 paragraph 级 `ref/text`，不做最终字段判断。
-- `search_table_rows_grep(query)`：只查表格 block，返回 row 级 `ref/text`，不把整张表发给模型。
+- `search_grep(field_name, query)`：同时搜索普通文本段落和表格行，返回 `ref/text`，不做最终字段判断。
 - `add_broad_candidate(field_name, refs, reason)`：只写 broad 候选证据和写入原因，不改字段值。
-- `add_resolution_candidate(field_name, refs, reason)`：只写 resolution 二次补证候选，不改字段值。
-- `finish_broad(field_name, status, reason)`：结束当前字段 broad；`status=enough_evidence` 时必须已有候选证据。
+- `copy_field_candidates(field_name, source_field_name, reason)`：只在 broad 阶段把来源字段候选复制到目标字段，工具结果只返回复制数量和 candidate id，不返回候选正文。
+- `add_resolution_candidate(field_name, refs | values, reason)`：只写 resolution 二次补证候选；`values` 用于把 count 等工具返回的数字写入候选池。
+- `count_field_candidates(field_name)`：只在 resolution 阶段统计指定字段当前候选数量，返回 number，不返回候选正文或 ref 列表。
+- `finish_broad(field_name, status, reason)`：结束指定字段 broad；`status=enough_evidence` 时必须已有候选证据。
 - `get_candidate_bundle(field_name)`：供 resolution 读取 broad 已写入的候选证据。
 - `final_decision(...)`：只允许 resolution 调用，用候选 `candidate_id` 支撑字段最终值或失败原因。
 
-表格处理是 `file_extraction_agent` 内部的专用检索能力，而不是业务特例。它只理解通用表格结构和字段提示，不硬编码“学术论文”“文明寝室”等业务词。对于列名不固定的表格，`search_table_rows` 应优先做宽召回：根据 `field_name`、`display_name`、`lookup_hints`、`cross_field_hints` 形成查询词，在表头、单元格文本、行文本和邻近标题中做匹配，再把候选行交给 resolution 精筛。
+表格处理是 `file_extraction_agent` 内部的专用检索能力，而不是业务特例。它只理解通用表格结构和字段提示，不硬编码“学术论文”“文明寝室”等业务词。对于列名不固定的表格，模型应通过统一 `search_grep` 做宽召回：根据 `field_name`、`display_name`、`lookup_hints`、`cross_field_hints` 形成查询词，在正文段落、表头、单元格文本、行文本和邻近标题中做匹配，再把候选行交给 resolution 精筛。
 
 当前不把 image 作为抽取对象。文档内容类型先收敛为：
 
@@ -156,17 +160,16 @@ table
 
 OCR 或表格结构质量提示不参与 broad、resolution 或 route policy 的自动判断。它只在 backend 组装 review handoff 时作为人工审核辅助信息展示，例如提示某个表格 block 行列错位、空 cell 比例高、文本异常字符多或 block 过长。主抽取链路仍以证据召回、字段定案和 route policy 为准。
 
-两阶段都使用结构化输出，但不再假设所有 OpenAI 兼容接口都支持同一种结构化协议。`impl/graph.py` 负责编排阶段流转，模型调用层当前由 `service/file_extraction_agent/extractor_client.py` 统一处理：
+两阶段都使用结构化输出，当前固定只走 `tool_call`，由客户端内部映射到 LangChain 的 `function_calling`。`impl/graph.py` 负责编排阶段流转，模型调用层当前由 `service/file_extraction_agent/extractor_client.py` 统一处理：
 
 ```text
 调用方显式传入 base_url / openai_api_key / model，或部署环境提供 BASE_URL / OPENAI_API_KEY / MODEL
   -> 如果 MODEL 仍为空，extractor_client 使用代码内默认模型
-  -> structured_output_strategy 由 processor.extract(...) 显式参数传入，默认 auto
+  -> structured_output_strategy 由 processor.extract(...) 显式参数传入，默认 tool_call
+  -> 如果传入 json_schema 或 auto，客户端直接拒绝
   -> 用连接配置创建 langchain_openai.ChatOpenAI(...)
-  -> 如果 strategy=json_schema，就用 with_structured_output(..., method="json_schema", strict=True)
-  -> 如果 strategy=tool_call，就改用 with_structured_output(..., method="function_calling", strict=True)
-  -> 如果 strategy=auto，就先试 json_schema；只有结构化协议明确不支持时才回退到 tool_call
-  -> 如果已经进入 runnable.invoke(...) 后发生超时、鉴权、服务端错误或输出校验失败，不切换协议重试
+  -> 用 with_structured_output(..., method="function_calling", strict=True) 构造 runnable
+  -> 如果构造或 invoke 阶段发生错误，不切换协议重试
   -> broad extraction / field resolution 继续收到同样的 Pydantic 结构化结果
 ```
 
@@ -191,19 +194,24 @@ OCR 或表格结构质量提示不参与 broad、resolution 或 route policy 的
 
 ### `route_policy_agent`
 
-- 负责消费 `TaskSpec + field_outputs + refs_with_text`，用小 LLM 作为第三方评价者判断字段结果应 `accept / review / reject`
+- 负责消费 `TaskSpec + field_outputs + refs_with_text + field_processes`，用小 LLM 作为第三方评价者判断字段结果应 `accept / review / reject`
 - 不负责文档标准化
 - 不负责字段抽取或重新定案
 - 不直接访问 backend 数据库
 - 不写最终结果、不执行人工审核、不生成 audit
-- 不读取抽取 agent 的完整 prompt、raw model response、chain-of-thought、trace actions 或额外风险标记
+- 不读取抽取 agent 的完整 prompt、raw model response 或 chain-of-thought
+- 只读取抽取过程摘要，不读取 search 工具返回的候选正文、table row、cell、block_id 列表或 action refs
 
 当前规划入口包括：
 
 - Python 入口：`service.route_policy_agent.processor.evaluate(...)`
 - HTTP 入口：`routes/route_policy_agent.py`
 
-这一层只看任务/字段定义、字段输出和 refs 中携带的证据文本与来源位置，不读取完整原文。更具体的设计见：
+这一层只看任务/字段定义、字段输出、refs 中携带的证据文本与来源位置，以及每个字段 broad / resolution 两阶段的过程摘要。过程摘要只包含统一 `search_grep` 查询词、候选写入数量、broad 结束原因、是否执行 `final_decision` 和失败原因，不包含工具返回结果或完整原文。更具体的设计见：
+
+对于由其他字段派生的字段，`route_policy_agent` 会按 `validation_rules.source_field/source_fields` 把来源字段的过程摘要作为 `related_field_processes` 注入 prompt。这样数量字段或复制候选字段能看到源字段 broad 具体查过哪些关键词，但仍不会看到 search 工具返回正文或表格行。
+
+route policy 的结构化输出策略也固定为 `tool_call`，显式传入 `json_schema` 或 `auto` 会被拒绝。
 
 - `service/route_policy_agent/docs/DESIGN.md`
 
@@ -228,8 +236,8 @@ raw file
 4. `backend` 按任务聚合多个文档的 block list，并补齐 `document_id / block_id`。
 5. `backend` 将已校验聚合结果和外部 `task_spec` 交给 `file_extraction_agent`。
 6. `file_extraction_agent` 输出字段候选证据、工具留痕和字段最终结果。
-7. `backend` 从字段结果和证据 refs 组装 `field_outputs + refs_with_text`，交给 `route_policy_agent`。
-8. `route_policy_agent` 先通过 `input_validator` 校验字段名、字段输出和 refs 文本完整性，再用小 LLM 输出字段级 `accept / review / reject`。
+7. `backend` 从字段结果、证据 refs 和 trace actions 组装 `field_outputs + refs_with_text + field_processes`，交给 `route_policy_agent`。
+8. `route_policy_agent` 先通过 `input_validator` 校验字段名、字段输出、refs 文本和两阶段过程摘要完整性，再用小 LLM 输出字段级 `accept / review / reject`。
 9. `backend` 保存抽取结果、trace 和 route 决策，并继续驱动 review、field commit 和 audit。
 
 可以理解为：
@@ -260,7 +268,7 @@ HTTP 请求
   - 调用 `service.file_extraction_agent.processor.extract(...)`
   - 返回 `ExtractionResult`
 - `POST /v1/route-policy-agent/evaluate`
-  - 接收 `TaskSpec`、`field_outputs` 和 `refs_with_text`
+  - 接收 `TaskSpec`、`field_outputs`、`refs_with_text` 和 `field_processes`
   - 调用 `service.route_policy_agent.processor.evaluate(...)`
   - 返回字段级 `accept / review / reject` route 决策
 

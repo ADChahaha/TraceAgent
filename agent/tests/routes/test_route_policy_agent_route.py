@@ -62,10 +62,25 @@ def test_route_policy_agent_route_calls_business_evaluator(monkeypatch):
                     ],
                 }
             ],
+            "field_processes": [
+                {
+                    "field_name": "invoice_no",
+                    "broad_extraction": {
+                        "search_queries": ["发票号 OR 发票号码"],
+                        "candidate_action_count": 1,
+                        "finish_reason": "候选足够，结束 broad",
+                    },
+                    "field_resolution": {
+                        "search_queries": [],
+                        "final_decision_used": True,
+                        "reason": "候选证据支持字段值",
+                    },
+                }
+            ],
             "base_url": "https://llm.example.com/v1",
             "openai_api_key": "test-key",
             "model": "small-route-model",
-            "structured_output_strategy": "json_schema",
+            "structured_output_strategy": "tool_call",
         },
     )
 
@@ -73,8 +88,12 @@ def test_route_policy_agent_route_calls_business_evaluator(monkeypatch):
     assert seen_call["task_spec"].fields[0].field_name == "invoice_no"
     assert seen_call["field_outputs"][0].value == "INV-001"
     assert seen_call["refs_with_text"][0].refs[0].text == "发票号码：INV-001"
+    assert seen_call["field_processes"][0].broad_extraction.search_queries == [
+        "发票号 OR 发票号码"
+    ]
     assert seen_call["base_url"] == "https://llm.example.com/v1"
     assert seen_call["openai_api_key"] == "test-key"
+    assert seen_call["structured_output_strategy"] == "tool_call"
     assert response.json()["field_routes"][0]["route"] == "accept"
 
 
@@ -117,6 +136,17 @@ def test_route_policy_agent_route_returns_422_for_business_validation_error(monk
                             "text": "发票号码：INV-001",
                         }
                     ],
+                }
+            ],
+            "field_processes": [
+                {
+                    "field_name": "unknown",
+                    "broad_extraction": {
+                        "search_queries": ["发票号 OR 发票号码"],
+                    },
+                    "field_resolution": {
+                        "final_decision_used": True,
+                    },
                 }
             ],
         },

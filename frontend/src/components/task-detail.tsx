@@ -1045,7 +1045,7 @@ function ActionRefs({ refs }: { refs: EvidenceRef[] }) {
       <p>引用 {refs.length} 条</p>
       <ul className="list-disc space-y-1 pl-4">
         {refs.map((ref, index) => (
-          <li key={`${ref.document_id ?? "ref"}-${ref.page ?? "p"}-${ref.span ?? index}`}>
+          <li key={`${ref.document_id ?? "ref"}-${ref.page ?? "p"}-${ref.block_id ?? "block"}-${ref.span ?? "span"}-${index}`}>
             {formatEvidenceRef(ref)}
           </li>
         ))}

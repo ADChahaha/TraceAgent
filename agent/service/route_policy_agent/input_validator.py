@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from service.file_extraction_agent.schemas import FieldDefinition
 from service.route_policy_agent.schemas import (
     EvidenceTextRef,
+    RouteFieldProcess,
     RouteFieldOutput,
     RoutePolicyInput,
 )
@@ -24,6 +25,7 @@ class ValidatedPolicyInput:
     field_definitions_by_name: dict[str, FieldDefinition]
     field_outputs_by_name: dict[str, RouteFieldOutput]
     refs_by_field_name: dict[str, list[EvidenceTextRef]]
+    processes_by_field_name: dict[str, RouteFieldProcess]
 
 
 def validate_route_policy_input(route_input: RoutePolicyInput) -> ValidatedPolicyInput:
@@ -35,6 +37,7 @@ def validate_route_policy_input(route_input: RoutePolicyInput) -> ValidatedPolic
     }
     field_outputs_by_name = _index_unique_field_outputs(route_input)
     refs_by_field_name = _index_unique_refs(route_input)
+    processes_by_field_name = _index_unique_processes(route_input)
 
     _validate_field_outputs_known(
         field_outputs_by_name=field_outputs_by_name,
@@ -49,12 +52,18 @@ def validate_route_policy_input(route_input: RoutePolicyInput) -> ValidatedPolic
         field_outputs_by_name=field_outputs_by_name,
         refs_by_field_name=refs_by_field_name,
     )
+    _validate_processes_known_and_requested(
+        processes_by_field_name=processes_by_field_name,
+        field_definitions_by_name=field_definitions_by_name,
+        field_outputs_by_name=field_outputs_by_name,
+    )
 
     return ValidatedPolicyInput(
         route_input=route_input,
         field_definitions_by_name=field_definitions_by_name,
         field_outputs_by_name=field_outputs_by_name,
         refs_by_field_name=refs_by_field_name,
+        processes_by_field_name=processes_by_field_name,
     )
 
 
@@ -83,6 +92,21 @@ def _index_unique_refs(route_input: RoutePolicyInput) -> dict[str, list[Evidence
     if duplicated:
         duplicated_names = ", ".join(sorted(duplicated))
         raise RoutePolicyInputError(f"duplicated refs_with_text.field_name: {duplicated_names}")
+    return indexed
+
+
+def _index_unique_processes(
+    route_input: RoutePolicyInput,
+) -> dict[str, RouteFieldProcess]:
+    indexed: dict[str, RouteFieldProcess] = {}
+    duplicated: set[str] = set()
+    for field_process in route_input.field_processes:
+        if field_process.field_name in indexed:
+            duplicated.add(field_process.field_name)
+        indexed[field_process.field_name] = field_process
+    if duplicated:
+        duplicated_names = ", ".join(sorted(duplicated))
+        raise RoutePolicyInputError(f"duplicated field_processes.field_name: {duplicated_names}")
     return indexed
 
 
@@ -154,6 +178,44 @@ def _validate_refs_complete(
                 raise RoutePolicyInputError(
                     f"{field_name} refs_with_text[{index}] source location is required"
                 )
+
+
+def _validate_processes_known_and_requested(
+    *,
+    processes_by_field_name: dict[str, RouteFieldProcess],
+    field_definitions_by_name: dict[str, FieldDefinition],
+    field_outputs_by_name: dict[str, RouteFieldOutput],
+) -> None:
+    unknown_process_names = [
+        field_name
+        for field_name in processes_by_field_name
+        if field_name not in field_definitions_by_name
+    ]
+    if unknown_process_names:
+        raise RoutePolicyInputError(
+            f"unknown field_processes.field_name: {', '.join(sorted(unknown_process_names))}"
+        )
+
+    unexpected_process_names = [
+        field_name
+        for field_name in processes_by_field_name
+        if field_name not in field_outputs_by_name
+    ]
+    if unexpected_process_names:
+        raise RoutePolicyInputError(
+            "unexpected field_processes.field_name without field_output: "
+            f"{', '.join(sorted(unexpected_process_names))}"
+        )
+
+    missing_process_names = [
+        field_name
+        for field_name in field_outputs_by_name
+        if field_name not in processes_by_field_name
+    ]
+    if missing_process_names:
+        raise RoutePolicyInputError(
+            f"missing field_processes for field: {', '.join(sorted(missing_process_names))}"
+        )
 
 
 def _has_source_location(ref: EvidenceTextRef) -> bool:

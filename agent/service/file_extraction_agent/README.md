@@ -11,8 +11,10 @@
 ```text
 标准化 blocks + task_spec
   -> search_grep 同时检索正文段落和表格行，query 统一使用 `term1 OR term2 OR term3`
-  -> broad 只把可能支撑字段的 ref 写入候选池，不直接给最终值
-  -> resolution 从候选池读取证据，必要时二次 search_grep 补证
+  -> broad 共享 loop 只把可能支撑字段的 ref 写入候选池，不直接给最终值
+  -> broad 可用 copy_field_candidates 在不把候选正文回传给模型的情况下复制字段候选
+  -> resolution 共享 loop 从候选池读取证据，必要时二次 search_grep 补证
+  -> resolution 可用 count_field_candidates 得到某个字段候选数量，再用 add_resolution_candidate(values=[...]) 把数字写成候选
   -> final_decision 必须引用 candidate_id
   -> graph 用 candidate_id 回查 ref、block_id、document_id、page_no 和文本
   -> result 保存最终业务值，trace 保存证据和动作链路
@@ -29,8 +31,8 @@ backend 聚合后的 blocks + 显式 task_spec
   -> processor.extract(...)
   -> input_adapter.build_graph_input(...) 调用 block_contract 校验 blocks，并组装内部 ExtractionInput
   -> graph.py 创建 GraphState 和 paragraph/table row 索引
-  -> broad.runner 按字段调用 search_grep / add_broad_candidate / finish_broad
-  -> resolution.runner 基于候选池调用 get_candidate_bundle / search_grep / add_resolution_candidate / final_decision
+  -> broad.runner 在一个共享 loop 中调用 search_grep / add_broad_candidate / copy_field_candidates / finish_broad
+  -> resolution.runner 在一个共享 loop 中调用 get_candidate_bundle / search_grep / add_resolution_candidate / count_field_candidates / final_decision
   -> graph.py 用 candidate_id -> ref -> index 回查证据
   -> 返回 ExtractionResult(result + trace)
 ```
@@ -199,8 +201,8 @@ extract(...) 显式参数
 - `max_prompt_blocks`：broad prompt 最多携带的 blocks 数
 - `max_prompt_block_chars`：broad prompt 单个 block 文本最多保留的字符数
 - `max_resolution_candidates`：resolution prompt 最多携带的候选证据数
-- `max_broad_iterations`：单字段 broad loop 最大动作轮次
-- `max_resolution_iterations`：单字段 resolution loop 最大动作轮次
+- `max_broad_iterations`：每字段 broad 预算；runner 会乘以字段数作为共享 broad loop 最大动作轮次
+- `max_resolution_iterations`：每字段 resolution 预算；runner 会乘以字段数作为共享 resolution loop 最大动作轮次
 - `keep_detailed_trace`：预留的详细 trace 开关
 
 Python 入口和 HTTP `/v1/file-extraction-agent/extract` 都支持传入 `run_options`。

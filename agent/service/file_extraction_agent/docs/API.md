@@ -12,8 +12,8 @@ backend / service.document_processor 产出标准化 blocks
   -> 调用方选择并传入显式 task_spec
   -> service.file_extraction_agent.processor.extract(...)
   -> input_adapter 调用 block_contract 校验 task_spec 和 blocks 契约
-  -> broad loop 通过 grep 和 add_broad_candidate 写入候选池
-  -> resolution loop 通过候选池和必要的二次 grep 输出 final_decision
+  -> 共享 broad loop 通过 search_grep、add_broad_candidate 和 copy_field_candidates 写入候选池
+  -> 共享 resolution loop 读取/补充候选，必要时用 count_field_candidates 统计候选数量
   -> graph 用 candidate_id 回查 ref、block_id、document_id 和 page_no
   -> ExtractionResult(status + result + trace)
 ```
@@ -215,8 +215,8 @@ HTTP 错误语义：
 - `max_prompt_blocks`：broad prompt 最多展示多少个可搜索段落样例。
 - `max_prompt_block_chars`：broad prompt 单个段落样例最多保留多少字符。
 - `max_resolution_candidates`：resolution prompt 最多携带多少个候选证据。
-- `max_broad_iterations`：单字段 broad loop 最多允许多少轮动作。
-- `max_resolution_iterations`：单字段 resolution loop 最多允许多少轮动作。
+- `max_broad_iterations`：每字段 broad 预算；runner 会乘以字段数作为共享 broad loop 最大动作轮次。
+- `max_resolution_iterations`：每字段 resolution 预算；runner 会乘以字段数作为共享 resolution loop 最大动作轮次。
 - `keep_detailed_trace`：预留开关；当前对外 trace 不包含 raw prompt 或 raw model response。
 
 ## 字段提示
@@ -247,7 +247,7 @@ ExtractionResult
 
 - `result.fields[]` 是纯业务输出，不重复放 evidence、actions 或 prompt 调试信息。
 - `trace.fields[].evidence` 是支撑最终值的候选证据摘要，来自 `final_decision.candidate_ids` 回查。
-- `trace.fields[].actions` 是系统可证明发生过的工具动作，包含 `search_grep`、候选写入、`finish_broad` 和 `final_decision`。
+- `trace.fields[].actions` 是系统可证明发生过的工具动作，包含 `search_grep`、候选写入、`count_field_candidates`、`copy_field_candidates`、`finish_broad` 和 `final_decision`。
 - 调用方展示或入库字段值时读 `result`；需要高亮原文、解释定案、转人工或做 route policy 时读 `trace`。
 
 例如抽取“作品类型为学术论文的论文题目和数量”时，`result` 应只返回论文题名列表和数量；每个题名对应的表格行、页码、block_id、搜索 query 和候选写入动作都放在 `trace`。
@@ -352,9 +352,11 @@ trace
 
 - `search_grep`：模型请求一次性在文本段落索引和表格行索引中做关键词检索；多关键词 query 固定使用 `term1 OR term2 OR term3`。
 - `add_broad_candidate`：broad 阶段把 grep ref 写入候选池。
-- `add_resolution_candidate`：resolution 阶段把二次检索 ref 写入候选池。
-- `get_candidate_bundle`：resolution 阶段读取当前字段候选池。
-- `finish_broad`：broad 阶段结束当前字段召回。
+- `copy_field_candidates`：broad 阶段把来源字段候选复制到目标字段；工具结果只返回复制数量和 candidate id，不返回候选正文。
+- `add_resolution_candidate`：resolution 阶段把二次检索 ref 或工具返回的数字/字符串写入候选池。
+- `count_field_candidates`：resolution 阶段统计指定字段当前候选数量；返回 number，不返回候选正文或 refs。
+- `get_candidate_bundle`：resolution 阶段读取指定字段候选池。
+- `finish_broad`：broad 阶段结束指定字段召回。
 - `final_decision`：resolution 阶段输出字段最终定案。
 - `model_call_error`：broad 或 resolution 运行中发生模型调用或结构化输出错误。
 

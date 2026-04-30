@@ -11,6 +11,8 @@ GraphState
   -> 兼容 search_text_grep(...) / search_table_rows_grep(...) 的旧入口
   -> add_broad_candidate(...) / add_resolution_candidate(...) 将 ref 写入候选池
   -> get_candidate_bundle(...) 按字段读取 candidate_id/text 摘要
+  -> count_field_candidates(...) 按字段统计当前候选数量
+  -> copy_field_candidates(...) 在 state 内把来源字段候选复制到目标字段，候选 source_stage 跟随调用阶段
   -> 每个工具动作都写入 state.actions[field_name]
 ```
 
@@ -20,7 +22,7 @@ GraphState
 - table grep 只返回命中的行级 `ref/text`，不会把整张表交给模型。
 - 统一 search grep 同时搜索正文和表格行，并只把大写 `OR` query 拆成多个命中词。
 - 中文“或”、逗号、顿号等格式不会被当作多词分隔。
-- 候选工具能写入、去重、读取候选，并区分 broad/resolution 来源。
+- 候选工具能写入、去重、读取候选、统计候选数量、复制候选，并区分 broad/resolution 来源。
 
 ## 每个函数在干什么
 
@@ -49,8 +51,10 @@ GraphState
 `test_candidate_tools_add_dedupe_and_read_field_candidates`
 
 - 先写入 broad 候选，再重复写入同一 ref。
-- 再写入 resolution 候选并读取候选池。
+- 再写入 resolution 候选、读取候选池、统计候选数量并复制候选到另一个字段。
 - 确认重复 ref 复用原 candidate id，候选读取也记录为动作。
+- 确认计数结果写入 `count_field_candidates` 动作的 `metadata.count`。
+- 确认复制工具只返回复制数量和 candidate id，正文只进入目标字段候选池，不作为工具结果返回。
 
 ## 怎么跑
 

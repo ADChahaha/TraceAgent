@@ -18,7 +18,7 @@
   -> backend 合并多个文件的 markdown、md_list 和 blocks
   -> backend 通过 HTTP 调用 file_extraction_agent
   -> agent service 返回 ExtractionResult(result + trace)
-  -> backend 组装 field_outputs + refs_with_text 并调用 route_policy_agent
+  -> backend 组装 field_outputs + refs_with_text + field_processes 并调用 route_policy_agent
   -> agent service 返回 accept / review / reject 字段路由
   -> accept 自动生成字段提交记录
   -> review 等待人工审核
@@ -112,7 +112,7 @@ POST /tasks 上传一个或多个文件
   -> agent_client 再通过 HTTP 调用 agent service 的字段抽取接口，metadata 包含 document_ids
   -> SQLite 为 file_extraction_agent 调用写入 agent_stage_runs
   -> SQLite 写入 agent_runs / extracted_fields / field_traces
-  -> route_policy 从字段结果和 trace refs 组装 field_outputs + refs_with_text
+  -> route_policy 从字段结果、trace refs 和 trace actions 组装 field_outputs + refs_with_text + field_processes
   -> agent_client 通过 HTTP 调用 agent service 的 route policy 接口
   -> SQLite 为 route_policy_agent 调用写入 agent_stage_runs
   -> SQLite 写入 field_routes
@@ -267,7 +267,7 @@ files/file + task_type + task_spec + metadata
   -> 调用 agent_client.extract_fields(blocks, markdown, md_list, task_spec)，metadata 携带 document_ids
   -> 保存 file_extraction_agent 的 agent_stage_runs
   -> 写入 agent_runs、extracted_fields、field_traces
-  -> route_policy.build_route_policy_request(...) 组装 field_outputs + refs_with_text
+  -> route_policy.build_route_policy_request(...) 组装 field_outputs + refs_with_text + field_processes
   -> 调用 agent_client.evaluate_route_policy(...)
   -> 保存 route_policy_agent 的 agent_stage_runs
   -> 写入 field_routes
@@ -305,7 +305,7 @@ upload file bytes + filename + file_type
 
 ```text
 extracted_fields + field_traces + task_spec
-  -> 从 trace refs 和证据文本组装 refs_with_text
+  -> 从 trace refs 和证据文本组装 refs_with_text，并从 trace actions 组装 field_processes
   -> 从 extracted_fields 组装 field_outputs
   -> 调用 agent /v1/route-policy-agent/evaluate
   -> 保存 RoutePolicyResult.field_routes
@@ -460,7 +460,7 @@ field_traces.evidence_json + documents.blocks_json + extracted_fields.agent_valu
 | `field_name` | `TEXT` | 字段名 |
 | `evidence_json` | `TEXT` | 证据文本和 refs |
 | `related_fields_json` | `TEXT` | 相关字段列表 |
-| `actions_json` | `TEXT` | `search_grep / add_broad_candidate / finish_broad / final_decision / model_call_error` 等动作 |
+| `actions_json` | `TEXT` | `search_grep / add_broad_candidate / copy_field_candidates / count_field_candidates / finish_broad / final_decision / model_call_error` 等动作 |
 | `trace_status` | `TEXT` | trace 字段状态 |
 | `reason` | `TEXT NULL` | 成功定案原因 |
 | `failure_reason` | `TEXT NULL` | 失败原因 |
@@ -611,10 +611,22 @@ reject -> reject
 task_spec + extracted_fields + field_traces
   -> backend 组装 field_outputs
   -> backend 从 refs 和证据文本组装 refs_with_text
+  -> backend 从 actions_json 归一化 field_processes：
+       broad_extraction.search_queries 只保留 search_grep 查询词
+       broad_extraction.candidate_action_count 统计 add_broad_candidate 和 copy_field_candidates
+       broad_extraction.counted_fields 通常为空，保留兼容字段
+       broad_extraction.finish_reason 来自 finish_broad.message
+       field_resolution.search_queries 只保留 resolution 阶段 search_grep 查询词
+       field_resolution.candidate_action_count 统计 add_resolution_candidate
+       field_resolution.counted_fields 只保留 count_field_candidates 的字段名和数量
+       field_resolution.final_decision_used 来自 final_decision 是否执行
+       field_resolution.reason / failure_reason 来自字段 trace
   -> agent route_policy_agent 校验输入完整性
-  -> agent route_policy_agent 只根据字段输出和 refs 文本判断 route
+  -> agent route_policy_agent 根据字段输出、refs 文本和两阶段过程摘要判断 route
   -> backend 写入 field_routes(route, route_reason, needs_review)
 ```
+
+`field_processes` 不能包含 search 工具返回的正文、表格行、cell、block_id 列表或 action refs。route policy 如果需要判断字段值是否被原文支持，只能读取 `refs_with_text.text`；`field_processes` 只用于判断 agent 是否用合理关键词查过、是否写入候选、是否执行最终定案。
 
 `route_policy.py` 的输出必须落库到 `field_routes`，不能只保存在内存里。这样 `GET /tasks/{task_id}/review` 和 `GET /tasks/{task_id}/audit` 都能解释字段为什么进入某条路径。
 
@@ -704,7 +716,7 @@ field final value + route + review + trace refs
   -> POST agent /v1/file-extraction-agent/extract
   -> ExtractionResult(result + trace)
   -> backend 写 agent_stage_runs(file_extraction_agent)
-  -> backend 组装 field_outputs + refs_with_text
+  -> backend 组装 field_outputs + refs_with_text + field_processes
   -> POST agent /v1/route-policy-agent/evaluate
   -> RoutePolicyResult(field_routes)
   -> backend 写 agent_stage_runs(route_policy_agent)

@@ -29,7 +29,7 @@ def test_build_policy_client_requires_connection_params(monkeypatch):
         raise AssertionError("未提供 policy client 和连接参数时应明确拒绝")
 
 
-def test_policy_client_auto_retries_tool_call_when_json_schema_fails(monkeypatch):
+def test_build_policy_client_uses_tool_call_only(monkeypatch):
     from service.route_policy_agent import policy_client as policy_client_module
 
     seen_methods: list[tuple[str, bool | None]] = []
@@ -47,8 +47,6 @@ def test_policy_client_auto_retries_tool_call_when_json_schema_fails(monkeypatch
 
         def with_structured_output(self, schema, *, method, strict):
             seen_methods.append((method, strict))
-            if method == "json_schema":
-                raise RuntimeError("json_schema unsupported by route model")
             return FakeRunnable(schema)
 
     monkeypatch.setattr(policy_client_module, "ChatOpenAI", FakeChatOpenAI)
@@ -57,15 +55,31 @@ def test_policy_client_auto_retries_tool_call_when_json_schema_fails(monkeypatch
         base_url="https://llm.example.com/v1",
         api_key="test-key",
         model="route-model",
-        structured_output_strategy="auto",
+        structured_output_strategy="tool_call",
     )
     result = client.invoke(
         output_schema=DummyRouteOutput,
         messages=[{"role": "user", "content": "accept"}],
     )
 
-    assert seen_methods == [("json_schema", True), ("function_calling", True)]
+    assert client.structured_output_strategy == "tool_call"
+    assert seen_methods == [("function_calling", True)]
     assert result.route == "accept"
+
+
+def test_build_policy_client_rejects_json_schema_and_auto_strategy_arguments():
+    for strategy in ["json_schema", "auto"]:
+        try:
+            build_policy_client(
+                base_url="https://llm.example.com/v1",
+                api_key="test-key",
+                model="route-model",
+                structured_output_strategy=strategy,  # type: ignore[arg-type]
+            )
+        except RoutePolicyClientConfigError as exc:
+            assert "only supported structured_output_strategy: tool_call" in str(exc)
+        else:
+            raise AssertionError(f"route policy 不应再支持 {strategy}")
 
 
 def test_policy_client_rejects_raw_json_content_when_structured_invoke_fails(monkeypatch):
@@ -98,7 +112,7 @@ def test_policy_client_rejects_raw_json_content_when_structured_invoke_fails(mon
         base_url="https://llm.example.com/v1",
         api_key="test-key",
         model="route-model",
-        structured_output_strategy="json_schema",
+        structured_output_strategy="tool_call",
     )
 
     try:

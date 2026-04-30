@@ -11,15 +11,12 @@ from pydantic import BaseModel
 
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
-StructuredOutputStrategy = Literal["json_schema", "tool_call", "auto"]
-StructuredOutputMethod = Literal["json_schema", "tool_call"]
-LangChainStructuredOutputMethod = Literal["json_schema", "function_calling"]
+StructuredOutputStrategy = Literal["tool_call"]
+LangChainStructuredOutputMethod = Literal["function_calling"]
 
-SUPPORTED_STRATEGIES = {"json_schema", "tool_call", "auto"}
-DEFAULT_AUTO_METHODS: tuple[StructuredOutputMethod, ...] = ("json_schema", "tool_call")
+SUPPORTED_STRATEGY = "tool_call"
 DEFAULT_MODEL = "gpt-5.4-mini"
-LANGCHAIN_METHOD_MAP: dict[StructuredOutputMethod, LangChainStructuredOutputMethod] = {
-    "json_schema": "json_schema",
+LANGCHAIN_METHOD_MAP: dict[StructuredOutputStrategy, LangChainStructuredOutputMethod] = {
     "tool_call": "function_calling",
 }
 
@@ -40,25 +37,19 @@ class RoutePolicyClient:
     model_name: str
     base_url: str
     structured_output_strategy: StructuredOutputStrategy
-    structured_output_methods: tuple[StructuredOutputMethod, ...]
 
     def invoke(self, *, output_schema: type[SchemaT], messages: Any) -> SchemaT:
-        last_error: Exception | None = None
-        for method in self.structured_output_methods:
-            try:
-                runnable = self.model.with_structured_output(
-                    output_schema,
-                    method=LANGCHAIN_METHOD_MAP[method],
-                    strict=True,
-                )
-                return _coerce_output(output_schema, runnable.invoke(messages))
-            except Exception as exc:  # noqa: BLE001
-                last_error = exc
-
-        attempted = ", ".join(self.structured_output_methods)
-        raise RoutePolicyClientInvocationError(
-            f"failed to invoke route policy structured output with methods: {attempted}"
-        ) from last_error
+        try:
+            runnable = self.model.with_structured_output(
+                output_schema,
+                method=LANGCHAIN_METHOD_MAP[self.structured_output_strategy],
+                strict=True,
+            )
+            return _coerce_output(output_schema, runnable.invoke(messages))
+        except Exception as exc:  # noqa: BLE001
+            raise RoutePolicyClientInvocationError(
+                "failed to invoke route policy structured output with method: tool_call"
+            ) from exc
 
 
 def build_policy_client(
@@ -66,9 +57,9 @@ def build_policy_client(
     base_url: str | None = None,
     api_key: str | None = None,
     model: str | None = None,
-    structured_output_strategy: StructuredOutputStrategy = "auto",
+    structured_output_strategy: StructuredOutputStrategy | str = "tool_call",
 ) -> RoutePolicyClient:
-    methods = _resolve_structured_output_methods(structured_output_strategy)
+    strategy = _validate_structured_output_strategy(structured_output_strategy)
     runtime_config = _validate_runtime_config(
         base_url=base_url,
         api_key=api_key,
@@ -85,8 +76,7 @@ def build_policy_client(
         model=chat_model,
         model_name=runtime_config["MODEL"],
         base_url=runtime_config["BASE_URL"],
-        structured_output_strategy=structured_output_strategy,
-        structured_output_methods=methods,
+        structured_output_strategy=strategy,
     )
 
 
@@ -116,19 +106,15 @@ def _validate_runtime_config(
     }
 
 
-def _resolve_structured_output_methods(
+def _validate_structured_output_strategy(
     structured_output_strategy: StructuredOutputStrategy | str,
-) -> tuple[StructuredOutputMethod, ...]:
-    if structured_output_strategy not in SUPPORTED_STRATEGIES:
-        supported = ", ".join(sorted(SUPPORTED_STRATEGIES))
+) -> StructuredOutputStrategy:
+    if structured_output_strategy != SUPPORTED_STRATEGY:
         raise RoutePolicyClientConfigError(
             "unsupported structured_output_strategy: "
-            f"{structured_output_strategy}. supported: {supported}"
+            f"{structured_output_strategy}. only supported structured_output_strategy: tool_call"
         )
-
-    if structured_output_strategy == "auto":
-        return DEFAULT_AUTO_METHODS
-    return (structured_output_strategy,)
+    return "tool_call"
 
 
 def _coerce_output(output_schema: type[SchemaT], payload: Any) -> SchemaT:

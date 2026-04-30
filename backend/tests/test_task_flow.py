@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from backend.core.config import BackendSettings
 from backend.main import create_app
 from backend.services.agent_process import build_field_agent_process
+from backend.services.route_policy import build_route_policy_request
 
 
 TASK_SPEC = {
@@ -146,6 +147,7 @@ class FakeAgentClient:
                                 "used_in_final_decision": False,
                                 "metadata": {
                                     "stage": "broad",
+                                    "status": "enough_evidence",
                                     "candidate_ids": [],
                                     "refs": [],
                                 },
@@ -177,6 +179,7 @@ class FakeAgentClient:
         task_spec: dict[str, Any],
         field_outputs: list[dict[str, Any]],
         refs_with_text: list[dict[str, Any]],
+        field_processes: list[dict[str, Any]],
         metadata: dict[str, Any],
         policy_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -185,6 +188,7 @@ class FakeAgentClient:
                 "task_spec": task_spec,
                 "field_outputs": field_outputs,
                 "refs_with_text": refs_with_text,
+                "field_processes": field_processes,
                 "metadata": metadata,
                 "policy_options": policy_options,
             }
@@ -309,6 +313,70 @@ def test_failed_task_summary_returns_error_message(tmp_path: Path):
         assert summary["error_message"] == "resolution 执行失败: lookup_blocks action exceeded limit"
 
 
+def test_route_policy_request_counts_broad_copy_candidates_in_broad_stage():
+    trace = {
+        "field_name": "room_numbers",
+        "evidence_json": json.dumps({"refs": [], "texts": []}, ensure_ascii=False),
+        "actions_json": json.dumps(
+            [
+                {
+                    "action_type": "add_broad_candidate",
+                    "metadata": {"stage": "broad"},
+                },
+                {
+                    "action_type": "copy_field_candidates",
+                    "metadata": {
+                        "stage": "broad",
+                        "source_field_name": "room_rows",
+                        "copied_candidate_count": 2,
+                    },
+                },
+                {
+                    "action_type": "add_resolution_candidate",
+                    "metadata": {"stage": "resolution"},
+                },
+                {
+                    "action_type": "count_field_candidates",
+                    "metadata": {
+                        "stage": "resolution",
+                        "counted_field_name": "room_rows",
+                        "count": 2,
+                    },
+                },
+                {
+                    "action_type": "final_decision",
+                    "metadata": {"stage": "resolution"},
+                },
+            ],
+            ensure_ascii=False,
+        ),
+        "reason": "候选证据支持字段值",
+        "failure_reason": None,
+    }
+
+    request = build_route_policy_request(
+        task_spec=TASK_SPEC,
+        extracted_fields=[
+            {
+                "field_name": "room_numbers",
+                "agent_status": "resolved",
+                "agent_value_json": json.dumps("1-101,1-102", ensure_ascii=False),
+                "reason": "候选证据支持字段值",
+                "failure_reason": None,
+            }
+        ],
+        field_traces=[trace],
+        metadata={},
+    )
+
+    field_process = request["field_processes"][0]
+    assert field_process["broad_extraction"]["candidate_action_count"] == 2
+    assert field_process["field_resolution"]["candidate_action_count"] == 1
+    assert field_process["field_resolution"]["counted_fields"] == [
+        {"field_name": "room_rows", "count": 2}
+    ]
+
+
 def test_create_task_returns_pending_before_background_pipeline_finishes(tmp_path: Path):
     app, fake_agent = build_app(tmp_path, route="accept")
 
@@ -396,6 +464,27 @@ def test_create_task_accept_route_commits_agent_fields(tmp_path: Path):
             {"field_name": "room_numbers", "status": "resolved", "value": "1-101,1-102"}
         ]
         assert route_call["refs_with_text"][0]["refs"][0]["text"] == "1-101、1-102 被列为文明寝室"
+        assert route_call["field_processes"] == [
+            {
+                "field_name": "room_numbers",
+                "broad_extraction": {
+                    "status": "enough_evidence",
+                    "search_queries": ["文明寝室 OR 房间号"],
+                    "candidate_action_count": 1,
+                    "counted_fields": [],
+                    "finish_reason": "候选足够，结束 broad",
+                },
+                "field_resolution": {
+                    "status": "resolved",
+                    "search_queries": [],
+                    "candidate_action_count": 0,
+                    "counted_fields": [],
+                    "final_decision_used": True,
+                    "reason": "候选证据支持字段值",
+                    "failure_reason": None,
+                },
+            }
+        ]
 
 
 def test_create_task_accepts_multiple_files_and_merges_document_blocks(tmp_path: Path):
@@ -563,6 +652,10 @@ def test_create_task_accepts_multiple_files_and_merges_document_blocks(tmp_path:
         assert agent_trace[3]["request"]["field_outputs"] == [
             {"field_name": "room_numbers", "status": "resolved", "value": "1-101,1-102"}
         ]
+        assert agent_trace[3]["request"]["field_processes"][0]["broad_extraction"]["search_queries"] == [
+            "文明寝室 OR 房间号"
+        ]
+        assert "refs" not in agent_trace[3]["request"]["field_processes"][0]["broad_extraction"]
         assert agent_trace[3]["response"]["field_routes"][0]["route"] == "accept"
 
 

@@ -19,7 +19,7 @@ class PolicyOptions(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    max_refs_per_field: int = 8
+    max_refs_per_field: int = 50
     max_ref_text_chars: int = 1200
 
     @field_validator("max_refs_per_field", "max_ref_text_chars")
@@ -51,6 +51,69 @@ class FieldRefsWithText(BaseModel):
     refs: list[EvidenceTextRef] = Field(default_factory=list)
 
 
+class CountedFieldSummary(BaseModel):
+    """count_field_candidates 的可见摘要，不包含工具返回正文或 refs。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    field_name: str
+    count: int
+
+    @field_validator("field_name")
+    @classmethod
+    def validate_field_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("field_name is required")
+        return value
+
+    @field_validator("count")
+    @classmethod
+    def validate_count(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("count must not be negative")
+        return value
+
+
+class RouteProcessStage(BaseModel):
+    """route policy 可见的单阶段抽取过程摘要。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: str | None = None
+    search_queries: list[str] = Field(default_factory=list)
+    candidate_action_count: int = 0
+    counted_fields: list[CountedFieldSummary] = Field(default_factory=list)
+    finish_reason: str | None = None
+    final_decision_used: bool = False
+    reason: str | None = None
+    failure_reason: str | None = None
+
+    @field_validator("search_queries")
+    @classmethod
+    def validate_search_queries(cls, value: list[str]) -> list[str]:
+        stripped = [item.strip() for item in value if item.strip()]
+        if len(stripped) != len(value):
+            raise ValueError("search_queries must not contain empty items")
+        return stripped
+
+    @field_validator("candidate_action_count")
+    @classmethod
+    def validate_candidate_action_count(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("candidate_action_count must not be negative")
+        return value
+
+
+class RouteFieldProcess(BaseModel):
+    """单字段 broad / resolution 两阶段过程摘要。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    field_name: str
+    broad_extraction: RouteProcessStage
+    field_resolution: RouteProcessStage
+
+
 class RouteFieldOutput(BaseModel):
     """route policy 只消费字段最终输出，不消费抽取 trace。"""
 
@@ -78,6 +141,7 @@ class RoutePolicyInput(BaseModel):
     task_spec: TaskSpec
     field_outputs: list[RouteFieldOutput]
     refs_with_text: list[FieldRefsWithText]
+    field_processes: list[RouteFieldProcess]
     policy_options: PolicyOptions = Field(default_factory=PolicyOptions)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -138,17 +202,20 @@ class RoutePolicyResult(BaseModel):
 
 __all__ = [
     "EvidenceTextRef",
+    "CountedFieldSummary",
     "FieldDefinition",
     "FieldRefsWithText",
     "FieldRouteDecision",
     "FieldStatus",
     "FieldType",
     "PolicyOptions",
+    "RouteFieldProcess",
     "RouteDecision",
     "RouteFieldOutput",
     "RoutePolicyDecision",
     "RoutePolicyInput",
     "RoutePolicyResult",
+    "RouteProcessStage",
     "RunStatus",
     "TaskSpec",
 ]

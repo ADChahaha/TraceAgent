@@ -16,13 +16,14 @@ from service.route_policy_agent.policy_client import (
 from service.route_policy_agent.schemas import (
     FieldRefsWithText,
     PolicyOptions,
+    RouteFieldProcess,
     RouteFieldOutput,
     RoutePolicyResult,
     TaskSpec,
 )
 
 
-StructuredOutputStrategy = Literal["json_schema", "tool_call", "auto"]
+StructuredOutputStrategy = Literal["tool_call"]
 
 router = APIRouter(tags=["route-policy-agent"])
 
@@ -33,12 +34,13 @@ class EvaluateRequest(BaseModel):
     task_spec: TaskSpec
     field_outputs: list[RouteFieldOutput]
     refs_with_text: list[FieldRefsWithText]
+    field_processes: list[RouteFieldProcess]
     policy_options: PolicyOptions | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     base_url: str | None = None
     openai_api_key: str | None = None
     model: str | None = None
-    structured_output_strategy: StructuredOutputStrategy = "auto"
+    structured_output_strategy: StructuredOutputStrategy = "tool_call"
 
 
 @router.post("/v1/route-policy-agent/evaluate", response_model=RoutePolicyResult)
@@ -63,6 +65,7 @@ def _evaluate_route_policy(request: EvaluateRequest) -> RoutePolicyResult:
         task_spec=request.task_spec,
         field_outputs=request.field_outputs,
         refs_with_text=request.refs_with_text,
+        field_processes=request.field_processes,
         policy_options=request.policy_options,
         metadata=request.metadata,
         base_url=request.base_url,

@@ -61,6 +61,7 @@ class AgentClient:
         task_spec: dict[str, Any],
         field_outputs: list[dict[str, Any]],
         refs_with_text: list[dict[str, Any]],
+        field_processes: list[dict[str, Any]],
         metadata: dict[str, Any],
         policy_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -68,6 +69,7 @@ class AgentClient:
             "task_spec": task_spec,
             "field_outputs": field_outputs,
             "refs_with_text": refs_with_text,
+            "field_processes": field_processes,
             "metadata": metadata,
         }
         if policy_options is not None:
@@ -87,4 +89,3 @@ class AgentClient:
         except httpx.HTTPError as exc:
             raise AgentServiceError(f"agent service request failed: {exc}") from exc
         return response.json()
-

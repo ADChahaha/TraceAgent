@@ -60,9 +60,12 @@ def test_run_resolution_stage_final_decision_must_reference_candidate_ids():
                 "get_candidate_bundle",
                 "search_grep",
                 "add_resolution_candidate",
+                "count_field_candidates",
             ]
             self.calls += 1
             if self.calls == 1:
+                assert "invoice_no" in messages[1]["content"]
+                assert "selected_room" in messages[1]["content"]
                 return FieldResolutionAction(
                     action="final_decision",
                     field_name="invoice_no",
@@ -72,6 +75,14 @@ def test_run_resolution_stage_final_decision_must_reference_candidate_ids():
                     related_fields=["invoice_no"],
                     reason="候选证据支持字段值",
                 )
+            if self.calls == 2:
+                return FieldResolutionAction(
+                    action="count_field_candidates",
+                    field_name="selected_room",
+                    source_field_name="selected_room",
+                    reason="统计已写入的房间候选数量",
+                )
+            assert messages[-1]["content"] == "1"
             return FieldResolutionAction(
                 action="final_decision",
                 field_name="selected_room",
@@ -91,14 +102,13 @@ def test_run_resolution_stage_final_decision_must_reference_candidate_ids():
 
 
 def test_run_resolution_stage_rejects_unknown_candidate_ids():
-    from service.file_extraction_agent.impl.resolution.runner import run_resolution_loop_for_field
+    from service.file_extraction_agent.impl.resolution.runner import run_resolution_stage
 
     state = _build_state()
-    field = state.extraction_input.task_spec.fields[0]
 
     class FakeExtractorClient:
         def invoke(self, *, output_schema, messages, tools=None):
-            del output_schema, messages, tools
+            del output_schema, tools
             return FieldResolutionAction(
                 action="final_decision",
                 field_name="invoice_no",
@@ -109,18 +119,16 @@ def test_run_resolution_stage_rejects_unknown_candidate_ids():
             )
 
     with pytest.raises(ValueError, match="unknown candidate_ids: missing-candidate"):
-        run_resolution_loop_for_field(
+        run_resolution_stage(
             state=state,
-            field=field,
             extractor_client=FakeExtractorClient(),
         )
 
 
 def test_run_resolution_stage_can_search_and_add_resolution_candidate_before_decision():
-    from service.file_extraction_agent.impl.resolution.runner import run_resolution_loop_for_field
+    from service.file_extraction_agent.impl.resolution.runner import run_resolution_stage
 
     state = _build_state()
-    field = state.extraction_input.task_spec.fields[1]
 
     class FakeExtractorClient:
         def __init__(self):
@@ -143,20 +151,34 @@ def test_run_resolution_stage_can_search_and_add_resolution_candidate_before_dec
                     refs=["b-table:r:r1"],
                     reason="二次检索找到选中房间行",
                 )
+            if self.calls == 3:
+                return FieldResolutionAction(
+                    action="final_decision",
+                    field_name="selected_room",
+                    status="resolved",
+                    value="A101",
+                    candidate_ids=["c1"],
+                    reason="resolution 候选支持字段值",
+                )
+            if self.calls == 4:
+                return FieldResolutionAction(
+                    action="final_decision",
+                    field_name="invoice_no",
+                    status="failed",
+                    failure_reason="本测试不处理发票号",
+                )
             return FieldResolutionAction(
                 action="final_decision",
-                field_name="selected_room",
-                status="resolved",
-                value="A101",
-                candidate_ids=["c1"],
-                reason="resolution 候选支持字段值",
+                field_name="invoice_no",
+                status="failed",
+                failure_reason="本测试不处理发票号",
             )
 
-    decision = run_resolution_loop_for_field(
+    run_resolution_stage(
         state=state,
-        field=field,
         extractor_client=FakeExtractorClient(),
     )
+    decision = state.field_decisions["selected_room"]
 
     assert decision.value == "A101"
     assert decision.candidate_ids == ["c1"]
@@ -168,11 +190,71 @@ def test_run_resolution_stage_can_search_and_add_resolution_candidate_before_dec
     ]
 
 
-def test_run_resolution_stage_records_candidate_bundle_reads():
-    from service.file_extraction_agent.impl.resolution.runner import run_resolution_loop_for_field
+def test_run_resolution_stage_returns_tool_error_for_unknown_ref_and_continues():
+    from service.file_extraction_agent.impl.resolution.runner import run_resolution_stage
 
     state = _build_state()
-    field = state.extraction_input.task_spec.fields[0]
+
+    class FakeExtractorClient:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, *, output_schema, messages, tools=None):
+            del output_schema, tools
+            self.calls += 1
+            if self.calls == 1:
+                return FieldResolutionAction(
+                    action="search_grep",
+                    field_name="selected_room",
+                    query="selected",
+                )
+            if self.calls == 2:
+                return FieldResolutionAction(
+                    action="add_resolution_candidate",
+                    field_name="selected_room",
+                    refs=["b-table:r:r999"],
+                    reason="误用了不存在的 ref",
+                )
+            if self.calls == 3:
+                assert "tool_error" in messages[-1]["content"]
+                assert "unknown evidence ref" in messages[-1]["content"]
+                return FieldResolutionAction(
+                    action="add_resolution_candidate",
+                    field_name="selected_room",
+                    refs=["b-table:r:r1"],
+                    reason="改用 search_grep 返回的合法 ref",
+                )
+            if self.calls == 4:
+                return FieldResolutionAction(
+                    action="final_decision",
+                    field_name="selected_room",
+                    status="resolved",
+                    value="A101",
+                    candidate_ids=["c1"],
+                    reason="合法候选支持字段值",
+                )
+            return FieldResolutionAction(
+                action="final_decision",
+                field_name="invoice_no",
+                status="failed",
+                failure_reason="本测试不处理发票号",
+            )
+
+    run_resolution_stage(state=state, extractor_client=FakeExtractorClient())
+
+    assert state.field_decisions["selected_room"].value == "A101"
+    assert [action.action_type for action in state.actions["selected_room"]] == [
+        "search_grep",
+        "tool_error",
+        "add_resolution_candidate",
+        "final_decision",
+    ]
+
+
+def test_run_resolution_stage_records_candidate_bundle_reads():
+    from service.file_extraction_agent.impl.resolution.runner import run_resolution_stage
+
+    state = _build_state()
     add_broad_candidate(
         state=state,
         field_name="invoice_no",
@@ -193,18 +275,24 @@ def test_run_resolution_stage_records_candidate_bundle_reads():
                     field_name="invoice_no",
                 )
             assert "candidate_id" in messages[-1]["content"]
+            if self.calls == 2:
+                return FieldResolutionAction(
+                    action="final_decision",
+                    field_name="invoice_no",
+                    status="resolved",
+                    value="INV-001",
+                    candidate_ids=["c1"],
+                    reason="候选池支持字段值",
+                )
             return FieldResolutionAction(
                 action="final_decision",
-                field_name="invoice_no",
-                status="resolved",
-                value="INV-001",
-                candidate_ids=["c1"],
-                reason="候选池支持字段值",
+                field_name="selected_room",
+                status="failed",
+                failure_reason="本测试不处理房间",
             )
 
-    run_resolution_loop_for_field(
+    run_resolution_stage(
         state=state,
-        field=field,
         extractor_client=FakeExtractorClient(),
     )
 
@@ -213,3 +301,69 @@ def test_run_resolution_stage_records_candidate_bundle_reads():
         "get_candidate_bundle",
         "final_decision",
     ]
+
+
+def test_run_resolution_stage_requires_model_final_decision_after_count_tool():
+    from service.file_extraction_agent.impl.resolution.runner import run_resolution_stage
+
+    state = _build_state()
+    add_broad_candidate(
+        state=state,
+        field_name="invoice_no",
+        refs=["b-invoice:p:p1"],
+        reason="来源字段候选",
+    )
+
+    class FakeExtractorClient:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, *, output_schema, messages, tools=None):
+            del output_schema, tools
+            self.calls += 1
+            if self.calls == 1:
+                return FieldResolutionAction(
+                    action="final_decision",
+                    field_name="invoice_no",
+                    status="resolved",
+                    value="INV-001",
+                    candidate_ids=["c1"],
+                    reason="来源字段定案",
+                )
+            if self.calls == 2:
+                return FieldResolutionAction(
+                    action="count_field_candidates",
+                    field_name="invoice_no",
+                    reason="数量字段由来源字段候选数量派生",
+                )
+            if self.calls == 3:
+                assert messages[-1]["content"] == "1"
+                return FieldResolutionAction(
+                    action="add_resolution_candidate",
+                    field_name="selected_room",
+                    values=["1"],
+                    reason="把 count_field_candidates 返回的数字写入数量字段候选池",
+                )
+            assert "candidate_id" in messages[-1]["content"]
+            return FieldResolutionAction(
+                action="final_decision",
+                field_name="selected_room",
+                status="resolved",
+                value=1,
+                candidate_ids=["c1"],
+                related_fields=["invoice_no"],
+                reason="模型基于 count_field_candidates 明确定案数量字段",
+            )
+
+    run_resolution_stage(state=state, extractor_client=FakeExtractorClient())
+
+    decision = state.field_decisions["selected_room"]
+    assert decision.status == "resolved"
+    assert decision.value == 1
+    assert decision.candidate_ids == ["c1"]
+    assert decision.related_fields == ["invoice_no"]
+    assert [action.action_type for action in state.actions["selected_room"]] == [
+        "add_resolution_candidate",
+        "final_decision",
+    ]
+    assert state.actions["invoice_no"][-1].action_type == "count_field_candidates"

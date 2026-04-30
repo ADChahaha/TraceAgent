@@ -512,6 +512,73 @@ it("list 字段在结果页按条目分行展示", async () => {
   expect(within(row).queryByText(/\["Cascading failures/)).not.toBeInTheDocument();
 });
 
+it("action refs 同页同 span 但 block 不同时不会触发重复 key warning", async () => {
+  const user = userEvent.setup();
+  const consoleError = jest.spyOn(console, "error").mockImplementation(() => {});
+  const duplicateRefAction = {
+    action_type: "search_grep",
+    message: "论文题目 OR 学术论文",
+    used_in_final_decision: false,
+    refs: [
+      { document_id: "doc-1", page: 2, span: "r:r1", block_id: "doc-1:p2:b11" },
+      { document_id: "doc-1", page: 2, span: "r:r1", block_id: "doc-1:p2:b12" }
+    ],
+    metadata: { stage: "broad", refs: ["doc-1:p2:b11:r:r1", "doc-1:p2:b12:r:r1"] }
+  };
+  const duplicateRefProcess = {
+    ...agentProcess,
+    actions: [duplicateRefAction],
+    process_steps: agentProcess.process_steps.map((step) =>
+      step.stage === "broad_extraction"
+        ? { ...step, actions: [duplicateRefAction] }
+        : { ...step, actions: [] }
+    )
+  };
+  const completedSummary: TaskSummary = {
+    ...waitingReviewSummary,
+    status: "completed",
+    stage: "done",
+    route: "accept",
+    needs_review: false
+  };
+  const loadTaskDetail = jest.fn(async (): Promise<TaskDetailData> => ({
+    ...detailData,
+    summary: completedSummary,
+    trace: detailData.trace
+      ? {
+          ...detailData.trace,
+          steps: detailData.trace.steps?.map((step) =>
+            step.agent === "file_extraction_agent"
+              ? { ...step, field_decisions: [duplicateRefProcess] }
+              : step
+          )
+        }
+      : null,
+    review: null
+  }));
+
+  try {
+    render(
+      <TaskDetail
+        taskId="task-duplicate-ref"
+        initialSummary={completedSummary}
+        loadTaskDetail={loadTaskDetail}
+      />
+    );
+
+    await screen.findByText("completed");
+    await user.click(screen.getByRole("tab", { name: "证据" }));
+    expect(screen.getByText("引用 2 条")).toBeInTheDocument();
+    expect(
+      consoleError.mock.calls.some((call) =>
+        call.some((item) => String(item).includes("Encountered two children with the same key"))
+      )
+    ).toBe(false);
+  } finally {
+    consoleError.mockRestore();
+  }
+});
+
 it("trace 会直接展示 document_processor 返回的完整原始 Markdown", async () => {
   const user = userEvent.setup();
   const completedSummary: TaskSummary = {

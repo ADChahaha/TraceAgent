@@ -9,7 +9,7 @@
 ```text
 backend 聚合后的 blocks + task_spec
   -> 外层输入适配和 blocks 契约校验
-  -> broad 按字段召回候选证据
+  -> broad 为各字段召回候选证据
   -> resolution 基于候选证据做字段定案
   -> 返回 ExtractionResult(result + trace)
 ```
@@ -246,8 +246,8 @@ messages + output_schema + 可选 tools
 - `max_prompt_blocks`：限制 broad 初始 prompt 可展示的 block 摘要数量。
 - `max_prompt_block_chars`：限制单个 block 摘要长度。
 - `max_resolution_candidates`：限制 resolution prompt 中候选证据数量。
-- `max_broad_iterations`：限制单字段 broad loop 的最大动作轮次。
-- `max_resolution_iterations`：限制单字段 resolution loop 的最大动作轮次。
+- `max_broad_iterations`：作为每字段 broad 预算，runner 会乘以字段数得到共享 broad loop 最大动作轮次。
+- `max_resolution_iterations`：作为每字段 resolution 预算，runner 会乘以字段数得到共享 resolution loop 最大动作轮次。
 - `keep_detailed_trace`：是否保留更详细内部调试信息。
 
 当前 grep 工具不使用 `top_k`。搜索返回多少，由确定性 grep 命中结果决定；如果后续需要限制最大返回数量，应使用明确的 `max_grep_results` 之类配置，不把它命名为 `top_k`。
@@ -513,15 +513,23 @@ GraphState + error
 
 #### `run_broad_stage(state, extractor_client)`
 
-运行所有字段的 broad loop。
+运行一个共享 broad agent loop，直到所有字段都有 `finish_broad`。
 
 处理步骤：
 
 ```text
 GraphState
-  -> 遍历 task_spec.fields
-  -> 对每个字段调用 run_broad_loop_for_field(...)
-  -> 所有字段都有 finish_broad 后结束
+  -> 读取 task_spec.fields，计算 pending_fields
+  -> build_broad_messages(state) 把所有字段、已完成字段和全字段候选池放入 prompt
+  -> 直接注入 search_grep、add_broad_candidate、copy_field_candidates
+  -> 调用 extractor_client.invoke(...) 获取 BroadAction
+  -> 校验 action.field_name 必须属于 task_spec.fields
+  -> search_grep：按 action.field_name 同时检索正文段落和表格行
+  -> add_broad_candidate：把 refs 写入 action.field_name 对应候选池
+  -> 如果 add_broad_candidate 收到不存在的 ref，记录 tool_error 并把错误作为下一轮 tool_result 返回给模型修正
+  -> copy_field_candidates：把 source_field_name 的候选复制到 action.field_name，返回不含正文的复制摘要
+  -> finish_broad：校验后写入 state.broad_finishes[action.field_name]
+  -> 所有字段都有 finish_broad 后返回 GraphState
 ```
 
 职责边界：
@@ -529,50 +537,39 @@ GraphState
 - 负责 broad 阶段整体调度。
 - 不做字段最终定案。
 - 不调用 resolution 工具。
+- 不按字段启动独立模型 loop；字段之间的候选可以在同一阶段上下文里互相参考。
 
-#### `run_broad_loop_for_field(state, field, extractor_client)`
-
-运行单字段 broad agent loop。
-
-处理步骤：
-
-```text
-field
-  -> build_broad_messages(state, field)
-  -> 直接注入 search_grep、add_broad_candidate
-  -> 调用 extractor_client.invoke(...)
-  -> 如果模型请求 search_grep，同时检索正文段落和表格行并把 ref/text 返回给模型
-  -> 如果模型请求 add_broad_candidate，写入 broad 候选
-  -> 如果模型返回 finish_broad action，校验后退出当前字段 loop
-```
+`run_broad_loop_for_field(...)` 只作为旧内部调用兼容包装存在；新实现不再依赖它编排单字段循环。
 
 broad 可用动作：
 
-- `search_grep(query)`
-- `add_broad_candidate(refs, reason)`
-- `finish_broad(status, reason)`
+- `search_grep(field_name, query)`
+- `add_broad_candidate(field_name, refs, reason)`
+- `copy_field_candidates(field_name, source_field_name, reason)`
+- `finish_broad(field_name, status, reason)`
 
 `finish_broad` 是 broad 的唯一正常出口，但它不是单独 tool 文件。runner 直接解析模型的 terminal action。
 
 约束：
 
-- `status=enough_evidence` 时，当前字段候选池必须非空。
+- `status=enough_evidence` 时，目标字段候选池必须非空。
 - broad 只能把搜索结果加入候选池，不能输出字段最终值。
-- 如果超过最大轮次仍未 `finish_broad`，抛出流程错误。
+- 如果超过共享最大轮次仍有字段未 `finish_broad`，抛出包含 pending fields 的流程错误。
 
 ### `impl/broad/prompts.py`
 
-#### `build_broad_messages(state, field)`
+#### `build_broad_messages(state)`
 
 构造 broad prompt。
 
 输入来源：
 
-- 当前字段定义。
-- 字段 `lookup_hints`。
+- 所有字段定义及字段 `lookup_hints` / `cross_field_hints`。
+- `pending_fields` 和已完成 `finish_broad` 摘要。
 - task 名称和必要 metadata。
 - 可搜索内容的概要说明。
-- 当前字段已有候选摘要。
+- 全字段已有候选摘要。
+- 上一轮工具结果。
 
 输出：
 
@@ -582,10 +579,12 @@ prompt 必须表达清楚：
 
 - broad 只负责找候选证据。
 - `search_grep` 会同时搜索正文 paragraph 和表格行。
+- broad 不暴露 `count_field_candidates`；数量字段应在 resolution 阶段基于候选池统计。
+- broad 可用 `copy_field_candidates` 在 state 内复制字段候选，工具结果不返回来源候选正文。
 - payload 必须注入 `tool_contract`，说明每个 action 的用途、入参、返回和约束。
 - `search_grep.query` 固定使用 `term1 OR term2 OR term3`，多个短关键词只能用大写 `OR` 连接。
 - 候选引用使用 `ref`。
-- 正常结束必须返回 `finish_broad` action。
+- 每个字段正常结束都必须返回 `finish_broad` action。
 
 #### `format_broad_tool_result(result)`
 
@@ -594,8 +593,10 @@ prompt 必须表达清楚：
 处理步骤：
 
 ```text
-SearchResult[] 或 Candidate[]
+SearchResult[]、Candidate[]、复制摘要或 tool_error
   -> 只保留 ref/candidate_id 和 text
+  -> copy_field_candidates 只返回 copied_candidate_count 和 copied_candidate_ids
+  -> tool_error 只返回工具名、字段名、错误信息和模型修正提示
   -> 不暴露 block metadata、page_no、bbox 等内部定位细节
   -> 返回模型可读消息片段
 ```
@@ -608,15 +609,24 @@ SearchResult[] 或 Candidate[]
 
 #### `run_resolution_stage(state, extractor_client)`
 
-运行所有字段的 resolution loop。
+运行一个共享 resolution agent loop，直到所有字段都有 `final_decision`。
 
 处理步骤：
 
 ```text
 GraphState
-  -> 按 task_spec.fields 顺序遍历字段
-  -> 对每个字段调用 run_resolution_loop_for_field(...)
-  -> 每个字段产出 FieldDecision
+  -> 读取 task_spec.fields，计算 pending_fields
+  -> build_resolution_messages(state) 把所有字段、候选池和已完成定案放入 prompt
+  -> 直接注入 get_candidate_bundle、search_grep、add_resolution_candidate、count_field_candidates
+  -> 调用 extractor_client.invoke(...) 获取 FieldResolutionAction
+  -> 校验 action.field_name 必须属于 task_spec.fields
+  -> get_candidate_bundle：读取 action.field_name 对应候选池摘要
+  -> search_grep：按 action.field_name 同时检索正文段落和表格行
+  -> add_resolution_candidate：把 refs 或 values 写入 action.field_name 对应候选池
+  -> 如果 add_resolution_candidate 收到不存在的 ref，记录 tool_error 并把错误作为下一轮 tool_result 返回给模型修正
+  -> count_field_candidates：统计 action.field_name 当前候选数量并记录 trace，返回 number 给模型
+  -> final_decision：校验 candidate_id 后写入 state.field_decisions[action.field_name]
+  -> 所有字段都有 FieldDecision 后返回 GraphState
 ```
 
 职责边界：
@@ -625,39 +635,24 @@ GraphState
 - 不重新执行 broad。
 - 不做 route policy。
 - 不写数据库。
+- 不按字段启动独立模型 loop；数量字段可以在同一阶段参考列表字段的候选数量。
 
-#### `run_resolution_loop_for_field(state, field, extractor_client)`
-
-运行单字段 resolution agent loop。
-
-处理步骤：
-
-```text
-field
-  -> get_candidate_bundle(state, field_name) 读取当前候选池
-  -> build_resolution_messages(state, field)
-  -> 直接注入 get_candidate_bundle、search_grep、add_resolution_candidate
-  -> 调用 extractor_client.invoke(...)
-  -> 如果模型请求候选读取，返回候选池摘要
-  -> 如果模型请求 search_grep，同时检索正文段落和表格行并返回 ref/text
-  -> 如果模型请求 add_resolution_candidate，写入 resolution 来源候选
-  -> 如果模型返回 final_decision action，调用 build_field_decision_from_final_action(...)
-  -> 写入 state.field_decisions[field_name]
-```
+`run_resolution_loop_for_field(...)` 只作为旧内部调用兼容包装存在；新实现不再依赖它编排单字段循环。
 
 resolution 可用动作：
 
 - `get_candidate_bundle(field_name)`
-- `search_grep(query)`
-- `add_resolution_candidate(refs, reason)`
-- `final_decision(status, value, candidate_ids, related_fields, reason)`
+- `search_grep(field_name, query)`
+- `add_resolution_candidate(field_name, refs | values, reason)`
+- `count_field_candidates(field_name)`
+- `final_decision(field_name, status, value, candidate_ids, related_fields, reason)`
 
 `final_decision` 是 resolution 的唯一正常出口，但它不是独立 tool 文件。runner 直接解析模型的 terminal action。
 
 约束：
 
 - `status=resolved` 时必须引用至少一个 `candidate_id`。
-- `candidate_id` 必须来自当前字段候选池。
+- `candidate_id` 必须来自 `final_decision.field_name` 对应的候选池。
 - resolution 可以把二次搜索命中的 ref 追加为候选，但不能直接引用未入候选池的 ref 做最终决策。
 - 如果超过最大轮次仍未 `final_decision`，抛出流程错误。
 
@@ -686,16 +681,17 @@ final_decision action
 
 ### `impl/resolution/prompts.py`
 
-#### `build_resolution_messages(state, field)`
+#### `build_resolution_messages(state)`
 
 构造 resolution prompt。
 
 输入来源：
 
-- 当前字段定义。
-- 当前字段候选池摘要。
+- 所有字段定义。
+- `pending_fields`。
+- 全字段候选池摘要。
 - 已完成字段结果摘要。
-- 当前字段工具历史。
+- 上一轮工具结果。
 - 必要运行选项。
 
 输出：
@@ -706,10 +702,11 @@ prompt 必须表达清楚：
 
 - resolution 负责最终字段定案。
 - 若候选不足，可以先 grep 并调用 `add_resolution_candidate`。
+- `count_field_candidates` 只统计指定字段当前候选数量，返回 number；模型若要把数字作为目标字段证据，必须再调用 `add_resolution_candidate(values=[...])`。
 - payload 必须注入 `tool_contract`，说明每个 action 的用途、入参、返回和约束。
 - `search_grep.query` 固定使用 `term1 OR term2 OR term3`，多个短关键词只能用大写 `OR` 连接。
-- 最终必须通过 `final_decision` action 退出。
-- `final_decision` 只能引用 `candidate_id`，不能直接引用 grep 返回的 ref。
+- 每个字段最终必须通过 `final_decision` action 退出。
+- `final_decision` 只能引用对应字段候选池里的 `candidate_id`，不能直接引用 grep 返回的 ref。
 
 #### `format_resolution_tool_result(result)`
 
@@ -718,8 +715,9 @@ prompt 必须表达清楚：
 处理步骤：
 
 ```text
-候选读取结果、grep 结果或候选写入结果
-  -> 只保留 candidate_id/ref 和 text
+候选读取结果、grep 结果、候选写入结果、tool_error 或 number
+  -> 候选读取/写入只保留 candidate_id/ref/text
+  -> tool_error 只返回工具名、字段名、错误信息和模型修正提示
   -> 不暴露 block metadata、page_no、bbox 等内部定位细节
   -> 返回模型可读消息片段
 ```
@@ -795,17 +793,18 @@ refs + reason
 - 不做字段最终定案。
 - 不修改已完成字段结果。
 
-#### `add_resolution_candidate(state, field_name, refs, reason)`
+#### `add_resolution_candidate(state, field_name, refs=None, values=None, reason)`
 
 resolution 专用候选写入函数。
 
 处理步骤：
 
 ```text
-refs + reason
-  -> 校验每个 ref 存在于 paragraph_index 或 table_row_index
-  -> 如果同一字段已存在同 ref 候选，复用已有 candidate_id 或跳过去重
-  -> 为新 ref 生成 candidate_id
+refs / values + reason
+  -> 对 refs 校验每个 ref 存在于 paragraph_index 或 table_row_index
+  -> 对 values 生成 value:{field_name}:vN 这类内部 ref
+  -> 如果同一字段已存在同 ref 或同 value 候选，复用已有 candidate_id 或跳过去重
+  -> 为新 ref/value 生成 candidate_id
   -> 写入 Candidate(source_stage="resolution")
   -> 记录 add_resolution_candidate action
   -> 返回 candidate_id 和 text
@@ -814,6 +813,7 @@ refs + reason
 职责边界：
 
 - 只服务 resolution 二次补证。
+- 可把 `count_field_candidates` 返回的数字通过 `values` 写成目标字段候选。
 - 和 broad 写入同一个候选池，但 `source_stage` 不同。
 - 不直接产出 `FieldDecision`。
 
@@ -845,6 +845,47 @@ field_name
 - 不新增候选。
 - 不改变候选状态。
 - 不做最终字段判断。
+
+#### `count_field_candidates(state, field_name, stage, reason=None)`
+
+统计字段候选池当前数量。
+
+处理步骤：
+
+```text
+field_name + stage
+  -> 读取 len(state.candidates[field_name])
+  -> 记录 count_field_candidates action，metadata.count 保留数量
+  -> 返回 number
+```
+
+职责边界：
+
+- 只读候选池数量。
+- 不返回候选正文或 ref 列表。
+- 不新增候选。
+- 不直接产出字段值。
+
+#### `copy_field_candidates(state, source_field_name, target_field_name, stage, reason)`
+
+把一个字段已有候选复制到另一个字段。
+
+处理步骤：
+
+```text
+source_field_name + target_field_name + reason
+  -> 读取 state.candidates[source_field_name]
+  -> 将每个候选的 ref/text 复制为 target_field_name 的当前阶段候选
+  -> 已存在同 ref 的目标候选直接复用
+  -> 记录 copy_field_candidates action，metadata.source_field_name 和 metadata.copied_candidate_count 保留过程摘要
+  -> 返回 copied_candidate_count 和 copied_candidate_ids，不返回候选正文或 ref 列表
+```
+
+职责边界：
+
+- 只在 state 内复制候选，避免把来源候选正文作为工具结果再次塞回 prompt。
+- 不读取新证据。
+- 不直接产出字段值。
 
 ## Ref 与 Candidate ID
 

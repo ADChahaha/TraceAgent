@@ -106,6 +106,7 @@ BroadActionType = Literal[
     "search_text_grep",
     "search_table_rows_grep",
     "add_broad_candidate",
+    "copy_field_candidates",
     "finish_broad",
 ]
 
@@ -115,6 +116,7 @@ class BroadAction(BaseModel):
 
     action: BroadActionType
     field_name: str
+    source_field_name: str | None = None
     query: str | None = None
     refs: list[str] = Field(default_factory=list)
     reason: str | None = None
@@ -133,6 +135,12 @@ class BroadAction(BaseModel):
             if not self.reason:
                 raise ValueError("add_broad_candidate action requires reason")
             return self
+        if self.action == "copy_field_candidates":
+            if not self.source_field_name:
+                raise ValueError("copy_field_candidates action requires source_field_name")
+            if not self.reason:
+                raise ValueError("copy_field_candidates action requires reason")
+            return self
         if self.status is None or not self.reason:
             raise ValueError("finish_broad action requires status and reason")
         return self
@@ -144,6 +152,7 @@ ResolutionActionType = Literal[
     "search_text_grep",
     "search_table_rows_grep",
     "add_resolution_candidate",
+    "count_field_candidates",
     "final_decision",
 ]
 FieldResolutionValue = str | int | float | bool | list[str] | None
@@ -156,6 +165,7 @@ class FieldResolutionAction(BaseModel):
     field_name: str
     query: str | None = None
     refs: list[str] = Field(default_factory=list)
+    values: list[str] = Field(default_factory=list)
     status: FieldStatus | None = None
     value: FieldResolutionValue = None
     candidate_ids: list[str] = Field(default_factory=list)
@@ -173,10 +183,12 @@ class FieldResolutionAction(BaseModel):
                 raise ValueError(f"{self.action} action requires query")
             return self
         if self.action == "add_resolution_candidate":
-            if not self.refs:
-                raise ValueError("add_resolution_candidate action requires refs")
+            if not self.refs and not self.values:
+                raise ValueError("add_resolution_candidate action requires refs or values")
             if not self.reason:
                 raise ValueError("add_resolution_candidate action requires reason")
+            return self
+        if self.action == "count_field_candidates":
             return self
 
         if self.status is None:

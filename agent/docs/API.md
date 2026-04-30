@@ -16,6 +16,7 @@ backend 持有原始 PDF / DOCX
   -> POST /v1/file-extraction-agent/extract
   -> 得到 ExtractionResult(result.fields + trace.fields)
   -> backend 从 trace.fields[].evidence.refs 和 texts 组装 refs_with_text
+  -> backend 从 trace.fields[].actions 组装 field_processes
   -> POST /v1/route-policy-agent/evaluate
   -> 得到 RoutePolicyResult(field_routes[])
 ```
@@ -136,7 +137,7 @@ POST /v1/file-extraction-agent/extract
 - `run_options`：可选，抽取运行预算。
 - `metadata`：可选，调用方透传元信息。
 - `base_url`、`openai_api_key`、`model`：可选，覆盖环境变量里的模型连接配置。
-- `structured_output_strategy`：可选，`auto`、`json_schema` 或 `tool_call`。
+- `structured_output_strategy`：可选，固定只支持 `tool_call`；显式传入 `auto` 或 `json_schema` 会返回 422。
 
 `task_spec.fields[]` 常用字段：
 
@@ -220,22 +221,43 @@ POST /v1/route-policy-agent/evaluate
     - `block_id`
     - `span`
     - `text`
+- `field_processes[]`：必填，backend 从抽取 trace actions 组装的两阶段过程摘要。
+  - `field_name`
+  - `broad_extraction`
+    - `status`
+    - `search_queries`：统一 `search_grep` 的查询词列表，格式固定为 `term1 OR term2 OR term3`。
+    - `candidate_action_count`
+    - `counted_fields`
+    - `finish_reason`
+  - `field_resolution`
+    - `status`
+    - `search_queries`
+    - `candidate_action_count`
+    - `counted_fields`
+    - `final_decision_used`
+    - `reason`
+    - `failure_reason`
 - `policy_options`：可选，route prompt 的 refs 数量和文本长度预算。
 - `metadata`：可选，调用方透传元信息。
 - `base_url`、`openai_api_key`、`model`：可选，覆盖环境变量里的模型连接配置。
-- `structured_output_strategy`：可选，`auto`、`json_schema` 或 `tool_call`。
+- `structured_output_strategy`：可选，固定只支持 `tool_call`；显式传入 `auto` 或 `json_schema` 会返回 422。
+
+`field_processes` 只允许记录 agent 搜索和定案路径，不允许包含 search 工具返回的正文、表格行、cell、block_id 列表或 action refs。route policy 判断字段值是否被原文支持时，只能读取 `refs_with_text.text`；`field_processes.search_queries` 只用于判断 agent 是否用合理关键词查过正文和表格。
+
+派生字段会在 route prompt 中额外带上来源字段的 `related_field_processes`。例如数量字段如果定义了 `validation_rules.source_field` 指向列表字段，route policy 会看到来源列表字段 broad/resolution 查过什么关键词、写入多少候选、是否最终定案；它不会看到来源字段工具返回正文。
 
 处理流程：
 
 ```text
-task_spec + field_outputs + refs_with_text
+task_spec + field_outputs + refs_with_text + field_processes
   -> route 层解析 JSON
   -> processor.evaluate(...)
-  -> RoutePolicyInput 拒绝 trace/actions/额外风险标记等未知字段
-  -> input_validator 校验字段名、refs 分组、ref.text 和来源位置
-  -> mapper 合并 FieldDefinition、RouteFieldOutput、EvidenceTextRef[]
+  -> RoutePolicyInput 拒绝未知字段和工具返回结果
+  -> input_validator 校验字段名、refs 分组、ref.text、来源位置和 field_processes 分组
+  -> mapper 合并 FieldDefinition、RouteFieldOutput、EvidenceTextRef[]、RouteFieldProcess
+  -> 对 source_field/source_fields 派生字段附加 related_field_processes
   -> failed + critical/required 字段直接 reject
-  -> resolved 字段调用小 LLM 输出 RoutePolicyDecision
+  -> resolved 字段用 refs 文本、当前字段过程摘要和来源字段过程摘要调用小 LLM 输出 RoutePolicyDecision
   -> 返回 RoutePolicyResult(field_routes[])
 ```
 
@@ -262,7 +284,7 @@ curl -sS \
 
 失败语义：
 
-- 未知字段、缺少 `refs_with_text`、ref 缺少 `text` 或来源位置时返回 422。
+- 未知字段、缺少 `refs_with_text`、缺少 `field_processes`、ref 缺少 `text` 或来源位置时返回 422。
 - 缺少模型连接参数时返回 422。
 - 小 LLM 结构化输出调用失败时返回 502。
 

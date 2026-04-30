@@ -1,6 +1,6 @@
 # Route Policy Agent Design
 
-这份文档记录 `service.route_policy_agent` 的设计。它是 `agent service` 下独立于 `service.file_extraction_agent` 的第三个处理阶段，负责像第三方评价者一样，根据任务、字段输出和 refs 中的证据文本判断字段结果应当 `accept / review / reject`。
+这份文档记录 `service.route_policy_agent` 的设计。它是 `agent service` 下独立于 `service.file_extraction_agent` 的第三个处理阶段，负责像第三方评价者一样，根据任务、字段输出、refs 中的证据文本和两阶段过程摘要判断字段结果应当 `accept / review / reject`。
 
 ## 目标与边界
 
@@ -9,10 +9,10 @@
 主链路是：
 
 ```text
-TaskSpec + field_outputs + refs_with_text
+TaskSpec + field_outputs + refs_with_text + field_processes
   -> route_policy_agent
-  -> 按 field_name 合并字段定义、字段输出和 refs 证据文本
-  -> 小 LLM 独立判断 accept / review / reject
+  -> 按 field_name 合并字段定义、字段输出、refs 证据文本和抽取过程摘要
+  -> 小 LLM 结合最终证据和抽取路径判断 accept / review / reject
   -> RoutePolicyResult(field_routes[])
   -> backend 保存 field_routes 并驱动 review / audit
 ```
@@ -26,7 +26,8 @@ TaskSpec + field_outputs + refs_with_text
 - 不写最终结果，不执行人工审核，不生成 audit。
 - 只输出字段级 route 决策和原因。
 - 不读取抽取 agent 的完整 prompt、raw model response、chain-of-thought 或详细推理过程。
-- 不消费额外风险标记，例如 `used_global_lookup`、`used_validation_rule`、`model_call_error`。
+- 不读取 search 工具返回的候选正文、table row、cell、block_id 列表或其他工具结果。
+- 只消费抽取过程的事实摘要：broad / resolution 阶段各自执行过哪些统一 `search_grep` 查询词、是否写入过候选、是否执行最终定案，以及阶段状态和失败原因。
 
 这层和 `service.file_extraction_agent` 的区别是：
 
@@ -35,7 +36,7 @@ service.file_extraction_agent
   -> 回答字段值是什么、refs 证据在哪里
 
 service.route_policy_agent
-  -> 只根据字段输出和 refs 中的证据文本回答这个字段结果应 accept、review 还是 reject
+  -> 根据字段输出、refs 证据文本和抽取过程摘要回答这个字段结果应 accept、review 还是 reject
 ```
 
 ## 当前结构
@@ -69,7 +70,7 @@ POST /v1/route-policy-agent/evaluate
 
 ## 输入
 
-`service.route_policy_agent` 的输入应当只包含做 route 判断所需的信息。第一版把它设计成第三方评价者：除任务/字段定义和待评估字段输出外，只看 `refs` 中携带的证据文本和来源位置。
+`service.route_policy_agent` 的输入应当只包含做 route 判断所需的信息。当前把它设计成第三方评价者：除任务/字段定义和待评估字段输出外，它看 `refs` 中携带的最终证据文本，也看 `file_extraction_agent` 的两阶段过程摘要，用来判断抽取路径是否充分。
 
 - `task_spec`
   - 字段定义、是否 required、是否 critical、是否 allow_missing、字段类型、业务提示。
@@ -77,10 +78,17 @@ POST /v1/route-policy-agent/evaluate
   - 字段最终值和字段状态；`type=list` 字段的值应是字符串数组，route policy 只评价该数组是否被 refs 支持，不把它改写成字符串。
 - `refs_with_text`
   - 每条 ref 必须包含证据文本和来源位置，例如 `document_id`、`page`、`block_id`、`span`、`text`。
+- `field_processes`
+  - 每个待评估字段必须有一条过程摘要，包含 `broad_extraction` 和 `field_resolution` 两段。
+  - 两段中的 `search_queries` 只记录统一 search 工具发起过的查询词，例如 `学术论文 OR 论文题目 OR 作品类型`，不记录 `search_text` / `search_table_rows` 这类内部拆分。
+  - 过程摘要可以包含候选写入数量、broad 结束原因、是否执行 `final_decision`、resolution 原因和失败原因。
+  - 过程摘要不能包含 search 工具返回的正文、表格行、cell、block_id 列表或 action refs；最终证据文本仍只从 `refs_with_text` 读取。
 - 可选 `policy_options`
-  - 小 LLM 模型配置和调用预算。
+  - route prompt 的 refs 数量和文本长度预算，`max_refs_per_field` 默认 50。
 
-这里的 `refs` 不能只是定位信息。如果 ref 只有 `document_id/page/span/block_id`，它只能说明证据位置，不能让 route policy 判断字段值是否真的被证据支持。第一版要求使用 `refs_with_text`：每条 ref 自带证据文本，route policy 不再读取抽取过程、trace actions、抽取 reason 或额外风险标记。
+这里的 `refs` 不能只是定位信息。如果 ref 只有 `document_id/page/span/block_id`，它只能说明证据位置，不能让 route policy 判断字段值是否真的被证据支持。`refs_with_text` 仍是最终证据来源；`field_processes` 只说明 agent 搜索和定案路径是否合理，不替代证据文本。
+
+对于派生字段，mapper 会按字段定义中的 `validation_rules.source_field` 或 `validation_rules.source_fields` 找到来源字段过程摘要，并在单字段 prompt 中额外放入 `related_field_processes`。例如 `academic_paper_count` 的 broad 可能只是复制 `academic_paper_names` 的候选，route policy 判断数量字段时必须能看到来源字段 broad 查过 `学术论文 OR 论文题目 OR 作品类型`。这里仍只传过程摘要，不传 search 工具返回结果。
 
 推荐输入 pipeline：
 
@@ -88,31 +96,35 @@ POST /v1/route-policy-agent/evaluate
 backend 传入 task_description / task_spec
   -> 传入待评估 field_outputs
   -> 传入每个字段对应的 refs_with_text
+  -> 从 field_traces.actions_json 提取每个字段的 broad / resolution 过程摘要
+  -> 只保留 search_grep 查询词、候选写入数量、finish_broad 信息和 final_decision 是否执行
   -> service.route_policy_agent.schemas 做 Pydantic 解析
-  -> input_validator 校验字段名、字段输出和 refs 文本完整性
-  -> mapper 按 field_name 合并 FieldDefinition、FieldOutput、refs_with_text
-  -> prompts 构造只包含字段定义、字段输出和 refs 文本的 route prompt
+  -> input_validator 校验字段名、字段输出、refs 文本和 field_processes 是否完整
+  -> mapper 按 field_name 合并 FieldDefinition、FieldOutput、refs_with_text、field_process
+  -> 如果字段声明了 source_field/source_fields，mapper 附加来源字段的 related_field_processes
+  -> prompts 构造只包含字段定义、字段输出、refs 文本、当前字段过程摘要和来源字段过程摘要的 route prompt
   -> policy_client 调小 LLM 独立判断 accept / review / reject
   -> 返回 RoutePolicyResult
 ```
 
 ## 输入校验
 
-`input_validator.py` 负责跨对象校验，避免把协议一致性检查混进 mapper 或 prompt 构造。它只检查 route policy 需要的输入是否完整，不补全文本、不读取原文、不从 trace 中推断 refs。
+`input_validator.py` 负责跨对象校验，避免把协议一致性检查混进 mapper 或 prompt 构造。它只检查 route policy 需要的输入是否完整，不补全文本、不读取原文、不从 trace 中推断 refs 或 search query。
 
 推荐校验 pipeline：
 
 ```text
-RoutePolicyInput(task_spec + field_outputs + refs_with_text)
+RoutePolicyInput(task_spec + field_outputs + refs_with_text + field_processes)
   -> 校验 task_spec.fields 中 field_name 唯一
   -> 校验每个 field_output.field_name 都能在 task_spec.fields 中找到
   -> 校验每个待评估字段都有对应 refs_with_text
   -> 校验每条 ref 都有非空 text 和至少一个来源位置 document_id/page/block_id/span
-  -> 校验请求中没有抽取推理过程、trace actions 或额外风险标记字段
+  -> 校验每个待评估字段都有对应 field_processes
+  -> 校验 field_processes 只包含两阶段过程摘要，不包含工具返回结果或 action refs
   -> 返回 ValidatedPolicyInput，供 mapper 合并字段上下文
 ```
 
-校验失败时应返回明确错误或 failed 结果，错误信息需要指出具体字段名和缺失项，例如缺少 `refs_with_text.text`、字段名不在 `task_spec.fields` 中，或 ref 只有定位信息但没有证据文本。
+校验失败时应返回明确错误或 failed 结果，错误信息需要指出具体字段名和缺失项，例如缺少 `refs_with_text.text`、字段名不在 `task_spec.fields` 中、ref 只有定位信息但没有证据文本，或缺少 `field_processes`。
 
 ## 输出
 
@@ -146,13 +158,13 @@ reject
 
 ## Route 判断流程
 
-字段级 route 判断应当只围绕字段输出和 refs 文本展开：
+字段级 route 判断围绕字段输出、refs 文本和抽取过程摘要展开：
 
 ```text
-FieldDefinition + FieldOutput + refs_with_text
+FieldDefinition + FieldOutput + refs_with_text + field_process
   -> input_validator 校验输入完整性和字段对应关系
-  -> mapper 合并字段定义、字段值和该字段 refs
-  -> prompts 构造不包含抽取推理过程的评价上下文
+  -> mapper 合并字段定义、字段值、该字段 refs 和两阶段过程摘要
+  -> prompts 构造不包含工具返回结果、不包含原始推理的评价上下文
   -> policy_client.invoke(RoutePolicyDecision)
   -> FieldRouteDecision
 ```
@@ -165,20 +177,19 @@ FieldDefinition + FieldOutput + refs_with_text
 实际处理 pipeline 是：
 
 ```text
-processor.evaluate(task_spec, field_outputs, refs_with_text)
-  -> RoutePolicyInput 解析并拒绝 trace/actions/额外风险标记等未知字段
-  -> input_validator 校验字段名、refs 分组、ref.text 和来源位置
-  -> mapper 按 field_name 合并 FieldDefinition、RouteFieldOutput、EvidenceTextRef[]
+processor.evaluate(task_spec, field_outputs, refs_with_text, field_processes)
+  -> RoutePolicyInput 解析并拒绝未知字段
+  -> input_validator 校验字段名、refs 分组、ref.text、来源位置和 field_processes 分组
+  -> mapper 按 field_name 合并 FieldDefinition、RouteFieldOutput、EvidenceTextRef[]、RouteFieldProcess
+  -> 派生字段额外带上 source_field/source_fields 对应的 related_field_processes
   -> failed + critical/required 字段直接生成 FieldRouteDecision(route=reject)
-  -> resolved 字段由 prompts 构造只含字段定义、字段输出和 refs 文本的 messages
+  -> resolved 字段由 prompts 构造只含字段定义、字段输出、refs 文本和过程摘要的 messages
   -> policy_client.invoke(RoutePolicyDecision, messages)
   -> 汇总 RoutePolicyResult(field_routes[])
 ```
 
 `policy_client` 只接受 `with_structured_output(...)` 产出的结构化结果，不解析裸
-`model.invoke(...)` JSON 文本。`structured_output_strategy=auto` 时，route policy
-阶段为了兼容小模型 provider，按 `json_schema -> tool_call` 顺序重试结构化协议；
-两种结构化协议都失败时，再把错误作为 route policy 模型调用失败向上抛出。
+`model.invoke(...)` JSON 文本。当前 route policy 固定只支持 `structured_output_strategy=tool_call`，客户端内部映射到 LangChain 的 `function_calling`；显式传入 `json_schema` 或 `auto` 会被拒绝，结构化调用失败时直接作为 route policy 模型调用失败向上抛出。
 
 ### 1. 合并字段上下文
 
@@ -189,18 +200,23 @@ ValidatedPolicyInput
   -> 按 field_name 找到 FieldDefinition
   -> 按 field_name 找到 FieldOutput
   -> 按 field_name 找到该字段 refs_with_text
+  -> 按 field_name 找到该字段 field_process
+  -> 从 validation_rules.source_field/source_fields 找到相关来源字段 field_process
   -> 合并成 FieldPolicyContext
 ```
 
 ### 2. 小 LLM 给出 route 决策
 
-小 LLM 只接收字段级评价上下文，不接收整篇文档，也不接收抽取 agent 的推理过程：
+小 LLM 只接收字段级评价上下文，不接收整篇文档，也不接收抽取 agent 的原始推理过程或工具返回结果：
 
 ```text
 任务描述和字段定义
   -> 字段值和字段状态
   -> refs 中的证据文本
   -> refs 的来源位置
+  -> broad_extraction.search_queries / candidate_action_count / counted_fields / finish_reason
+  -> field_resolution.search_queries / candidate_action_count / counted_fields / final_decision_used / reason / failure_reason
+  -> 派生字段的 related_field_processes，说明来源字段 broad/resolution 查过什么、写入过多少候选和如何定案
   -> 输出 route + reason
 ```
 
@@ -230,7 +246,7 @@ POST /tasks
 原因：
 
 - 抽取和治理决策是两个不同问题。
-- route policy 需要作为第三方评价者，只看字段输出和 refs 证据文本来判断是否放行。
+- route policy 需要作为第三方评价者，只看字段输出、refs 证据文本和抽取过程摘要来判断是否放行。
 - route policy 后续可以独立做消融实验，例如不同小 LLM、不同 prompt 或不同 refs 裁剪策略。
 - 把 route policy 独立出来，可以避免 `service.file_extraction_agent` 同时承担抽取、证据留痕和业务放行判断。
 
@@ -242,10 +258,12 @@ POST /tasks
 
 - resolved 且证据充分的非关键字段可以 `accept`。
 - resolved 但 refs 文本无法充分支持字段值时进入 `review`。
+- resolved 且 refs 支持字段值，但 broad / resolution 搜索路径明显不足时进入 `review`。
+- 派生字段 prompt 能看到来源字段的 search 查询词和过程摘要，例如数量字段能看到列表字段查过什么。
 - critical required 字段 failed 时必须 `reject`。
 - 输入校验能拒绝未知字段名、缺少 refs、ref 没有 text 或只有定位信息的请求。
 - 小 LLM 不允许产生新的字段值。
-- 输入缺少字段输出或 refs 文本时返回 failed 或明确 warning。
+- 输入缺少字段输出、refs 文本或 `field_processes` 时返回 failed 或明确 warning。
 
 ## 原型范围
 

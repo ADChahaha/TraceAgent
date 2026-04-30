@@ -87,6 +87,8 @@ def test_candidate_tools_add_dedupe_and_read_field_candidates():
     from service.file_extraction_agent.impl.tools.candidates import (
         add_broad_candidate,
         add_resolution_candidate,
+        count_field_candidates,
+        copy_field_candidates,
         get_candidate_bundle,
     )
 
@@ -111,14 +113,47 @@ def test_candidate_tools_add_dedupe_and_read_field_candidates():
         reason="resolution 二次补充表格行",
     )
     bundle = get_candidate_bundle(state=state, field_name="amount")
+    count = count_field_candidates(
+        state=state,
+        field_name="amount",
+        stage="resolution",
+        reason="统计金额候选数量",
+    )
+    copied = copy_field_candidates(
+        state=state,
+        source_field_name="amount",
+        target_field_name="amount_copy",
+        stage="resolution",
+        reason="复制金额候选",
+    )
 
     assert [candidate.candidate_id for candidate in broad_candidates] == ["c1"]
     assert [candidate.candidate_id for candidate in repeated_candidates] == ["c1"]
     assert [candidate.candidate_id for candidate in resolution_candidates] == ["c2"]
     assert [candidate.ref for candidate in bundle] == ["b-text:p:p1", "b-table:r:r1"]
+    assert count == 2
     assert [action.action_type for action in state.actions["amount"]] == [
         "add_broad_candidate",
         "add_broad_candidate",
         "add_resolution_candidate",
         "get_candidate_bundle",
+        "count_field_candidates",
     ]
+    assert copied == {
+        "copied_candidate_count": 2,
+        "copied_candidate_ids": ["c1", "c2"],
+    }
+    assert [candidate.field_name for candidate in state.candidates["amount_copy"]] == [
+        "amount_copy",
+        "amount_copy",
+    ]
+    assert [candidate.ref for candidate in state.candidates["amount_copy"]] == [
+        "b-text:p:p1",
+        "b-table:r:r1",
+    ]
+    assert state.actions["amount"][-1].metadata["count"] == 2
+    assert state.actions["amount_copy"][0].action_type == "copy_field_candidates"
+    assert state.actions["amount_copy"][0].metadata == {
+        "source_field_name": "amount",
+        "copied_candidate_count": 2,
+    }

@@ -15,7 +15,7 @@
   -> 后端合并多个文件的 markdown、md_list 和 blocks
   -> 后端调用 file_extraction_agent 执行字段抽取
   -> agent 返回 ExtractionResult(result + trace)
-  -> 后端组装 field_outputs + refs_with_text 并调用 route_policy_agent
+  -> 后端组装 field_outputs + refs_with_text + field_processes 并调用 route_policy_agent
   -> agent 返回 accept / review / reject 字段路由
   -> 如果 route=accept，生成最终字段结果和审计记录
   -> 如果 route=review，生成人工审核 handoff 包
@@ -76,7 +76,7 @@ review
 reject
 ```
 
-`route` 由 agent service 的 `route_policy_agent` 给出。backend 只提交任务/字段定义、字段输出和 `refs_with_text`，然后保存 `accept / review / reject` 输出并驱动状态流转。
+`route` 由 agent service 的 `route_policy_agent` 给出。backend 提交任务/字段定义、字段输出、`refs_with_text` 和 `field_processes`，然后保存 `accept / review / reject` 输出并驱动状态流转。`refs_with_text` 提供最终证据文本；`field_processes` 只提供 broad / resolution 两阶段的 search 查询词、候选写入数量、count 摘要、broad 结束原因和是否执行最终定案，不包含工具返回结果。
 
 人工审核结论 `review_decision`：
 
@@ -134,7 +134,7 @@ curl -X POST "http://localhost:8000/tasks" \
   -> 合并所有文件的 markdown、md_list 和 blocks
   -> 调用 file_extraction_agent，并在 metadata 中传入 document_ids
   -> 保存 result 和 trace
-  -> 组装 field_outputs + refs_with_text 并调用 route_policy_agent
+  -> 组装 field_outputs + refs_with_text + field_processes 并调用 route_policy_agent
   -> 按 route 写入 final result、review 状态或 reject / failed 状态
   -> 如果后台流程抛错，任务会变成 failed/done，并把失败原因写入 error_message
 ```
@@ -427,8 +427,8 @@ documents 表中的标准化结果
 
 ```text
 field evidence + documents.blocks_json + actions + agent value
-  -> broad_extraction：按 evidence.block_ids / refs[].block_id 回查候选 block 正文，并返回 blocks、文本、refs、notes 和 broad 阶段 actions，例如 search_grep / add_broad_candidate / finish_broad
-  -> field_resolution：返回本阶段产出的 route 前 output_fields(field_name/status/value/reason)，并说明读取了哪些 related_fields、执行了哪些 resolution actions，例如 final_decision；没有额外 action 时返回 completed 和直接定案说明，不返回 skipped
+  -> broad_extraction：按 evidence.block_ids / refs[].block_id 回查候选 block 正文，并返回 blocks、文本、refs、notes 和 broad 阶段 actions，例如 search_grep / add_broad_candidate / copy_field_candidates / finish_broad
+  -> field_resolution：返回本阶段产出的 route 前 output_fields(field_name/status/value/reason)，并说明读取了哪些 related_fields、执行了哪些 resolution actions，例如 add_resolution_candidate / count_field_candidates / final_decision；没有额外 action 时返回 completed 和直接定案说明，不返回 skipped
   -> final_result：route policy 之前的 agent 抽取结果，包含 status、agent value、reason 或 failure_reason
   -> route_validation：route_policy_agent 的验证/路由结论，包含 route、needs_review 和 route_reason
 ```
@@ -447,7 +447,7 @@ file_extraction_agent 一次记录
   -> trace 保存 ExtractionResult.trace
 
 route_policy_agent 一次记录
-  -> request 保存 task_spec、field_outputs、refs_with_text、metadata、policy_options
+  -> request 保存 task_spec、field_outputs、refs_with_text、field_processes、metadata、policy_options
   -> response 保存 RoutePolicyResult 完整 JSON
   -> trace 保存 response.trace；没有 trace 时保存 field_routes/warnings/metadata 摘要
 ```

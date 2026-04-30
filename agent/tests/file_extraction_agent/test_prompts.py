@@ -43,25 +43,31 @@ def test_build_broad_messages_focuses_on_field_and_search_contract():
 
     messages = broad_prompts.build_broad_messages(
         state=state,
-        field=extraction_input.task_spec.fields[0],
         tool_results=[],
     )
 
     assert messages[0]["role"] == "system"
     assert "BroadAction" in messages[0]["content"]
     assert "search_grep" in messages[0]["content"]
+    assert "copy_field_candidates" in messages[0]["content"]
     assert "query 格式固定为" in messages[0]["content"]
     assert " OR " in messages[0]["content"]
     assert "finish_broad" in messages[0]["content"]
+    assert "broad 阶段没有 count_field_candidates" in messages[0]["content"]
     payload = json.loads(messages[1]["content"])
     assert payload["task_name"] == "invoice"
-    assert payload["field"]["field_name"] == "invoice_no"
+    assert payload["fields"][0]["field_name"] == "invoice_no"
+    assert payload["pending_fields"] == ["invoice_no"]
     assert payload["metadata"] == {"source": "backend"}
     assert payload["searchable_summary"]["paragraph_count"] == 1
-    assert payload["current_candidates"] == []
+    assert payload["candidates_by_field"] == {"invoice_no": []}
     assert payload["tool_contract"]["search_grep"]["query_format"] == "term1 OR term2 OR term3"
     assert "同时搜索正文段落和表格行" in payload["tool_contract"]["search_grep"]["description"]
-    assert payload["tool_contract"]["finish_broad"]["description"] == "当前字段 broad 阶段的唯一正常出口。"
+    assert "count_field_candidates" not in payload["tool_contract"]
+    assert payload["tool_contract"]["copy_field_candidates"]["returns"] == (
+        "包含 copied_candidate_count 和 copied_candidate_ids 的摘要，不包含 text/ref。"
+    )
+    assert payload["tool_contract"]["finish_broad"]["description"] == "指定字段 broad 阶段的唯一正常出口。"
 
 
 def test_build_resolution_messages_includes_candidate_pool_and_prior_decisions():
@@ -88,7 +94,6 @@ def test_build_resolution_messages_includes_candidate_pool_and_prior_decisions()
 
     messages = resolution_prompts.build_resolution_messages(
         state=state,
-        field=extraction_input.task_spec.fields[0],
         tool_results=[],
     )
 
@@ -97,14 +102,19 @@ def test_build_resolution_messages_includes_candidate_pool_and_prior_decisions()
     assert "search_grep" in messages[0]["content"]
     assert "query 格式固定为" in messages[0]["content"]
     assert "final_decision" in messages[0]["content"]
+    assert "count_field_candidates" in messages[0]["content"]
+    assert "copy_field_candidates" not in messages[0]["content"]
     payload = json.loads(messages[1]["content"])
-    assert payload["target_field"]["field_name"] == "amount"
-    assert payload["candidate_bundle"][0]["candidate_id"] == "c1"
-    assert payload["candidate_bundle"][0]["text"] == "金额：100.00"
+    assert payload["fields"][0]["field_name"] == "amount"
+    assert payload["pending_fields"] == ["amount", "invoice_no"]
+    assert payload["candidate_bundles_by_field"]["amount"][0]["candidate_id"] == "c1"
+    assert payload["candidate_bundles_by_field"]["amount"][0]["text"] == "金额：100.00"
     assert payload["completed_fields"] == []
     assert "blocks" not in payload
     assert payload["tool_contract"]["search_grep"]["query_format"] == "term1 OR term2 OR term3"
-    assert payload["tool_contract"]["final_decision"]["description"] == "当前字段 resolution 阶段的唯一正常出口。"
+    assert payload["tool_contract"]["count_field_candidates"]["returns"] == "number。"
+    assert "copy_field_candidates" not in payload["tool_contract"]
+    assert payload["tool_contract"]["final_decision"]["description"] == "指定字段 resolution 阶段的唯一正常出口。"
 
 
 def test_prompt_builders_apply_prompt_budget_limits():
@@ -129,7 +139,6 @@ def test_prompt_builders_apply_prompt_budget_limits():
 
     broad_messages = broad_prompts.build_broad_messages(
         state=state,
-        field=extraction_input.task_spec.fields[0],
         tool_results=[],
     )
     broad_payload = json.loads(broad_messages[1]["content"])
@@ -139,10 +148,12 @@ def test_prompt_builders_apply_prompt_budget_limits():
 
     resolution_messages = resolution_prompts.build_resolution_messages(
         state=state,
-        field=extraction_input.task_spec.fields[0],
         tool_results=[],
     )
     resolution_payload = json.loads(resolution_messages[1]["content"])
 
-    assert [item["candidate_id"] for item in resolution_payload["candidate_bundle"]] == ["c1"]
+    assert [
+        item["candidate_id"]
+        for item in resolution_payload["candidate_bundles_by_field"]["amount"]
+    ] == ["c1"]
     assert resolution_payload["prompt_budget"]["omitted_candidate_count"] == 1
