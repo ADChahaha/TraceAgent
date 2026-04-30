@@ -21,7 +21,7 @@ backend 聚合后的 blocks + task_spec
 - 不保留独立 `validation` 阶段，也不把它改名成 `rules.py` 或 `constraints.py` 继续存在。
 - tool 数量保持少而明确，不做动态 registry；runner 直接把当前阶段允许的工具注入给模型。
 
-## 目标代码结构
+## 当前代码结构
 
 ```text
 service/file_extraction_agent/
@@ -54,7 +54,7 @@ service/file_extraction_agent/
     └── DEVLOG.md
 ```
 
-这是一版目标结构。落地重构时应先按 TDD 修改测试，再移动实现文件。
+当前实现已经按这个结构落地。后续如果继续调整阶段目录、工具边界或 trace 语义，需要先按 TDD 修改对应测试，再同步更新本文档。
 
 ## 主处理链路
 
@@ -97,8 +97,9 @@ service/file_extraction_agent/
 ```text
 调用方传入 blocks、task_spec、run_options、metadata 和可选模型连接参数
   -> 调用 input_adapter.build_graph_input(...) 组装 ExtractionInput
-  -> 如果调用方没有传 extractor_client，则调用 extractor_client.build_extractor_client(...)
-  -> 调用 graph.run_extraction_graph(graph_input, extractor_client)
+  -> 如果调用方没有传 extractor_client 或阶段客户端，则调用 extractor_client.build_extractor_client(...)
+  -> 如果传了 broad_model / resolution_model，则分别构造阶段客户端
+  -> 调用 graph.run_extraction_graph(graph_input, extractor_client, stage clients)
   -> 返回 schemas.py::ExtractionResult
 ```
 
@@ -160,7 +161,7 @@ blocks
   -> 检查 blocks 是可遍历的非空列表
   -> 检查每个 block 有稳定 block_id
   -> 检查 block_id 在本次输入内唯一
-  -> 检查 document_id、kind、text、page_no 等 trace 所需字段可用
+  -> 检查 document_id、kind、text 等 trace 所需字段可用，page_no 有值时会进入最终 trace
   -> 检查 table block 至少能被转换成行级文本
   -> 校验通过后返回 None
 ```
@@ -180,7 +181,7 @@ blocks
 
 ### `extractor_client.py`
 
-#### `build_extractor_client(base_url=None, openai_api_key=None, model=None, structured_output_strategy="auto")`
+#### `build_extractor_client(base_url=None, api_key=None, model=None, structured_output_strategy="tool_call")`
 
 创建结构化输出模型调用器。
 
@@ -188,9 +189,10 @@ blocks
 
 ```text
 显式模型参数 + 环境变量
-  -> 合并 base_url、openai_api_key、model
+  -> 合并 base_url、api_key、model
   -> model 缺省时使用代码默认模型
-  -> 按 structured_output_strategy 选择结构化输出协议
+  -> 校验 structured_output_strategy 只能是 tool_call
+  -> 把 tool_call 映射成 LangChain 的 function_calling
   -> 返回 ExtractorClient
 ```
 
@@ -209,7 +211,8 @@ blocks
 
 ```text
 messages + output_schema + 可选 tools
-  -> 调用底层模型
+  -> 用 LangChain function_calling 构造结构化 runnable
+  -> 调用底层模型并要求返回匹配 output_schema 的工具调用参数
   -> 解析成 Pydantic 结构化结果
   -> 返回结构化对象
 ```
@@ -243,6 +246,8 @@ messages + output_schema + 可选 tools
 - `max_prompt_blocks`：限制 broad 初始 prompt 可展示的 block 摘要数量。
 - `max_prompt_block_chars`：限制单个 block 摘要长度。
 - `max_resolution_candidates`：限制 resolution prompt 中候选证据数量。
+- `max_broad_iterations`：限制单字段 broad loop 的最大动作轮次。
+- `max_resolution_iterations`：限制单字段 resolution loop 的最大动作轮次。
 - `keep_detailed_trace`：是否保留更详细内部调试信息。
 
 当前 grep 工具不使用 `top_k`。搜索返回多少，由确定性 grep 命中结果决定；如果后续需要限制最大返回数量，应使用明确的 `max_grep_results` 之类配置，不把它命名为 `top_k`。
@@ -332,8 +337,7 @@ resolution 产出的字段最终定案对象。
 
 action 类型至少包括：
 
-- `text_grep`
-- `table_row_grep`
+- `search_grep`
 - `add_broad_candidate`
 - `add_resolution_candidate`
 - `get_candidate_bundle`
@@ -424,27 +428,33 @@ field_name + ToolActionRecord
 
 ### `impl/graph.py`
 
-#### `run_extraction_graph(graph_input, extractor_client)`
+#### `run_extraction_graph(graph_input, extractor_client, broad_extractor_client=None, resolution_extractor_client=None)`
 
 内部执行总入口。
 
 处理步骤：
 
 ```text
-ExtractionInput + ExtractorClient
+ExtractionInput + 共享 ExtractorClient 或 broad/resolution 阶段客户端
   -> build_graph_state(graph_input)
-  -> broad.runner.run_broad_stage(state, extractor_client)
-  -> resolution.runner.run_resolution_stage(state, extractor_client)
+  -> broad.runner.run_broad_stage(state, broad_client)
+  -> resolution.runner.run_resolution_stage(state, resolution_client)
   -> map_state_to_result(state)
   -> ExtractionResult
 ```
+
+客户端选择规则：
+
+- 如果传了 `broad_extractor_client`，broad 阶段优先使用它。
+- 如果传了 `resolution_extractor_client`，resolution 阶段优先使用它。
+- 没有阶段客户端时，两个阶段复用 `extractor_client`。
 
 失败收口：
 
 ```text
 broad 或 resolution 抛异常
   -> 捕获异常
-  -> 写入 model_call_error 或流程错误 action
+  -> 只给第一个未完成字段写 model_call_error 或流程错误 action
   -> build_failed_result(state, error)
   -> 返回 status="failed" 的 ExtractionResult
 ```
@@ -465,16 +475,18 @@ broad 或 resolution 抛异常
 ```text
 GraphState
   -> 读取 state.field_decisions
-  -> 生成 result.fields[]
+  -> 生成只包含 field_name/status/value 的 result.fields[]
   -> 通过 candidate_id -> ref -> paragraph/table index 回查证据定位
   -> 生成 trace.fields[].evidence
-  -> 复制 actions、related_fields、reason、failure_reason
+  -> 复制 actions、related_fields、reason、failure_reason 到 trace.fields[]
   -> 返回 completed ExtractionResult
 ```
 
 职责边界：
 
 - 对外只暴露稳定 result / trace 语义。
+- `result` 是纯业务结果，不重复放证据、动作或 prompt 调试信息。
+- `trace` 是审计和治理层使用的证据链，保存候选证据、工具动作、定案原因和失败原因。
 - 不暴露内部 prompt、raw model response 或链路私有对象。
 
 #### `build_failed_result(state, error)`
@@ -485,10 +497,11 @@ GraphState
 
 ```text
 GraphState + error
-  -> 保留已经完成的 FieldDecision
+  -> broad 失败时用 state.broad_finishes 判断已完成 broad 字段
+  -> resolution 失败时用 state.field_decisions 判断已完成定案字段
   -> 未完成字段补 status=failed
-  -> 失败字段写 model_call_error action
-  -> trace.metadata 写 failure_stage、error_type、error_message
+  -> 只给第一个未完成字段写 model_call_error action
+  -> trace.metadata 写 failure_stage、error_type、error_message、completed_field_names、pending_field_names
   -> 返回 failed ExtractionResult
 ```
 
@@ -526,17 +539,16 @@ GraphState
 ```text
 field
   -> build_broad_messages(state, field)
-  -> 直接注入 search_text_grep、search_table_rows_grep、add_broad_candidate
+  -> 直接注入 search_grep、add_broad_candidate
   -> 调用 extractor_client.invoke(...)
-  -> 如果模型请求 grep，执行对应 grep 并把 ref/text 返回给模型
+  -> 如果模型请求 search_grep，同时检索正文段落和表格行并把 ref/text 返回给模型
   -> 如果模型请求 add_broad_candidate，写入 broad 候选
   -> 如果模型返回 finish_broad action，校验后退出当前字段 loop
 ```
 
 broad 可用动作：
 
-- `search_text_grep(query)`
-- `search_table_rows_grep(query)`
+- `search_grep(query)`
 - `add_broad_candidate(refs, reason)`
 - `finish_broad(status, reason)`
 
@@ -569,8 +581,9 @@ broad 可用动作：
 prompt 必须表达清楚：
 
 - broad 只负责找候选证据。
-- text 搜索返回 paragraph。
-- table 搜索返回单行。
+- `search_grep` 会同时搜索正文 paragraph 和表格行。
+- payload 必须注入 `tool_contract`，说明每个 action 的用途、入参、返回和约束。
+- `search_grep.query` 固定使用 `term1 OR term2 OR term3`，多个短关键词只能用大写 `OR` 连接。
 - 候选引用使用 `ref`。
 - 正常结束必须返回 `finish_broad` action。
 
@@ -623,10 +636,10 @@ GraphState
 field
   -> get_candidate_bundle(state, field_name) 读取当前候选池
   -> build_resolution_messages(state, field)
-  -> 直接注入 get_candidate_bundle、search_text_grep、search_table_rows_grep、add_resolution_candidate
+  -> 直接注入 get_candidate_bundle、search_grep、add_resolution_candidate
   -> 调用 extractor_client.invoke(...)
   -> 如果模型请求候选读取，返回候选池摘要
-  -> 如果模型请求 grep，执行 grep 并返回 ref/text
+  -> 如果模型请求 search_grep，同时检索正文段落和表格行并返回 ref/text
   -> 如果模型请求 add_resolution_candidate，写入 resolution 来源候选
   -> 如果模型返回 final_decision action，调用 build_field_decision_from_final_action(...)
   -> 写入 state.field_decisions[field_name]
@@ -635,8 +648,7 @@ field
 resolution 可用动作：
 
 - `get_candidate_bundle(field_name)`
-- `search_text_grep(query)`
-- `search_table_rows_grep(query)`
+- `search_grep(query)`
 - `add_resolution_candidate(refs, reason)`
 - `final_decision(status, value, candidate_ids, related_fields, reason)`
 
@@ -694,6 +706,8 @@ prompt 必须表达清楚：
 
 - resolution 负责最终字段定案。
 - 若候选不足，可以先 grep 并调用 `add_resolution_candidate`。
+- payload 必须注入 `tool_contract`，说明每个 action 的用途、入参、返回和约束。
+- `search_grep.query` 固定使用 `term1 OR term2 OR term3`，多个短关键词只能用大写 `OR` 连接。
 - 最终必须通过 `final_decision` action 退出。
 - `final_decision` 只能引用 `candidate_id`，不能直接引用 grep 返回的 ref。
 
@@ -716,66 +730,44 @@ tool 文件只保留确定性能力，不承载阶段编排。
 
 ### `impl/tools/search.py`
 
-#### `search_text_grep(state, field_name, query)`
+#### `search_grep(state, field_name, query)`
 
-在文本内容中做确定性 grep。
+在正文段落和表格行中做一次统一确定性 grep。
 
 处理步骤：
 
 ```text
 query
-  -> 在 paragraph_index 中按文档原始顺序查找字符串命中
-  -> 命中后返回命中所在完整 paragraph
+  -> 只按大写 OR 拆成 query_terms
+  -> 在 paragraph_index 中按文档原始顺序查找任一关键词命中
+  -> 在 table_row_index 中按文档原始顺序和 row 顺序查找任一关键词命中
+  -> paragraph 命中返回完整 paragraph，table 命中返回当前 table row
   -> 每条结果只返回 SearchResult(ref, text)
-  -> 记录 text_grep action
+  -> 记录 search_grep action，并在 metadata.query_terms 中保留拆词结果
 ```
 
 返回给模型：
 
 ```text
 [
-  {"ref": "block_12:p:p3", "text": "命中所在完整段落"}
-]
-```
-
-约束：
-
-- paragraph 是文本语义段落，不等同于 block。
-- paragraph 有多长就返回多长，不做固定窗口截断。
-- 不返回整个 block，除非该 block 本身就是无法继续切分的单段 paragraph。
-- 不使用 `top_k`。
-- 不做语义排序。
-- 不返回 `document_id`、`page_no`、bbox 等追踪字段给模型。
-
-#### `search_table_rows_grep(state, field_name, query)`
-
-在表格行中做确定性 grep。
-
-处理步骤：
-
-```text
-query
-  -> 在 table_row_index 中按文档原始顺序和 row 顺序查找字符串命中
-  -> 命中后只返回当前 table row
-  -> 每条结果只返回 SearchResult(ref, text)
-  -> 记录 table_row_grep action
-```
-
-返回给模型：
-
-```text
-[
+  {"ref": "block_12:p:p3", "text": "命中所在完整段落"},
   {"ref": "block_18:r:r5", "text": "列名1=值1 | 列名2=值2"}
 ]
 ```
 
 约束：
 
-- 只返回命中的一行。
-- 不返回整张表。
-- 不返回所有 cells 的结构化明细给模型。
-- `text` 可以是最小可读行文本，例如 `列名=值` 拼接。
+- 每次 search 都同时查正文和表格，不让模型在 text/table 两个搜索工具之间反复试错。
+- paragraph 是文本语义段落，不等同于 block；table row 是行级证据，不返回整张表。
+- query 中的 `A OR B` 表示任一关键词命中即可返回；只支持大写 `OR` 作为多词分隔。
+- 不支持中文“或”、逗号、顿号、斜杠或自然语言句子作为多词分隔。
 - 不使用 `top_k`。
+- 不做语义排序。
+- 不返回 `document_id`、`page_no`、bbox 等追踪字段给模型。
+
+#### `search_text_grep(...)` / `search_table_rows_grep(...)`
+
+保留为兼容旧测试或内部直接调用的窄入口。broad / resolution runner 不再把它们暴露给模型；模型侧统一使用 `search_grep`。
 - 不做语义排序。
 - 不返回 `document_id`、`page_no`、bbox 等追踪字段给模型。
 

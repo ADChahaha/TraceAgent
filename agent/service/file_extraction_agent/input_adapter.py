@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from service.file_extraction_agent.impl.block_ids import validate_block_ids
+from service.file_extraction_agent.block_contract import validate_blocks_contract
 from service.file_extraction_agent.impl.schemas import ExtractionInput
 from service.file_extraction_agent.schemas import (
     NormalizedBlock,
@@ -25,8 +25,9 @@ def build_graph_input(
     """把外部 session 级输入收敛成模块内部统一的 `ExtractionInput`。"""
 
     resolved_task_spec = _resolve_task_spec(task_spec=task_spec)
+    validate_blocks_contract(blocks)
     return ExtractionInput(
-        blocks=validate_block_ids(blocks),
+        blocks=[NormalizedBlock.model_validate(block) for block in blocks],
         markdown=markdown,
         md_list=md_list or [],
         task_spec=resolved_task_spec,

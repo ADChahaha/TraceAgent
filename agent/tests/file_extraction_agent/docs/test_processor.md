@@ -9,8 +9,8 @@ blocks + 显式 task_spec
   -> input_adapter.build_graph_input(...)
   -> 校验 blocks 均带有上游传入的唯一 block_id
   -> 组装内部 ExtractionInput
-  -> 准备可 invoke 的 ExtractorClient
-  -> 调用 impl/graph.run_extraction_graph(extraction_input, extractor_client)
+  -> 准备共享 ExtractorClient，或按 broad_model / resolution_model 准备阶段客户端
+  -> 调用 impl/graph.run_extraction_graph(extraction_input, extractor_client, stage clients)
   -> 返回 graph 汇总好的 ExtractionResult
 ```
 
@@ -21,8 +21,11 @@ blocks + 显式 task_spec
 - `processor` 会先把 blocks 主输入委托给 `input_adapter`
 - 直接入口的合法 blocks 必须携带显式 `block_id`
 - `processor` 会把内部 `ExtractionInput + ExtractorClient` 交给 graph
+- `processor` 支持直接传 broad / resolution 阶段客户端。
+- `processor` 支持用 `broad_model` / `resolution_model` 构造不同阶段客户端。
 - 未传 extractor client 且缺少连接环境变量时会要求 `base_url` / `api_key`
-- `structured_output_strategy` 会显式传给 extractor client builder
+- `structured_output_strategy` 会以 `tool_call` 传给 extractor client builder
+- 不显式传 `structured_output_strategy` 时，默认也会使用 `tool_call`
 - 缺少显式 `task_spec` 时会被拒绝
 - `processor` 直接返回 graph 的 `ExtractionResult`
 
@@ -40,10 +43,25 @@ blocks + 显式 task_spec
 - 用假的 graph 返回 `ExtractionResult`。
 - 确认 `processor` 会把构造好的内部输入和 extractor client 一起交给 graph。
 
+`test_extract_allows_distinct_stage_clients`
+
+- 直接传入 broad / resolution 两个阶段客户端。
+- 确认 `processor` 不再构造共享客户端，而是把两个阶段客户端交给 graph。
+
+`test_extract_builds_distinct_stage_clients_when_stage_models_are_configured`
+
+- 配置 `broad_model` 和 `resolution_model`。
+- 确认 builder 分别用两个模型名构造阶段客户端，并保留相同连接参数和结构化输出策略。
+
 `test_extract_passes_structured_output_strategy_to_client_builder`
 
 - 不直接传 extractor client，只替换默认 builder。
-- 确认 `processor` 会把连接参数和结构化输出策略一起传给 builder。
+- 确认 `processor` 会把连接参数和 `tool_call` 结构化输出策略一起传给 builder。
+
+`test_extract_defaults_structured_output_strategy_to_tool_call`
+
+- 不显式传 `structured_output_strategy`，只替换默认 builder。
+- 确认 `processor` 默认把结构化输出策略固定为 `tool_call`。
 
 `test_extract_requires_explicit_connection_params_when_client_is_not_provided`
 

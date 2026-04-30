@@ -2,53 +2,47 @@
 
 ## 基本实现思路
 
-`service.file_extraction_agent.impl.prompts` 负责把内部 `ExtractionInput` 和 `EvidenceCollection` 组装成给模型调用层消费的消息列表。
+`service.file_extraction_agent.impl.broad.prompts` 和 `impl.resolution.prompts` 分别负责两个阶段的 prompt 组装。
 
 ```text
-ExtractionInput 或 EvidenceCollection
-  -> 提取 task_name、blocks、field 定义
-  -> 使用 block.block_id 作为 prompt 和 trace 可引用的唯一 id
-  -> broad prompt 要求模型返回字段级 evidence，并按 validation_rules 筛选最小证据片段
-  -> broad prompt 按 RunOptions 的 prompt budget 限制 blocks 数量和单块文本长度
-  -> resolution prompt 聚焦目标字段 evidence 和全字段 evidence 摘要，不直接携带原始 blocks
-  -> resolution prompt 按 RunOptions 限制字段 evidence 数量和 evidence 文本长度
-  -> 如果已有 tool evidence / records，就一并放入下一轮 resolution prompt
-  -> 返回给 ExtractorClient 的 messages 列表
+GraphState + 当前字段
+  -> broad prompt 提供字段定义、可搜索内容摘要、已有候选和工具结果
+  -> resolution prompt 提供字段定义、候选池、已完成字段和工具结果
+  -> 在 payload.tool_contract 中注入每个 action 的用途、入参、返回和约束
+  -> search_grep 的 query 统一要求使用大写 OR 连接短关键词
+  -> 按 RunOptions 裁剪示例段落和候选数量
+  -> 输出 system + user messages，不让 resolution 直接读取完整 blocks
 ```
 
 ## 测什么
 
-- broad prompt 会带上 task、字段定义和 blocks 摘要
-- broad prompt 中的 blocks 使用上游显式传入的 `block_id`
-- broad prompt 会提示模型使用 `validation_rules` 的 filter/exclude/target_column 约束 evidence
-- resolution prompt 会聚焦目标字段，并保留全局字段 evidence 上下文
-- resolution prompt 不直接携带原始 blocks，原始 blocks 只能由 lookup 工具按需访问
-- resolution prompt 会要求模型返回 `FieldResolutionAction`，可选择最终定案或请求工具
-- resolution prompt 会带上 `tool_evidence` 和 `tool_records`，用于工具调用后的下一轮模型定案
-- resolution prompt 会提示模型最终值必须满足 `validation_rules`，且不能混入 exclude 命中的证据
-- prompt builder 会在 payload 中写入 `prompt_budget`，说明输入总量、实际携带量和被省略量
+- broad prompt 会带上 task、字段定义、metadata、搜索索引摘要和候选池。
+- broad 和 resolution prompt 都会暴露统一的 `search_grep` 搜索动作和精确工具契约。
+- prompt 会明确要求 search query 使用 `term1 OR term2 OR term3` 固定格式。
+- resolution prompt 会聚焦目标字段的候选池，不直接携带原始 blocks。
+- prompt builder 会在 payload 中写入 `prompt_budget`，说明输入总量、实际携带量和被省略量。
 
 ## 每个函数在干什么
 
-`test_build_broad_extraction_messages_includes_task_and_blocks_summary`
+`test_build_broad_messages_focuses_on_field_and_search_contract`
 
-- 构造一份最小可用的 `ExtractionInput`。
-- 确认 broad prompt 里包含 task、metadata、字段定义和 blocks 摘要。
-- 确认 broad prompt 的系统消息明确提到 `validation_rules`。
+- 构造一个字段和一个段落索引。
+- 确认 broad prompt 明确要求 `BroadAction`、`search_grep` 和 `finish_broad`。
+- 确认 system message 明确 `OR` 查询格式。
+- 确认 payload 包含当前字段、metadata、可搜索内容摘要和 `tool_contract`。
 
-`test_build_field_resolution_messages_focuses_on_target_field_and_evidence`
+`test_build_resolution_messages_includes_candidate_pool_and_prior_decisions`
 
-- 构造 `ExtractionInput` 和一份多字段 `EvidenceCollection`。
-- 确认 resolution prompt 会单独展开目标字段 evidence，同时保留全量字段 evidence 摘要。
-- 确认 resolution prompt 的系统消息明确要求 `FieldResolutionAction`，并包含 `lookup_blocks` 工具动作。
-- 确认默认会传入空的 `tool_evidence` 和 `tool_records`，给工具后续轮次复用。
-- 确认 resolution prompt 不会直接带入原始 `blocks`，避免模型绕过 lookup trace 直接回查全文。
+- 为目标字段写入一个候选。
+- 确认 resolution prompt 包含候选 `candidate_id/text`。
+- 确认 resolution prompt 暴露 `search_grep` 和 `final_decision`。
+- 确认 resolution prompt 带有 `tool_contract`，且 `final_decision` 被描述为唯一正常出口。
+- 确认 resolution prompt 不包含完整 `blocks`。
 
 `test_prompt_builders_apply_prompt_budget_limits`
 
-- 构造带两个 blocks、两个字段 evidence 的输入，并把 prompt budget 调小。
-- 确认 broad prompt 只携带预算内 blocks，且 block 文本按字符上限截断。
-- 确认 resolution prompt 优先保留目标字段 evidence，并记录被省略的字段 evidence 数量。
+- 调小 broad 的段落展示预算和 resolution 的候选展示预算。
+- 确认 broad 只展示预算内文本，resolution 只展示预算内候选。
 
 ## 怎么跑
 

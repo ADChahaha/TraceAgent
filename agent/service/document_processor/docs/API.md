@@ -199,7 +199,7 @@ ContentBlock
 
 ## PDF 行为
 
-PDF 固定走 `docling + RapidOCR`：
+PDF 默认走 `docling + RapidOCR`：
 
 ```text
 pdf file_obj
@@ -218,6 +218,27 @@ pdf file_obj
 - `HF_HOME`
 
 可在启动服务前通过环境变量覆盖这些目录。
+
+如果启动前设置 `DOCUMENT_PROCESSOR_PDF_ENGINE=pdf-paddle`，PDF 会改走可选 PaddleOCR 路径：
+
+```text
+pdf file_obj
+  -> PdfPaddleProcessor 读取二进制
+  -> pypdfium2 渲染每页图片
+  -> PaddleOCR PPStructureV3 逐页解析版面、文字和表格
+  -> 从 markdown_texts 生成每页 markdown
+  -> 从 parsing_res_list 生成 ContentBlock(kind="text" | "table", meta_info.ocr_engine="paddleocr")
+  -> 只有运行时只返回普通 OCR rec_texts 时，才降级生成 ContentBlock(kind="text_line")
+  -> ProcessResult(file_type="pdf")
+```
+
+这一路径不依赖 docling，但需要先安装 `agent-service[paddle]`。如果未安装带 `PPStructureV3` 的 `paddleocr`，处理器初始化会抛出明确的运行时错误。HTTP 请求形状不变，仍使用同一个 `/v1/document-processor/process` 接口。
+
+PaddleOCR 相关模型默认缓存到 `service/document_processor/impl/pdf/models/paddlex/`，可通过 `PADDLE_PDX_CACHE_HOME` 覆盖。默认启用表格识别和 block 内容格式化，使用 `DOCUMENT_PROCESSOR_PADDLE_OCR_VERSION=PP-OCRv4` 对应的 mobile 模型，优先保证本地 CPU/M4 能跑通；如果需要更高精度但更慢的 PP-OCRv5，可在启动前设置：
+
+```bash
+export DOCUMENT_PROCESSOR_PADDLE_OCR_VERSION=PP-OCRv5
+```
 
 ## DOCX 行为
 

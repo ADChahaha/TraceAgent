@@ -2,7 +2,7 @@
 
 ## 基本实现思路
 
-`impl/pdf/processor.py` 是 `service.document_processor` 里真正负责 PDF 标准化的实现文件。它的目标不是自己解析版面，而是把 PDF 二进制包装成 `docling` 能接受的 `DocumentStream`，再把 `docling` 产出的文档对象归一化成仓库内部统一的 `ProcessResult`。
+`impl/pdf/processor.py` 是 `service.document_processor` 里默认负责 PDF 标准化的实现文件。它的目标不是自己解析版面，而是把 PDF 二进制包装成 `docling` 能接受的 `DocumentStream`，再把 `docling` 产出的文档对象归一化成仓库内部统一的 `ProcessResult`。`impl/pdf/paddle_processor.py` 是可选 PDF 路径，启动前设置 `DOCUMENT_PROCESSOR_PDF_ENGINE=pdf-paddle` 时才会使用，它绕开 docling，用 `pypdfium2 + PaddleOCR PPStructureV3` 生成包含表格和文本块的 markdown。
 
 当前这条处理链路的 pipeline 是：
 
@@ -20,6 +20,19 @@
   -> 返回 `ProcessResult(file_type, filename, md_list, markdown, blocks, meta_info)`
 ```
 
+可选 PaddleOCR 路径的 pipeline 是：
+
+```text
+调用方传入 pdf file_obj
+  -> `InternalProcessorInterface` 根据 `DOCUMENT_PROCESSOR_PDF_ENGINE=pdf-paddle` 选择 `PdfPaddleProcessor`
+  -> `PdfPaddleProcessor` 读取 PDF 二进制并用 pypdfium2 渲染每页图片
+  -> 逐页调用 PaddleOCR `PPStructureV3.predict(...)`
+  -> 从结构化结果读取 `markdown_texts` 和 `parsing_res_list`
+  -> 表格块转成 `ContentBlock(kind="table")`，普通文字转成 `ContentBlock(kind="text")`
+  -> 如果运行时只返回普通 OCR `rec_texts`，才降级成 `ContentBlock(kind="text_line")`
+  -> 返回 `ProcessResult(meta_info.ocr_engine="paddleocr", paddle_pipeline="PPStructureV3")`
+```
+
 这里最关键的约束有两个：
 
 1. `PDF` 默认实现必须走 `docling`，而不是继续停留在占位 warning。
@@ -27,6 +40,7 @@
 3. 没有显式环境变量时，模型目录默认收口到 `impl/pdf/models/`，而不是开发者本机的默认缓存路径。
 4. PDF 文字抽取默认显式走 `RapidOCR`，不再依赖 `docling` 自动选择 OCR 后端。
 5. `RapidOCR` 模型目录也必须显式落到 `impl/pdf/models/rapidocr`，不能继续落到 `site-packages`。
+6. 可选 `pdf-paddle` 路径不能初始化 docling；它负责把 PaddleOCR 结构化输出收口成同一套 `ProcessResult`，能识别表格时必须保留 `kind="table"`。
 
 ## 测什么
 
@@ -39,6 +53,13 @@
 - 当 `docling` 某些节点的 `export_to_markdown(...)` 需要显式传入 `document` 时，`PdfProcessor` 也能兼容这类接口
 - `PdfProcessor` 会显式使用 `RapidOCR` 做文字抽取，而不是继续用 `OcrAutoOptions`
 - `PdfProcessor` 会把 `RapidOCR` 的 `model_root_dir` 显式指到 `impl/pdf/models/rapidocr`
+- 设置 `DOCUMENT_PROCESSOR_PDF_ENGINE=pdf-paddle` 时，默认注册表会把 PDF 绑定到 `PdfPaddleProcessor`
+- `PdfPaddleProcessor` 默认调用 PaddleOCR `PPStructureV3`，把结构化 markdown 和 layout parsing blocks 转成统一输出
+- `PdfPaddleProcessor` 会把 PaddleOCR 识别到的表格转成 `kind="table"` block，普通文本转成 `kind="text"` block
+- 如果运行时只返回普通 OCR `rec_texts / rec_boxes`，`PdfPaddleProcessor` 会保留 `text_line` fallback
+- `PdfPaddleProcessor` 默认按 PaddleOCR 3.x 初始化 `PPStructureV3`，关闭文档方向分类、文档矫正和文本行方向分类，启用表格识别，并使用 PP-OCRv4 mobile 模型
+- `PdfPaddleProcessor` 会把 PaddleX 缓存默认收口到仓库内 `impl/pdf/models/paddlex`
+- `PdfPaddleProcessor` 支持通过 `DOCUMENT_PROCESSOR_PADDLE_OCR_VERSION` 覆盖 PaddleOCR 模型版本
 
 ## 每个函数在干什么
 
@@ -72,6 +93,43 @@
 - 直接走顶层 `service.document_processor.processor.process(...)` 处理 `.pdf` 文件。
 - 检查默认注册表最终绑定的是 `PdfProcessor`，而不是旧的占位处理器。
 
+`test_process_can_route_pdf_files_to_paddle_processor`
+
+- 设置 `DOCUMENT_PROCESSOR_PDF_ENGINE=pdf-paddle`。
+- 清空 `InternalProcessorInterface` 的默认注册状态。
+- 检查默认注册表会把 PDF 绑定到 `PdfPaddleProcessor`。
+
+`test_pdf_paddle_processor_generates_structured_markdown_blocks`
+
+- 构造 fake PaddleOCR `PPStructureV3` client 和 fake PDF 页面渲染结果。
+- 直接调用 `PdfPaddleProcessor().process(...)`。
+- 检查 PaddleOCR 返回的普通文本和表格会分别转成 `ContentBlock(kind="text")` 与 `ContentBlock(kind="table")`。
+- 检查 HTML table 会被归一化成 markdown table，保证后续 `file_extraction_agent` 可以建立 table row 索引。
+
+`test_pdf_paddle_processor_keeps_text_line_fallback_for_plain_ocr_result`
+
+- 构造只返回普通 OCR `rec_texts / rec_boxes` 风格结果的 fake PaddleOCR client。
+- 直接调用 `PdfPaddleProcessor().process(...)`。
+- 检查处理器在缺少结构化 layout parsing 结果时，仍能降级生成 `ContentBlock(kind="text_line")`。
+
+`test_pdf_paddle_processor_builds_ppstructure_with_table_recognition`
+
+- 用 fake `paddleocr` 模块替换真实依赖。
+- 直接调用 `PdfPaddleProcessor._build_ocr_client()`。
+- 检查默认初始化参数使用 PaddleOCR `PPStructureV3`，选择 PP-OCRv4，关闭较重的方向分类和文档矫正步骤，并启用表格识别。
+
+`test_pdf_paddle_processor_sets_repo_local_paddlex_cache`
+
+- 清空 `PADDLE_PDX_CACHE_HOME` 并用 fake `paddleocr` 模块替换真实依赖。
+- 直接调用 `PdfPaddleProcessor._build_ocr_client()`。
+- 检查处理器会先把 PaddleX 缓存目录设置到仓库内 `impl/pdf/models/paddlex`，避免默认写入 `~/.paddlex`。
+
+`test_pdf_paddle_processor_respects_paddle_ocr_version_override`
+
+- 设置 `DOCUMENT_PROCESSOR_PADDLE_OCR_VERSION=PP-OCRv5`。
+- 用 fake `paddleocr` 模块记录初始化参数。
+- 检查处理器会把用户指定的 OCR 版本传给 `PaddleOCR`。
+
 `test_pdf_processor_propagates_docling_errors_without_fallback`
 
 - 用 monkeypatch 把 `DocumentConverter` 替换成始终抛错的 fake。
@@ -92,7 +150,7 @@
 
 ## 为什么有它
 
-这个测试文件专门把 `PDF -> docling -> ProcessResult` 这条真实处理链路钉住。这样后面即使继续补充更细的 block 归一化策略，也不会把“默认 PDF 处理器必须真实接入 docling”这个关键约束退回成占位实现。
+这个测试文件专门把 `PDF -> docling -> ProcessResult` 这条默认处理链路钉住，同时固定可选 `PDF -> pypdfium2 -> PaddleOCR -> ProcessResult` 的注册和输出契约。这样后面即使继续补充更细的 block 归一化策略，也不会把“默认 PDF 处理器必须真实接入 docling”或“可选 PaddleOCR 路径必须保持统一输出结构”这些关键约束退回成占位实现。
 
 ## 怎么跑
 

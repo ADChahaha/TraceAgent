@@ -138,6 +138,111 @@ def test_extract_delegates_execution_to_graph_with_built_client():
     assert result.trace.fields[0].related_fields == ["invoice_no"]
 
 
+def test_extract_allows_distinct_stage_clients(monkeypatch):
+    seen_graph_call: dict[str, object] = {}
+    broad_client = object()
+    resolution_client = object()
+
+    def fake_run_extraction_graph(
+        *,
+        extraction_input,
+        extractor_client=None,
+        broad_extractor_client=None,
+        resolution_extractor_client=None,
+    ):
+        seen_graph_call["extraction_input"] = extraction_input
+        seen_graph_call["extractor_client"] = extractor_client
+        seen_graph_call["broad_extractor_client"] = broad_extractor_client
+        seen_graph_call["resolution_extractor_client"] = resolution_extractor_client
+        return _build_result(value="INV-STAGE")
+
+    monkeypatch.setattr(processor_module, "run_extraction_graph", fake_run_extraction_graph, raising=False)
+
+    result = processor_module.extract(
+        blocks=[NormalizedBlock(document_id="doc-1", block_id="b-1", text="发票号码：INV-001")],
+        task_spec=TaskSpec(
+            task_name="invoice",
+            fields=[
+                FieldDefinition(
+                    field_name="invoice_no",
+                    display_name="发票号",
+                    type="string",
+                )
+            ],
+        ),
+        broad_extractor_client=broad_client,
+        resolution_extractor_client=resolution_client,
+    )
+
+    assert seen_graph_call["extractor_client"] is None
+    assert seen_graph_call["broad_extractor_client"] is broad_client
+    assert seen_graph_call["resolution_extractor_client"] is resolution_client
+    assert result.result.fields[0].value == "INV-STAGE"
+
+
+def test_extract_builds_distinct_stage_clients_when_stage_models_are_configured(monkeypatch):
+    seen_builder_calls: list[dict[str, object]] = []
+    built_clients = [object(), object()]
+
+    def fake_builder(*, base_url, api_key, model, structured_output_strategy):
+        seen_builder_calls.append(
+            {
+                "base_url": base_url,
+                "api_key": api_key,
+                "model": model,
+                "structured_output_strategy": structured_output_strategy,
+            }
+        )
+        return built_clients[len(seen_builder_calls) - 1]
+
+    seen_graph_call: dict[str, object] = {}
+
+    def fake_run_extraction_graph(
+        *,
+        extraction_input,
+        extractor_client=None,
+        broad_extractor_client=None,
+        resolution_extractor_client=None,
+    ):
+        del extraction_input, extractor_client
+        seen_graph_call["broad_extractor_client"] = broad_extractor_client
+        seen_graph_call["resolution_extractor_client"] = resolution_extractor_client
+        return _build_result(value="INV-STAGE-MODELS")
+
+    monkeypatch.setattr(processor_module, "build_extractor_client", fake_builder)
+    monkeypatch.setattr(processor_module, "run_extraction_graph", fake_run_extraction_graph, raising=False)
+
+    processor_module.extract(
+        blocks=[NormalizedBlock(document_id="doc-1", block_id="b-1", text="发票号码：INV-001")],
+        task_spec=TaskSpec(
+            task_name="invoice",
+            fields=[
+                FieldDefinition(
+                    field_name="invoice_no",
+                    display_name="发票号",
+                    type="string",
+                )
+            ],
+        ),
+        base_url="https://llm.example.com/v1",
+        openai_api_key="test-key",
+        model="default-model",
+        broad_model="small-broad-model",
+        resolution_model="strong-resolution-model",
+        structured_output_strategy="tool_call",
+    )
+
+    assert [call["model"] for call in seen_builder_calls] == [
+        "small-broad-model",
+        "strong-resolution-model",
+    ]
+    assert all(call["base_url"] == "https://llm.example.com/v1" for call in seen_builder_calls)
+    assert all(call["api_key"] == "test-key" for call in seen_builder_calls)
+    assert all(call["structured_output_strategy"] == "tool_call" for call in seen_builder_calls)
+    assert seen_graph_call["broad_extractor_client"] is built_clients[0]
+    assert seen_graph_call["resolution_extractor_client"] is built_clients[1]
+
+
 def test_extract_passes_structured_output_strategy_to_client_builder(monkeypatch):
     seen_builder_call: dict[str, object] = {}
     fake_client = object()
@@ -175,13 +280,53 @@ def test_extract_passes_structured_output_strategy_to_client_builder(monkeypatch
         base_url="https://llm.example.com/v1",
         openai_api_key="test-key",
         model="gpt-compatible",
-        structured_output_strategy="json_schema",
+        structured_output_strategy="tool_call",
     )
 
     assert seen_builder_call["base_url"] == "https://llm.example.com/v1"
     assert seen_builder_call["api_key"] == "test-key"
     assert seen_builder_call["model"] == "gpt-compatible"
-    assert seen_builder_call["structured_output_strategy"] == "json_schema"
+    assert seen_builder_call["structured_output_strategy"] == "tool_call"
+
+
+def test_extract_defaults_structured_output_strategy_to_tool_call(monkeypatch):
+    seen_builder_call: dict[str, object] = {}
+    fake_client = object()
+
+    def fake_builder(*, base_url, api_key, model, structured_output_strategy):
+        del base_url, api_key, model
+        seen_builder_call["structured_output_strategy"] = structured_output_strategy
+        return fake_client
+
+    def fake_run_extraction_graph(*, extraction_input, extractor_client):
+        del extraction_input
+        assert extractor_client is fake_client
+        return ExtractionResult(
+            result=ExtractionContent(fields=[]),
+            trace=ExtractionTrace(fields=[]),
+        )
+
+    monkeypatch.setattr(processor_module, "build_extractor_client", fake_builder)
+    monkeypatch.setattr(processor_module, "run_extraction_graph", fake_run_extraction_graph, raising=False)
+
+    processor_module.extract(
+        blocks=[NormalizedBlock(document_id="doc-1", block_id="b-1", text="内容")],
+        task_spec=TaskSpec(
+            task_name="invoice",
+            fields=[
+                FieldDefinition(
+                    field_name="invoice_no",
+                    display_name="发票号",
+                    type="string",
+                )
+            ],
+        ),
+        base_url="https://llm.example.com/v1",
+        openai_api_key="test-key",
+        model="gpt-compatible",
+    )
+
+    assert seen_builder_call["structured_output_strategy"] == "tool_call"
 
 
 def test_extract_requires_explicit_connection_params_when_client_is_not_provided():

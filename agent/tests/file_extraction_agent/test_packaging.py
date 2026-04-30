@@ -16,6 +16,9 @@ def test_pyproject_packages_service_business_subpackages():
     assert "service.document_processor.impl.pdf" in packages
     assert "service.file_extraction_agent" in packages
     assert "service.file_extraction_agent.impl" in packages
+    assert "service.file_extraction_agent.impl.broad" in packages
+    assert "service.file_extraction_agent.impl.resolution" in packages
+    assert "service.file_extraction_agent.impl.tools" in packages
     assert "service.route_policy_agent" in packages
 
 

@@ -52,6 +52,30 @@ def test_build_graph_input_requires_explicit_task_spec():
         raise AssertionError("缺少显式 task_spec 时应拒绝进入抽取图")
 
 
+def test_build_graph_input_calls_block_contract_before_internal_graph(monkeypatch):
+    from service.file_extraction_agent import input_adapter
+
+    calls: list[list[NormalizedBlock]] = []
+
+    def fake_validate_blocks_contract(blocks):
+        calls.append(blocks)
+
+    monkeypatch.setattr(input_adapter, "validate_blocks_contract", fake_validate_blocks_contract)
+    task_spec = TaskSpec(
+        task_name="invoice",
+        fields=[FieldDefinition(field_name="invoice_no", display_name="发票号", type="string")],
+    )
+    blocks = [NormalizedBlock(document_id="doc-2", block_id="b-1", text="内容", page_no=1)]
+
+    extraction_input = input_adapter.build_graph_input(
+        blocks=blocks,
+        task_spec=task_spec,
+    )
+
+    assert calls == [blocks]
+    assert extraction_input.blocks[0].block_id == "b-1"
+
+
 def test_build_graph_input_requires_block_ids_from_upstream():
     from service.file_extraction_agent import input_adapter
 

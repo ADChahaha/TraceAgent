@@ -2,7 +2,23 @@
 
 `service.file_extraction_agent` 负责在 **backend 已按 session 聚合好的标准化 blocks** 上做字段抽取，并返回可审计、可治理的 `ExtractionResult`。它不解析原始 `pdf/docx`，不写数据库，也不决定结果是否允许入库；这些职责分别属于 `service.document_processor`、`backend` 和后续治理层。
 
-这个包的核心价值不是“全文一次性转 JSON”，而是把字段抽取拆成可追踪的证据预选、字段定案、工具补查和规则后处理。
+这个包的核心价值不是“全文一次性转 JSON”，而是把字段抽取拆成可追踪的候选召回、字段定案和工具动作。
+
+## 为什么不用纯抽取
+
+纯抽取通常把全文或长 markdown 一次性交给模型，让模型直接输出 JSON。遇到长表格、多行名单和反复出现的业务词时，模型容易被标题、正文总数或大量相似行干扰。当前 agent 链路把判断拆成下面几步：
+
+```text
+标准化 blocks + task_spec
+  -> search_grep 同时检索正文段落和表格行，query 统一使用 `term1 OR term2 OR term3`
+  -> broad 只把可能支撑字段的 ref 写入候选池，不直接给最终值
+  -> resolution 从候选池读取证据，必要时二次 search_grep 补证
+  -> final_decision 必须引用 candidate_id
+  -> graph 用 candidate_id 回查 ref、block_id、document_id、page_no 和文本
+  -> result 保存最终业务值，trace 保存证据和动作链路
+```
+
+因此像“只统计作品类型为学术论文的论文题目”这类任务，不会只因为正文写了“111位学生”或每行都有“论文替代”就把总人数或全表题目误当答案。
 
 ## 主处理链路
 
@@ -11,16 +27,16 @@
 ```text
 backend 聚合后的 blocks + 显式 task_spec
   -> processor.extract(...)
-  -> input_adapter.build_graph_input(...) 校验 block_id 必填且唯一，并组装内部 ExtractionInput
-  -> broad_extraction.py 为每个字段预选相关 blocks 和 evidence
-  -> resolution.py 逐字段调用模型做最终定案
-  -> resolution.py 按模型请求调用 get_field_bundle(...) 或 lookup_blocks_for_field(...)
-  -> validation.py::apply_validation_rules(...) 执行 validation_rules 后处理
-  -> validation.py::apply_field_constraints(...) 按 FieldDefinition 做 required / enum_values / type 约束校验
-  -> graph.py 把内部 FieldDecision[] 映射成对外 ExtractionResult
+  -> input_adapter.build_graph_input(...) 调用 block_contract 校验 blocks，并组装内部 ExtractionInput
+  -> graph.py 创建 GraphState 和 paragraph/table row 索引
+  -> broad.runner 按字段调用 search_grep / add_broad_candidate / finish_broad
+  -> resolution.runner 基于候选池调用 get_candidate_bundle / search_grep / add_resolution_candidate / final_decision
+  -> graph.py 用 candidate_id -> ref -> index 回查证据
+  -> 返回 ExtractionResult(result + trace)
 ```
 
 如果 broad 或 resolution 中途失败，`graph.py` 会统一返回 `status="failed"` 的 `ExtractionResult`，并在 trace 中记录失败阶段、错误类型、错误信息和失败前已有的字段证据。
+`search_grep` 每次同时搜索正文段落和表格行，多关键词 query 固定写成 `term1 OR term2 OR term3`。
 
 ## 职责边界
 
@@ -135,35 +151,18 @@ print(result.trace.fields[0].evidence.block_ids)
 
 调用方必须直接传 `TaskSpec`。`service.file_extraction_agent` 当前不维护本地 `task_specs/` 目录，也不再支持 `task_spec_name` 加载；schema 选择应由 backend 或调用方在进入本包前完成。
 
-## validation_rules
+## 字段提示和候选证据
 
-`validation_rules` 和基础字段约束由 `impl/validation.py` 统一后处理：
+`validation_rules`、`lookup_hints` 和 `cross_field_hints` 仍属于 `FieldDefinition` 的稳定字段，当前实现会把它们作为模型可见的字段上下文保留。系统不再维护独立规则后处理阶段，也不会用规则绕过模型自行覆盖字段值。
 
-```text
-模型返回 FieldResolutionDecision
-  -> resolution.py 按 used_block_ids 绑定 FieldEvidence
-  -> resolution.py 组装 FieldDecision
-  -> validation.py::apply_validation_rules(...) 读取字段 validation_rules
-  -> 如有规则，执行通用校验、覆盖或跨字段一致性收口
-  -> validation.py::apply_field_constraints(...) 检查基础字段约束
-  -> 返回最终 FieldDecision
-```
-
-当前支持两类通用规则：
-
-- `source_type=table_rows`：按 `columns`、`filter`、`exclude`、`target_column` 从标准化表格行筛选最小证据片段，并可覆盖模型混入的无关行。
-- `operation=count_items`：按 `source_field` 的已定案结果计算条目数量，用于保证列表字段和数量字段一致。
-
-规则层只能作为模型定案后的通用约束校验或 trace 补强，不能绕过模型自行决定字段值。每次规则覆盖都应记录 `validation_rule` action，说明访问了哪些证据、应用了什么规则。
-
-`validation_rules` 执行后，系统还会按字段定义做基础约束校验：
+当前字段定案必须遵循下面的候选链路：
 
 ```text
-FieldDecision
-  -> 检查 required / allow_missing
-  -> 检查 enum 值是否在 enum_values 中
-  -> 检查 money / date / boolean / list 的基本类型形状
-  -> 不满足时把该字段降级为 failed，并记录 field_constraint action
+grep 返回 ref
+  -> add_broad_candidate / add_resolution_candidate 生成 candidate_id
+  -> final_decision 只能引用 candidate_id
+  -> graph 用 candidate_id 回查 ref、document_id、page_no 和 block_id
+  -> trace.evidence
 ```
 
 ## 模型配置
@@ -186,22 +185,22 @@ extract(...) 显式参数
 可选配置：
 
 - `model` 或 `MODEL`
-- `structured_output_strategy`：`auto`、`json_schema` 或 `tool_call`
+- `broad_model`：只覆盖 broad 候选召回阶段
+- `resolution_model`：只覆盖 resolution 字段定案阶段
+- `structured_output_strategy`：固定只支持 `tool_call`，未传时默认也是 `tool_call`
 
-`structured_output_strategy="auto"` 时会先尝试 `json_schema`，不支持时再回退到 `tool_call`。
+`tool_call` 会在客户端内部映射到 LangChain 的 `function_calling`。显式传入 `json_schema` 或 `auto` 会被拒绝，不再保留协议回退。
 
 ## 运行选项
 
 `run_options` 使用公开契约 `schemas.py::RunOptions`，HTTP 入口、Python 入口和
 内部 graph 共用这一份运行配置：
 
-- `allow_extra_lookup`：是否允许 resolution 模型请求全局补查
-- `max_lookup_calls_per_field`：每个字段最多允许几次补查
-- `lookup_top_k`：每次补查最多返回几个 blocks
 - `max_prompt_blocks`：broad prompt 最多携带的 blocks 数
 - `max_prompt_block_chars`：broad prompt 单个 block 文本最多保留的字符数
-- `max_resolution_evidence_fields`：resolution prompt 最多携带的字段 evidence 数，目标字段优先保留
-- `max_prompt_evidence_text_chars`：resolution prompt 单条 evidence 文本最多保留的字符数
+- `max_resolution_candidates`：resolution prompt 最多携带的候选证据数
+- `max_broad_iterations`：单字段 broad loop 最大动作轮次
+- `max_resolution_iterations`：单字段 resolution loop 最大动作轮次
 - `keep_detailed_trace`：预留的详细 trace 开关
 
 Python 入口和 HTTP `/v1/file-extraction-agent/extract` 都支持传入 `run_options`。
@@ -228,7 +227,13 @@ ExtractionResult
   -> trace.metadata
 ```
 
-`result.fields[]` 只放最终业务结果；`trace.fields[]` 保存证据、相关字段、工具动作、规则动作和失败原因。外层治理层应结合 `result` 和 `trace` 决定后续通过、转人工、拒绝还是 fallback。
+返回边界固定为：
+
+- `result.fields[]` 只放字段最终业务结果，适合直接进入后续业务表单或展示层。
+- `trace.fields[]` 保存候选证据、相关字段、工具动作、定案原因和失败原因，适合审计、前端高亮、route policy 和人工复核。
+- `result` 不重复塞证据文本；需要解释“为什么是这个值”时读 `trace`。
+
+外层治理层应结合 `result` 和 `trace` 决定后续通过、转人工、拒绝还是 fallback。
 
 ## 目录结构
 
@@ -238,16 +243,14 @@ service/file_extraction_agent/
 ├── input_adapter.py      # 外部输入到内部 ExtractionInput 的适配层
 ├── schemas.py            # 对外稳定输入输出契约
 ├── extractor_client.py   # 结构化模型客户端构造与调用
+├── block_contract.py     # blocks 入口契约校验
 ├── impl/
 │   ├── schemas.py        # 内部流程对象
 │   ├── graph.py          # broad -> resolution 的编排和失败收口
-│   ├── block_ids.py      # block id 必填和唯一性校验
-│   ├── broad_extraction.py
-│   ├── resolution.py     # 字段定案和工具调度
-│   ├── validation.py     # validation_rules 和基础字段约束后处理
-│   ├── tools.py
-│   ├── prompts.py
-│   └── state.py
+│   ├── state.py          # 内部索引和运行态
+│   ├── broad/            # broad runner 和 prompts
+│   ├── resolution/       # resolution runner 和 prompts
+│   └── tools/            # search 和 candidates
 └── docs/
     ├── API.md
     ├── DESIGN.md

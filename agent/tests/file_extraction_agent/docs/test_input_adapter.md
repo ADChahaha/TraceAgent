@@ -8,8 +8,8 @@
 调用方传入 blocks，可选再传 markdown / md_list，并必须显式传 task_spec
   -> input_adapter.build_graph_input(...)
   -> 校验 task_spec 存在
-  -> 校验每个 block 都带有上游生成的 block_id
-  -> 校验 block_id 在本次输入内唯一
+  -> 调用 block_contract.validate_blocks_contract(blocks)
+  -> 在外层统一校验 block_id、document_id、kind、text 和 table 行可转换性
   -> 保留公开 RunOptions 作为内部 graph 的同一份运行配置
   -> 组装内部 ExtractionInput
   -> 返回给 processor 继续执行 graph
@@ -19,6 +19,7 @@
 
 - 显式 `task_spec` 会被优先收进 `ExtractionInput`
 - 缺少显式 `task_spec` 时会被拒绝
+- adapter 会调用 `block_contract`，不把 blocks 契约校验散落到 `impl/`
 - 缺少 `block_id` 的 blocks 会被拒绝，不再由 agent 兜底生成
 - 重复 `block_id` 的 blocks 会被拒绝，避免 evidence 回查互相覆盖
 - 合法的上游 `block_id` 会原样保留
@@ -37,6 +38,11 @@
 
 - 只传 blocks，不传 `task_spec`。
 - 确认适配层拒绝进入内部抽取图。
+
+`test_build_graph_input_calls_block_contract_before_internal_graph`
+
+- 用 monkeypatch 替换 `validate_blocks_contract`。
+- 确认 `build_graph_input(...)` 会先把原始 blocks 交给外层契约校验。
 
 `test_build_graph_input_requires_block_ids_from_upstream`
 

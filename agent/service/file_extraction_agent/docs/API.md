@@ -11,14 +11,14 @@ backend / service.document_processor 产出标准化 blocks
   -> 调用方为每个 block 生成稳定唯一 block_id
   -> 调用方选择并传入显式 task_spec
   -> service.file_extraction_agent.processor.extract(...)
-  -> input_adapter 校验 task_spec、block_id 必填和唯一性
-  -> broad extraction 预选字段证据
-  -> resolution 逐字段定案，必要时按模型请求调用工具
-  -> validation_rules / FieldDefinition 约束后处理
+  -> input_adapter 调用 block_contract 校验 task_spec 和 blocks 契约
+  -> broad loop 通过 grep 和 add_broad_candidate 写入候选池
+  -> resolution loop 通过候选池和必要的二次 grep 输出 final_decision
+  -> graph 用 candidate_id 回查 ref、block_id、document_id 和 page_no
   -> ExtractionResult(status + result + trace)
 ```
 
-`result` 只放最终字段值；`trace` 保存证据、工具动作、规则动作和失败原因，供后续治理层判断是否入库、转人工或拒绝。
+`result` 只放最终字段值；`trace` 保存候选证据、工具动作和失败原因，供后续治理层判断是否入库、转人工或拒绝。
 
 ## Python 入口
 
@@ -38,8 +38,12 @@ result = extract(
     base_url=None,
     openai_api_key=None,
     model=None,
-    structured_output_strategy="auto",
+    broad_model=None,
+    resolution_model=None,
+    structured_output_strategy="tool_call",
     extractor_client=None,
+    broad_extractor_client=None,
+    resolution_extractor_client=None,
 )
 ```
 
@@ -48,8 +52,10 @@ result = extract(
 ```text
 blocks + task_spec
   -> extract(...)
-  -> 如果 extractor_client 已传入，直接使用
+  -> 如果 extractor_client 或阶段客户端已传入，优先使用
   -> 否则读取显式 base_url/openai_api_key/model 或环境变量 BASE_URL/OPENAI_API_KEY/MODEL
+  -> broad_model / resolution_model 可分别覆盖两个阶段的模型名
+  -> structured_output_strategy 固定为 tool_call，底层映射到 LangChain function_calling
   -> MODEL 仍为空时使用代码默认模型
   -> 返回 ExtractionResult
 ```
@@ -129,13 +135,12 @@ POST /v1/file-extraction-agent/extract
     ]
   },
   "run_options": {
-    "allow_extra_lookup": true,
-    "max_lookup_calls_per_field": 1,
-    "lookup_top_k": 3,
     "max_prompt_blocks": 200,
     "max_prompt_block_chars": 2000,
-    "max_resolution_evidence_fields": 80,
-    "max_prompt_evidence_text_chars": 1000
+    "max_resolution_candidates": 20,
+    "max_broad_iterations": 8,
+    "max_resolution_iterations": 8,
+    "keep_detailed_trace": false
   },
   "metadata": {
     "source": "backend"
@@ -143,7 +148,7 @@ POST /v1/file-extraction-agent/extract
   "base_url": "https://llm.example.com/v1",
   "openai_api_key": "your-api-key",
   "model": "gpt-compatible-model",
-  "structured_output_strategy": "auto"
+  "structured_output_strategy": "tool_call"
 }
 ```
 
@@ -207,44 +212,45 @@ HTTP 错误语义：
 `run_options` 控制运行策略和 prompt 预算。Python 入口和 HTTP 入口都支持，
 并按公开契约 `RunOptions` 解析；内部 graph 也复用这一份运行配置。
 
-- `allow_extra_lookup`：是否允许 resolution 模型请求全局补查。
-- `max_lookup_calls_per_field`：每个字段最多允许几次全局补查。
-- `lookup_top_k`：每次全局补查最多返回几个 blocks。
-- `max_prompt_blocks`：broad prompt 最多携带多少个 blocks。
-- `max_prompt_block_chars`：broad prompt 单个 block 文本最多保留多少字符。
-- `max_resolution_evidence_fields`：resolution prompt 最多携带多少个字段 evidence；目标字段优先保留。
-- `max_prompt_evidence_text_chars`：resolution prompt 单条 evidence 文本最多保留多少字符。
+- `max_prompt_blocks`：broad prompt 最多展示多少个可搜索段落样例。
+- `max_prompt_block_chars`：broad prompt 单个段落样例最多保留多少字符。
+- `max_resolution_candidates`：resolution prompt 最多携带多少个候选证据。
+- `max_broad_iterations`：单字段 broad loop 最多允许多少轮动作。
+- `max_resolution_iterations`：单字段 resolution loop 最多允许多少轮动作。
 - `keep_detailed_trace`：预留开关；当前对外 trace 不包含 raw prompt 或 raw model response。
 
-## validation_rules
+## 字段提示
 
-`validation_rules` 只在模型完成字段定案之后执行，用于通用规则校验、规则覆盖或跨字段一致性收口。
+`validation_rules`、`lookup_hints`、`cross_field_hints` 和 `enum_values` 会随字段定义进入模型上下文。当前实现不维护独立规则后处理阶段；字段结果是否可自动通过，应交给后续 `route_policy_agent` 根据字段输出和 refs 文本判断。
 
-当前支持：
+## result 与 trace 边界
 
-- `source_type=table_rows`
-  - 按 `columns`、`filter`、`exclude`、`target_column` 从标准化表格行筛选证据。
-  - 如果命中行的 `target_column` 全为空，会保留模型原始定案，不会覆盖成空 resolved。
-  - 覆盖时会记录 `validation_rule` action。
-- `operation=count_items`
-  - 按 `source_field` 的已定案结果计算条目数量。
-  - 会记录 `validation_rule` action。
+`ExtractionResult` 按“业务结果”和“证据留痕”分层返回：
 
-示例：
-
-```json
-{
-  "source_type": "table_rows",
-  "columns": ["楼栋", "房间", "平均分", "模范/文明"],
-  "target_column": "房间",
-  "filter": {"column": "模范/文明", "equals": "文明寝室"},
-  "exclude": [{"column": "模范/文明", "equals": "模范寝室"}],
-  "output": {
-    "separator": ",",
-    "deduplicate": true
-  }
-}
+```text
+ExtractionResult
+  -> status / failure_reason
+  -> result.fields[]
+       -> field_name
+       -> status
+       -> value
+  -> trace.fields[]
+       -> field_name
+       -> status
+       -> evidence
+       -> actions
+       -> related_fields
+       -> reason / failure_reason
 ```
+
+设计约束：
+
+- `result.fields[]` 是纯业务输出，不重复放 evidence、actions 或 prompt 调试信息。
+- `trace.fields[].evidence` 是支撑最终值的候选证据摘要，来自 `final_decision.candidate_ids` 回查。
+- `trace.fields[].actions` 是系统可证明发生过的工具动作，包含 `search_grep`、候选写入、`finish_broad` 和 `final_decision`。
+- 调用方展示或入库字段值时读 `result`；需要高亮原文、解释定案、转人工或做 route policy 时读 `trace`。
+
+例如抽取“作品类型为学术论文的论文题目和数量”时，`result` 应只返回论文题名列表和数量；每个题名对应的表格行、页码、block_id、搜索 query 和候选写入动作都放在 `trace`。
 
 ## 返回结构
 
@@ -275,12 +281,12 @@ HTTP 错误语义：
             {
               "document_id": "doc-1",
               "page": 1,
-              "span": null,
+              "span": "p:p1",
               "block_id": "doc-1:p1:b1"
             }
           ],
-          "status": "model_resolved",
-          "notes": ["按模型 used_block_ids 从标准化 blocks 绑定证据"]
+          "status": "candidate_resolved",
+          "notes": ["field decision referenced candidate_ids: c1"]
         },
         "related_fields": [],
         "actions": [],
@@ -298,10 +304,12 @@ HTTP 错误语义：
 
 ```text
 ExtractionResult.status = "failed"
-ExtractionResult.failure_reason = "broad_extraction 执行失败: ..."
+ExtractionResult.failure_reason = "broad 执行失败: ..."
 result.fields[] = 按 task_spec 字段补齐 failed 结果
-trace.fields[].actions[] = 包含 model_call_error
-trace.metadata.failure_stage = broad_extraction / resolution / graph_mapping
+第一个未完成字段的 trace.actions[] 包含 model_call_error
+trace.metadata.failure_stage = broad / resolution
+trace.metadata.completed_field_names = 失败前已完成字段
+trace.metadata.pending_field_names = 失败时仍未完成字段
 ```
 
 字段级失败时：
@@ -342,17 +350,19 @@ trace
 
 常见 `actions[].action_type`：
 
-- `field_reference`：模型请求读取其他字段的 evidence bundle。
-- `global_lookup`：模型请求从全量 blocks 补查证据。
-- `validation_rule`：系统按 `validation_rules` 覆盖或校正模型结果。
-- `field_constraint`：系统按字段基础约束把 resolved 降级为 failed。
+- `search_grep`：模型请求一次性在文本段落索引和表格行索引中做关键词检索；多关键词 query 固定使用 `term1 OR term2 OR term3`。
+- `add_broad_candidate`：broad 阶段把 grep ref 写入候选池。
+- `add_resolution_candidate`：resolution 阶段把二次检索 ref 写入候选池。
+- `get_candidate_bundle`：resolution 阶段读取当前字段候选池。
+- `finish_broad`：broad 阶段结束当前字段召回。
+- `final_decision`：resolution 阶段输出字段最终定案。
 - `model_call_error`：broad 或 resolution 运行中发生模型调用或结构化输出错误。
 
-`used_in_final_decision` 表示该 action 的证据是否支撑最终定案。validation 覆盖最终 evidence 后，lookup action 会按最终 evidence 重新计算这个标记。
+`used_in_final_decision` 表示该 action 的候选证据是否支撑最终定案。
 
 当前 trace 边界：
 
-- 保留字段级证据、refs、相关字段、工具动作、规则动作、失败原因。
+- 保留字段级证据、refs、相关字段、工具动作、失败原因。
 - 不对外保留 raw prompt、raw model response 或完整内部 broad 原始对象。
 - `keep_detailed_trace` 是预留运行选项，当前不改变对外返回结构。
 
@@ -374,9 +384,12 @@ extract(...) / HTTP request 显式参数
 可选：
 
 - `model` 或 `MODEL`
-- `structured_output_strategy`：`auto`、`json_schema` 或 `tool_call`
+- `broad_model`：只用于 broad 候选召回阶段。
+- `resolution_model`：只用于 resolution 字段定案阶段。
+- 未配置阶段模型时，对应阶段复用 `model` 或 `MODEL` 构造出的共享客户端。
+- `structured_output_strategy`：固定只支持 `tool_call`，未传时默认也是 `tool_call`。
 
-`structured_output_strategy="auto"` 时，系统先尝试 `json_schema`；只有结构化协议明确不支持时才尝试 `tool_call`。如果结构化 runnable 已经开始调用后发生超时、鉴权、服务端错误或输出校验失败，抽取端不会换协议重试，而是按模型调用失败进入统一失败收口。
+`tool_call` 在客户端内部映射到 LangChain 的 `function_calling`。HTTP 入口显式传入 `json_schema` 或 `auto` 会在请求解析阶段返回 `422`；Python 入口显式传入这些旧策略时，客户端构造阶段会抛出配置错误。结构化 runnable 调用失败后不会再解析裸 JSON 或裸 tool call 参数，而是按模型调用失败进入统一失败收口。
 
 ## 不支持的输入
 

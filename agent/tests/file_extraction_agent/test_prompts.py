@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import json
 
-from service.file_extraction_agent.impl import prompts
-from service.file_extraction_agent.impl.schemas import (
-    EvidenceCollection,
-    ExtractionInput,
-    FieldEvidence,
-)
+from service.file_extraction_agent.impl.broad import prompts as broad_prompts
+from service.file_extraction_agent.impl.resolution import prompts as resolution_prompts
+from service.file_extraction_agent.impl.schemas import ExtractionInput
+from service.file_extraction_agent.impl.state import build_graph_state
+from service.file_extraction_agent.impl.tools.candidates import add_broad_candidate
 from service.file_extraction_agent.schemas import (
     FieldDefinition,
     NormalizedBlock,
@@ -16,7 +15,7 @@ from service.file_extraction_agent.schemas import (
 )
 
 
-def test_build_broad_extraction_messages_includes_task_and_blocks_summary():
+def test_build_broad_messages_focuses_on_field_and_search_contract():
     extraction_input = ExtractionInput(
         blocks=[
             NormalizedBlock(
@@ -26,8 +25,6 @@ def test_build_broad_extraction_messages_includes_task_and_blocks_summary():
                 page_no=1,
             )
         ],
-        markdown="发票号码：INV-001",
-        md_list=["发票号码：INV-001"],
         task_spec=TaskSpec(
             task_name="invoice",
             fields=[
@@ -36,28 +33,43 @@ def test_build_broad_extraction_messages_includes_task_and_blocks_summary():
                     display_name="发票号",
                     type="string",
                     required=True,
+                    lookup_hints=["发票号码"],
                 )
             ],
         ),
         metadata={"source": "backend"},
     )
+    state = build_graph_state(extraction_input)
 
-    messages = prompts.build_broad_extraction_messages(extraction_input)
+    messages = broad_prompts.build_broad_messages(
+        state=state,
+        field=extraction_input.task_spec.fields[0],
+        tool_results=[],
+    )
 
     assert messages[0]["role"] == "system"
-    assert "EvidenceCollection" in messages[0]["content"]
+    assert "BroadAction" in messages[0]["content"]
+    assert "search_grep" in messages[0]["content"]
+    assert "query 格式固定为" in messages[0]["content"]
+    assert " OR " in messages[0]["content"]
+    assert "finish_broad" in messages[0]["content"]
     payload = json.loads(messages[1]["content"])
     assert payload["task_name"] == "invoice"
+    assert payload["field"]["field_name"] == "invoice_no"
     assert payload["metadata"] == {"source": "backend"}
-    assert payload["blocks"][0]["document_id"] == "doc-1"
-    assert payload["blocks"][0]["text"] == "发票号码：INV-001"
-    assert payload["fields"][0]["field_name"] == "invoice_no"
-    assert "validation_rules" in messages[0]["content"]
+    assert payload["searchable_summary"]["paragraph_count"] == 1
+    assert payload["current_candidates"] == []
+    assert payload["tool_contract"]["search_grep"]["query_format"] == "term1 OR term2 OR term3"
+    assert "同时搜索正文段落和表格行" in payload["tool_contract"]["search_grep"]["description"]
+    assert payload["tool_contract"]["finish_broad"]["description"] == "当前字段 broad 阶段的唯一正常出口。"
 
 
-def test_build_field_resolution_messages_focuses_on_target_field_and_evidence():
+def test_build_resolution_messages_includes_candidate_pool_and_prior_decisions():
     extraction_input = ExtractionInput(
-        blocks=[NormalizedBlock(document_id="doc-2", text="金额：100.00")],
+        blocks=[
+            NormalizedBlock(document_id="doc-2", block_id="b-amount", text="金额：100.00"),
+            NormalizedBlock(document_id="doc-2", block_id="b-invoice", text="发票号：INV-002"),
+        ],
         task_spec=TaskSpec(
             task_name="invoice",
             fields=[
@@ -66,45 +78,33 @@ def test_build_field_resolution_messages_focuses_on_target_field_and_evidence():
             ],
         ),
     )
-    evidence_collection = EvidenceCollection(
-        fields=[
-            FieldEvidence(
-                field_name="amount",
-                relevant_block_ids=["b-amount"],
-                evidence_texts=["金额：100.00"],
-                local_status="evidence_found",
-            ),
-            FieldEvidence(
-                field_name="invoice_no",
-                relevant_block_ids=["b-invoice"],
-                evidence_texts=["发票号：INV-002"],
-                local_status="evidence_found",
-            ),
-        ]
+    state = build_graph_state(extraction_input)
+    add_broad_candidate(
+        state=state,
+        field_name="amount",
+        refs=["b-amount:p:p1"],
+        reason="broad 找到金额候选",
     )
 
-    messages = prompts.build_field_resolution_messages(
-        extraction_input=extraction_input,
-        target_field_name="amount",
-        evidence_collection=evidence_collection,
+    messages = resolution_prompts.build_resolution_messages(
+        state=state,
+        field=extraction_input.task_spec.fields[0],
+        tool_results=[],
     )
 
     assert messages[0]["role"] == "system"
-    assert "field resolution" in messages[0]["content"]
     assert "FieldResolutionAction" in messages[0]["content"]
-    assert "lookup_blocks" in messages[0]["content"]
-    assert "validation_rules" in messages[0]["content"]
+    assert "search_grep" in messages[0]["content"]
+    assert "query 格式固定为" in messages[0]["content"]
+    assert "final_decision" in messages[0]["content"]
     payload = json.loads(messages[1]["content"])
-    assert payload["target_field_name"] == "amount"
     assert payload["target_field"]["field_name"] == "amount"
-    assert payload["target_field"]["relevant_block_ids"] == ["b-amount"]
-    assert payload["tool_evidence"] == []
-    assert payload["tool_records"] == []
-    assert [field["field_name"] for field in payload["all_field_evidence"]] == [
-        "amount",
-        "invoice_no",
-    ]
+    assert payload["candidate_bundle"][0]["candidate_id"] == "c1"
+    assert payload["candidate_bundle"][0]["text"] == "金额：100.00"
+    assert payload["completed_fields"] == []
     assert "blocks" not in payload
+    assert payload["tool_contract"]["search_grep"]["query_format"] == "term1 OR term2 OR term3"
+    assert payload["tool_contract"]["final_decision"]["description"] == "当前字段 resolution 阶段的唯一正常出口。"
 
 
 def test_prompt_builders_apply_prompt_budget_limits():
@@ -115,49 +115,34 @@ def test_prompt_builders_apply_prompt_budget_limits():
         ],
         task_spec=TaskSpec(
             task_name="invoice",
-            fields=[
-                FieldDefinition(field_name="amount", display_name="金额", type="money"),
-                FieldDefinition(field_name="invoice_no", display_name="发票号", type="string"),
-            ],
+            fields=[FieldDefinition(field_name="amount", display_name="金额", type="money")],
         ),
         options=RunOptions(
             max_prompt_blocks=1,
             max_prompt_block_chars=5,
-            max_resolution_evidence_fields=1,
-            max_prompt_evidence_text_chars=4,
+            max_resolution_candidates=1,
         ),
     )
+    state = build_graph_state(extraction_input)
+    add_broad_candidate(state=state, field_name="amount", refs=["b-1:p:p1"], reason="A")
+    add_broad_candidate(state=state, field_name="amount", refs=["b-2:p:p1"], reason="B")
 
-    broad_messages = prompts.build_broad_extraction_messages(extraction_input)
+    broad_messages = broad_prompts.build_broad_messages(
+        state=state,
+        field=extraction_input.task_spec.fields[0],
+        tool_results=[],
+    )
     broad_payload = json.loads(broad_messages[1]["content"])
 
-    assert [block["block_id"] for block in broad_payload["blocks"]] == ["b-1"]
-    assert broad_payload["blocks"][0]["text"] == "AAAAA"
-    assert broad_payload["prompt_budget"]["omitted_block_count"] == 1
+    assert broad_payload["sample_paragraphs"][0]["text"] == "AAAAA"
+    assert broad_payload["prompt_budget"]["omitted_paragraph_count"] == 1
 
-    evidence_collection = EvidenceCollection(
-        fields=[
-            FieldEvidence(
-                field_name="amount",
-                relevant_block_ids=["b-1"],
-                evidence_texts=["金额证据文本很长"],
-                local_status="found",
-            ),
-            FieldEvidence(
-                field_name="invoice_no",
-                relevant_block_ids=["b-2"],
-                evidence_texts=["发票证据文本很长"],
-                local_status="found",
-            ),
-        ]
-    )
-    resolution_messages = prompts.build_field_resolution_messages(
-        extraction_input=extraction_input,
-        target_field_name="amount",
-        evidence_collection=evidence_collection,
+    resolution_messages = resolution_prompts.build_resolution_messages(
+        state=state,
+        field=extraction_input.task_spec.fields[0],
+        tool_results=[],
     )
     resolution_payload = json.loads(resolution_messages[1]["content"])
 
-    assert [item["field_name"] for item in resolution_payload["all_field_evidence"]] == ["amount"]
-    assert resolution_payload["target_field"]["evidence_texts"] == ["金额证据"]
-    assert resolution_payload["prompt_budget"]["omitted_field_evidence_count"] == 1
+    assert [item["candidate_id"] for item in resolution_payload["candidate_bundle"]] == ["c1"]
+    assert resolution_payload["prompt_budget"]["omitted_candidate_count"] == 1

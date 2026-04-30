@@ -1,3 +1,4 @@
+import sys
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -84,7 +85,11 @@ def test_pdf_processor_uses_docling_to_generate_markdown_and_blocks(monkeypatch)
     assert result.warnings == []
     assert result.markdown == "# 测试标题\n\n第一段正文"
     assert result.md_list == [result.markdown]
-    assert [block.text for block in result.blocks] == ["测试标题", "第一段正文", "| 列1 | | --- | | 值1 |"]
+    assert [block.text for block in result.blocks] == [
+        "测试标题",
+        "第一段正文",
+        "| 列1 | | --- | | 值1 |",
+    ]
     assert [block.kind for block in result.blocks] == ["section_header", "text", "table"]
     assert result.blocks[1].page_no == 2
     assert result.blocks[1].bbox == BoundingBox(10.0, 20.0, 30.0, 40.0)
@@ -210,6 +215,238 @@ def test_process_routes_pdf_files_to_docling_processor_by_default(monkeypatch):
         InternalProcessorInterface._processor_instances.clear()
         InternalProcessorInterface._processor_instances.update(original_instances)
         InternalProcessorInterface._defaults_registered = original_defaults_flag
+
+
+def test_process_can_route_pdf_files_to_paddle_processor(monkeypatch):
+    from service.document_processor.impl.interface import InternalProcessorInterface
+    from service.document_processor.impl.pdf.paddle_processor import PdfPaddleProcessor
+    from service.document_processor.types import FileType
+
+    monkeypatch.setenv("DOCUMENT_PROCESSOR_PDF_ENGINE", "pdf-paddle")
+
+    original_types = InternalProcessorInterface._processor_types.copy()
+    original_instances = InternalProcessorInterface._processor_instances.copy()
+    original_defaults_flag = InternalProcessorInterface._defaults_registered
+    try:
+        InternalProcessorInterface._processor_types.clear()
+        InternalProcessorInterface._processor_instances.clear()
+        InternalProcessorInterface._defaults_registered = False
+
+        InternalProcessorInterface._ensure_default_processors_registered()
+
+        assert InternalProcessorInterface._processor_types[FileType.PDF] is PdfPaddleProcessor
+    finally:
+        InternalProcessorInterface._processor_types.clear()
+        InternalProcessorInterface._processor_types.update(original_types)
+        InternalProcessorInterface._processor_instances.clear()
+        InternalProcessorInterface._processor_instances.update(original_instances)
+        InternalProcessorInterface._defaults_registered = original_defaults_flag
+
+
+def test_pdf_paddle_processor_generates_structured_markdown_blocks(monkeypatch):
+    from service.document_processor.impl.pdf.paddle_processor import PdfPaddleProcessor
+
+    class FakeStructureResult:
+        @property
+        def markdown(self):
+            return {
+                "markdown_texts": (
+                    "名单说明\n\n"
+                    "<table><tr><th>序号</th><th>作品类型</th><th>论文题目</th></tr>"
+                    "<tr><td>1</td><td>学术论文</td><td>测试论文</td></tr></table>"
+                )
+            }
+
+        @property
+        def json(self):
+            return {
+                "res": {
+                    "parsing_res_list": [
+                        {
+                            "block_label": "text",
+                            "block_content": "名单说明",
+                            "block_bbox": [10, 20, 110, 36],
+                            "block_id": 1,
+                            "block_order": 1,
+                        },
+                        {
+                            "block_label": "table",
+                            "block_content": (
+                                "<table><tr><th>序号</th><th>作品类型</th><th>论文题目</th></tr>"
+                                "<tr><td>1</td><td>学术论文</td><td>测试论文</td></tr></table>"
+                            ),
+                            "block_bbox": [10, 45, 310, 120],
+                            "block_id": 2,
+                            "block_order": 2,
+                        },
+                    ]
+                }
+            }
+
+    class FakePaddleStructure:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def predict(self, image, **kwargs):
+            self.calls.append({"image": image, **kwargs})
+            return [FakeStructureResult()]
+
+    fake_structure = FakePaddleStructure()
+    processor = PdfPaddleProcessor(ocr_client=fake_structure, render_scale=1.5)
+    monkeypatch.setattr(
+        processor,
+        "_render_pdf_pages",
+        lambda source_bytes: ["rendered-page"],
+    )
+
+    result = processor.process(NamedBytesIO(b"%PDF-1.4", filename="sample.pdf"))
+
+    assert fake_structure.calls == [
+        {
+            "image": "rendered-page",
+            "use_table_recognition": True,
+            "format_block_content": True,
+        }
+    ]
+    assert result.file_type == "pdf"
+    assert result.filename == "sample.pdf"
+    assert result.markdown == (
+        "名单说明\n\n"
+        "| 序号 | 作品类型 | 论文题目 |\n"
+        "| --- | --- | --- |\n"
+        "| 1 | 学术论文 | 测试论文 |"
+    )
+    assert result.md_list == [result.markdown]
+    assert [block.text for block in result.blocks] == [
+        "名单说明",
+        "| 序号 | 作品类型 | 论文题目 |\n| --- | --- | --- |\n| 1 | 学术论文 | 测试论文 |",
+    ]
+    assert [block.kind for block in result.blocks] == ["text", "table"]
+    assert [block.page_no for block in result.blocks] == [1, 1]
+    assert result.blocks[0].bbox == BoundingBox(10.0, 20.0, 110.0, 36.0)
+    assert result.blocks[0].meta_info == {
+        "ocr_engine": "paddleocr",
+        "paddle_pipeline": "PPStructureV3",
+        "block_label": "text",
+        "block_id": 1,
+        "block_order": 1,
+        "render_scale": 1.5,
+    }
+    assert result.meta_info["ocr_engine"] == "paddleocr"
+    assert result.meta_info["paddle_pipeline"] == "PPStructureV3"
+    assert result.meta_info["block_count"] == 2
+    assert result.meta_info["page_count"] == 1
+
+
+def test_pdf_paddle_processor_keeps_text_line_fallback_for_plain_ocr_result(monkeypatch):
+    from service.document_processor.impl.pdf.paddle_processor import PdfPaddleProcessor
+
+    class FakePaddleOcr:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def predict(self, image):
+            self.calls.append({"method": "predict", "image": image})
+            return [
+                {
+                    "rec_texts": ["第三行"],
+                    "rec_scores": [0.88],
+                    "rec_boxes": [[1, 2, 31, 12]],
+                }
+            ]
+
+        def ocr(self, image, cls=True):
+            self.calls.append({"method": "ocr", "image": image, "cls": cls})
+            return []
+
+    fake_ocr = FakePaddleOcr()
+    processor = PdfPaddleProcessor(ocr_client=fake_ocr)
+    monkeypatch.setattr(
+        processor,
+        "_render_pdf_pages",
+        lambda source_bytes: ["rendered-page"],
+    )
+
+    result = processor.process(NamedBytesIO(b"%PDF-1.4", filename="sample.pdf"))
+
+    assert fake_ocr.calls == [{"method": "predict", "image": "rendered-page"}]
+    assert result.markdown == "第三行"
+    assert result.blocks[0].bbox == BoundingBox(1.0, 2.0, 31.0, 12.0)
+    assert result.blocks[0].kind == "text_line"
+
+
+def test_pdf_paddle_processor_builds_ppstructure_with_table_recognition(monkeypatch):
+    from service.document_processor.impl.pdf.paddle_processor import PdfPaddleProcessor
+
+    calls = []
+
+    class FakePaddleStructure:
+        def __init__(self, **kwargs) -> None:
+            calls.append(kwargs)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "paddleocr",
+        SimpleNamespace(PPStructureV3=FakePaddleStructure),
+    )
+
+    client = PdfPaddleProcessor._build_ocr_client()
+
+    assert isinstance(client, FakePaddleStructure)
+    assert calls == [
+        {
+            "lang": "ch",
+            "ocr_version": "PP-OCRv4",
+            "use_doc_orientation_classify": False,
+            "use_doc_unwarping": False,
+            "use_textline_orientation": False,
+            "use_table_recognition": True,
+            "format_block_content": True,
+        }
+    ]
+
+
+def test_pdf_paddle_processor_sets_repo_local_paddlex_cache(monkeypatch):
+    from service.document_processor.impl.pdf import processor as processor_module
+    from service.document_processor.impl.pdf.paddle_processor import PdfPaddleProcessor
+
+    class FakePaddleStructure:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+    monkeypatch.delenv("PADDLE_PDX_CACHE_HOME", raising=False)
+    monkeypatch.setitem(
+        sys.modules,
+        "paddleocr",
+        SimpleNamespace(PPStructureV3=FakePaddleStructure),
+    )
+
+    PdfPaddleProcessor._build_ocr_client()
+
+    assert Path(processor_module.os.environ["PADDLE_PDX_CACHE_HOME"]) == (
+        Path(processor_module.__file__).resolve().parent / "models" / "paddlex"
+    )
+
+
+def test_pdf_paddle_processor_respects_paddle_ocr_version_override(monkeypatch):
+    from service.document_processor.impl.pdf.paddle_processor import PdfPaddleProcessor
+
+    calls = []
+
+    class FakePaddleStructure:
+        def __init__(self, **kwargs) -> None:
+            calls.append(kwargs)
+
+    monkeypatch.setenv("DOCUMENT_PROCESSOR_PADDLE_OCR_VERSION", "PP-OCRv5")
+    monkeypatch.setitem(
+        sys.modules,
+        "paddleocr",
+        SimpleNamespace(PPStructureV3=FakePaddleStructure),
+    )
+
+    PdfPaddleProcessor._build_ocr_client()
+
+    assert calls[0]["ocr_version"] == "PP-OCRv5"
 
 
 def test_pdf_processor_propagates_docling_errors_without_fallback(monkeypatch):

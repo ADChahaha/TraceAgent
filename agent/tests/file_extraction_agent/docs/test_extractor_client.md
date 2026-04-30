@@ -2,21 +2,19 @@
 
 ## 基本实现思路
 
-`service.file_extraction_agent.extractor_client` 负责把“连接哪个 OpenAI 兼容服务”和“按什么结构化输出协议调用模型”拆开管理。连接信息优先来自显式参数，缺省时读取环境变量；如果环境里没有 `MODEL`，就使用代码内默认模型。结构化输出策略由调用方显式传入 `build_extractor_client(...)`，然后再统一构造一个可直接 `invoke(...)` 的抽取客户端。
+`service.file_extraction_agent.extractor_client` 负责连接 OpenAI 兼容服务，并且只用 tool call 结构化输出调用模型。连接信息优先来自显式参数，缺省时读取环境变量；如果环境里没有 `MODEL`，就使用代码内默认模型。
 
 这层可以按下面的 pipeline 理解：
 
 ```text
-调用方进入 build_extractor_client(base_url, api_key, model, structured_output_strategy=...)
-  -> 先显式指定 json_schema / tool_call / auto
+调用方进入 build_extractor_client(base_url, api_key, model, structured_output_strategy="tool_call")
+  -> 如果传入的 structured_output_strategy 不是 tool_call，直接拒绝
   -> 优先使用显式传入的 base_url / api_key / model
   -> 缺省时读取 BASE_URL / OPENAI_API_KEY / MODEL
   -> 如果 MODEL 仍缺失，就使用 DEFAULT_MODEL
   -> extractor_client 检查连接参数是否齐全
   -> 用显式连接参数和代码内默认参数创建 ChatOpenAI(base_url=..., api_key=..., model=..., temperature=0)
-  -> 先按显式参数选择 json_schema 或 tool_call
-  -> 如果 structured_output_strategy=auto 且 json_schema 不支持，就回退到 tool_call
-  -> 如果 json_schema runnable 已开始 invoke 后失败，直接返回结构化调用失败，不再重试 tool_call
+  -> 始终用 LangChain function_calling 构造结构化 runnable
   -> 返回能直接 invoke 的结构化 agent
   -> 如果结构化 runnable 调用失败，不再解析裸 JSON 文本或裸 tool call 参数
 ```
@@ -26,10 +24,8 @@
 - 缺少连接参数且环境变量也没有时会明确报错
 - 显式参数缺省时会从环境变量读取连接配置
 - 环境变量没有 `MODEL` 时会使用默认模型
-- `json_schema` 策略会按严格 schema 方式构造 runnable
 - `tool_call` 策略会映射到 LangChain 的 `function_calling`
-- `auto` 策略会在 `json_schema` 不支持时回退到 `tool_call`
-- `auto` 策略不会把 json_schema 调用阶段的超时、鉴权、服务端错误或输出校验失败当成协议不支持并重试
+- `json_schema` 和 `auto` 策略会在构造阶段被拒绝
 - 结构化调用失败后不会再调用裸 `model.invoke(...)` 解析 JSON 文本
 - 结构化调用失败后不会再解析裸 tool call arguments
 - 非法策略参数会被拒绝
@@ -54,24 +50,15 @@
 - 不显式传 `model`，调用 `build_extractor_client(...)`。
 - 确认底层 `ChatOpenAI` 使用代码内默认模型。
 
-`test_build_extractor_client_from_env_uses_json_schema_strategy_argument`
-
-- 用假的 `ChatOpenAI` 替身拦住真实网络调用。
-- 确认连接参数和模型名都来自显式参数，默认请求参数来自代码，结构化策略也来自显式参数，而且最终返回对象可直接 `invoke(...)`。
-
-`test_build_extractor_client_from_env_uses_tool_call_strategy_argument`
+`test_build_extractor_client_from_env_uses_tool_call_only`
 
 - 确认内部会把显式传入的 `tool_call` 映射成 LangChain 需要的 `function_calling`。
+- 确认连接参数和模型名都来自显式参数，默认请求参数来自代码，而且最终返回对象可直接 `invoke(...)`。
 
-`test_build_extractor_client_from_env_falls_back_to_tool_call_when_json_schema_is_unsupported`
+`test_build_extractor_client_rejects_json_schema_and_auto_strategy_arguments`
 
-- 让假的 `ChatOpenAI` 在 `json_schema` 时抛错。
-- 确认 client 会继续尝试 `tool_call`，而不是直接失败。
-
-`test_auto_strategy_does_not_retry_tool_call_after_json_schema_invoke_failure`
-
-- 让假的 `json_schema` structured runnable 在 `invoke(...)` 阶段抛出超时类错误。
-- 确认 client 不会继续调用 `function_calling`，避免一次业务调用被换协议重复执行。
+- 显式传入 `json_schema` 和 `auto`。
+- 确认构造阶段直接拒绝，只允许 `tool_call`。
 
 `test_invoke_rejects_raw_json_content_when_structured_invoke_fails`
 

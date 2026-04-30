@@ -3,7 +3,7 @@
 实现步骤：
 
 ```text
-HTTP 调用方提交 blocks、markdown、显式 task_spec、run_options 和 metadata
+HTTP 调用方提交 blocks、markdown、显式 task_spec、run_options、metadata 和可选模型配置
   -> FastAPI 先用 service.file_extraction_agent.schemas 里的稳定输入对象解析请求体
   -> route 层不重新定义抽取业务结构，只把 HTTP JSON 转成 processor.extract(...) 的参数
   -> processor.extract(...) 负责输入适配、模型客户端构造和 graph 执行
@@ -30,7 +30,7 @@ from service.file_extraction_agent.schemas import (
 )
 
 
-StructuredOutputStrategy = Literal["json_schema", "tool_call", "auto"]
+StructuredOutputStrategy = Literal["tool_call"]
 
 router = APIRouter(tags=["file-extraction-agent"])
 
@@ -47,7 +47,9 @@ class ExtractRequest(BaseModel):
     base_url: str | None = None
     openai_api_key: str | None = None
     model: str | None = None
-    structured_output_strategy: StructuredOutputStrategy = "auto"
+    broad_model: str | None = None
+    resolution_model: str | None = None
+    structured_output_strategy: StructuredOutputStrategy = "tool_call"
 
 
 @router.post("/v1/file-extraction-agent/extract", response_model=ExtractionResult)
@@ -73,5 +75,7 @@ def _extract_fields(request: ExtractRequest) -> ExtractionResult:
         base_url=request.base_url,
         openai_api_key=request.openai_api_key,
         model=request.model,
+        broad_model=request.broad_model,
+        resolution_model=request.resolution_model,
         structured_output_strategy=request.structured_output_strategy,
     )

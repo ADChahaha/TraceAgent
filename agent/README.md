@@ -63,6 +63,21 @@ export RAPIDOCR_MODEL_ROOT=/your/path/rapidocr
 export HF_HOME=/your/path/huggingface
 ```
 
+如果要绕开默认 `docling + RapidOCR`，可以切到可选的 PaddleOCR PDF 处理器：
+
+```bash
+pip install -e ".[paddle]"
+export DOCUMENT_PROCESSOR_PDF_ENGINE=pdf-paddle
+```
+
+这一路径使用 `pypdfium2` 渲染 PDF 页面，再用 `PaddleOCR PPStructureV3` 逐页解析版面、文字和表格，输出结构化 markdown；识别到表格时生成 `kind=table` blocks，普通文字生成 `kind=text` blocks。只有运行时退回普通 OCR 行结果时，才会生成 `kind=text_line` blocks。未设置该环境变量时，默认路径仍是 `docling + RapidOCR`。
+
+PaddleOCR 模型默认缓存到 `service/document_processor/impl/pdf/models/paddlex/`，不会写到 `~/.paddlex`。默认使用 `PP-OCRv4` mobile 模型以优先跑通本地 CPU/M4 推理；如果要改用更新但更慢的 `PP-OCRv5`，可以在启动前设置：
+
+```bash
+export DOCUMENT_PROCESSOR_PADDLE_OCR_VERSION=PP-OCRv5
+```
+
 ### Usage
 
 在 `agent/` 目录下执行：

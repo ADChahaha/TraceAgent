@@ -15,9 +15,7 @@ def test_build_extractor_client_from_env_requires_all_runtime_variables(monkeypa
     monkeypatch.delenv("MODEL", raising=False)
 
     try:
-        extractor_client_module.build_extractor_client(
-            structured_output_strategy="auto",
-        )
+        extractor_client_module.build_extractor_client()
     except extractor_client_module.ExtractorClientConfigError as exc:
         message = str(exc)
         assert "base_url" in message
@@ -39,9 +37,7 @@ def test_build_extractor_client_uses_environment_when_arguments_are_omitted(monk
     monkeypatch.setenv("MODEL", "env-model")
     monkeypatch.setattr(extractor_client_module, "ChatOpenAI", FakeChatOpenAI)
 
-    client = extractor_client_module.build_extractor_client(
-        structured_output_strategy="tool_call",
-    )
+    client = extractor_client_module.build_extractor_client()
 
     assert created_kwargs["base_url"] == "https://env-llm.example.com/v1"
     assert created_kwargs["api_key"] == "env-key"
@@ -62,17 +58,16 @@ def test_build_extractor_client_defaults_model_when_env_model_is_omitted(monkeyp
     monkeypatch.delenv("MODEL", raising=False)
     monkeypatch.setattr(extractor_client_module, "ChatOpenAI", FakeChatOpenAI)
 
-    client = extractor_client_module.build_extractor_client(
-        structured_output_strategy="auto",
-    )
+    client = extractor_client_module.build_extractor_client()
 
     assert created_kwargs["model"] == extractor_client_module.DEFAULT_MODEL
     assert client.model_name == extractor_client_module.DEFAULT_MODEL
 
 
-def test_build_extractor_client_from_env_uses_json_schema_strategy_argument(monkeypatch):
-    created_kwargs: dict[str, object] = {}
+def test_build_extractor_client_from_env_uses_tool_call_only(monkeypatch):
+    seen_methods: list[tuple[str, bool | None]] = []
     seen_payloads: list[object] = []
+    created_kwargs: dict[str, object] = {}
 
     class FakeRunnable:
         def __init__(self, schema):
@@ -87,49 +82,6 @@ def test_build_extractor_client_from_env_uses_json_schema_strategy_argument(monk
             created_kwargs.update(kwargs)
 
         def with_structured_output(self, schema, *, method, strict):
-            assert method == "json_schema"
-            assert strict is True
-            return FakeRunnable(schema)
-
-    monkeypatch.setattr(extractor_client_module, "ChatOpenAI", FakeChatOpenAI)
-
-    client = extractor_client_module.build_extractor_client(
-        base_url="https://llm.example.com/v1",
-        api_key="test-key",
-        model="gpt-compatible",
-        structured_output_strategy="json_schema",
-    )
-    result = client.invoke(
-        output_schema=DummyOutput,
-        messages=[{"role": "user", "content": "可调用"}],
-    )
-
-    assert created_kwargs["base_url"] == "https://llm.example.com/v1"
-    assert created_kwargs["api_key"] == "test-key"
-    assert created_kwargs["model"] == "gpt-compatible"
-    assert created_kwargs["temperature"] == 0
-    assert client.structured_output_strategy == "json_schema"
-    assert seen_payloads == [[{"role": "user", "content": "可调用"}]]
-    assert result.answer == "可调用"
-
-
-def test_build_extractor_client_from_env_uses_tool_call_strategy_argument(monkeypatch):
-    seen_methods: list[tuple[str, bool | None]] = []
-    seen_payloads: list[object] = []
-
-    class FakeRunnable:
-        def __init__(self, schema):
-            self.schema = schema
-
-        def invoke(self, payload):
-            seen_payloads.append(payload)
-            return self.schema(answer=payload[-1]["content"])
-
-    class FakeChatOpenAI:
-        def __init__(self, **kwargs):
-            del kwargs
-
-        def with_structured_output(self, schema, *, method, strict):
             seen_methods.append((method, strict))
             return FakeRunnable(schema)
 
@@ -139,102 +91,35 @@ def test_build_extractor_client_from_env_uses_tool_call_strategy_argument(monkey
         base_url="https://llm.example.com/v1",
         api_key="test-key",
         model="gpt-compatible",
-        structured_output_strategy="tool_call",
     )
     result = client.invoke(
         output_schema=DummyOutput,
         messages=[{"role": "user", "content": "tool"}],
     )
 
+    assert created_kwargs["base_url"] == "https://llm.example.com/v1"
+    assert created_kwargs["api_key"] == "test-key"
+    assert created_kwargs["model"] == "gpt-compatible"
+    assert created_kwargs["temperature"] == 0
     assert client.structured_output_strategy == "tool_call"
     assert seen_methods == [("function_calling", True)]
     assert seen_payloads == [[{"role": "user", "content": "tool"}]]
     assert result.answer == "tool"
 
 
-def test_build_extractor_client_from_env_falls_back_to_tool_call_when_json_schema_is_unsupported(
-    monkeypatch,
-):
-    seen_methods: list[tuple[str, bool | None]] = []
-
-    class FakeRunnable:
-        def __init__(self, schema):
-            self.schema = schema
-
-        def invoke(self, payload):
-            return self.schema(answer=payload[-1]["content"])
-
-    class FakeChatOpenAI:
-        def __init__(self, **kwargs):
-            del kwargs
-
-        def with_structured_output(self, schema, *, method, strict):
-            seen_methods.append((method, strict))
-            if method == "json_schema":
-                raise RuntimeError("json_schema unsupported")
-            return FakeRunnable(schema)
-
-    monkeypatch.setattr(extractor_client_module, "ChatOpenAI", FakeChatOpenAI)
-
-    client = extractor_client_module.build_extractor_client(
-        base_url="https://llm.example.com/v1",
-        api_key="test-key",
-        model="gpt-compatible",
-        structured_output_strategy="auto",
-    )
-    result = client.invoke(
-        output_schema=DummyOutput,
-        messages=[{"role": "user", "content": "fallback"}],
-    )
-
-    assert client.structured_output_strategy == "auto"
-    assert seen_methods == [("json_schema", True), ("function_calling", True)]
-    assert result.answer == "fallback"
-
-
-def test_auto_strategy_does_not_retry_tool_call_after_json_schema_invoke_failure(
-    monkeypatch,
-):
-    seen_methods: list[tuple[str, bool | None]] = []
-
-    class FakeRunnable:
-        def __init__(self, schema, method):
-            self.schema = schema
-            self.method = method
-
-        def invoke(self, payload):
-            if self.method == "json_schema":
-                raise RuntimeError("json_schema invoke timeout")
-            return self.schema(answer="tool-call-should-not-run")
-
-    class FakeChatOpenAI:
-        def __init__(self, **kwargs):
-            del kwargs
-
-        def with_structured_output(self, schema, *, method, strict):
-            seen_methods.append((method, strict))
-            return FakeRunnable(schema, method)
-
-    monkeypatch.setattr(extractor_client_module, "ChatOpenAI", FakeChatOpenAI)
-
-    client = extractor_client_module.build_extractor_client(
-        base_url="https://llm.example.com/v1",
-        api_key="test-key",
-        model="gpt-compatible",
-        structured_output_strategy="auto",
-    )
-
-    try:
-        client.invoke(
-            output_schema=DummyOutput,
-            messages=[{"role": "user", "content": "should fail once"}],
-        )
-    except extractor_client_module.ExtractorClientInvocationError as exc:
-        assert "json_schema" in str(exc)
-    else:
-        raise AssertionError("json_schema invoke 失败后不应重试 tool_call")
-
-    assert seen_methods == [("json_schema", True)]
+def test_build_extractor_client_rejects_json_schema_and_auto_strategy_arguments():
+    for strategy in ["json_schema", "auto"]:
+        try:
+            extractor_client_module.build_extractor_client(
+                base_url="https://llm.example.com/v1",
+                api_key="test-key",
+                model="gpt-compatible",
+                structured_output_strategy=strategy,  # type: ignore[arg-type]
+            )
+        except extractor_client_module.ExtractorClientConfigError as exc:
+            assert "only supported structured_output_strategy: tool_call" in str(exc)
+        else:
+            raise AssertionError(f"{strategy} 应被拒绝")
 
 
 def test_invoke_rejects_raw_json_content_when_structured_invoke_fails(monkeypatch):
@@ -266,7 +151,6 @@ def test_invoke_rejects_raw_json_content_when_structured_invoke_fails(monkeypatc
         base_url="https://llm.example.com/v1",
         api_key="test-key",
         model="gpt-compatible",
-        structured_output_strategy="json_schema",
     )
 
     try:
@@ -318,7 +202,6 @@ def test_invoke_rejects_raw_tool_call_arguments_when_structured_invoke_fails(mon
         base_url="https://llm.example.com/v1",
         api_key="test-key",
         model="gpt-compatible",
-        structured_output_strategy="tool_call",
     )
 
     try:

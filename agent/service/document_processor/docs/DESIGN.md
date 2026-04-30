@@ -65,7 +65,7 @@ file_obj
 
 ## PDF 实现
 
-当前 `PDF` 已经落地为单一路径实现，入口在 `impl/pdf/processor.py`。
+当前 `PDF` 默认实现入口在 `impl/pdf/processor.py`，可选 PaddleOCR 实现入口在 `impl/pdf/paddle_processor.py`。默认路径仍然是 `docling + RapidOCR`；当启动前设置 `DOCUMENT_PROCESSOR_PDF_ENGINE=pdf-paddle` 时，内部注册表会把 `FileType.PDF` 绑定到 `PdfPaddleProcessor`。
 
 实现步骤：
 
@@ -87,11 +87,31 @@ file_obj
 
 这里的设计约束是：
 
-- `PDF` 只走 `docling` 这一条解析链路
-- 如果 `docling` 失败，就直接向上抛错，不做任何兜底解析
+- 默认 `PDF` 只走 `docling` 这一条解析链路
+- 如果默认 `docling` 路径失败，就直接向上抛错，不做任何兜底解析
 - 如果调用方没有显式配置模型目录，默认把 docling / Hugging Face / RapidOCR 相关下载产物都放到 `impl/pdf/models/` 下
 - PDF 文字抽取当前显式使用 `RapidOCR`，不再依赖 `docling` 的自动 OCR 选择
 - 当前 block 归一化优先保留文本、页码和 bbox，不在这一层扩展额外业务字段
+
+可选 PaddleOCR 路径的处理流程是：
+
+```text
+调用方传入 pdf file_obj
+  -> `InternalProcessorInterface` 读取 `DOCUMENT_PROCESSOR_PDF_ENGINE`
+  -> 如果值为 `pdf-paddle` / `paddleocr` / `paddle`，选择 `PdfPaddleProcessor`
+  -> `PdfPaddleProcessor` 复用默认 PDF helper 读取文件名和二进制
+  -> 如果调用方没设置 `PADDLE_PDX_CACHE_HOME`，先把 PaddleX 缓存收口到 `impl/pdf/models/paddlex`
+  -> 用 `pypdfium2` 将 PDF 每页渲染成图片
+  -> 初始化 `paddleocr.PPStructureV3(lang="ch", ocr_version="PP-OCRv4", use_table_recognition=True, format_block_content=True, ...)`
+  -> 逐页调用 PaddleOCR 3.x 的 `predict(...)` 接口
+  -> 从结构化结果读取 `markdown_texts` 作为每页 markdown
+  -> 从 `parsing_res_list` 读取版面块，表格转 `ContentBlock(kind="table")`，普通文字转 `ContentBlock(kind="text")`
+  -> 如果运行时只返回普通 OCR `rec_texts / rec_boxes`，才降级成 `ContentBlock(kind="text_line")`
+  -> 按页拼接 `md_list`，再合并成整篇 markdown
+  -> 返回 `ProcessResult(meta_info.ocr_engine="paddleocr", meta_info.paddle_pipeline="PPStructureV3")`
+```
+
+PaddleOCR 路径不依赖 docling，也不读取 docling/RapidOCR 缓存目录；它要求运行环境额外安装 `agent-service[paddle]` 依赖。默认初始化 PaddleOCR PPStructureV3 时会关闭文档方向分类、文档矫正和文本行方向分类，启用表格识别，并使用 `PP-OCRv4` mobile 模型，先把速度控制在可接受范围内。如果需要更高精度但更慢的 PP-OCRv5，可通过 `DOCUMENT_PROCESSOR_PADDLE_OCR_VERSION=PP-OCRv5` 覆盖。这个路径主要用于对比密集表格 PDF 的 OCR 质量，默认不替代现有 docling 路径。
 
 ## DOCX 实现
 

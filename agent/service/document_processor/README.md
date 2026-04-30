@@ -62,6 +62,7 @@ file_obj
 
 - 当前 `pdf` 和 `docx` 已经有内部注册入口和真实处理器
 - `pdf` 固定走 `docling + RapidOCR`
+- 如果启动前设置 `DOCUMENT_PROCESSOR_PDF_ENGINE=pdf-paddle`，`pdf` 会改走 `pypdfium2 + PaddleOCR PPStructureV3`，输出结构化 markdown；识别到表格时生成 `kind="table"` blocks，普通文字生成 `kind="text"` blocks；该路径需要额外安装 `agent-service[paddle]`，模型默认缓存到 `impl/pdf/models/paddlex/`
 - `docx` 固定走 `python-docx`
 - 输出的 `blocks` 不包含 `block_id`；如果要继续交给 `service.file_extraction_agent`，应由 backend 或 session 聚合层补齐稳定唯一 `block_id`
 - `.doc` 当前仍不支持

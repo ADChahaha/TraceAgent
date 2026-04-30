@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Callable
 
 from service.document_processor.impl.base import BaseDocumentProcessor
@@ -89,9 +90,26 @@ class InternalProcessorInterface:
             return
 
         from service.document_processor.impl.docx.processor import DocxProcessor
-        from service.document_processor.impl.pdf.processor import PdfProcessor
 
-        cls.register(FileType.PDF, replace=False)(PdfProcessor)
+        cls.register(FileType.PDF, replace=False)(_resolve_pdf_processor_type())
         cls.register(FileType.DOCX, replace=False)(DocxProcessor)
 
         cls._defaults_registered = True
+
+
+def _resolve_pdf_processor_type() -> type[BaseDocumentProcessor]:
+    """按运行时配置选择默认 PDF 处理器。"""
+
+    engine = os.getenv("DOCUMENT_PROCESSOR_PDF_ENGINE", "docling").strip().lower()
+    if engine in {"docling", "pdf-docling", "rapidocr"}:
+        from service.document_processor.impl.pdf.processor import PdfProcessor
+
+        return PdfProcessor
+    if engine in {"paddle", "paddleocr", "pdf-paddle"}:
+        from service.document_processor.impl.pdf.paddle_processor import PdfPaddleProcessor
+
+        return PdfPaddleProcessor
+    raise ValueError(
+        "unsupported DOCUMENT_PROCESSOR_PDF_ENGINE: "
+        f"{engine!r}; expected one of docling, rapidocr, pdf-paddle"
+    )
