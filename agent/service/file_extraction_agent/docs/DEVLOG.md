@@ -1,4 +1,27 @@
-last updated: 2026-04-29 23:15:29 CST
+last updated: 2026-04-30 10:45:35 CST
+
+## 2026-04-30 10:45:35
+
+### 已完成工作
+
+- 重写 `file_extraction_agent/docs/DESIGN.md`，形成新的目标结构：外层 `block_contract.py` 承担 blocks 契约校验，内部按 `broad/`、`resolution/` 和 `tools/` 拆分。
+- 明确删除独立 `validation` 阶段，后续不以 `rules.py` 或 `constraints.py` 形式恢复。
+- 收敛 tool 设计：不引入动态 registry，runner 直接注入当前阶段允许的工具；工具文件只保留 `search.py` 和 `candidates.py`。
+- 明确 grep 搜索语义：text 搜索返回 paragraph 级 `ref/text`，table 搜索只返回单行 `ref/text`，不使用 `top_k` 和 `match_id`。
+- 明确候选与定案引用链路：grep 返回 `ref`，候选写入生成 `candidate_id`，`final_decision` 只能引用 `candidate_id`。
+
+### 当前进展
+
+- 当前完成的是设计文档落地，尚未开始移动代码、改测试或重构实现。
+- 后续实现需要按 TDD 推进，并同步更新对应 `tests/file_extraction_agent/docs/` 测试说明文档。
+
+### 验证
+
+- `git diff --check -- agent/service/file_extraction_agent/docs/DESIGN.md agent/service/file_extraction_agent/docs/DEVLOG.md`
+
+### 下一步
+
+- 按新设计先补或调整测试，确认 red 阶段失败来自目标结构变化，再开始拆分 broad、resolution 和 tools 实现。
 
 ## 2026-04-29 23:15:29
 
