@@ -3,118 +3,68 @@ from io import BytesIO
 import pytest
 
 from service.document_processor.schemas import ProcessResult
-from service.document_processor.types import FileType, UnsupportedFileTypeError
 
 
 class NamedBytesIO(BytesIO):
-    def __init__(self, data: bytes, filename: str | None) -> None:
+    def __init__(self, data: bytes, filename: str | None = None) -> None:
         super().__init__(data)
         self.filename = filename
 
 
-def test_document_processor_base_validates_file_like_input_and_delegates_to_subclass():
-    from service.document_processor.impl.base import BaseDocumentProcessor
-
-    class StubProcessor(BaseDocumentProcessor):
-        def __init__(self) -> None:
-            self.calls = []
-
-        def _process(self, file_obj):
-            self.calls.append(file_obj)
-            return ProcessResult(file_type="pdf", filename="sample.pdf")
-
-    processor = StubProcessor()
-    file_obj = NamedBytesIO(b"fake", filename="sample.pdf")
-
-    result = processor.process(file_obj)
-
-    assert result.file_type == "pdf"
-    assert processor.calls == [file_obj]
-
-
-def test_document_processor_base_rejects_non_file_like_input():
-    from service.document_processor.impl.base import BaseDocumentProcessor
-    from service.document_processor.processor import InvalidFileObjectError
-
-    class StubProcessor(BaseDocumentProcessor):
-        def _process(self, file_obj):
-            return ProcessResult(file_type="pdf")
-
-    with pytest.raises(InvalidFileObjectError, match="file-like"):
-        StubProcessor().process(object())
-
-
-def test_process_routes_explicit_file_type_to_registered_processor():
+def test_process_validates_input_then_calls_pdf_pipeline(monkeypatch):
     from service.document_processor import processor as processor_module
-    from service.document_processor.impl.base import BaseDocumentProcessor
-    from service.document_processor.impl.interface import InternalProcessorInterface
 
-    class PdfStubProcessor(BaseDocumentProcessor):
-        def __init__(self) -> None:
-            self.calls = []
+    seen_call: dict[str, object] = {}
 
-        def _process(self, file_obj):
-            self.calls.append(file_obj)
-            return ProcessResult(file_type="pdf", filename="sample.unknown")
+    def fake_convert(source_bytes: bytes, filename: str) -> object:
+        seen_call["source_bytes"] = source_bytes
+        seen_call["filename"] = filename
+        return object()
 
-    original_types = InternalProcessorInterface._processor_types.copy()
-    original_instances = InternalProcessorInterface._processor_instances.copy()
-    original_defaults_flag = InternalProcessorInterface._defaults_registered
-    try:
-        InternalProcessorInterface._processor_types.clear()
-        InternalProcessorInterface._processor_instances.clear()
-        InternalProcessorInterface._defaults_registered = False
-        InternalProcessorInterface.register(FileType.PDF)(PdfStubProcessor)
-
-        result = processor_module.process(
-            NamedBytesIO(b"%PDF-1.4", filename="sample.unknown"),
-            file_type="pdf",
+    def fake_export(document: object) -> str:
+        seen_call["document"] = document
+        return (
+            "<html><head><style>.x{}</style></head><body>"
+            '<p class="ignored">正文</p>'
+            "</body></html>"
         )
 
-        assert result.file_type == "pdf"
-        assert InternalProcessorInterface._processor_instances[FileType.PDF].calls != []
-    finally:
-        InternalProcessorInterface._processor_types.clear()
-        InternalProcessorInterface._processor_types.update(original_types)
-        InternalProcessorInterface._processor_instances.clear()
-        InternalProcessorInterface._processor_instances.update(original_instances)
-        InternalProcessorInterface._defaults_registered = original_defaults_flag
+    monkeypatch.setattr(processor_module, "convert_to_docling_document", fake_convert)
+    monkeypatch.setattr(processor_module, "export_html", fake_export)
+
+    file_obj = NamedBytesIO(b"%PDF-1.4", filename="/tmp/sample.PDF")
+    result = processor_module.process(file_obj)
+
+    assert result == ProcessResult(
+        filename="sample.PDF",
+        html='<p id="dp-p-1">正文</p>',
+    )
+    assert seen_call["source_bytes"] == b"%PDF-1.4"
+    assert seen_call["filename"] == "sample.PDF"
+    assert file_obj.tell() == 0
 
 
-def test_process_uses_filename_inference_when_file_type_is_omitted():
+def test_process_accepts_explicit_pdf_type_without_filename_suffix(monkeypatch):
     from service.document_processor import processor as processor_module
-    from service.document_processor.impl.base import BaseDocumentProcessor
-    from service.document_processor.impl.interface import InternalProcessorInterface
 
-    class DocxStubProcessor(BaseDocumentProcessor):
-        def __init__(self) -> None:
-            self.calls = []
+    monkeypatch.setattr(
+        processor_module,
+        "convert_to_docling_document",
+        lambda source_bytes, filename: object(),
+    )
+    monkeypatch.setattr(
+        processor_module,
+        "export_html",
+        lambda document: "<html><body><p>正文</p></body></html>",
+    )
 
-        def _process(self, file_obj):
-            self.calls.append(file_obj)
-            return ProcessResult(file_type="docx", filename="contract.DOCX")
+    result = processor_module.process(
+        NamedBytesIO(b"%PDF-1.4", filename="upload.bin"),
+        file_type=".PDF",
+    )
 
-    original_types = InternalProcessorInterface._processor_types.copy()
-    original_instances = InternalProcessorInterface._processor_instances.copy()
-    original_defaults_flag = InternalProcessorInterface._defaults_registered
-    try:
-        InternalProcessorInterface._processor_types.clear()
-        InternalProcessorInterface._processor_instances.clear()
-        InternalProcessorInterface._defaults_registered = False
-        InternalProcessorInterface.register(FileType.DOCX)(DocxStubProcessor)
-
-        result = processor_module.process(
-            NamedBytesIO(b"fake-docx", filename="contract.DOCX"),
-        )
-
-        assert result.file_type == "docx"
-        assert InternalProcessorInterface._processor_instances[FileType.DOCX].calls != []
-    finally:
-        InternalProcessorInterface._processor_types.clear()
-        InternalProcessorInterface._processor_types.update(original_types)
-        InternalProcessorInterface._processor_instances.clear()
-        InternalProcessorInterface._processor_instances.update(original_instances)
-        InternalProcessorInterface._defaults_registered = original_defaults_flag
+    assert result.filename == "upload.bin"
+    assert result.html == '<p id="dp-p-1">正文</p>'
 
 
 def test_process_rejects_objects_without_file_like_read_method():
@@ -125,53 +75,42 @@ def test_process_rejects_objects_without_file_like_read_method():
         processor_module.process(object(), file_type="pdf")
 
 
-def test_process_propagates_unsupported_file_type_errors():
+def test_process_rejects_non_pdf_explicit_type():
     from service.document_processor import processor as processor_module
+    from service.document_processor.processor import UnsupportedFileTypeError
+
+    with pytest.raises(UnsupportedFileTypeError, match="docx"):
+        processor_module.process(
+            NamedBytesIO(b"fake-docx", filename="sample.pdf"),
+            file_type="docx",
+        )
+
+
+def test_process_rejects_non_pdf_filename_when_type_is_omitted():
+    from service.document_processor import processor as processor_module
+    from service.document_processor.processor import UnsupportedFileTypeError
 
     with pytest.raises(UnsupportedFileTypeError, match="txt"):
         processor_module.process(NamedBytesIO(b"fake", filename="sample.txt"))
 
 
-def test_register_processor_rejects_non_processor_subclasses():
-    from service.document_processor.impl.interface import InternalProcessorInterface
-
-    with pytest.raises(TypeError, match="BaseDocumentProcessor"):
-        @InternalProcessorInterface.register(FileType.PDF)
-        class NotAProcessor:
-            pass
-
-
-def test_process_uses_registered_processor_class_when_no_instance_is_injected():
+def test_process_uses_default_pdf_filename_when_name_is_missing(monkeypatch):
     from service.document_processor import processor as processor_module
-    from service.document_processor.impl.base import BaseDocumentProcessor
-    from service.document_processor.impl.interface import InternalProcessorInterface
 
-    class RegisteredPdfProcessor(BaseDocumentProcessor):
-        def __init__(self) -> None:
-            self.calls = []
+    seen_call: dict[str, object] = {}
+    monkeypatch.setattr(
+        processor_module,
+        "convert_to_docling_document",
+        lambda source_bytes, filename: seen_call.setdefault("filename", filename)
+        or object(),
+    )
+    monkeypatch.setattr(
+        processor_module,
+        "export_html",
+        lambda document: "<html>正文</html>",
+    )
 
-        def _process(self, file_obj):
-            self.calls.append(file_obj)
-            return ProcessResult(file_type="pdf", filename="sample.pdf")
+    result = processor_module.process(BytesIO(b"%PDF-1.4"))
 
-    original_types = InternalProcessorInterface._processor_types.copy()
-    original_instances = InternalProcessorInterface._processor_instances.copy()
-    original_defaults_flag = InternalProcessorInterface._defaults_registered
-    try:
-        InternalProcessorInterface._processor_types.clear()
-        InternalProcessorInterface._processor_instances.clear()
-        InternalProcessorInterface._defaults_registered = False
-        InternalProcessorInterface.register(FileType.PDF)(RegisteredPdfProcessor)
-
-        result = processor_module.process(
-            NamedBytesIO(b"%PDF-1.4", filename="sample.pdf"),
-        )
-
-        assert result.file_type == "pdf"
-        assert InternalProcessorInterface._processor_instances[FileType.PDF].calls != []
-    finally:
-        InternalProcessorInterface._processor_types.clear()
-        InternalProcessorInterface._processor_types.update(original_types)
-        InternalProcessorInterface._processor_instances.clear()
-        InternalProcessorInterface._processor_instances.update(original_instances)
-        InternalProcessorInterface._defaults_registered = original_defaults_flag
+    assert result.filename == "document.pdf"
+    assert seen_call["filename"] == "document.pdf"

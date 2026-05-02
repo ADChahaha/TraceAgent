@@ -1,10 +1,4 @@
-"""Adapt document processing results to HTTP endpoints.
-
-Purpose: expose health/capability/process routes for document normalization.
-Input/Output: accepts FastAPI uploads/forms and returns Pydantic response models.
-How to use: mount `router` in the service FastAPI app; business callers should use
-`service.document_processor.processor.process(...)` directly instead of this module.
-"""
+"""把 PDF 转 HTML 业务入口适配成 HTTP endpoints。"""
 
 from __future__ import annotations
 
@@ -14,11 +8,13 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 from starlette.concurrency import run_in_threadpool
 
-from service.document_processor.processor import InvalidFileObjectError
-from service.document_processor.types import FileType, UnsupportedFileTypeError
+from service.document_processor.processor import (
+    InvalidFileObjectError,
+    UnsupportedFileTypeError,
+)
 
 router = APIRouter(tags=["document-processor"])
 
@@ -50,35 +46,11 @@ class CapabilitiesResponse(BaseModel):
     docling_artifacts_available: bool
 
 
-class BoundingBoxResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    x0: float
-    y0: float
-    x1: float
-    y1: float
-
-
-class ContentBlockResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    text: str
-    page_no: int | None = None
-    bbox: BoundingBoxResponse | None = None
-    kind: str = "text"
-    meta_info: dict[str, Any] = Field(default_factory=dict)
-
-
 class ProcessResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    file_type: FileType
-    filename: str | None
-    md_list: list[str] = Field(default_factory=list)
-    markdown: str = ""
-    blocks: list[ContentBlockResponse] = Field(default_factory=list)
-    meta_info: dict[str, Any] = Field(default_factory=dict)
-    warnings: list[str] = Field(default_factory=list)
+    filename: str
+    html: str
 
 
 @router.get("/healthz", response_model=HealthResponse)
@@ -90,8 +62,8 @@ async def healthz() -> HealthResponse:
 async def get_capabilities() -> CapabilitiesResponse:
     artifacts_path = _resolve_docling_artifacts_path()
     return CapabilitiesResponse(
-        supported_file_types=[item.value for item in FileType],
-        implemented_file_types=[FileType.PDF.value, FileType.DOCX.value],
+        supported_file_types=["pdf"],
+        implemented_file_types=["pdf"],
         docling_artifacts_path=_stringify_path(artifacts_path),
         docling_artifacts_available=bool(artifacts_path and artifacts_path.exists()),
     )
@@ -127,8 +99,8 @@ def _stringify_path(path: Path | None) -> str | None:
 
 
 def _resolve_docling_artifacts_path() -> Path | None:
-    pdf_processor = import_module("service.document_processor.impl.pdf.processor")
-    return pdf_processor.resolve_docling_artifacts_path()
+    docling_converter = import_module("service.document_processor.docling_converter")
+    return docling_converter.resolve_docling_artifacts_path()
 
 
 def _process_document(file_obj, file_type: str | None):
@@ -138,33 +110,6 @@ def _process_document(file_obj, file_type: str | None):
 
 def _build_process_response(result) -> ProcessResponse:
     return ProcessResponse(
-        file_type=result.file_type,
         filename=result.filename,
-        md_list=list(result.md_list),
-        markdown=result.markdown,
-        blocks=[_build_block_response(block) for block in result.blocks],
-        meta_info=dict(result.meta_info),
-        warnings=list(result.warnings),
-    )
-
-
-def _build_block_response(block) -> ContentBlockResponse:
-    return ContentBlockResponse(
-        text=block.text,
-        page_no=block.page_no,
-        bbox=_build_bbox_response(block.bbox),
-        kind=block.kind,
-        meta_info=dict(block.meta_info),
-    )
-
-
-def _build_bbox_response(bbox) -> BoundingBoxResponse | None:
-    if bbox is None:
-        return None
-
-    return BoundingBoxResponse(
-        x0=bbox.x0,
-        y0=bbox.y0,
-        x1=bbox.x1,
-        y1=bbox.y1,
+        html=result.html,
     )

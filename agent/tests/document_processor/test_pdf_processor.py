@@ -1,51 +1,18 @@
-import sys
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 
-from service.document_processor.schemas import BoundingBox
-
-
-class NamedBytesIO(BytesIO):
-    def __init__(self, data: bytes, filename: str | None = None) -> None:
-        super().__init__(data)
-        self.filename = filename
+import pytest
 
 
 class FakeDocument:
-    def export_to_markdown(self) -> str:
-        return "# 测试标题\n\n第一段正文"
+    def __init__(self, html: object = "<html><body>测试正文</body></html>") -> None:
+        self.html = html
+        self.export_kwargs = None
 
-    def iterate_items(self):
-        yield (
-            SimpleNamespace(
-                text="测试标题",
-                label="title",
-                prov=[],
-            ),
-            1,
-        )
-        yield (
-            SimpleNamespace(
-                text="第一段正文",
-                label="text",
-                prov=[
-                    SimpleNamespace(
-                        page_no=2,
-                        bbox=SimpleNamespace(l=10.0, t=20.0, r=30.0, b=40.0),
-                    )
-                ],
-            ),
-            1,
-        )
-        yield (
-            SimpleNamespace(
-                label="table",
-                prov=[],
-                export_to_markdown=lambda doc: "| 列1 |\n| --- |\n| 值1 |",
-            ),
-            1,
-        )
+    def export_to_html(self, **kwargs):
+        self.export_kwargs = kwargs
+        return self.html
 
 
 class FakeDocumentConverter:
@@ -62,9 +29,8 @@ class FakeDocumentConverter:
         return SimpleNamespace(document=FakeDocument())
 
 
-def test_pdf_processor_uses_docling_to_generate_markdown_and_blocks(monkeypatch):
-    from service.document_processor.impl.pdf import processor as processor_module
-    from service.document_processor.impl.pdf.processor import PdfProcessor
+def test_convert_to_docling_document_wraps_pdf_bytes_and_filename(monkeypatch):
+    from service.document_processor import docling_converter as processor_module
 
     FakeDocumentConverter.instances.clear()
     monkeypatch.setattr(
@@ -73,49 +39,38 @@ def test_pdf_processor_uses_docling_to_generate_markdown_and_blocks(monkeypatch)
         FakeDocumentConverter,
     )
 
-    result = PdfProcessor().process(NamedBytesIO(b"%PDF-1.4", filename="sample.pdf"))
+    document = processor_module.convert_to_docling_document(
+        b"%PDF-1.4",
+        "sample.pdf",
+    )
 
     converter = FakeDocumentConverter.instances[0]
     converted_stream = converter.calls[0]
 
+    assert isinstance(document, FakeDocument)
     assert converted_stream.name == "sample.pdf"
     assert converted_stream.stream.read() == b"%PDF-1.4"
-    assert result.file_type == "pdf"
-    assert result.filename == "sample.pdf"
-    assert result.warnings == []
-    assert result.markdown == "# 测试标题\n\n第一段正文"
-    assert result.md_list == [result.markdown]
-    assert [block.text for block in result.blocks] == [
-        "测试标题",
-        "第一段正文",
-        "| 列1 | | --- | | 值1 |",
-    ]
-    assert [block.kind for block in result.blocks] == ["section_header", "text", "table"]
-    assert result.blocks[1].page_no == 2
-    assert result.blocks[1].bbox == BoundingBox(10.0, 20.0, 30.0, 40.0)
 
 
-def test_pdf_processor_passes_document_when_item_markdown_export_requires_it():
-    from service.document_processor.impl.pdf.processor import PdfProcessor
+def test_export_html_returns_docling_html():
+    from service.document_processor import docling_converter as processor_module
 
-    class ExportNeedsDoc:
-        label = "table"
-        prov = []
+    document = FakeDocument("<main>正文</main>")
 
-        def export_to_markdown(self, doc):
-            assert doc is fake_document
-            return "| A |"
-
-    fake_document = SimpleNamespace()
-
-    text = PdfProcessor._extract_text(ExportNeedsDoc(), fake_document)
-
-    assert text == "| A |"
+    assert processor_module.export_html(document) == "<main>正文</main>"
+    assert document.export_kwargs["include_annotations"] is False
+    assert document.export_kwargs["labels"] == processor_module.semantic_docling_labels()
 
 
-def test_pdf_processor_enables_table_structure_explicitly(monkeypatch):
-    from service.document_processor.impl.pdf import processor as processor_module
-    from service.document_processor.impl.pdf.processor import PdfProcessor
+def test_export_html_rejects_non_string_docling_output():
+    from service.document_processor import docling_converter as processor_module
+
+    with pytest.raises(TypeError, match="export_to_html"):
+        processor_module.export_html(FakeDocument(html=None))
+
+
+def test_build_document_converter_enables_table_structure(monkeypatch):
+    from service.document_processor import docling_converter as processor_module
 
     FakeDocumentConverter.instances.clear()
     monkeypatch.setattr(
@@ -124,7 +79,7 @@ def test_pdf_processor_enables_table_structure_explicitly(monkeypatch):
         FakeDocumentConverter,
     )
 
-    PdfProcessor()
+    processor_module.build_document_converter()
 
     converter = FakeDocumentConverter.instances[0]
     format_options = converter.init_kwargs["format_options"]
@@ -133,9 +88,8 @@ def test_pdf_processor_enables_table_structure_explicitly(monkeypatch):
     assert pdf_option.pipeline_options.do_table_structure is True
 
 
-def test_pdf_processor_uses_explicit_rapidocr_for_text_extraction(monkeypatch):
-    from service.document_processor.impl.pdf import processor as processor_module
-    from service.document_processor.impl.pdf.processor import PdfProcessor
+def test_build_document_converter_uses_explicit_rapidocr(monkeypatch):
+    from service.document_processor import docling_converter as processor_module
 
     FakeDocumentConverter.instances.clear()
     monkeypatch.setattr(
@@ -144,28 +98,24 @@ def test_pdf_processor_uses_explicit_rapidocr_for_text_extraction(monkeypatch):
         FakeDocumentConverter,
     )
 
-    PdfProcessor()
+    processor_module.build_document_converter()
 
     converter = FakeDocumentConverter.instances[0]
     format_options = converter.init_kwargs["format_options"]
     pdf_option = format_options[processor_module.InputFormat.PDF]
     ocr_options = pdf_option.pipeline_options.ocr_options
-    repo_pdf_dir = Path(processor_module.__file__).resolve().parent / "models"
+    module_dir = Path(processor_module.__file__).resolve().parent
 
     assert type(ocr_options).__name__ == "RapidOcrOptions"
     assert ocr_options.backend == "onnxruntime"
     assert ocr_options.lang == ["chinese", "english"]
     assert Path(ocr_options.rapidocr_params["Global.model_root_dir"]) == (
-        repo_pdf_dir / "rapidocr"
+        module_dir / "models" / "rapidocr"
     )
-    assert ocr_options.rec_keys_path is None
-    assert ocr_options.force_full_page_ocr is False
-    assert ocr_options.rapidocr_params["EngineConfig.onnxruntime.use_coreml"] is False
 
 
-def test_pdf_processor_can_force_full_page_rapidocr(monkeypatch):
-    from service.document_processor.impl.pdf import processor as processor_module
-    from service.document_processor.impl.pdf.processor import PdfProcessor
+def test_build_document_converter_accepts_pdf_runtime_env_overrides(monkeypatch):
+    from service.document_processor import docling_converter as processor_module
 
     FakeDocumentConverter.instances.clear()
     monkeypatch.setattr(
@@ -174,108 +124,22 @@ def test_pdf_processor_can_force_full_page_rapidocr(monkeypatch):
         FakeDocumentConverter,
     )
     monkeypatch.setenv("DOCUMENT_PROCESSOR_RAPIDOCR_FORCE_FULL_PAGE_OCR", "1")
-
-    PdfProcessor()
-
-    converter = FakeDocumentConverter.instances[0]
-    format_options = converter.init_kwargs["format_options"]
-    pdf_option = format_options[processor_module.InputFormat.PDF]
-    ocr_options = pdf_option.pipeline_options.ocr_options
-
-    assert ocr_options.force_full_page_ocr is True
-
-
-def test_pdf_processor_can_disable_table_cell_matching(monkeypatch):
-    from service.document_processor.impl.pdf import processor as processor_module
-    from service.document_processor.impl.pdf.processor import PdfProcessor
-
-    FakeDocumentConverter.instances.clear()
-    monkeypatch.setattr(
-        processor_module,
-        "DocumentConverter",
-        FakeDocumentConverter,
-    )
     monkeypatch.setenv("DOCUMENT_PROCESSOR_PDF_TABLE_DO_CELL_MATCHING", "0")
-
-    PdfProcessor()
-
-    converter = FakeDocumentConverter.instances[0]
-    format_options = converter.init_kwargs["format_options"]
-    pdf_option = format_options[processor_module.InputFormat.PDF]
-    table_options = pdf_option.pipeline_options.table_structure_options
-
-    assert table_options.do_cell_matching is False
-
-
-def test_pdf_processor_can_enable_onnxruntime_coreml(monkeypatch):
-    from service.document_processor.impl.pdf import processor as processor_module
-    from service.document_processor.impl.pdf.processor import PdfProcessor
-
-    FakeDocumentConverter.instances.clear()
-    monkeypatch.setattr(
-        processor_module,
-        "DocumentConverter",
-        FakeDocumentConverter,
-    )
-    monkeypatch.setenv("DOCUMENT_PROCESSOR_RAPIDOCR_ONNX_USE_COREML", "1")
-
-    PdfProcessor()
-
-    converter = FakeDocumentConverter.instances[0]
-    format_options = converter.init_kwargs["format_options"]
-    pdf_option = format_options[processor_module.InputFormat.PDF]
-    ocr_options = pdf_option.pipeline_options.ocr_options
-
-    assert ocr_options.rapidocr_params["EngineConfig.onnxruntime.use_coreml"] is True
-
-
-def test_pdf_processor_allows_rapidocr_backend_override(monkeypatch):
-    from service.document_processor.impl.pdf import processor as processor_module
-    from service.document_processor.impl.pdf.processor import PdfProcessor
-
-    FakeDocumentConverter.instances.clear()
-    monkeypatch.setattr(
-        processor_module,
-        "DocumentConverter",
-        FakeDocumentConverter,
-    )
-    monkeypatch.setenv("DOCUMENT_PROCESSOR_RAPIDOCR_BACKEND", "torch")
-    monkeypatch.setenv("DOCUMENT_PROCESSOR_DOCLING_DEVICE", "mps")
-
-    PdfProcessor()
-
-    converter = FakeDocumentConverter.instances[0]
-    format_options = converter.init_kwargs["format_options"]
-    pdf_option = format_options[processor_module.InputFormat.PDF]
-    ocr_options = pdf_option.pipeline_options.ocr_options
-
-    assert ocr_options.backend == "torch"
-    assert ocr_options.rapidocr_params["EngineConfig.torch.use_mps"] is True
-
-
-def test_pdf_processor_passes_docling_accelerator_and_batch_options(monkeypatch):
-    from service.document_processor.impl.pdf import processor as processor_module
-    from service.document_processor.impl.pdf.processor import PdfProcessor
-
-    FakeDocumentConverter.instances.clear()
-    monkeypatch.setattr(
-        processor_module,
-        "DocumentConverter",
-        FakeDocumentConverter,
-    )
     monkeypatch.setenv("DOCUMENT_PROCESSOR_DOCLING_DEVICE", "mps")
     monkeypatch.setenv("DOCUMENT_PROCESSOR_DOCLING_NUM_THREADS", "8")
     monkeypatch.setenv("DOCUMENT_PROCESSOR_PDF_OCR_BATCH_SIZE", "2")
     monkeypatch.setenv("DOCUMENT_PROCESSOR_PDF_LAYOUT_BATCH_SIZE", "3")
     monkeypatch.setenv("DOCUMENT_PROCESSOR_PDF_TABLE_BATCH_SIZE", "5")
 
-    PdfProcessor()
+    processor_module.build_document_converter()
 
     converter = FakeDocumentConverter.instances[0]
     format_options = converter.init_kwargs["format_options"]
     pdf_option = format_options[processor_module.InputFormat.PDF]
     pipeline_options = pdf_option.pipeline_options
 
+    assert pipeline_options.ocr_options.force_full_page_ocr is True
+    assert pipeline_options.table_structure_options.do_cell_matching is False
     assert pipeline_options.accelerator_options.device == "mps"
     assert pipeline_options.accelerator_options.num_threads == 8
     assert pipeline_options.ocr_batch_size == 2
@@ -283,404 +147,21 @@ def test_pdf_processor_passes_docling_accelerator_and_batch_options(monkeypatch)
     assert pipeline_options.table_batch_size == 5
 
 
-def test_pdf_processor_uses_default_filename_when_input_has_no_name(monkeypatch):
-    from service.document_processor.impl.pdf import processor as processor_module
-    from service.document_processor.impl.pdf.processor import PdfProcessor
+def test_read_source_bytes_restores_file_position():
+    from service.document_processor import processor as processor_module
 
-    FakeDocumentConverter.instances.clear()
-    monkeypatch.setattr(
-        processor_module,
-        "DocumentConverter",
-        FakeDocumentConverter,
-    )
+    file_obj = BytesIO(b"%PDF-1.4")
+    file_obj.seek(4)
 
-    result = PdfProcessor().process(BytesIO(b"%PDF-1.4"))
+    assert processor_module.read_source_bytes(file_obj) == b"%PDF-1.4"
+    assert file_obj.tell() == 0
 
-    converter = FakeDocumentConverter.instances[0]
-    converted_stream = converter.calls[0]
 
-    assert converted_stream.name == "document.pdf"
-    assert result.filename == "document.pdf"
-
-
-def test_process_routes_pdf_files_to_docling_processor_by_default(monkeypatch):
-    from service.document_processor import processor as entrypoint_module
-    from service.document_processor.impl.interface import InternalProcessorInterface
-    from service.document_processor.impl.pdf import processor as processor_module
-    from service.document_processor.impl.pdf.processor import PdfProcessor
-    from service.document_processor.types import FileType
-
-    FakeDocumentConverter.instances.clear()
-    monkeypatch.setattr(
-        processor_module,
-        "DocumentConverter",
-        FakeDocumentConverter,
-    )
-
-    original_types = InternalProcessorInterface._processor_types.copy()
-    original_instances = InternalProcessorInterface._processor_instances.copy()
-    original_defaults_flag = InternalProcessorInterface._defaults_registered
-    try:
-        InternalProcessorInterface._processor_types.clear()
-        InternalProcessorInterface._processor_instances.clear()
-        InternalProcessorInterface._defaults_registered = False
-
-        result = entrypoint_module.process(
-            NamedBytesIO(b"%PDF-1.4", filename="sample.pdf"),
-        )
-
-        assert result.file_type == "pdf"
-        assert InternalProcessorInterface._processor_types[FileType.PDF] is PdfProcessor
-    finally:
-        InternalProcessorInterface._processor_types.clear()
-        InternalProcessorInterface._processor_types.update(original_types)
-        InternalProcessorInterface._processor_instances.clear()
-        InternalProcessorInterface._processor_instances.update(original_instances)
-        InternalProcessorInterface._defaults_registered = original_defaults_flag
-
-
-def test_process_can_route_pdf_files_to_paddle_processor(monkeypatch):
-    from service.document_processor.impl.interface import InternalProcessorInterface
-    from service.document_processor.impl.pdf.paddle_processor import PdfPaddleProcessor
-    from service.document_processor.types import FileType
-
-    monkeypatch.setenv("DOCUMENT_PROCESSOR_PDF_ENGINE", "pdf-paddle")
-
-    original_types = InternalProcessorInterface._processor_types.copy()
-    original_instances = InternalProcessorInterface._processor_instances.copy()
-    original_defaults_flag = InternalProcessorInterface._defaults_registered
-    try:
-        InternalProcessorInterface._processor_types.clear()
-        InternalProcessorInterface._processor_instances.clear()
-        InternalProcessorInterface._defaults_registered = False
-
-        InternalProcessorInterface._ensure_default_processors_registered()
-
-        assert InternalProcessorInterface._processor_types[FileType.PDF] is PdfPaddleProcessor
-    finally:
-        InternalProcessorInterface._processor_types.clear()
-        InternalProcessorInterface._processor_types.update(original_types)
-        InternalProcessorInterface._processor_instances.clear()
-        InternalProcessorInterface._processor_instances.update(original_instances)
-        InternalProcessorInterface._defaults_registered = original_defaults_flag
-
-
-def test_process_can_route_pdf_files_to_marker_processor(monkeypatch):
-    from service.document_processor.impl.interface import InternalProcessorInterface
-    from service.document_processor.impl.pdf.marker_processor import PdfMarkerProcessor
-    from service.document_processor.types import FileType
-
-    monkeypatch.setenv("DOCUMENT_PROCESSOR_PDF_ENGINE", "pdf-marker")
-
-    original_types = InternalProcessorInterface._processor_types.copy()
-    original_instances = InternalProcessorInterface._processor_instances.copy()
-    original_defaults_flag = InternalProcessorInterface._defaults_registered
-    try:
-        InternalProcessorInterface._processor_types.clear()
-        InternalProcessorInterface._processor_instances.clear()
-        InternalProcessorInterface._defaults_registered = False
-
-        InternalProcessorInterface._ensure_default_processors_registered()
-
-        assert InternalProcessorInterface._processor_types[FileType.PDF] is PdfMarkerProcessor
-    finally:
-        InternalProcessorInterface._processor_types.clear()
-        InternalProcessorInterface._processor_types.update(original_types)
-        InternalProcessorInterface._processor_instances.clear()
-        InternalProcessorInterface._processor_instances.update(original_instances)
-        InternalProcessorInterface._defaults_registered = original_defaults_flag
-
-
-def test_pdf_marker_processor_generates_markdown_blocks_from_marker_runtime():
-    from service.document_processor.impl.pdf.marker_processor import PdfMarkerProcessor
-
-    class FakeMarkerConverter:
-        def __init__(self) -> None:
-            self.calls = []
-
-        def __call__(self, source_path: str):
-            self.calls.append(Path(source_path).name)
-            return SimpleNamespace(pages=[object(), object()])
-
-    fake_converter = FakeMarkerConverter()
-
-    def fake_text_from_rendered(rendered):
-        assert len(rendered.pages) == 2
-        return (
-            "## 测试名单\n\n"
-            "| 学号 | 姓名 |\n"
-            "| --- | --- |\n"
-            "| 21036117 | 陈帅文 |\n\n"
-            "备注文本",
-            "md",
-            {"page-1-table": object()},
-        )
-
-    processor = PdfMarkerProcessor(
-        converter=fake_converter,
-        text_extractor=fake_text_from_rendered,
-    )
-
-    result = processor.process(NamedBytesIO(b"%PDF-1.4", filename="marker.pdf"))
-
-    assert fake_converter.calls == ["marker.pdf"]
-    assert result.file_type == "pdf"
-    assert result.filename == "marker.pdf"
-    assert result.markdown.startswith("## 测试名单")
-    assert result.md_list == [result.markdown]
-    assert [block.kind for block in result.blocks] == ["section_header", "table", "text"]
-    assert result.blocks[1].text == (
-        "| 学号 | 姓名 |\n"
-        "| --- | --- |\n"
-        "| 21036117 | 陈帅文 |"
-    )
-    assert result.meta_info == {
-        "ocr_engine": "marker",
-        "marker_output_format": "md",
-        "block_count": 3,
-        "page_count": 2,
-        "image_count": 1,
-    }
-
-
-def test_pdf_marker_processor_falls_back_to_pdfium_for_page_count(monkeypatch):
-    from service.document_processor.impl.pdf.marker_processor import PdfMarkerProcessor
-
-    class FakePdfDocument:
-        def __init__(self, stream) -> None:
-            self.stream = stream
-
-        def __len__(self) -> int:
-            return 6
-
-    monkeypatch.setitem(
-        sys.modules,
-        "pypdfium2",
-        SimpleNamespace(PdfDocument=FakePdfDocument),
-    )
-
-    processor = PdfMarkerProcessor(
-        converter=lambda source_path: SimpleNamespace(),
-        text_extractor=lambda rendered: ("正文", "md", {}),
-    )
-
-    result = processor.process(NamedBytesIO(b"%PDF-1.4", filename="marker.pdf"))
-
-    assert result.meta_info["page_count"] == 6
-
-
-def test_pdf_paddle_processor_generates_structured_markdown_blocks(monkeypatch):
-    from service.document_processor.impl.pdf.paddle_processor import PdfPaddleProcessor
-
-    class FakeStructureResult:
-        @property
-        def markdown(self):
-            return {
-                "markdown_texts": (
-                    "名单说明\n\n"
-                    "<table><tr><th>序号</th><th>作品类型</th><th>论文题目</th></tr>"
-                    "<tr><td>1</td><td>学术论文</td><td>测试论文</td></tr></table>"
-                )
-            }
-
-        @property
-        def json(self):
-            return {
-                "res": {
-                    "parsing_res_list": [
-                        {
-                            "block_label": "text",
-                            "block_content": "名单说明",
-                            "block_bbox": [10, 20, 110, 36],
-                            "block_id": 1,
-                            "block_order": 1,
-                        },
-                        {
-                            "block_label": "table",
-                            "block_content": (
-                                "<table><tr><th>序号</th><th>作品类型</th><th>论文题目</th></tr>"
-                                "<tr><td>1</td><td>学术论文</td><td>测试论文</td></tr></table>"
-                            ),
-                            "block_bbox": [10, 45, 310, 120],
-                            "block_id": 2,
-                            "block_order": 2,
-                        },
-                    ]
-                }
-            }
-
-    class FakePaddleStructure:
-        def __init__(self) -> None:
-            self.calls = []
-
-        def predict(self, image, **kwargs):
-            self.calls.append({"image": image, **kwargs})
-            return [FakeStructureResult()]
-
-    fake_structure = FakePaddleStructure()
-    processor = PdfPaddleProcessor(ocr_client=fake_structure, render_scale=1.5)
-    monkeypatch.setattr(
-        processor,
-        "_render_pdf_pages",
-        lambda source_bytes: ["rendered-page"],
-    )
-
-    result = processor.process(NamedBytesIO(b"%PDF-1.4", filename="sample.pdf"))
-
-    assert fake_structure.calls == [
-        {
-            "image": "rendered-page",
-            "use_table_recognition": True,
-            "format_block_content": True,
-        }
-    ]
-    assert result.file_type == "pdf"
-    assert result.filename == "sample.pdf"
-    assert result.markdown == (
-        "名单说明\n\n"
-        "| 序号 | 作品类型 | 论文题目 |\n"
-        "| --- | --- | --- |\n"
-        "| 1 | 学术论文 | 测试论文 |"
-    )
-    assert result.md_list == [result.markdown]
-    assert [block.text for block in result.blocks] == [
-        "名单说明",
-        "| 序号 | 作品类型 | 论文题目 |\n| --- | --- | --- |\n| 1 | 学术论文 | 测试论文 |",
-    ]
-    assert [block.kind for block in result.blocks] == ["text", "table"]
-    assert [block.page_no for block in result.blocks] == [1, 1]
-    assert result.blocks[0].bbox == BoundingBox(10.0, 20.0, 110.0, 36.0)
-    assert result.blocks[0].meta_info == {
-        "ocr_engine": "paddleocr",
-        "paddle_pipeline": "PPStructureV3",
-        "block_label": "text",
-        "block_id": 1,
-        "block_order": 1,
-        "render_scale": 1.5,
-    }
-    assert result.meta_info["ocr_engine"] == "paddleocr"
-    assert result.meta_info["paddle_pipeline"] == "PPStructureV3"
-    assert result.meta_info["block_count"] == 2
-    assert result.meta_info["page_count"] == 1
-
-
-def test_pdf_paddle_processor_keeps_text_line_fallback_for_plain_ocr_result(monkeypatch):
-    from service.document_processor.impl.pdf.paddle_processor import PdfPaddleProcessor
-
-    class FakePaddleOcr:
-        def __init__(self) -> None:
-            self.calls = []
-
-        def predict(self, image):
-            self.calls.append({"method": "predict", "image": image})
-            return [
-                {
-                    "rec_texts": ["第三行"],
-                    "rec_scores": [0.88],
-                    "rec_boxes": [[1, 2, 31, 12]],
-                }
-            ]
-
-        def ocr(self, image, cls=True):
-            self.calls.append({"method": "ocr", "image": image, "cls": cls})
-            return []
-
-    fake_ocr = FakePaddleOcr()
-    processor = PdfPaddleProcessor(ocr_client=fake_ocr)
-    monkeypatch.setattr(
-        processor,
-        "_render_pdf_pages",
-        lambda source_bytes: ["rendered-page"],
-    )
-
-    result = processor.process(NamedBytesIO(b"%PDF-1.4", filename="sample.pdf"))
-
-    assert fake_ocr.calls == [{"method": "predict", "image": "rendered-page"}]
-    assert result.markdown == "第三行"
-    assert result.blocks[0].bbox == BoundingBox(1.0, 2.0, 31.0, 12.0)
-    assert result.blocks[0].kind == "text_line"
-
-
-def test_pdf_paddle_processor_builds_ppstructure_with_table_recognition(monkeypatch):
-    from service.document_processor.impl.pdf.paddle_processor import PdfPaddleProcessor
-
-    calls = []
-
-    class FakePaddleStructure:
-        def __init__(self, **kwargs) -> None:
-            calls.append(kwargs)
-
-    monkeypatch.setitem(
-        sys.modules,
-        "paddleocr",
-        SimpleNamespace(PPStructureV3=FakePaddleStructure),
-    )
-
-    client = PdfPaddleProcessor._build_ocr_client()
-
-    assert isinstance(client, FakePaddleStructure)
-    assert calls == [
-        {
-            "lang": "ch",
-            "ocr_version": "PP-OCRv4",
-            "use_doc_orientation_classify": False,
-            "use_doc_unwarping": False,
-            "use_textline_orientation": False,
-            "use_table_recognition": True,
-            "format_block_content": True,
-        }
-    ]
-
-
-def test_pdf_paddle_processor_sets_repo_local_paddlex_cache(monkeypatch):
-    from service.document_processor.impl.pdf import processor as processor_module
-    from service.document_processor.impl.pdf.paddle_processor import PdfPaddleProcessor
-
-    class FakePaddleStructure:
-        def __init__(self, **kwargs) -> None:
-            pass
-
-    monkeypatch.delenv("PADDLE_PDX_CACHE_HOME", raising=False)
-    monkeypatch.setitem(
-        sys.modules,
-        "paddleocr",
-        SimpleNamespace(PPStructureV3=FakePaddleStructure),
-    )
-
-    PdfPaddleProcessor._build_ocr_client()
-
-    assert Path(processor_module.os.environ["PADDLE_PDX_CACHE_HOME"]) == (
-        Path(processor_module.__file__).resolve().parent / "models" / "paddlex"
-    )
-
-
-def test_pdf_paddle_processor_respects_paddle_ocr_version_override(monkeypatch):
-    from service.document_processor.impl.pdf.paddle_processor import PdfPaddleProcessor
-
-    calls = []
-
-    class FakePaddleStructure:
-        def __init__(self, **kwargs) -> None:
-            calls.append(kwargs)
-
-    monkeypatch.setenv("DOCUMENT_PROCESSOR_PADDLE_OCR_VERSION", "PP-OCRv5")
-    monkeypatch.setitem(
-        sys.modules,
-        "paddleocr",
-        SimpleNamespace(PPStructureV3=FakePaddleStructure),
-    )
-
-    PdfPaddleProcessor._build_ocr_client()
-
-    assert calls[0]["ocr_version"] == "PP-OCRv5"
-
-
-def test_pdf_processor_propagates_docling_errors_without_fallback(monkeypatch):
-    from service.document_processor.impl.pdf import processor as processor_module
-    from service.document_processor.impl.pdf.processor import PdfProcessor
+def test_docling_errors_propagate_without_fallback(monkeypatch):
+    from service.document_processor import docling_converter as processor_module
 
     class RaisingDocumentConverter:
-        def __init__(self, *args, **kwargs):
+        def __init__(self, *args, **kwargs) -> None:
             pass
 
         def convert(self, stream):
@@ -692,48 +173,43 @@ def test_pdf_processor_propagates_docling_errors_without_fallback(monkeypatch):
         RaisingDocumentConverter,
     )
 
-    file_obj = NamedBytesIO(b"%PDF-1.4", filename="sample.pdf")
-
-    try:
-        PdfProcessor().process(file_obj)
-    except RuntimeError as exc:
-        assert str(exc) == "docling boom"
-    else:
-        raise AssertionError("Expected docling error to be raised directly.")
+    with pytest.raises(RuntimeError, match="docling boom"):
+        processor_module.convert_to_docling_document(b"%PDF-1.4", "sample.pdf")
 
 
-def test_pdf_processor_sets_repo_local_cache_dirs_by_default(monkeypatch):
-    from service.document_processor.impl.pdf import processor as processor_module
+def test_configure_runtime_cache_dirs_sets_repo_local_defaults(monkeypatch):
+    from service.document_processor import docling_converter as processor_module
 
-    repo_pdf_dir = Path(processor_module.__file__).resolve().parent / "models"
+    module_dir = Path(processor_module.__file__).resolve().parent
 
     monkeypatch.delenv("DOCLING_CACHE_DIR", raising=False)
+    monkeypatch.delenv("RAPIDOCR_MODEL_ROOT", raising=False)
     monkeypatch.delenv("HF_HOME", raising=False)
     monkeypatch.delenv("HF_HUB_CACHE", raising=False)
     monkeypatch.delenv("HUGGINGFACE_HUB_CACHE", raising=False)
 
-    processor_module._configure_runtime_cache_dirs()
+    processor_module.configure_runtime_cache_dirs()
 
-    assert Path(processor_module.os.environ["DOCLING_CACHE_DIR"]) == repo_pdf_dir / "docling"
-    assert Path(processor_module.os.environ["HF_HOME"]) == repo_pdf_dir / "huggingface"
-    assert Path(processor_module.os.environ["RAPIDOCR_MODEL_ROOT"]) == repo_pdf_dir / "rapidocr"
+    assert Path(processor_module.os.environ["DOCLING_CACHE_DIR"]) == module_dir / "models" / "docling"
+    assert Path(processor_module.os.environ["RAPIDOCR_MODEL_ROOT"]) == module_dir / "models" / "rapidocr"
+    assert Path(processor_module.os.environ["HF_HOME"]) == module_dir / "models" / "huggingface"
 
 
-def test_pdf_processor_respects_explicit_cache_env_overrides(monkeypatch, tmp_path):
-    from service.document_processor.impl.pdf import processor as processor_module
+def test_configure_runtime_cache_dirs_respects_explicit_overrides(monkeypatch, tmp_path):
+    from service.document_processor import docling_converter as processor_module
 
-    custom_docling_cache = tmp_path / "docling-cache"
-    custom_hf_home = tmp_path / "hf-home"
-    custom_rapidocr_root = tmp_path / "rapidocr-models"
+    custom_docling = tmp_path / "docling"
+    custom_rapidocr = tmp_path / "rapidocr"
+    custom_hf = tmp_path / "hf"
 
-    monkeypatch.setenv("DOCLING_CACHE_DIR", str(custom_docling_cache))
-    monkeypatch.setenv("HF_HOME", str(custom_hf_home))
-    monkeypatch.setenv("RAPIDOCR_MODEL_ROOT", str(custom_rapidocr_root))
+    monkeypatch.setenv("DOCLING_CACHE_DIR", str(custom_docling))
+    monkeypatch.setenv("RAPIDOCR_MODEL_ROOT", str(custom_rapidocr))
+    monkeypatch.setenv("HF_HOME", str(custom_hf))
     monkeypatch.delenv("HF_HUB_CACHE", raising=False)
     monkeypatch.delenv("HUGGINGFACE_HUB_CACHE", raising=False)
 
-    processor_module._configure_runtime_cache_dirs()
+    processor_module.configure_runtime_cache_dirs()
 
-    assert Path(processor_module.os.environ["DOCLING_CACHE_DIR"]) == custom_docling_cache
-    assert Path(processor_module.os.environ["HF_HOME"]) == custom_hf_home
-    assert Path(processor_module.os.environ["RAPIDOCR_MODEL_ROOT"]) == custom_rapidocr_root
+    assert Path(processor_module.os.environ["DOCLING_CACHE_DIR"]) == custom_docling
+    assert Path(processor_module.os.environ["RAPIDOCR_MODEL_ROOT"]) == custom_rapidocr
+    assert Path(processor_module.os.environ["HF_HOME"]) == custom_hf

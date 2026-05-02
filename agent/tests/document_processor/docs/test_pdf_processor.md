@@ -2,209 +2,85 @@
 
 ## 基本实现思路
 
-`impl/pdf/processor.py` 是 `service.document_processor` 里默认负责 PDF 标准化的实现文件。它的目标不是自己解析版面，而是把 PDF 二进制包装成 `docling` 能接受的 `DocumentStream`，再把 `docling` 产出的文档对象归一化成仓库内部统一的 `ProcessResult`。`impl/pdf/paddle_processor.py` 和 `impl/pdf/marker_processor.py` 是可选 PDF 路径：前者在 `DOCUMENT_PROCESSOR_PDF_ENGINE=pdf-paddle` 时用 PaddleOCR PPStructureV3 生成结构化 markdown，后者在 `DOCUMENT_PROCESSOR_PDF_ENGINE=pdf-marker` 时用 Marker/marker-pdf 追求更好的扫描件表格抽取效果。
+这个测试文件覆盖 `service.document_processor.docling_converter` 中与 docling PDF 转换直接相关的 helper。当前不再有 `impl/pdf/processor.py`，docling 运行时和 PDF 转换逻辑集中在 `docling_converter.py`，`processor.py` 只负责串 pipeline。
 
-当前这条处理链路的 pipeline 是：
-
-```text
-调用方传入 pdf file_obj
-  -> `PdfProcessor.process(...)`
-  -> 基类校验 read()
-  -> 先检查 `DOCLING_CACHE_DIR` / `RAPIDOCR_MODEL_ROOT` / `HF_HOME`，没配就默认写到 `impl/pdf/models/` 目录
-  -> 再延迟导入 docling 运行时
-  -> 按环境变量组装 RapidOCR 后端、整页 OCR、docling 表格 cell matching 和 batch 参数
-  -> 读取 PDF 二进制并解析 filename/name，没有就回退到 `document.pdf`
-  -> 构造 `DocumentStream(name, BytesIO(bytes))`
-  -> 调用 `DocumentConverter.convert(...)`
-  -> 从 `document.export_to_markdown()` 提取 markdown
-  -> 遍历 `document.iterate_items()` 归一化成 `ContentBlock`
-  -> 返回 `ProcessResult(file_type, filename, md_list, markdown, blocks, meta_info)`
-```
-
-可选 PaddleOCR 路径的 pipeline 是：
+核心链路：
 
 ```text
-调用方传入 pdf file_obj
-  -> `InternalProcessorInterface` 根据 `DOCUMENT_PROCESSOR_PDF_ENGINE=pdf-paddle` 选择 `PdfPaddleProcessor`
-  -> `PdfPaddleProcessor` 读取 PDF 二进制并用 pypdfium2 渲染每页图片
-  -> 逐页调用 PaddleOCR `PPStructureV3.predict(...)`
-  -> 从结构化结果读取 `markdown_texts` 和 `parsing_res_list`
-  -> 表格块转成 `ContentBlock(kind="table")`，普通文字转成 `ContentBlock(kind="text")`
-  -> 如果运行时只返回普通 OCR `rec_texts`，才降级成 `ContentBlock(kind="text_line")`
-  -> 返回 `ProcessResult(meta_info.ocr_engine="paddleocr", paddle_pipeline="PPStructureV3")`
+PDF bytes + filename
+  -> convert_to_docling_document(...)
+  -> build_document_converter()
+  -> load_docling_runtime()
+  -> DocumentStream(name, BytesIO(bytes))
+  -> DocumentConverter.convert(...)
+  -> export_html(document)
 ```
-
-可选 Marker 路径的 pipeline 是：
-
-```text
-调用方传入 pdf file_obj
-  -> `InternalProcessorInterface` 根据 `DOCUMENT_PROCESSOR_PDF_ENGINE=pdf-marker` 选择 `PdfMarkerProcessor`
-  -> `PdfMarkerProcessor` 读取 PDF 二进制并写入临时 pdf 文件
-  -> 调用 Marker converter 生成 rendered document
-  -> 用 `marker.output.text_from_rendered(...)` 导出 markdown
-  -> 按 markdown 结构拆成 `section_header` / `table` / `text` blocks
-  -> 返回 `ProcessResult(meta_info.ocr_engine="marker")`
-```
-
-这里最关键的约束包括：
-
-1. `PDF` 默认实现必须走 `docling`，而不是继续停留在占位 warning。
-2. `docling` 的输出要被压平成仓库统一的 markdown + block 结果，方便后续抽取链路直接消费。
-3. 没有显式环境变量时，模型目录默认收口到 `impl/pdf/models/`，而不是开发者本机的默认缓存路径。
-4. PDF 文字抽取默认显式走 `RapidOCR`，不再依赖 `docling` 自动选择 OCR 后端。
-5. `RapidOCR` 模型目录也必须显式落到 `impl/pdf/models/rapidocr`，不能继续落到 `site-packages`。
-6. 可选 `pdf-paddle` 路径不能初始化 docling；它负责把 PaddleOCR 结构化输出收口成同一套 `ProcessResult`，能识别表格时必须保留 `kind="table"`。
-7. 可选 `pdf-marker` 路径不能影响默认 docling 路径；它只在显式配置时加载 Marker，并把 Marker 的 markdown 输出收口成同一套 `ProcessResult`。
-8. 默认 RapidOCR 不强制整页 OCR；只有设置 `DOCUMENT_PROCESSOR_RAPIDOCR_FORCE_FULL_PAGE_OCR=1` 时才跳过 PDF 内置文本层重新识别。
-9. 默认开启 docling 表格 cell matching；只有设置 `DOCUMENT_PROCESSOR_PDF_TABLE_DO_CELL_MATCHING=0` 时才关闭。
 
 ## 测什么
 
-- `PdfProcessor` 会调用 `docling` 转换 PDF，并生成 markdown 与 blocks
-- 当输入对象没有 `filename/name` 时，`PdfProcessor` 会补默认文件名 `document.pdf`
-- 顶层 `service.document_processor.processor.process(...)` 在默认注册表里会把 `pdf` 路由到真正的 `PdfProcessor`
-- `docling` 转换失败时，`PdfProcessor` 会直接抛出原始异常，不做任何降级或替代解析
-- 如果调用方没有显式配置模型目录，`PdfProcessor` 会默认把运行时模型目录指到 `impl/pdf/models/` 下
-- 如果调用方显式设置了缓存环境变量，`PdfProcessor` 不会覆盖这些配置
-- 当 `docling` 某些节点的 `export_to_markdown(...)` 需要显式传入 `document` 时，`PdfProcessor` 也能兼容这类接口
-- `PdfProcessor` 会显式使用 `RapidOCR` 做文字抽取，而不是继续用 `OcrAutoOptions`
-- `PdfProcessor` 会把 `RapidOCR` 的 `model_root_dir` 显式指到 `impl/pdf/models/rapidocr`
-- `PdfProcessor` 会在字典文件不存在时不传 `rec_keys_path`，避免 RapidOCR 运行时收到无效路径
-- `PdfProcessor` 支持通过 `DOCUMENT_PROCESSOR_RAPIDOCR_FORCE_FULL_PAGE_OCR` 强制整页 OCR
-- `PdfProcessor` 支持通过 `DOCUMENT_PROCESSOR_PDF_TABLE_DO_CELL_MATCHING` 关闭表格 cell matching
-- 设置 `DOCUMENT_PROCESSOR_PDF_ENGINE=pdf-paddle` 时，默认注册表会把 PDF 绑定到 `PdfPaddleProcessor`
-- `PdfPaddleProcessor` 默认调用 PaddleOCR `PPStructureV3`，把结构化 markdown 和 layout parsing blocks 转成统一输出
-- `PdfPaddleProcessor` 会把 PaddleOCR 识别到的表格转成 `kind="table"` block，普通文本转成 `kind="text"` block
-- 如果运行时只返回普通 OCR `rec_texts / rec_boxes`，`PdfPaddleProcessor` 会保留 `text_line` fallback
-- `PdfPaddleProcessor` 默认按 PaddleOCR 3.x 初始化 `PPStructureV3`，关闭文档方向分类、文档矫正和文本行方向分类，启用表格识别，并使用 PP-OCRv4 mobile 模型
-- `PdfPaddleProcessor` 会把 PaddleX 缓存默认收口到仓库内 `impl/pdf/models/paddlex`
-- `PdfPaddleProcessor` 支持通过 `DOCUMENT_PROCESSOR_PADDLE_OCR_VERSION` 覆盖 PaddleOCR 模型版本
-- 设置 `DOCUMENT_PROCESSOR_PDF_ENGINE=pdf-marker` 时，默认注册表会把 PDF 绑定到 `PdfMarkerProcessor`
-- `PdfMarkerProcessor` 会调用 Marker runtime，导出 markdown，并按标题、表格和普通文本生成统一 blocks
-- 如果 Marker rendered 对象没有暴露页信息，`PdfMarkerProcessor` 会用 pypdfium2 从原始 PDF 二进制兜底计算页数
+- PDF bytes 会被包装成 docling `DocumentStream`，并保留源文件名。
+- `export_html(...)` 调用 docling `export_to_html(...)`，并要求 docling 只导出标题、段落、列表、表格和 caption 等语义 label。
+- `export_html(...)` 会拒绝非字符串返回值。
+- docling converter 初始化时开启表格结构识别。
+- RapidOCR 明确配置为中文/英文和默认 `onnxruntime` 后端。
+- PDF runtime 环境变量能影响整页 OCR、表格 cell matching、device、线程和 batch 参数。
+- 文件读取 helper 会复位文件指针。
+- docling 异常不会被兜底吞掉。
+- 默认缓存目录收口到 `service/document_processor/models/`。
+- 显式缓存环境变量不会被覆盖。
 
 ## 每个函数在干什么
 
-`test_pdf_processor_uses_docling_to_generate_markdown_and_blocks`
+`test_convert_to_docling_document_wraps_pdf_bytes_and_filename`
 
-- 用 monkeypatch 把 `DocumentConverter` 替换成可控 fake。
-- 直接调用 `PdfProcessor().process(...)`。
-- 检查传给 `docling` 的是带文件名的内存流，并确认返回结果里的 markdown、blocks、页码和 bbox 都被正确归一化；其中也覆盖了需要 `document` 参数的节点 markdown 导出。
+- 用 fake `DocumentConverter` 替代真实 docling converter。
+- 调用 `convert_to_docling_document(...)`。
+- 检查传给 converter 的 `DocumentStream.name` 和 bytes。
 
-`test_pdf_processor_passes_document_when_item_markdown_export_requires_it`
+`test_export_html_returns_docling_html`
 
-- 构造一个 `export_to_markdown(doc)` 形式的 fake 节点。
-- 直接调用 `PdfProcessor._extract_text(...)`。
-- 检查处理器会把当前 `document` 传进去，而不是假定所有节点导出函数都是零参数。
+- 构造 fake document。
+- 检查 `export_html(...)` 返回 `export_to_html()` 的字符串结果。
 
-`test_pdf_processor_uses_explicit_rapidocr_for_text_extraction`
+`test_export_html_rejects_non_string_docling_output`
 
-- 用 monkeypatch 把 `DocumentConverter` 替换成 fake。
-- 直接实例化 `PdfProcessor()`，读取传给 `DocumentConverter` 的 pipeline 配置。
-- 检查 OCR 选项已经显式切成 `RapidOcrOptions(backend="onnxruntime", lang=["chinese", "english"])`，并且 `rapidocr_params["Global.model_root_dir"]` 已经指向 `impl/pdf/models/rapidocr`。
-- 检查默认不强制整页 OCR；当仓库内没有 `ppocr_keys_v1.txt` 时，不传无效 `rec_keys_path`。
+- 构造返回 `None` 的 fake document。
+- 检查 `export_html(...)` 抛 `TypeError`。
 
-`test_pdf_processor_can_force_full_page_rapidocr`
+`test_build_document_converter_enables_table_structure`
 
-- 设置 `DOCUMENT_PROCESSOR_RAPIDOCR_FORCE_FULL_PAGE_OCR=1`。
-- 直接实例化 `PdfProcessor()` 并读取 docling pipeline 配置。
-- 检查 `RapidOcrOptions.force_full_page_ocr` 被传成 `True`，用于扫描件内置文本层质量差时重新整页识别。
+- 构造 converter。
+- 检查 PDF pipeline 中 `do_table_structure=True`。
 
-`test_pdf_processor_can_disable_table_cell_matching`
+`test_build_document_converter_uses_explicit_rapidocr`
 
-- 设置 `DOCUMENT_PROCESSOR_PDF_TABLE_DO_CELL_MATCHING=0`。
-- 直接实例化 `PdfProcessor()` 并读取 docling pipeline 配置。
-- 检查 `TableStructureOptions.do_cell_matching` 被传成 `False`，用于密集表格列粘连时做参数对照。
+- 构造 converter。
+- 检查 OCR 配置是 `RapidOcrOptions`，后端默认为 `onnxruntime`，语言为中文和英文，模型目录指向 `models/rapidocr`。
 
-`test_pdf_processor_uses_default_filename_when_input_has_no_name`
+`test_build_document_converter_accepts_pdf_runtime_env_overrides`
 
-- 构造一个没有 `filename/name` 的 PDF 内存流。
-- 调用 `PdfProcessor().process(...)`。
-- 检查传给 `docling` 的 `DocumentStream.name` 和最终 `ProcessResult.filename` 都会回退成 `document.pdf`。
+- 设置整页 OCR、表格 cell matching、device、线程和 batch 环境变量。
+- 检查这些值进入 docling PDF pipeline。
 
-`test_process_routes_pdf_files_to_docling_processor_by_default`
+`test_read_source_bytes_restores_file_position`
 
-- 清空 `InternalProcessorInterface` 的默认注册状态。
-- 直接走顶层 `service.document_processor.processor.process(...)` 处理 `.pdf` 文件。
-- 检查默认注册表最终绑定的是 `PdfProcessor`，而不是旧的占位处理器。
+- 从非开头位置读取内存文件。
+- 检查返回完整 bytes，并把指针复位到 0。
 
-`test_process_can_route_pdf_files_to_paddle_processor`
+`test_docling_errors_propagate_without_fallback`
 
-- 设置 `DOCUMENT_PROCESSOR_PDF_ENGINE=pdf-paddle`。
-- 清空 `InternalProcessorInterface` 的默认注册状态。
-- 检查默认注册表会把 PDF 绑定到 `PdfPaddleProcessor`。
+- 用始终抛错的 fake converter 替代 docling。
+- 检查异常原样向上抛出。
 
-`test_process_can_route_pdf_files_to_marker_processor`
+`test_configure_runtime_cache_dirs_sets_repo_local_defaults`
 
-- 设置 `DOCUMENT_PROCESSOR_PDF_ENGINE=pdf-marker`。
-- 清空 `InternalProcessorInterface` 的默认注册状态。
-- 检查默认注册表会把 PDF 绑定到 `PdfMarkerProcessor`。
+- 清空相关缓存环境变量。
+- 检查默认路径落到 `models/docling`、`models/rapidocr` 和 `models/huggingface`。
 
-`test_pdf_marker_processor_generates_markdown_blocks_from_marker_runtime`
+`test_configure_runtime_cache_dirs_respects_explicit_overrides`
 
-- 构造 fake Marker converter 和 fake `text_from_rendered(...)`。
-- 直接调用 `PdfMarkerProcessor().process(...)`。
-- 检查处理器会把 PDF 写成 Marker 能读取的临时文件，并把 Marker markdown 归一化成标题、表格和正文 blocks。
-- 检查返回的 `meta_info` 会标记 `ocr_engine="marker"`、页数、图片数和 block 数。
-
-`test_pdf_marker_processor_falls_back_to_pdfium_for_page_count`
-
-- 构造没有 `pages` 属性的 fake Marker rendered 对象。
-- 用 fake `pypdfium2.PdfDocument` 替换真实依赖。
-- 检查 Marker rendered 不提供页数时，处理器仍会从 PDF 二进制兜底计算 `meta_info.page_count`。
-
-`test_pdf_paddle_processor_generates_structured_markdown_blocks`
-
-- 构造 fake PaddleOCR `PPStructureV3` client 和 fake PDF 页面渲染结果。
-- 直接调用 `PdfPaddleProcessor().process(...)`。
-- 检查 PaddleOCR 返回的普通文本和表格会分别转成 `ContentBlock(kind="text")` 与 `ContentBlock(kind="table")`。
-- 检查 HTML table 会被归一化成 markdown table，保证后续 `file_extraction_agent` 可以建立 table row 索引。
-
-`test_pdf_paddle_processor_keeps_text_line_fallback_for_plain_ocr_result`
-
-- 构造只返回普通 OCR `rec_texts / rec_boxes` 风格结果的 fake PaddleOCR client。
-- 直接调用 `PdfPaddleProcessor().process(...)`。
-- 检查处理器在缺少结构化 layout parsing 结果时，仍能降级生成 `ContentBlock(kind="text_line")`。
-
-`test_pdf_paddle_processor_builds_ppstructure_with_table_recognition`
-
-- 用 fake `paddleocr` 模块替换真实依赖。
-- 直接调用 `PdfPaddleProcessor._build_ocr_client()`。
-- 检查默认初始化参数使用 PaddleOCR `PPStructureV3`，选择 PP-OCRv4，关闭较重的方向分类和文档矫正步骤，并启用表格识别。
-
-`test_pdf_paddle_processor_sets_repo_local_paddlex_cache`
-
-- 清空 `PADDLE_PDX_CACHE_HOME` 并用 fake `paddleocr` 模块替换真实依赖。
-- 直接调用 `PdfPaddleProcessor._build_ocr_client()`。
-- 检查处理器会先把 PaddleX 缓存目录设置到仓库内 `impl/pdf/models/paddlex`，避免默认写入 `~/.paddlex`。
-
-`test_pdf_paddle_processor_respects_paddle_ocr_version_override`
-
-- 设置 `DOCUMENT_PROCESSOR_PADDLE_OCR_VERSION=PP-OCRv5`。
-- 用 fake `paddleocr` 模块记录初始化参数。
-- 检查处理器会把用户指定的 OCR 版本传给 `PaddleOCR`。
-
-`test_pdf_processor_propagates_docling_errors_without_fallback`
-
-- 用 monkeypatch 把 `DocumentConverter` 替换成始终抛错的 fake。
-- 直接调用 `PdfProcessor().process(...)`。
-- 检查 `docling` 的异常会原样向外冒泡，确保实现里没有任何兜底路径。
-
-`test_pdf_processor_sets_repo_local_cache_dirs_by_default`
-
-- 清空 `DOCLING_CACHE_DIR`、`RAPIDOCR_MODEL_ROOT`、`HF_HOME` 和 Hugging Face 相关缓存环境变量。
-- 调用运行时缓存目录初始化逻辑。
-- 检查默认值会被收口到 `impl/pdf/models/docling`、`impl/pdf/models/rapidocr` 和 `impl/pdf/models/huggingface`。
-
-`test_pdf_processor_respects_explicit_cache_env_overrides`
-
-- 先显式设置自定义 `DOCLING_CACHE_DIR`、`RAPIDOCR_MODEL_ROOT` 和 `HF_HOME`。
-- 再调用运行时缓存目录初始化逻辑。
-- 检查处理器不会把这些显式配置覆盖回仓库默认目录。
-
-## 为什么有它
-
-这个测试文件专门把 `PDF -> docling -> ProcessResult` 这条默认处理链路钉住，同时固定可选 `PDF -> pypdfium2 -> PaddleOCR -> ProcessResult` 和 `PDF -> Marker -> ProcessResult` 的注册与输出契约。这样后面即使继续补充更细的 block 归一化策略，也不会把“默认 PDF 处理器必须真实接入 docling”或“可选高精度路径必须保持统一输出结构”这些关键约束退回成占位实现。
+- 设置自定义缓存目录。
+- 检查处理器不会覆盖用户配置。
 
 ## 怎么跑
 

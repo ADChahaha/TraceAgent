@@ -4,21 +4,21 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from service.document_processor.schemas import ContentBlock, ProcessResult
+from service.document_processor.schemas import ProcessResult
 from main import create_app
 
 
-def test_document_processor_capabilities_route_reports_available_processors():
+def test_document_processor_capabilities_route_reports_pdf_only_processor():
     client = TestClient(create_app())
 
     response = client.get("/v1/ocr/capabilities")
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["supported_file_types"] == ["pdf", "docx"]
-    assert payload["implemented_file_types"] == ["pdf", "docx"]
+    assert payload["supported_file_types"] == ["pdf"]
+    assert payload["implemented_file_types"] == ["pdf"]
     assert payload["docling_artifacts_path"].endswith(
-        "service/document_processor/impl/pdf/models/docling"
+        "service/document_processor/models/docling"
     )
     assert isinstance(payload["docling_artifacts_available"], bool)
 
@@ -28,8 +28,9 @@ def test_document_processor_route_uses_public_processor_exception_contract():
 
     source = Path(route_module.__file__).read_text()
 
-    assert "service.document_processor.impl.base" not in source
-    assert "service.document_processor.processor import InvalidFileObjectError" in source
+    assert "service.document_processor.impl" not in source
+    assert "InvalidFileObjectError" in source
+    assert "UnsupportedFileTypeError" in source
 
 
 def test_document_processor_process_route_calls_business_processor(monkeypatch):
@@ -42,13 +43,8 @@ def test_document_processor_process_route_calls_business_processor(monkeypatch):
         seen_call["file_type"] = file_type
         seen_call["prefix"] = file_obj.read(4)
         return ProcessResult(
-            file_type="pdf",
             filename="sample.pdf",
-            md_list=["正文"],
-            markdown="正文",
-            blocks=[ContentBlock(text="正文", page_no=1)],
-            meta_info={"processor": "fake"},
-            warnings=["测试 warning"],
+            html="<html><body>正文</body></html>",
         )
 
     monkeypatch.setattr(processor_module, "process", fake_process)
@@ -65,19 +61,6 @@ def test_document_processor_process_route_calls_business_processor(monkeypatch):
     assert getattr(seen_call["file_obj"], "filename") == "sample.pdf"
     assert seen_call["prefix"] == b"%PDF"
     assert response.json() == {
-        "file_type": "pdf",
         "filename": "sample.pdf",
-        "md_list": ["正文"],
-        "markdown": "正文",
-        "blocks": [
-            {
-                "text": "正文",
-                "page_no": 1,
-                "bbox": None,
-                "kind": "text",
-                "meta_info": {},
-            }
-        ],
-        "meta_info": {"processor": "fake"},
-        "warnings": ["测试 warning"],
+        "html": "<html><body>正文</body></html>",
     }

@@ -18,10 +18,10 @@
 
 它和 `backend` 的交互方式应当是：
 
-- `backend` 通过 HTTP 把上传文件 bytes 传给 `document_processor`
-- `agent service` 返回标准化后的 markdown、md_list、blocks、meta_info 和 warnings
-- `backend` 为多文档任务聚合 blocks，并为每个 block 补齐 `document_id / block_id`
-- `backend` 通过 HTTP 把已聚合的 blocks、markdown 和外部 `task_spec` 传给 `file_extraction_agent`
+- `backend` 通过 HTTP 把上传 PDF bytes 传给 `document_processor`
+- `agent service` 返回 PDF 文件名和抽取友好的语义 HTML fragment
+- 如果后续要走字段抽取，`backend` 需要自行准备并聚合 blocks，为每个 block 补齐 `document_id / block_id`
+- `backend` 通过 HTTP 把已聚合的 blocks 和外部 `task_spec` 传给 `file_extraction_agent`
 - `agent service` 返回字段级 `ExtractionResult(result + trace)`
 - `backend` 从字段结果、trace refs 和 trace actions 组装 `field_outputs + refs_with_text + field_processes`，再通过 HTTP 调用 `route_policy_agent`
 - `route_policy_agent` 返回字段级 `accept / review / reject`，后续 review、final result 和 audit 都由 `backend` 保存和驱动
@@ -46,8 +46,6 @@ agent/
     ├── document_processor/
     │   ├── processor.py
     │   ├── schemas.py
-    │   ├── types.py
-    │   ├── impl/
     │   └── docs/
     │       ├── API.md
     │       └── DESIGN.md
@@ -87,7 +85,6 @@ agent/
 - `langgraph`
 - `langchain-openai`
 - `openai`
-- `python-docx`
 - `python-multipart`
 - `uvicorn`
 
@@ -95,16 +92,16 @@ agent/
 
 ### `document_processor`
 
-- 负责原始 `pdf/docx` 的读取、OCR、结构化块提取和 Markdown 标准化
-- 输出统一 `ProcessResult(blocks + md_list + markdown + meta_info + warnings)`
-- PDF 默认走 `docling + RapidOCR`；启动前设置 `DOCUMENT_PROCESSOR_PDF_ENGINE=pdf-paddle` 时，可切到不依赖 docling 的 `pypdfium2 + PaddleOCR` 路径
+- 负责原始 PDF 的读取和 HTML 导出
+- 输出 `ProcessResult(filename + html)`
+- PDF 固定走 `docling + RapidOCR`，不再保留 DOCX、Paddle 或 Marker 分支
 - 提供两类入口：
   - Python 入口：`service.document_processor.processor.process(...)`
   - HTTP 入口：`routes/document_processor.py`
 
 ### `file_extraction_agent`
 
-- 负责消费多文档 block/markdown 输入，完成字段级证据预选与字段定案
+- 负责消费外部已聚合的 blocks，完成字段级证据预选与字段定案
 - 不负责原始文件解析
 - 不负责对外部原始 payload 做第一层必填校验或协议兜底；这一层默认接收外部已经校验好的输入
 - 进入这一层前，外部必须先通过独立文件完成 session 输入校验与协议适配，不应把这部分逻辑混进 `processor.py`
@@ -121,34 +118,33 @@ agent/
 backend 聚合后的 blocks + task_spec
   -> input_adapter.py 组装 ExtractionInput
   -> 启动一个共享 broad agent loop，prompt 同时包含所有字段、pending_fields 和全字段候选池
-  -> broad agent 只能调用 search_grep / add_broad_candidate / copy_field_candidates / finish_broad
-  -> search_grep 同时搜索正文 paragraph 和表格行，query 固定使用 term1 OR term2 OR term3
-  -> add_broad_candidate 把命中的 paragraph 或 table row refs 写入指定字段候选池
+  -> broad agent 只能调用 search_grep / add_broad_candidate / finish_broad
+  -> search_grep 同时搜索正文 paragraph 和 table 级索引，query 固定使用 term1 OR term2 OR term3
+  -> add_broad_candidate 把命中的 paragraph 或 table refs 写入指定字段候选池
   -> 如果模型把不存在的 ref 传给候选写入工具，runner 记录 tool_error 并把错误作为下一轮工具结果返回给模型修正
   -> 每个字段用 finish_broad 正常退出，记录 enough_evidence / partial_evidence / no_evidence 和结束原因
   -> graph 把 candidate_evidence、broad_search_history 和 finish_broad 结果交给 resolution
   -> 启动一个共享 resolution agent loop，prompt 同时包含所有字段、候选池和已完成定案
   -> resolution agent 可读取候选池；如果候选不足，可以继续调用 search_grep / add_resolution_candidate 补查
-  -> broad 可调用 copy_field_candidates 把来源字段候选复制到目标字段，工具结果不返回候选正文
-  -> resolution 可调用 count_field_candidates 统计指定字段候选数量，再用 add_resolution_candidate(values=[...]) 把数字写入目标字段候选池
+  -> 多个字段复用同一来源证据时，broad 必须给每个目标字段显式写入候选
+  -> resolution 可调用 add_count_candidate 统计来源字段候选数量，并直接把数字写入目标字段候选池
   -> 每个字段最终返回 final_decision，且必须引用对应字段候选池里的 candidate_id
-  -> graph 映射成 ExtractionResult(result + trace)
+  -> graph 映射成 ExtractionResult(result + trace)，trace.debug_steps 保留运行级调试步骤
 ```
 
 这个设计不承诺 100% 召回。它的目标是让系统从“单次 broad 漏了就无法恢复”改成“broad 主动查找候选，resolution 还能二次补查，证据仍不足时交给 route/review”。所有搜索、候选写入、阶段退出和最终定案都必须进入 trace，方便后续审核和调试。
 
 工具边界保持精简：
 
-- `search_grep(field_name, query)`：同时搜索普通文本段落和表格行，返回 `ref/text`，不做最终字段判断。
+- `search_grep(field_name, query)`：同时搜索普通文本段落和 table 级索引；paragraph 返回 `ref/text`，table 返回 `ref/section/columns/row_count/hint`，不做最终字段判断。
 - `add_broad_candidate(field_name, refs, reason)`：只写 broad 候选证据和写入原因，不改字段值。
-- `copy_field_candidates(field_name, source_field_name, reason)`：只在 broad 阶段把来源字段候选复制到目标字段，工具结果只返回复制数量和 candidate id，不返回候选正文。
 - `add_resolution_candidate(field_name, refs | values, reason)`：只写 resolution 二次补证候选；`values` 用于把 count 等工具返回的数字写入候选池。
-- `count_field_candidates(field_name)`：只在 resolution 阶段统计指定字段当前候选数量，返回 number，不返回候选正文或 ref 列表。
+- `add_count_candidate(field_name, source_field_name, reason)`：只在 resolution 阶段统计来源字段当前候选数量，并把数字作为目标字段候选写入。
 - `finish_broad(field_name, status, reason)`：结束指定字段 broad；`status=enough_evidence` 时必须已有候选证据。
 - `get_candidate_bundle(field_name)`：供 resolution 读取 broad 已写入的候选证据。
 - `final_decision(...)`：只允许 resolution 调用，用候选 `candidate_id` 支撑字段最终值或失败原因。
 
-表格处理是 `file_extraction_agent` 内部的专用检索能力，而不是业务特例。它只理解通用表格结构和字段提示，不硬编码“学术论文”“文明寝室”等业务词。对于列名不固定的表格，模型应通过统一 `search_grep` 做宽召回：根据 `field_name`、`display_name`、`lookup_hints`、`cross_field_hints` 形成查询词，在正文段落、表头、单元格文本、行文本和邻近标题中做匹配，再把候选行交给 resolution 精筛。
+表格处理是 `file_extraction_agent` 内部的专用检索能力，而不是业务特例。它只理解通用表格结构和字段提示，不硬编码“学术论文”“文明寝室”等业务词。对于列名不固定的表格，模型应通过统一 `search_grep` 做宽召回：根据 `field_name`、`display_name`、`lookup_hints`、`cross_field_hints` 形成查询词，在正文段落、表头、表级摘要和邻近标题中做匹配；命中表格时先把 table 级 ref 写入候选池，字段最终定案仍必须引用候选 `candidate_id`。
 
 当前不把 image 作为抽取对象。文档内容类型先收敛为：
 
@@ -220,8 +216,8 @@ route policy 的结构化输出策略也固定为 `tool_call`，显式传入 `js
 ```text
 raw file
   -> document_processor
-  -> normalized markdown + blocks
-  -> backend session aggregation
+  -> html
+  -> backend prepares extraction blocks when needed
   -> file_extraction_agent
   -> extraction result + trace
   -> route_policy_agent
@@ -231,9 +227,9 @@ raw file
 整体流程可以展开为：
 
 1. `backend` 创建任务，并在当前请求内读取上传文件 bytes；原始文件不持久化。
-2. `backend` 逐个 HTTP 调用 `document_processor`，把 PDF / DOCX 标准化成 Markdown 和 blocks。
-3. `backend` 保存每个文档的 markdown、md_list、blocks、meta_info 和 warnings。
-4. `backend` 按任务聚合多个文档的 block list，并补齐 `document_id / block_id`。
+2. `backend` 逐个 HTTP 调用 `document_processor`，把 PDF 转成语义 HTML fragment。
+3. `backend` 保存或展示 `filename/html`。
+4. 如果任务需要字段抽取，`backend` 按任务准备 block list，并补齐 `document_id / block_id`。
 5. `backend` 将已校验聚合结果和外部 `task_spec` 交给 `file_extraction_agent`。
 6. `file_extraction_agent` 输出字段候选证据、工具留痕和字段最终结果。
 7. `backend` 从字段结果、证据 refs 和 trace actions 组装 `field_outputs + refs_with_text + field_processes`，交给 `route_policy_agent`。
@@ -242,7 +238,7 @@ raw file
 
 可以理解为：
 
-`raw file -> document_processor -> normalized markdown + blocks -> backend session aggregation -> file_extraction_agent -> extraction result + trace -> route_policy_agent -> route decisions`
+`raw PDF -> document_processor -> semantic html -> backend prepared blocks -> file_extraction_agent -> extraction result + trace -> route_policy_agent -> route decisions`
 
 ## HTTP 出口
 
@@ -261,10 +257,10 @@ HTTP 请求
 - `POST /v1/document-processor/process`
   - 接收上传文件和可选 `file_type`
   - 调用 `service.document_processor.processor.process(...)`
-  - 返回 `ProcessResult` 对应的 JSON 形状
+  - 返回 `filename/html`
   - 兼容保留旧路径 `POST /v1/ocr/process`
 - `POST /v1/file-extraction-agent/extract`
-  - 接收标准化后的 `blocks`、可选 `markdown/md_list`、必填 `task_spec`、可选 `run_options`、`metadata` 以及可选模型连接参数
+  - 接收外部已准备好的 `blocks`、可选 `markdown/md_list`、必填 `task_spec`、可选 `run_options`、`metadata` 以及可选模型连接参数
   - 调用 `service.file_extraction_agent.processor.extract(...)`
   - 返回 `ExtractionResult`
 - `POST /v1/route-policy-agent/evaluate`
