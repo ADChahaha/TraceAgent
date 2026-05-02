@@ -43,7 +43,7 @@ def test_model_config_keeps_stage_model_names_and_sampling_options():
 
 
 def test_run_options_defaults_to_tool_budget_only():
-    assert RunOptions().max_tool_calls == 20
+    assert RunOptions().max_tool_calls == 200
 
 
 def test_extraction_result_defaults_to_completed_empty_payload():

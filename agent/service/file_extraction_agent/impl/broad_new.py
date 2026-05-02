@@ -46,7 +46,12 @@ def build_broad_messages(state: Any) -> list[dict[str, str]]:
         "You are the broad planning stage for a document extraction workflow. "
         "Create a concise plan for the resolution agent after reading the full "
         "HTML document. Do not extract final field values, do not call document "
-        "tools, and do not invent evidence ids. "
+        "tools, and do not invent evidence ids. The plan may name relevant "
+        "element ids, table ids, section titles, column names, and search "
+        "strategies, but it must not state final field values. Do not write "
+        "patterns like field=value, field: value, or 'set field X to Y'. Use "
+        "instructions like 'read dp-table-2 and extract the capacity column' "
+        "or 'verify the degree program from the relevant title elements'. "
         "Return only the plan by calling return_broad_plan. return_broad_plan is "
         "a structured-output function, not a document tool."
     )
@@ -57,10 +62,11 @@ def build_broad_messages(state: Any) -> list[dict[str, str]]:
             "Full HTML document:\n" + _read(_read(state, "extraction_input"), "html", ""),
             (
                 "Resolution agent capabilities, for planning context only: it can "
-                "inspect the overview, read one element by id, query one table with "
-                "SQL, search one text element with regex, set fields, and finish "
-                "after validation. These capabilities are not available to broad; "
-                "broad must only return a plan."
+                "use the built-in document outline, read one element by id, query "
+                "one table with SQL, search one text element with regex, set fields, "
+                "and finish after validation. These capabilities are not available "
+                "to broad; broad must only return a plan and must not pre-fill "
+                "the extraction answers."
             ),
         ]
     )
@@ -90,8 +96,8 @@ def parse_broad_plan_tool_call(message: Any) -> BroadPlan:
             raw_args = _read(_read(call, "function", {}), "arguments", "{}")
             args = json.loads(raw_args)
         summary = str(args.get("summary", ""))
-        plan = [str(item) for item in args.get("plan", [])]
-        risks = [str(item) for item in args.get("risks", [])]
+        plan = _string_list(args.get("plan", []))
+        risks = _string_list(args.get("risks", []))
         return BroadPlan(summary=summary, plan=plan, risks=risks)
     raise ValueError("model did not call return_broad_plan")
 
@@ -118,6 +124,23 @@ def _plain(value: Any) -> Any:
     if hasattr(value, "__dict__"):
         return {key: _plain(item) for key, item in vars(value).items()}
     return value
+
+
+def _string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return []
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            return [stripped]
+        return _string_list(parsed)
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return [str(value)]
 
 
 def _read(value: Any, name: str, default: Any = None) -> Any:

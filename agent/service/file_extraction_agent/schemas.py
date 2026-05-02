@@ -63,7 +63,7 @@ class ModelConfig:
 
 @dataclass
 class RunOptions:
-    max_tool_calls: int = 20
+    max_tool_calls: int = 200
 
 
 @dataclass

@@ -21,6 +21,10 @@ def test_build_broad_messages_includes_task_and_tree():
     assert "resolution agent" in content
     assert "Available resolution tools" not in content
     assert "broad must only return a plan" in content
+    assert "must not state final field values" in content
+    assert "field=value" in content
+    assert "read dp-table-2 and extract the capacity column" in content
+    assert "must not pre-fill the extraction answers" in content
 
 
 def test_run_broad_planner_binds_only_plan_output_function():
@@ -72,3 +76,23 @@ def test_parse_broad_plan_tool_call_reads_function_arguments():
     assert plan.summary == "名单文档"
     assert plan.plan == ["overview", "query table", "set fields"]
     assert plan.risks == ["表头可能跨页"]
+
+
+def test_parse_broad_plan_keeps_string_list_values_as_single_items():
+    message = SimpleNamespace(
+        tool_calls=[
+            {
+                "name": "return_broad_plan",
+                "args": {
+                    "summary": "s",
+                    "plan": "read relevant tables",
+                    "risks": '["multi program document", "split tables"]',
+                },
+            }
+        ]
+    )
+
+    plan = parse_broad_plan_tool_call(message)
+
+    assert plan.plan == ["read relevant tables"]
+    assert plan.risks == ["multi program document", "split tables"]

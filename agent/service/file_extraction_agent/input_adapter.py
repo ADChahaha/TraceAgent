@@ -58,7 +58,7 @@ def normalize_run_options(run_options: Any) -> RunOptions:
     elif isinstance(run_options, dict):
         options = RunOptions(**run_options)
     else:
-        options = RunOptions(max_tool_calls=getattr(run_options, "max_tool_calls", 20))
+        options = RunOptions(max_tool_calls=getattr(run_options, "max_tool_calls", RunOptions().max_tool_calls))
     if options.max_tool_calls <= 0:
         raise ValueError("max_tool_calls must be positive")
     return options
