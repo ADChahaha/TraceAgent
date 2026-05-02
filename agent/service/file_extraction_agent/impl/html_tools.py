@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from html import escape
 from typing import Any
 
 try:
@@ -25,40 +26,46 @@ def build_tools(state: Any) -> list[Any]:
     """Build model-facing resolution tools bound to the current graph state."""
 
     @tool
-    def overview() -> dict[str, Any]:
-        """
-        Return the document tree built from the input HTML.
-
-        Use this first to understand the document structure and locate candidate
-        element ids for headings, text, list items, captions, and tables.
-
-        Returns:
-            A JSON object with key ``tree``. The tree contains existing HTML ids,
-            semantic node types, short text, and children. Table nodes include
-            columns and row counts, not full table rows.
-        """
-
-        return _overview(state)
-
-    @tool
     def read_element(element_id: str) -> dict[str, Any]:
         """
         Read one HTML element by its existing id.
 
-        Use this after ``overview`` returns a candidate element id and you need
-        the element's detailed content.
+        Use this after the built-in document outline shows a candidate element
+        id and you need the element's detailed content.
 
         Args:
             element_id: Existing HTML element id, for example ``dp-p-3`` or
                 ``dp-table-1``.
 
         Returns:
-            For text-like elements, returns id, type, and full text. For table
-            elements, returns id, type, columns, header row id, and row count.
-            Table rows are not returned; use ``table_extraction`` for row data.
+            HTML-like element content and evidence ids. Table rows are not
+            returned; use ``table_extraction`` for row data.
         """
 
         return _read_element(state, element_id)
+
+    @tool
+    def read_section(section_id: str, depth: int = 1) -> dict[str, Any]:
+        """
+        Read a heading section by id, optionally including nested subsections.
+
+        Use this when the document outline points to a section heading and you
+        need the content under that heading. This is better than repeatedly
+        calling read_element on the heading id.
+
+        Args:
+            section_id: Existing heading id, for example ``dp-h2-56``.
+            depth: Number of nested heading levels to include. ``1`` reads the
+                section content and direct child subsection headings/content;
+                larger values include deeper subsections.
+
+        Returns:
+            HTML-like section map and evidence ids. Large lists are summarized
+            as list references with a few item previews. Table rows are not
+            returned; use ``table_extraction`` for row data.
+        """
+
+        return _read_section(state, section_id, depth)
 
     @tool
     def table_extraction(table_id: str, sql: str) -> dict[str, Any]:
@@ -115,6 +122,12 @@ def build_tools(state: Any) -> list[Any]:
         """
         Set one output field with value and evidence ids.
 
+        You must call this for each task field exactly once, either with
+        ``status="resolved"`` when the value is supported, or with
+        ``status="failed"`` when the field cannot be extracted. Call set_field
+        as soon as enough evidence for the current field has been observed; do
+        not keep reading unrelated elements first.
+
         Use this only after this same run has observed the supporting evidence
         through ``read_element``, ``table_extraction``, or
         ``paragraph_extraction``. Do not call this from document overview alone.
@@ -139,8 +152,9 @@ def build_tools(state: Any) -> list[Any]:
         """
         Finish the extraction run.
 
-        Use this only after all required fields have been set either as
-        ``resolved`` or ``failed``.
+        Use this only after all task fields have been set either as ``resolved``
+        or ``failed``. If this returns errors, fix the listed fields with
+        set_field and call finish again.
 
         Returns:
             ``{"ok": true, "errors": []}`` when validation passes. If
@@ -150,8 +164,8 @@ def build_tools(state: Any) -> list[Any]:
         return _finish(state)
 
     return [
-        overview,
         read_element,
+        read_section,
         table_extraction,
         paragraph_extraction,
         set_field,
@@ -183,9 +197,8 @@ def _read_element(state: Any, element_id: str) -> dict[str, Any]:
         result = {
             "id": table.table_id,
             "type": "TABLE",
-            "columns": table.columns,
-            "header_row_id": table.header_row_id,
-            "row_count": len(table.rows),
+            "html": _element_html(document, element),
+            "evidence_ids": [table.table_id],
             "sql_hint": (
                 'Use table name data and wrap every column name in double quotes, '
                 'for example SELECT "论文题目" FROM data WHERE "作品类型" = '
@@ -199,9 +212,69 @@ def _read_element(state: Any, element_id: str) -> dict[str, Any]:
     result = {
         "id": element.id,
         "type": element.type,
-        "text": element.text,
+        "html": _element_html(document, element),
+        "evidence_ids": [element.id],
     }
     _record_action(state, "read_element", {"element_id": element_id}, result)
+    return result
+
+
+def _read_section(state: Any, section_id: str, depth: int = 1) -> dict[str, Any]:
+    document = _read(state, "document")
+    section = document.elements_by_id.get(section_id)
+    if section is None:
+        result = {"ok": False, "error": f"unknown section id: {section_id}"}
+        _record_action(state, "read_section", {"section_id": section_id, "depth": depth}, result)
+        return result
+    if section.tag not in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+        result = {"ok": False, "error": f"element is not a section heading: {section_id}"}
+        _record_action(state, "read_section", {"section_id": section_id, "depth": depth}, result)
+        return result
+
+    depth = max(0, int(depth))
+    ordered = list(document.elements_by_id.values())
+    start_index = next(
+        (index for index, element in enumerate(ordered) if element.id == section_id),
+        None,
+    )
+    if start_index is None:
+        result = {"ok": False, "error": f"section id not found in document order: {section_id}"}
+        _record_action(state, "read_section", {"section_id": section_id, "depth": depth}, result)
+        return result
+
+    start_level = _heading_level(section.tag)
+    max_level = start_level + depth
+    current_level = start_level
+    items: list[dict[str, Any]] = []
+    evidence_ids = [section_id]
+
+    for element in ordered[start_index + 1 :]:
+        element_level = _heading_level(element.tag)
+        if element_level is not None:
+            if element_level <= start_level:
+                break
+            current_level = element_level
+            if element_level <= max_level:
+                items.append(_section_item(document, element))
+                evidence_ids.append(element.id)
+            continue
+
+        if (
+            current_level <= max_level
+            and element.tag not in {"tr", "caption"}
+            and not _is_list_child(document, element)
+        ):
+            items.append(_section_item(document, element))
+            evidence_ids.append(element.id)
+
+    _mark_observed(state, evidence_ids)
+    result = {
+        "section_id": section_id,
+        "depth": depth,
+        "html": _section_html(document, section, items, depth),
+        "evidence_ids": evidence_ids,
+    }
+    _record_action(state, "read_section", {"section_id": section_id, "depth": depth}, _summarize_tool_result(result))
     return result
 
 
@@ -419,6 +492,8 @@ def _summarize_tool_result(result: Any) -> Any:
         summary["row_count"] = len(summary["rows"])
     if "matches" in summary and isinstance(summary["matches"], list):
         summary["match_count"] = len(summary["matches"])
+    if "html" in summary and isinstance(summary["html"], str):
+        summary["html_chars"] = len(summary["html"])
     return summary
 
 
@@ -461,6 +536,125 @@ def _match_row_id(table: Any, values: dict[str, Any]) -> str | None:
         if all(str(row.get(column, "")) == str(value) for column, value in values.items()):
             return row_id
     return None
+
+
+def _heading_level(tag: str) -> int | None:
+    if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+        return int(tag[1])
+    return None
+
+
+def _section_item(document: Any, element: Any) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "id": element.id,
+        "type": element.type,
+    }
+    if element.type == "TABLE":
+        table = document.tables_by_id.get(element.id)
+        item["columns"] = table.columns if table else []
+        item["header_row_id"] = table.header_row_id if table else None
+        item["row_count"] = len(table.rows) if table else 0
+    else:
+        item["text"] = element.text
+    return item
+
+
+def _element_html(document: Any, element: Any) -> str:
+    if element.type == "TABLE":
+        table = document.tables_by_id.get(element.id)
+        columns = " | ".join(table.columns if table else [])
+        row_count = len(table.rows) if table else 0
+        header_row_id = table.header_row_id if table else ""
+        return (
+            f'<table-ref id="{_attr(element.id)}" rows="{_attr(row_count)}" '
+            f'header-row-id="{_attr(header_row_id)}" columns="{_attr(columns)}" />'
+        )
+    tag = _html_like_tag(element)
+    return f'<{tag} id="{_attr(element.id)}">{_text(element.text)}</{tag}>'
+
+
+def _section_html(document: Any, section: Any, items: list[dict[str, Any]], depth: int) -> str:
+    lines = [
+        f'<section id="{_attr(section.id)}" title="{_attr(section.text)}" depth="{_attr(depth)}">'
+    ]
+    for item in items:
+        lines.extend(_section_item_html_lines(document, item, indent="  "))
+    lines.append("</section>")
+    return "\n".join(lines)
+
+
+def _section_item_html_lines(document: Any, item: dict[str, Any], indent: str) -> list[str]:
+    item_id = item["id"]
+    item_type = item["type"]
+    if item_type == "TABLE":
+        columns = " | ".join(str(column) for column in item.get("columns", []) or [])
+        return [
+            f'{indent}<table-ref id="{_attr(item_id)}" rows="{_attr(item.get("row_count", 0))}" '
+            f'header-row-id="{_attr(item.get("header_row_id", ""))}" columns="{_attr(columns)}" />'
+        ]
+    if item_type == "TEXT" and _element_tag(document, item_id) in {"ul", "ol"}:
+        return _list_ref_html_lines(document, item_id, indent)
+    tag = _html_like_tag(item)
+    text = _preview(str(item.get("text", "")))
+    return [f'{indent}<{tag} id="{_attr(item_id)}">{_text(text)}</{tag}>']
+
+
+def _list_ref_html_lines(document: Any, list_id: str, indent: str) -> list[str]:
+    item_ids = [
+        element.id
+        for element in document.elements_by_id.values()
+        if element.parent_id == list_id and element.tag == "li"
+    ]
+    lines = [f'{indent}<list-ref id="{_attr(list_id)}" items="{_attr(len(item_ids))}">']
+    for item_id in item_ids[:3]:
+        element = document.elements_by_id[item_id]
+        lines.append(
+            f'{indent}  <item-ref id="{_attr(item_id)}">{_text(_preview(element.text))}</item-ref>'
+        )
+    remaining = len(item_ids) - 3
+    if remaining > 0:
+        lines.append(f'{indent}  <truncated remaining="{_attr(remaining)}" />')
+    lines.append(f"{indent}</list-ref>")
+    return lines
+
+
+def _element_tag(document: Any, element_id: str) -> str:
+    element = document.elements_by_id.get(element_id)
+    return element.tag if element else ""
+
+
+def _is_list_child(document: Any, element: Any) -> bool:
+    if element.tag != "li" or not element.parent_id:
+        return False
+    return _element_tag(document, element.parent_id) in {"ul", "ol"}
+
+
+def _html_like_tag(element: Any) -> str:
+    element_type = element["type"] if isinstance(element, dict) else element.type
+    if element_type == "TITLE":
+        return "title"
+    if element_type == "SECTION_HEADER":
+        return "heading"
+    if element_type == "LIST_ITEM":
+        return "item"
+    if element_type == "CAPTION":
+        return "caption"
+    return "text"
+
+
+def _preview(text: str, limit: int = 160) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[:limit].rstrip() + "..."
+
+
+def _attr(value: Any) -> str:
+    return escape(str(value), quote=True)
+
+
+def _text(value: Any) -> str:
+    return escape(str(value), quote=False)
 
 
 def _value_matches_type(value: Any, field_type: str) -> bool:
