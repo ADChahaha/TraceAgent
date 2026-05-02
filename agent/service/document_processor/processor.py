@@ -23,8 +23,10 @@ from service.document_processor.docling_converter import (
     convert_to_docling_document,
     export_html,
 )
+from service.document_processor.display_html import build_display_html
 from service.document_processor.html_cleaner import clean_semantic_html
 from service.document_processor.schemas import ProcessResult
+from service.document_processor.table_merger import merge_continued_tables
 
 
 class InvalidFileObjectError(TypeError):
@@ -43,8 +45,11 @@ def process(file_obj, file_type: str | None = None) -> ProcessResult:
     validate_pdf_type(file_type=file_type, filename=filename)
     source_bytes = read_source_bytes(file_obj)
     document = convert_to_docling_document(source_bytes, filename)
-    html = clean_semantic_html(export_html(document))
-    return ProcessResult(filename=filename, html=html)
+    raw_html = export_html(document)
+    merged_html = merge_continued_tables(raw_html)
+    html = clean_semantic_html(merged_html)
+    display_html = build_display_html(merged_html)
+    return ProcessResult(filename=filename, html=html, display_html=display_html)
 
 
 def validate_file_obj(file_obj) -> None:

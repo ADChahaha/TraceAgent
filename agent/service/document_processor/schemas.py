@@ -19,3 +19,4 @@ from dataclasses import dataclass
 class ProcessResult:
     filename: str
     html: str
+    display_html: str | None = None
