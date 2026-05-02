@@ -23,6 +23,8 @@ TRACKED_TAGS = {
     "ol",
 }
 HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+TABLE_EVIDENCE_ID_TAGS = {"table", "tr"}
+DEFAULT_ID_PREFIX = "dp"
 
 
 @dataclass
@@ -96,6 +98,7 @@ def build_html_document(html: str) -> HtmlDocument:
     parser.feed(html)
     parser.close()
 
+    assign_missing_table_evidence_ids(parser.root)
     validate_required_ids(parser.root)
     elements_by_id = build_elements_by_id(parser.root)
     tables_by_id, row_index = build_tables_by_id(parser.root)
@@ -106,6 +109,45 @@ def build_html_document(html: str) -> HtmlDocument:
         tables_by_id=tables_by_id,
         row_index=row_index,
     )
+
+
+def assign_missing_table_evidence_ids(root: HtmlNode, *, prefix: str = DEFAULT_ID_PREFIX) -> None:
+    """给缺少 id 的 table/tr 补稳定证据 id。"""
+
+    counters: dict[str, int] = {}
+    existing_ids = {
+        node.attrs["id"]
+        for node in walk(root)
+        if node.tag is not None and node.attrs.get("id")
+    }
+    for node in walk(root):
+        if (
+            node.tag is None
+            or node.tag not in TABLE_EVIDENCE_ID_TAGS
+            or node.attrs.get("id")
+        ):
+            continue
+        node.attrs["id"] = next_generated_id(
+            prefix=prefix,
+            id_name=node.tag,
+            counters=counters,
+            existing_ids=existing_ids,
+        )
+
+
+def next_generated_id(
+    *,
+    prefix: str,
+    id_name: str,
+    counters: dict[str, int],
+    existing_ids: set[str],
+) -> str:
+    while True:
+        counters[id_name] = counters.get(id_name, 0) + 1
+        candidate = f"{prefix}-{id_name}-{counters[id_name]}"
+        if candidate not in existing_ids:
+            existing_ids.add(candidate)
+            return candidate
 
 
 def validate_required_ids(root: HtmlNode) -> None:
@@ -156,7 +198,7 @@ def build_document_tree(
     for node in walk(root):
         if node.tag is None or node.tag not in TRACKED_TAGS:
             continue
-        if node.tag in {"tr", "ul", "ol"}:
+        if node.tag in {"tr", "ul", "ol", "p", "li", "caption"}:
             continue
         element_id = node.attrs.get("id")
         if not element_id:
@@ -187,14 +229,15 @@ def tree_node(node: HtmlNode, tables_by_id: dict[str, HtmlTable]) -> dict[str, A
     item: dict[str, Any] = {
         "id": element_id,
         "type": infer_element_type(node.tag or ""),
-        "text": node_text(node),
         "children": [],
     }
+    if node.tag in HEADING_TAGS:
+        item["text"] = node_text(node)
     if node.tag == "table" and element_id in tables_by_id:
         table = tables_by_id[element_id]
+        item["table_name"] = table_name(node)
         item["columns"] = table.columns
         item["row_count"] = len(table.rows)
-        item["text"] = "columns: " + " | ".join(table.columns)
     return item
 
 
@@ -257,6 +300,14 @@ def extract_table_columns(row: HtmlNode) -> list[str]:
         seen[base] = count
         columns.append(base if count == 1 else f"{base}_{count}")
     return columns
+
+
+def table_name(table_node: HtmlNode) -> str | None:
+    for child in table_node.children:
+        if child.tag == "caption":
+            name = node_text(child)
+            return name or None
+    return None
 
 
 def row_cells(row: HtmlNode) -> list[HtmlNode]:

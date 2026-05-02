@@ -91,6 +91,26 @@ def test_clean_semantic_html_keeps_existing_ids():
     )
 
 
+def test_clean_semantic_html_generates_unique_row_ids_around_existing_ids():
+    raw_html = """
+    <body>
+      <table id="source-table">
+        <tr id="dp-tr-1"><th>姓名</th></tr>
+        <tr><td>张三</td></tr>
+        <tr id="source-row"><td>李四</td></tr>
+        <tr><td>王五</td></tr>
+      </table>
+    </body>
+    """
+
+    assert clean_semantic_html(raw_html) == (
+        '<table id="source-table"><tr id="dp-tr-1"><th>姓名</th></tr>'
+        '<tr id="dp-tr-2"><td>张三</td></tr>'
+        '<tr id="source-row"><td>李四</td></tr>'
+        '<tr id="dp-tr-3"><td>王五</td></tr></table>'
+    )
+
+
 def test_clean_semantic_html_does_not_filter_docling_content_nodes():
     raw_html = """
     <body>

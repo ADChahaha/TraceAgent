@@ -151,13 +151,39 @@ def assign_ids(nodes: list[HtmlNode], *, prefix: str) -> None:
     """为缺少 id 的关键节点补稳定 id。"""
 
     counters: dict[str, int] = {}
+    existing_ids = {
+        node.attrs["id"]
+        for node in walk_nodes(nodes)
+        if node.tag is not None and node.attrs.get("id")
+    }
     for node in walk_nodes(nodes):
         if node.tag is None or node.tag == "br" or node.attrs.get("id"):
             continue
         id_name = id_counter_name(node.tag)
         if node.tag in ID_TAGS:
-            counters[id_name] = counters.get(id_name, 0) + 1
-            node.attrs["id"] = f"{prefix}-{id_name}-{counters[id_name]}"
+            node.attrs["id"] = next_generated_id(
+                prefix=prefix,
+                id_name=id_name,
+                counters=counters,
+                existing_ids=existing_ids,
+            )
+
+
+def next_generated_id(
+    *,
+    prefix: str,
+    id_name: str,
+    counters: dict[str, int],
+    existing_ids: set[str],
+) -> str:
+    """生成不和源 HTML 既有 id 冲突的稳定 id。"""
+
+    while True:
+        counters[id_name] = counters.get(id_name, 0) + 1
+        candidate = f"{prefix}-{id_name}-{counters[id_name]}"
+        if candidate not in existing_ids:
+            existing_ids.add(candidate)
+            return candidate
 
 
 def walk_nodes(nodes: list[HtmlNode]):
