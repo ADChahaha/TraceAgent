@@ -1,52 +1,67 @@
-"""service.file_extraction_agent 的外部输入适配层。"""
+"""Adapt public HTML extraction inputs into internal graph input."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from service.file_extraction_agent.block_contract import validate_blocks_contract
-from service.file_extraction_agent.impl.schemas import ExtractionInput
-from service.file_extraction_agent.schemas import (
-    NormalizedBlock,
-    RunOptions,
-    TaskSpec,
-)
+from service.file_extraction_agent.impl.html_index import build_html_document
+from service.file_extraction_agent.impl.html_state import HtmlExtractionInput
+from service.file_extraction_agent.schemas import FieldDefinition, RunOptions, TaskSpec
 
 
 def build_graph_input(
     *,
-    blocks: list[NormalizedBlock],
-    markdown: str = "",
-    md_list: list[str] | None = None,
-    task_spec: TaskSpec | None = None,
-    run_options: RunOptions | dict[str, Any] | None = None,
-    metadata: dict[str, Any] | None = None,
-) -> ExtractionInput:
-    """把外部 session 级输入收敛成模块内部统一的 `ExtractionInput`。"""
-
-    resolved_task_spec = _resolve_task_spec(task_spec=task_spec)
-    validate_blocks_contract(blocks)
-    return ExtractionInput(
-        blocks=[NormalizedBlock.model_validate(block) for block in blocks],
-        markdown=markdown,
-        md_list=md_list or [],
-        task_spec=resolved_task_spec,
-        options=_resolve_run_options(run_options),
-        metadata=metadata or {},
+    html: str,
+    task_spec: Any,
+    run_options: Any = None,
+) -> HtmlExtractionInput:
+    if not isinstance(html, str) or not html.strip():
+        raise ValueError("html must be a non-empty string")
+    normalized_task_spec = normalize_task_spec(task_spec)
+    normalized_run_options = normalize_run_options(run_options)
+    document = build_html_document(html)
+    return HtmlExtractionInput(
+        html=html,
+        task_spec=normalized_task_spec,
+        document=document,
+        run_options=normalized_run_options,
     )
 
 
-def _resolve_task_spec(*, task_spec: TaskSpec | None) -> TaskSpec:
-    if task_spec is not None:
-        return task_spec
-    raise ValueError("task_spec is required")
+def normalize_task_spec(task_spec: Any) -> TaskSpec:
+    if task_spec is None:
+        raise ValueError("task_spec is required")
+    if isinstance(task_spec, TaskSpec):
+        spec = task_spec
+    elif isinstance(task_spec, dict):
+        spec = TaskSpec(**task_spec)
+    else:
+        fields = getattr(task_spec, "fields", None)
+        instructions = getattr(task_spec, "instructions", None)
+        spec = TaskSpec(fields=fields, instructions=instructions)
+
+    if not spec.fields:
+        raise ValueError("task_spec.fields must be non-empty")
+    for field_def in spec.fields:
+        if not isinstance(field_def, FieldDefinition):
+            raise ValueError("task_spec fields must be FieldDefinition-compatible")
+        if not field_def.name:
+            raise ValueError("field name is required")
+    return spec
 
 
-def _resolve_run_options(
-    run_options: RunOptions | dict[str, Any] | None,
-) -> RunOptions:
+def normalize_run_options(run_options: Any) -> RunOptions:
     if run_options is None:
-        return RunOptions()
-    if isinstance(run_options, RunOptions):
-        return run_options
-    return RunOptions.model_validate(run_options)
+        options = RunOptions()
+    elif isinstance(run_options, RunOptions):
+        options = run_options
+    elif isinstance(run_options, dict):
+        options = RunOptions(**run_options)
+    else:
+        options = RunOptions(max_tool_calls=getattr(run_options, "max_tool_calls", 20))
+    if options.max_tool_calls <= 0:
+        raise ValueError("max_tool_calls must be positive")
+    return options
+
+
+__all__ = ["build_graph_input", "normalize_task_spec", "normalize_run_options"]
