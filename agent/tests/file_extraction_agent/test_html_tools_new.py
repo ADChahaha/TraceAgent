@@ -12,6 +12,7 @@ from service.file_extraction_agent.impl.html_tools import (
     _read_section,
     _set_field,
     _table_extraction,
+    _update_plan,
 )
 
 
@@ -45,6 +46,8 @@ def _state():
         field_states={},
         actions=[],
         observed_evidence_ids=set(),
+        broad_plan=SimpleNamespace(summary="测试", plan=["读取名单表", "写入字段"], risks=[]),
+        plan_statuses={},
     )
 
 
@@ -57,7 +60,7 @@ def test_overview_returns_document_tree():
     assert table_node is not None
     assert table_node["id"] == "dp-table-1"
     assert table_node["type"] == "TABLE"
-    assert table_node["table_name"] == "学生名单"
+    assert table_node["label"] == "学生名单"
     assert table_node["columns"] == ["姓名", "学院"]
     assert table_node["row_count"] == 2
     assert "text" not in table_node
@@ -189,6 +192,31 @@ def test_set_field_records_value_and_finish_validates_required_fields():
     assert finish_result == {"ok": True, "errors": []}
 
 
+def test_update_plan_records_plan_status_and_action():
+    state = _state()
+
+    result = _update_plan(state, 1, "in_progress", reason="开始读取名单表")
+    completed = _update_plan(state, 1, "completed", reason="名单表已产生字段证据")
+
+    assert result["ok"] is True
+    assert completed["ok"] is True
+    assert state.plan_statuses[1]["status"] == "completed"
+    assert state.plan_statuses[1]["step"] == "读取名单表"
+    assert state.actions[-1]["tool_name"] == "update_plan"
+    assert state.actions[-1]["args"] == {
+        "plan_index": 1,
+        "status": "completed",
+        "reason": "名单表已产生字段证据",
+    }
+
+
+def test_update_plan_rejects_invalid_plan_index():
+    result = _update_plan(_state(), 99, "completed", reason="不存在")
+
+    assert result["ok"] is False
+    assert result["errors"][0]["message"] == "plan_index is outside the broad plan"
+
+
 def test_set_field_rejects_unobserved_evidence_ids():
     state = _state()
 
@@ -217,6 +245,7 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
     names = [_tool_name(tool) for tool in tools]
 
     assert names == [
+        "update_plan",
         "read_element",
         "read_section",
         "table_extraction",
@@ -224,21 +253,38 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
         "set_field",
         "finish",
     ]
+    update_plan = tools[names.index("update_plan")]
+    update_plan_schema = getattr(update_plan, "args_schema", None)
+    update_plan_fields = getattr(update_plan_schema, "model_fields", None) or getattr(update_plan_schema, "__fields__", {})
+    assert "state" not in update_plan_fields
+    assert "plan_index" in update_plan_fields
+    assert "status" in update_plan_fields
+    assert "Mark one broad-plan step" in _tool_description(update_plan)
     read_element = tools[names.index("read_element")]
     schema = getattr(read_element, "args_schema", None)
     schema_fields = getattr(schema, "model_fields", None) or getattr(schema, "__fields__", {})
     assert "state" not in schema_fields
     assert "element_id" in schema_fields
+    assert "reason" in schema_fields
     assert "Read one HTML element" in _tool_description(read_element)
     read_section = tools[names.index("read_section")]
     read_section_schema = getattr(read_section, "args_schema", None)
     read_section_fields = getattr(read_section_schema, "model_fields", None) or getattr(read_section_schema, "__fields__", {})
     assert "state" not in read_section_fields
     assert "section_id" in read_section_fields
+    assert "reason" in read_section_fields
     assert "Read a heading section" in _tool_description(read_section)
+    assert "Prefer increasing depth" in _tool_description(read_section)
+    assert "many read_element calls" in _tool_description(read_section)
     table_extraction = tools[names.index("table_extraction")]
+    table_schema = getattr(table_extraction, "args_schema", None)
+    table_fields = getattr(table_schema, "model_fields", None) or getattr(table_schema, "__fields__", {})
+    assert "reason" in table_fields
     assert "double quotes" in _tool_description(table_extraction)
     set_field = tools[names.index("set_field")]
+    set_field_schema = getattr(set_field, "args_schema", None)
+    set_field_fields = getattr(set_field_schema, "model_fields", None) or getattr(set_field_schema, "__fields__", {})
+    assert "reason" in set_field_fields
     set_field_description = " ".join(_tool_description(set_field).split())
     assert "for each task field exactly once" in set_field_description
     assert "unrelated elements" in set_field_description

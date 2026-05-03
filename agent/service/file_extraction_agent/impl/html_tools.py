@@ -26,38 +26,77 @@ def build_tools(state: Any) -> list[Any]:
     """Build model-facing resolution tools bound to the current graph state."""
 
     @tool
-    def read_element(element_id: str) -> dict[str, Any]:
+    def update_plan(plan_index: int, status: str, reason: str) -> dict[str, Any]:
+        """
+        Mark one broad-plan step as in progress or completed.
+
+        Use this to keep the replay plan synchronized with your actual work.
+        Call ``update_plan(plan_index, "in_progress", reason)`` before starting
+        a broad-plan step, and call ``update_plan(plan_index, "completed",
+        reason)`` immediately after the step has produced its field value,
+        evidence, or routing decision. ``plan_index`` is 1-based and refers to
+        the numbered Broad plan shown in the prompt.
+
+        Args:
+            plan_index: 1-based index of the Broad plan item.
+            status: ``in_progress`` or ``completed``.
+            reason: Short explanation of why this plan step now has that
+                status.
+
+        Returns:
+            The stored plan status, or validation errors.
+        """
+
+        return _update_plan(state, plan_index, status, reason=reason)
+
+    @tool
+    def read_element(element_id: str, reason: str) -> dict[str, Any]:
         """
         Read one HTML element by its existing id.
 
         Use this after the built-in document outline shows a candidate element
-        id and you need the element's detailed content.
+        id and you need the element's detailed content. If the current field
+        depends on several adjacent elements from the same section, call
+        read_section on the parent heading with a larger depth instead of
+        repeatedly calling read_element.
 
         Args:
             element_id: Existing HTML element id, for example ``dp-p-3`` or
                 ``dp-table-1``.
+            reason: Why this element is needed for the current field. Mention
+                the current field name and what evidence you expect here.
 
         Returns:
             HTML-like element content and evidence ids. Table rows are not
             returned; use ``table_extraction`` for row data.
         """
 
-        return _read_element(state, element_id)
+        return _read_element(state, element_id, reason=reason)
 
     @tool
-    def read_section(section_id: str, depth: int = 1) -> dict[str, Any]:
+    def read_section(section_id: str, reason: str, depth: int = 1) -> dict[str, Any]:
         """
         Read a heading section by id, optionally including nested subsections.
 
         Use this when the document outline points to a section heading and you
         need the content under that heading. This is better than repeatedly
-        calling read_element on the heading id.
+        calling read_element on the heading id. Prefer increasing depth over
+        many read_element calls from the same section: use depth=1 for one
+        narrow subsection, depth=2 for several adjacent child subsections, and
+        depth=3 only for a complete major chapter.
 
         Args:
             section_id: Existing heading id, for example ``dp-h2-56``.
+            reason: Why this section is needed for the current field. Mention
+                the current field name and what evidence you expect here.
             depth: Number of nested heading levels to include. ``1`` reads the
                 section content and direct child subsection headings/content;
-                larger values include deeper subsections.
+                larger values include deeper subsections. Use ``depth=1`` for
+                one narrow subsection, ``depth=2`` when the current field needs
+                several adjacent child subsections, and ``depth=3`` only when
+                the current field needs a complete major chapter. Prefer
+                increasing depth over many read_element calls from the same
+                section.
 
         Returns:
             HTML-like section map and evidence ids. Large lists are summarized
@@ -65,10 +104,10 @@ def build_tools(state: Any) -> list[Any]:
             returned; use ``table_extraction`` for row data.
         """
 
-        return _read_section(state, section_id, depth)
+        return _read_section(state, section_id, depth, reason=reason)
 
     @tool
-    def table_extraction(table_id: str, sql: str) -> dict[str, Any]:
+    def table_extraction(table_id: str, sql: str, reason: str) -> dict[str, Any]:
         """
         Query one HTML table using a SQL SELECT statement.
 
@@ -83,6 +122,8 @@ def build_tools(state: Any) -> list[Any]:
                 Always wrap every column name in double quotes, especially
                 Chinese names, names containing spaces, and names containing
                 punctuation.
+            reason: Why this SQL query is needed for the current field. Mention
+                the current field name and what rows/columns you expect.
 
         Returns:
             On success, matching rows with values, row ids, and evidence ids.
@@ -91,10 +132,10 @@ def build_tools(state: Any) -> list[Any]:
             inspect the error and retry with corrected SQL.
         """
 
-        return _table_extraction(state, table_id, sql)
+        return _table_extraction(state, table_id, sql, reason=reason)
 
     @tool
-    def paragraph_extraction(element_id: str, pattern: str) -> dict[str, Any]:
+    def paragraph_extraction(element_id: str, pattern: str, reason: str) -> dict[str, Any]:
         """
         Search one text-like HTML element using a regex pattern.
 
@@ -104,18 +145,21 @@ def build_tools(state: Any) -> list[Any]:
         Args:
             element_id: Existing HTML element id, for example ``dp-p-4``.
             pattern: Python regular expression pattern.
+            reason: Why this regex search is needed for the current field.
+                Mention the current field name and expected value.
 
         Returns:
             All regex matches with matched text, spans, and evidence ids.
         """
 
-        return _paragraph_extraction(state, element_id, pattern)
+        return _paragraph_extraction(state, element_id, pattern, reason=reason)
 
     @tool
     def set_field(
         name: str,
         value: Any,
         evidence_ids: list[str],
+        reason: str,
         status: str = "resolved",
         failure_reason: str | None = None,
     ) -> dict[str, Any]:
@@ -139,13 +183,15 @@ def build_tools(state: Any) -> list[Any]:
                 ``["dp-p-4"]`` or ``["dp-table-1", "dp-tr-2"]``.
             status: ``resolved`` when a value is found, or ``failed`` when the
                 field cannot be extracted.
+            reason: Why this value is now sufficiently supported. Mention the
+                evidence ids and the current field.
             failure_reason: Required when status is ``failed``.
 
         Returns:
             The stored field state or validation errors.
         """
 
-        return _set_field(state, name, value, evidence_ids, status, failure_reason)
+        return _set_field(state, name, value, evidence_ids, status, failure_reason, reason=reason)
 
     @tool
     def finish() -> dict[str, Any]:
@@ -164,6 +210,7 @@ def build_tools(state: Any) -> list[Any]:
         return _finish(state)
 
     return [
+        update_plan,
         read_element,
         read_section,
         table_extraction,
@@ -179,19 +226,64 @@ def _overview(state: Any) -> dict[str, Any]:
     return result
 
 
-def _read_element(state: Any, element_id: str) -> dict[str, Any]:
+def _update_plan(state: Any, plan_index: int, status: str, *, reason: str | None = None) -> dict[str, Any]:
+    try:
+        index = int(plan_index)
+    except (TypeError, ValueError):
+        result = {"ok": False, "errors": [{"message": "plan_index must be an integer"}]}
+        _record_action(state, "update_plan", _args_with_reason({"plan_index": plan_index, "status": status}, reason), result)
+        return result
+
+    plan_items = _read(_read(state, "broad_plan"), "plan", []) or []
+    if index < 1 or index > len(plan_items):
+        result = {
+            "ok": False,
+            "errors": [
+                {
+                    "message": "plan_index is outside the broad plan",
+                    "plan_index": index,
+                    "plan_count": len(plan_items),
+                }
+            ],
+        }
+        _record_action(state, "update_plan", _args_with_reason({"plan_index": index, "status": status}, reason), result)
+        return result
+    if status not in {"in_progress", "completed"}:
+        result = {"ok": False, "errors": [{"message": "status must be in_progress or completed"}]}
+        _record_action(state, "update_plan", _args_with_reason({"plan_index": index, "status": status}, reason), result)
+        return result
+
+    plan_state = {
+        "plan_index": index,
+        "status": status,
+        "step": str(plan_items[index - 1]),
+        "reason": reason,
+    }
+    statuses = _read(state, "plan_statuses", None)
+    if isinstance(statuses, dict):
+        statuses[index] = plan_state
+    _record_action(
+        state,
+        "update_plan",
+        _args_with_reason({"plan_index": index, "status": status}, reason),
+        {"ok": True, "plan": plan_state},
+    )
+    return {"ok": True, "plan": plan_state}
+
+
+def _read_element(state: Any, element_id: str, *, reason: str | None = None) -> dict[str, Any]:
     document = _read(state, "document")
     element = document.elements_by_id.get(element_id)
     if element is None:
         result = {"ok": False, "error": f"unknown element id: {element_id}"}
-        _record_action(state, "read_element", {"element_id": element_id}, result)
+        _record_action(state, "read_element", _args_with_reason({"element_id": element_id}, reason), result)
         return result
 
     if element.type == "TABLE":
         table = document.tables_by_id.get(element_id)
         if table is None:
             result = {"ok": False, "error": f"unknown table id: {element_id}"}
-            _record_action(state, "read_element", {"element_id": element_id}, result)
+            _record_action(state, "read_element", _args_with_reason({"element_id": element_id}, reason), result)
             return result
         _mark_observed(state, [table.table_id])
         result = {
@@ -205,7 +297,7 @@ def _read_element(state: Any, element_id: str) -> dict[str, Any]:
                 "'学术论文'."
             ),
         }
-        _record_action(state, "read_element", {"element_id": element_id}, result)
+        _record_action(state, "read_element", _args_with_reason({"element_id": element_id}, reason), result)
         return result
 
     _mark_observed(state, [element.id])
@@ -215,20 +307,20 @@ def _read_element(state: Any, element_id: str) -> dict[str, Any]:
         "html": _element_html(document, element),
         "evidence_ids": [element.id],
     }
-    _record_action(state, "read_element", {"element_id": element_id}, result)
+    _record_action(state, "read_element", _args_with_reason({"element_id": element_id}, reason), result)
     return result
 
 
-def _read_section(state: Any, section_id: str, depth: int = 1) -> dict[str, Any]:
+def _read_section(state: Any, section_id: str, depth: int = 1, *, reason: str | None = None) -> dict[str, Any]:
     document = _read(state, "document")
     section = document.elements_by_id.get(section_id)
     if section is None:
         result = {"ok": False, "error": f"unknown section id: {section_id}"}
-        _record_action(state, "read_section", {"section_id": section_id, "depth": depth}, result)
+        _record_action(state, "read_section", _args_with_reason({"section_id": section_id, "depth": depth}, reason), result)
         return result
     if section.tag not in {"h1", "h2", "h3", "h4", "h5", "h6"}:
         result = {"ok": False, "error": f"element is not a section heading: {section_id}"}
-        _record_action(state, "read_section", {"section_id": section_id, "depth": depth}, result)
+        _record_action(state, "read_section", _args_with_reason({"section_id": section_id, "depth": depth}, reason), result)
         return result
 
     depth = max(0, int(depth))
@@ -239,7 +331,7 @@ def _read_section(state: Any, section_id: str, depth: int = 1) -> dict[str, Any]
     )
     if start_index is None:
         result = {"ok": False, "error": f"section id not found in document order: {section_id}"}
-        _record_action(state, "read_section", {"section_id": section_id, "depth": depth}, result)
+        _record_action(state, "read_section", _args_with_reason({"section_id": section_id, "depth": depth}, reason), result)
         return result
 
     start_level = _heading_level(section.tag)
@@ -274,20 +366,20 @@ def _read_section(state: Any, section_id: str, depth: int = 1) -> dict[str, Any]
         "html": _section_html(document, section, items, depth),
         "evidence_ids": evidence_ids,
     }
-    _record_action(state, "read_section", {"section_id": section_id, "depth": depth}, _summarize_tool_result(result))
+    _record_action(state, "read_section", _args_with_reason({"section_id": section_id, "depth": depth}, reason), _summarize_tool_result(result))
     return result
 
 
-def _table_extraction(state: Any, table_id: str, sql: str) -> dict[str, Any]:
+def _table_extraction(state: Any, table_id: str, sql: str, *, reason: str | None = None) -> dict[str, Any]:
     document = _read(state, "document")
     table = document.tables_by_id.get(table_id)
     if table is None:
         result = {"ok": False, "error": f"unknown table id: {table_id}"}
-        _record_action(state, "table_extraction", {"table_id": table_id, "sql": sql}, result)
+        _record_action(state, "table_extraction", _args_with_reason({"table_id": table_id, "sql": sql}, reason), result)
         return result
     if not _is_safe_select(sql):
         result = {"ok": False, "error": "sql must be a single SELECT statement"}
-        _record_action(state, "table_extraction", {"table_id": table_id, "sql": sql}, result)
+        _record_action(state, "table_extraction", _args_with_reason({"table_id": table_id, "sql": sql}, reason), result)
         return result
 
     connection = sqlite3.connect(":memory:")
@@ -317,7 +409,7 @@ def _table_extraction(state: Any, table_id: str, sql: str) -> dict[str, Any]:
         _record_action(
             state,
             "table_extraction",
-            {"table_id": table_id, "sql": sql},
+            _args_with_reason({"table_id": table_id, "sql": sql}, reason),
             result,
         )
         return result
@@ -347,22 +439,22 @@ def _table_extraction(state: Any, table_id: str, sql: str) -> dict[str, Any]:
         "columns": [column for column in selected_columns if column != "__row_id"],
         "rows": rows,
     }
-    _record_action(state, "table_extraction", {"table_id": table_id, "sql": sql}, _summarize_tool_result(result))
+    _record_action(state, "table_extraction", _args_with_reason({"table_id": table_id, "sql": sql}, reason), _summarize_tool_result(result))
     return result
 
 
-def _paragraph_extraction(state: Any, element_id: str, pattern: str) -> dict[str, Any]:
+def _paragraph_extraction(state: Any, element_id: str, pattern: str, *, reason: str | None = None) -> dict[str, Any]:
     document = _read(state, "document")
     element = document.elements_by_id.get(element_id)
     if element is None:
         result = {"ok": False, "error": f"unknown element id: {element_id}"}
-        _record_action(state, "paragraph_extraction", {"element_id": element_id, "pattern": pattern}, result)
+        _record_action(state, "paragraph_extraction", _args_with_reason({"element_id": element_id, "pattern": pattern}, reason), result)
         return result
     try:
         regex = re.compile(pattern)
     except re.error as exc:
         result = {"ok": False, "error": f"invalid regex: {exc}"}
-        _record_action(state, "paragraph_extraction", {"element_id": element_id, "pattern": pattern}, result)
+        _record_action(state, "paragraph_extraction", _args_with_reason({"element_id": element_id, "pattern": pattern}, reason), result)
         return result
 
     matches = [
@@ -379,7 +471,7 @@ def _paragraph_extraction(state: Any, element_id: str, pattern: str) -> dict[str
         "element_id": element_id,
         "matches": matches,
     }
-    _record_action(state, "paragraph_extraction", {"element_id": element_id, "pattern": pattern}, _summarize_tool_result(result))
+    _record_action(state, "paragraph_extraction", _args_with_reason({"element_id": element_id, "pattern": pattern}, reason), _summarize_tool_result(result))
     return result
 
 
@@ -390,6 +482,8 @@ def _set_field(
     evidence_ids: list[str],
     status: str,
     failure_reason: str | None,
+    *,
+    reason: str | None = None,
 ) -> dict[str, Any]:
     if status not in {"resolved", "failed"}:
         return {"ok": False, "errors": [{"field": name, "message": "invalid status"}]}
@@ -426,13 +520,14 @@ def _set_field(
         "status": status,
         "value": value,
         "evidence_ids": list(evidence_ids),
-        "failure_reason": failure_reason,
-    }
+            "failure_reason": failure_reason,
+            "reason": reason,
+        }
     _read(state, "field_states")[name] = field_state
     _record_action(
         state,
         "set_field",
-        {"name": name, "value": value, "evidence_ids": evidence_ids, "status": status},
+        _args_with_reason({"name": name, "value": value, "evidence_ids": evidence_ids, "status": status}, reason),
         {"ok": True, "field": field_state},
     )
     return {"ok": True, "field": field_state}
@@ -671,9 +766,16 @@ def _value_matches_type(value: Any, field_type: str) -> bool:
     return True
 
 
+def _args_with_reason(args: dict[str, Any], reason: str | None) -> dict[str, Any]:
+    if reason is None:
+        return args
+    return {**args, "reason": reason}
+
+
 __all__ = [
     "build_tools",
     "_overview",
+    "_update_plan",
     "_read_element",
     "_table_extraction",
     "_paragraph_extraction",

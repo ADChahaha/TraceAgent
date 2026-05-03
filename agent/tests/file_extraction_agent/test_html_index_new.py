@@ -22,12 +22,42 @@ def test_build_html_document_indexes_existing_ids_and_tree():
     assert document.elements_by_id["dp-h2-1"].type == "SECTION_HEADER"
     assert document.tree[0]["id"] == "dp-h2-1"
     assert [child["id"] for child in document.tree[0]["children"]] == ["dp-table-1"]
-    assert document.tree[0]["children"][0]["table_name"] == "学生名单"
+    assert document.tree[0]["children"][0]["label"] == "学生名单"
     assert "text" not in document.tree[0]["children"][0]
     assert document.tables_by_id["dp-table-1"].columns == ["姓名", "学院"]
     assert document.tables_by_id["dp-table-1"].rows == [{"姓名": "张三", "学院": "计算机学院"}]
     assert document.tables_by_id["dp-table-1"].row_ids == ["dp-tr-2"]
     assert document.row_index["dp-tr-2"]["table_id"] == "dp-table-1"
+
+
+def test_mineru_figure_table_uses_block_id_and_caption_label():
+    html = """
+    <figure id="p001_b000" data-type="table">
+      <div class="caption">文明模范寝室</div>
+      <div class="table-wrap">
+        <table>
+          <tr><td>楼栋</td><td>房间</td><td>平均分</td><td>模范/文明</td></tr>
+          <tr><td>18栋</td><td>106</td><td>94.18</td><td>模范寝室</td></tr>
+        </table>
+      </div>
+    </figure>
+    """
+
+    document = build_html_document(html)
+
+    assert document.tree == [
+        {
+            "id": "p001_b000",
+            "type": "TABLE",
+            "children": [],
+            "label": "文明模范寝室",
+            "columns": ["楼栋", "房间", "平均分", "模范/文明"],
+            "row_count": 1,
+        }
+    ]
+    assert document.elements_by_id["p001_b000"].type == "TABLE"
+    assert document.tables_by_id["p001_b000"].columns == ["楼栋", "房间", "平均分", "模范/文明"]
+    assert document.row_index["dp-tr-2"]["table_id"] == "p001_b000"
 
 
 def test_build_html_document_generates_and_indexes_missing_table_row_ids():

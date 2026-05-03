@@ -17,40 +17,39 @@ from service.file_extraction_agent.impl.html_tools import build_tools
 def build_resolution_messages(state: Any) -> list[Any]:
     system = SystemMessage(
         content=(
-            "You are the resolution agent for an HTML document extraction task. "
-            "You are not a research assistant; you are a field-writing agent. "
-            "Your goal is to write every field in Task fields. For every field, "
-            "you must eventually call set_field exactly once with status "
-            "'resolved' or 'failed'. Use the built-in document outline to choose "
-            "element ids. When an outline candidate is a section heading, prefer "
-            "read_section with the smallest useful depth instead of repeatedly "
-            "reading the heading element. Inspect specific elements with "
-            "read_element, query tables with table_extraction, and search text "
-            "with paragraph_extraction. As soon as you have enough evidence for one "
-            "field, immediately call set_field for that field before reading "
-            "more unrelated elements. Do not collect all evidence first. Do not "
-            "scan the whole document before writing fields. Do not issue a large "
-            "batch of read_element calls just to explore. Even though tool calls "
-            "may be available in parallel, use them only for the current field's "
-            "immediate evidence, then stop reading and call set_field. Work in "
-            "this loop: choose one field, inspect only the elements needed for "
-            "that field, call set_field for that field, move to the next field, "
-            "then call finish after all fields are set. If finish returns "
-            "ok=false, fix the listed fields and call finish again. "
-            "When writing SQL for table_extraction, always wrap every column name "
-            "in double quotes. If a tool returns ok=false or an error, inspect the "
-            "error and retry with corrected arguments instead of stopping. "
-            "You must not call set_field with evidence ids that have not first "
-            "appeared in a read_element, table_extraction, or paragraph_extraction "
-            "tool result in this run."
+            "你是 HTML 文档抽取流程里的 resolution agent。你的输出会被前端做成“人类查找文档”的动画，"
+            "所以每一次工具调用都必须像一个清晰、可信、可展示的动作。"
+            "你不是聊天助手，也不是研究助手；你是字段写入 agent。目标是把 Task fields 里的每个字段写完。"
+            "每个字段最终必须且只能调用一次 set_field，status 为 resolved 或 failed。"
+            "一次只处理一个字段或 broad plan 中强相关的一组字段；不要一边浏览多个区域一边最后统一写字段。"
+            "除 finish 外，每个工具调用都有必填 reason。reason 是展示给用户看的中文旁白，"
+            "要短、具体、像人在解释自己为什么现在看这里；不要写内部术语、不要写泛泛的'继续抽取'。"
+            "调用轨迹必须适合前端 replay："
+            "1. 开始执行某条 broad plan 前，先调用 update_plan(plan_index, 'in_progress', reason)。"
+            "2. 然后只读取完成这条 plan 所需的证据。"
+            "3. 一旦某个字段证据足够，下一次相关工具调用必须是 set_field，不要继续乱看。"
+            "4. 与该 plan 相关的字段写入或失败决策完成后，立刻调用 update_plan(plan_index, 'completed', reason)，"
+            "让右侧 plan 可以画线标记完成。没有 set_field 或明确失败决策前，不要 completed。"
+            "5. 所有字段完成后再调用 finish。"
+            "使用内置 document outline 选择 element id。优先先看目录/contents/index 相关页面来定位章节；"
+            "除非当前字段需要文档标题，不要在封面和无关标题上游荡。"
+            "如果候选是章节标题，优先使用 read_section，并使用最小够用 depth："
+            "depth=1 看窄章节，depth=2 看相邻子章节，depth=3 只用于完整大章。"
+            "如果同一字段已经在同一章节 read_element 了 3 次以上，停止零散 read_element，改用父章节 read_section 加大 depth。"
+            "表格先 read_element(table_id) 看字段行，再 table_extraction 查询；SQL 里所有列名必须用双引号包住。"
+            "文本用 paragraph_extraction；普通 HTML 片段用 read_element/read_section。"
+            "工具返回 ok=false 或 error 时，不要退出，读错误并修正参数重试。"
+            "set_field 的 evidence_ids 必须来自本轮 read_element/read_section/table_extraction/paragraph_extraction 的结果，"
+            "不能只凭 overview 或 broad plan 写字段。"
         )
     )
     human = HumanMessage(
         content="\n\n".join(
             [
-                "Broad plan:\n" + format_broad_plan(state.broad_plan),
-                "Task fields:\n" + _task_fields_text(state.task_spec),
-                "Document outline:\n" + format_document_outline(state.document.tree),
+                "Broad plan（右侧 plan 会根据 update_plan 动作逐项划线完成）:\n" + format_broad_plan(state.broad_plan),
+                "Task fields（必须逐个 set_field）:\n" + _task_fields_text(state.task_spec),
+                "Document outline（用于选择 read_section/read_element/table_extraction 的 id）:\n"
+                + format_document_outline(state.document.tree),
             ]
         )
     )
@@ -93,6 +92,8 @@ def build_resolution_graph(resolution_model: Any, tools: list[Any], state: Any):
         last_message = messages[-1]
         if getattr(last_message, "tool_calls", None):
             return "tools"
+        if _should_force_set_field_nudge(state):
+            return "nudge"
         if not _has_successful_finish(state) and _should_nudge_resolution(state):
             return "nudge"
         return END
@@ -149,6 +150,14 @@ def _should_nudge_resolution(state: Any) -> bool:
 
 def _continue_instruction(state: Any) -> str:
     field_states = getattr(state, "field_states", {}) or {}
+    if _should_force_set_field_nudge(state):
+        return (
+            "你已经读取了多个证据但还没有写字段。停止继续浏览。"
+            "如果当前字段证据已经足够，下一次工具调用必须是 set_field。"
+            "如果证据还不够，只能再做一次针对同一字段的精确工具调用，然后 set_field。"
+            "不要切换到别的字段。相关 plan 完成后调用 update_plan，status=completed。"
+            "不要用普通文本回答。"
+        )
     missing = [
         field.name
         for field in getattr(state.task_spec, "fields", []) or []
@@ -156,14 +165,15 @@ def _continue_instruction(state: Any) -> str:
     ]
     if missing:
         return (
-            "You stopped before completing the extraction. Missing fields: "
+            "抽取还没有完成。缺失字段: "
             + ", ".join(missing)
-            + ". Continue with tool calls. For each missing field, inspect only the necessary evidence, "
-            "call set_field exactly once, and then call finish. Do not answer in plain text."
+            + "。继续使用工具。每个缺失字段只读取必要证据，证据足够后立刻 set_field，"
+            "然后再处理下一个字段。开始和完成相关 broad plan 时都要调用 update_plan。"
+            "不要先收集多个字段的证据再统一写入。不要用普通文本回答。"
         )
     return (
-        "All fields have been set, but finish has not succeeded yet. Call finish now. "
-        "If finish returns errors, fix them with set_field and call finish again. Do not answer in plain text."
+        "所有字段都已经 set_field，但 finish 还没有成功。现在调用 finish。"
+        "如果 finish 返回错误，用 set_field 修正后再次调用 finish。不要用普通文本回答。"
     )
 
 
@@ -180,9 +190,35 @@ def _task_fields_text(task_spec: Any) -> str:
 
 def format_document_outline(tree: list[dict[str, Any]]) -> str:
     lines: list[str] = ["<outline>"]
-    _append_outline_lines(tree, lines, depth=1, section_stack=[])
+    index_nodes = select_index_outline_nodes(tree)
+    if index_nodes:
+        lines.append('  <index-pages purpose="use these first to locate sections">')
+        _append_outline_lines(index_nodes, lines, depth=2, section_stack=[])
+        lines.append("  </index-pages>")
+        lines.append('  <main-outline purpose="use after choosing candidate sections from index pages">')
+        _append_outline_lines(tree, lines, depth=2, section_stack=[], skip_ids={node.get("id", "") for node in index_nodes})
+        lines.append("  </main-outline>")
+    else:
+        _append_outline_lines(tree, lines, depth=1, section_stack=[])
     lines.append("</outline>")
     return "\n".join(lines)
+
+
+def select_index_outline_nodes(tree: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return likely table-of-contents/index nodes for the model to consult first."""
+
+    selected: list[dict[str, Any]] = []
+    for node in tree:
+        text = str(node.get("text") or node.get("label") or "")
+        normalized = text.replace(" ", "").lower()
+        if (
+            "目次" in normalized
+            or "contents" in normalized
+            or "tableofcontents" in normalized
+            or "index" == normalized
+        ):
+            selected.append(node)
+    return selected[:2]
 
 
 def _append_outline_lines(
@@ -190,17 +226,21 @@ def _append_outline_lines(
     lines: list[str],
     depth: int,
     section_stack: list[str],
+    skip_ids: set[str] | None = None,
 ) -> None:
     for node in nodes:
+        if skip_ids and node.get("id", "") in skip_ids:
+            continue
         indent = "  " * depth
         node_id = node.get("id", "")
         node_type = node.get("type", "")
         if node_type == "TABLE":
             columns = " | ".join(str(column) for column in node.get("columns", []) or [])
-            table_name = node.get("table_name") or (section_stack[-1] if section_stack else "unnamed")
             row_count = node.get("row_count", 0)
+            label = node.get("label") or (section_stack[-1] if section_stack else "")
+            label_attr = f' label="{_attr(label)}"' if label else ""
             lines.append(
-                f'{indent}<table-ref id="{_attr(node_id)}" name="{_attr(table_name)}" rows="{_attr(row_count)}" columns="{_attr(columns)}" />'
+                f'{indent}<table-ref id="{_attr(node_id)}"{label_attr} rows="{_attr(row_count)}" columns="{_attr(columns)}" />'
             )
             continue
 
@@ -215,6 +255,7 @@ def _append_outline_lines(
                 lines,
                 depth + 1,
                 [*section_stack, text],
+                skip_ids=skip_ids,
             )
             lines.append(f"{indent}</section>")
         else:
@@ -223,7 +264,19 @@ def _append_outline_lines(
                 lines,
                 depth,
                 section_stack,
+                skip_ids=skip_ids,
             )
+
+
+def _should_force_set_field_nudge(state: Any) -> bool:
+    actions = getattr(state, "actions", []) or []
+    if len(actions) < 4:
+        return False
+    recent = actions[-4:]
+    if any(action.get("tool_name") == "set_field" for action in recent):
+        return False
+    read_like = {"read_element", "read_section", "table_extraction", "paragraph_extraction"}
+    return sum(1 for action in recent if action.get("tool_name") in read_like) >= 4
 
 
 def _heading_level(node_type: str, depth: int) -> int:

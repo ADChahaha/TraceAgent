@@ -8,6 +8,7 @@ from typing import Any
 
 
 TRACKED_TAGS = {
+    "figure",
     "h1",
     "h2",
     "h3",
@@ -53,6 +54,7 @@ class HtmlTable:
     rows: list[dict[str, Any]]
     row_ids: list[str]
     header_row_id: str | None = None
+    label: str | None = None
 
 
 @dataclass
@@ -133,6 +135,9 @@ def assign_missing_table_evidence_ids(root: HtmlNode, *, prefix: str = DEFAULT_I
             counters=counters,
             existing_ids=existing_ids,
         )
+        owner = table_owner_node(node)
+        if owner is not None and owner.attrs.get("id"):
+            node.attrs["data-table-id"] = owner.attrs["id"]
 
 
 def next_generated_id(
@@ -180,7 +185,7 @@ def build_elements_by_id(root: HtmlNode) -> dict[str, HtmlElement]:
         indexed[element_id] = HtmlElement(
             id=element_id,
             tag=node.tag,
-            type=infer_element_type(node.tag),
+            type=infer_node_type(node),
             text=node_text(node),
             parent_id=_parent_id(node),
             child_ids=child_ids,
@@ -200,8 +205,12 @@ def build_document_tree(
             continue
         if node.tag in {"tr", "ul", "ol", "p", "li", "caption"}:
             continue
+        if node.tag == "table" and table_owner_node(node) is not None:
+            continue
         element_id = node.attrs.get("id")
         if not element_id:
+            continue
+        if is_table_overview_node(node) and element_id not in tables_by_id:
             continue
 
         item = tree_node(node, tables_by_id)
@@ -228,14 +237,14 @@ def tree_node(node: HtmlNode, tables_by_id: dict[str, HtmlTable]) -> dict[str, A
     element_id = node.attrs["id"]
     item: dict[str, Any] = {
         "id": element_id,
-        "type": infer_element_type(node.tag or ""),
+        "type": infer_node_type(node),
         "children": [],
     }
     if node.tag in HEADING_TAGS:
         item["text"] = node_text(node)
-    if node.tag == "table" and element_id in tables_by_id:
+    if is_table_overview_node(node) and element_id in tables_by_id:
         table = tables_by_id[element_id]
-        item["table_name"] = table_name(node)
+        item["label"] = table.label
         item["columns"] = table.columns
         item["row_count"] = len(table.rows)
     return item
@@ -259,7 +268,12 @@ def build_tables_by_id(root: HtmlNode) -> tuple[dict[str, HtmlTable], dict[str, 
 
 
 def parse_table(table_node: HtmlNode) -> HtmlTable:
-    table_id = table_node.attrs["id"]
+    owner = table_owner_node(table_node)
+    table_id = (
+        owner.attrs["id"]
+        if owner is not None and owner.attrs.get("id")
+        else table_node.attrs["id"]
+    )
     rows = [node for node in walk(table_node) if node.tag == "tr"]
     if not rows:
         return HtmlTable(table_id=table_id, columns=[], rows=[], row_ids=[])
@@ -288,6 +302,7 @@ def parse_table(table_node: HtmlNode) -> HtmlTable:
         rows=parsed_rows,
         row_ids=row_ids,
         header_row_id=header_row.attrs.get("id"),
+        label=table_label(table_node, owner),
     )
 
 
@@ -302,12 +317,33 @@ def extract_table_columns(row: HtmlNode) -> list[str]:
     return columns
 
 
-def table_name(table_node: HtmlNode) -> str | None:
+def table_label(table_node: HtmlNode, owner: HtmlNode | None = None) -> str | None:
     for child in table_node.children:
         if child.tag == "caption":
             name = node_text(child)
             return name or None
+    if owner is not None:
+        for child in owner.children:
+            if "caption" in (child.attrs.get("class") or "").split():
+                label = node_text(child)
+                return label or None
     return None
+
+
+def table_owner_node(table_node: HtmlNode) -> HtmlNode | None:
+    parent = table_node.parent
+    while parent is not None:
+        if parent.tag == "figure" and parent.attrs.get("data-type", "").lower() == "table":
+            return parent
+        parent = parent.parent
+    return None
+
+
+def is_table_overview_node(node: HtmlNode) -> bool:
+    return (
+        node.tag == "table"
+        or (node.tag == "figure" and node.attrs.get("data-type", "").lower() == "table")
+    )
 
 
 def row_cells(row: HtmlNode) -> list[HtmlNode]:
@@ -326,6 +362,12 @@ def infer_element_type(tag: str) -> str:
     if tag == "caption":
         return "CAPTION"
     return "TEXT"
+
+
+def infer_node_type(node: HtmlNode) -> str:
+    if node.tag == "figure" and node.attrs.get("data-type", "").lower() == "table":
+        return "TABLE"
+    return infer_element_type(node.tag or "")
 
 
 def heading_level(tag: str) -> int:

@@ -20,11 +20,12 @@ def test_build_broad_messages_includes_task_and_tree():
     assert '<p id="dp-p-1">全文正文</p>' in content
     assert "resolution agent" in content
     assert "Available resolution tools" not in content
-    assert "broad must only return a plan" in content
-    assert "must not state final field values" in content
+    assert "只能 return_broad_plan" in content
+    assert "不能直接抽取最终字段值" in content
     assert "field=value" in content
-    assert "read dp-table-2 and extract the capacity column" in content
-    assert "must not pre-fill the extraction answers" in content
+    assert "用 update_plan 标记" in content
+    assert "读取 p004_b002 表格" in content
+    assert "不能预先填答案" in content
 
 
 def test_run_broad_planner_binds_only_plan_output_function():

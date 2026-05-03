@@ -105,10 +105,11 @@ attributes. The tree therefore infers semantic type from tags:
 Tree construction rules:
 
 - headings form hierarchy by numeric level;
-- text/list/table/caption nodes attach to the nearest active heading;
-- if no heading exists, nodes attach to root;
+- only headings and tables appear in the overview tree;
+- tables attach to the nearest active heading;
+- if no heading exists, tables attach to root;
 - table rows and cells do not appear in the overview tree;
-- table nodes show only columns and row count, never full rows.
+- table nodes show table name, columns, and row count, never full rows.
 
 ## Tools
 
@@ -119,7 +120,6 @@ docstrings are the model-facing function descriptions.
 
 Tools:
 
-- `overview()`: return the document tree.
 - `read_element(element_id)`: read one element. Tables return columns/header
   metadata only.
 - `table_extraction(table_id, sql)`: run a single `SELECT` against one table as
@@ -132,8 +132,8 @@ Tools:
 
 ## Broad
 
-`broad.py` is a planner only. It receives task spec and the overview tree, then
-uses a single bound function tool:
+`broad.py` is a planner only. It receives task spec, overview context, and the
+full HTML document, then uses a single bound function tool:
 
 ```python
 return_broad_plan(summary: str, plan: list[str], risks: list[str])
@@ -152,8 +152,9 @@ agent -> tools -> agent
           finish ok / max_tool_calls -> END
 ```
 
-The resolution model sees only the six public tool wrappers. It never sees
-`GraphState`.
+The resolution model receives a compact built-in text outline, not raw
+`str(document.tree)` JSON. It sees only the five public tool wrappers and never
+sees `GraphState`.
 
 ## Evidence
 

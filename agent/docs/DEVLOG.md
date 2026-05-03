@@ -1,4 +1,34 @@
-last updated: 2026-04-30 20:42:20
+last updated: 2026-05-04 02:20:00
+
+## 2026-05-04 02:20:00
+
+### 已完成工作
+
+- 将 `file_extraction_agent` 收口到 HTML 文档工作流：broad 只看完整 HTML 并产出 plan，resolution 通过工具读取 section/element/table/paragraph 并逐步 `set_field`。
+- 新增/扩展 HTML index：基于 document_processor 已补好的 DOM id 建立元素索引、表格索引、标题树和表格行证据 id，不再在抽取包内重新生成 element id。
+- resolution 工具返回 HTML 片段而不是自定义 JSON 文本，`read_section(depth=1)` 默认只读当前层，可由模型显式调大 depth；表格查询错误会作为工具错误返回给模型自行修正，不直接终止 agent。
+- 增加 `update_plan`/tool action trace，要求模型每一步写 reason，便于前端复现“人类查找文档”的过程。
+- 模型配置继续走 `agent/.env`，支持 broad/resolution 分别配置模型名、temperature、top_k 等参数。
+- 更新 file_extraction_agent 设计文档和测试，覆盖 broad plan、HTML index、table row evidence、工具错误恢复和 resolution tool loop。
+
+### 当前进展
+
+- 用立命馆真实 PDF 走 backend 全链路时，document_processor 和 file_extraction_agent 均完成；route_policy 因 API key 配置不匹配失败，但抽取结果和完整 actions trace 已保存，可被前端 replay。
+- 当前抽取 trace 已能驱动前端显示：outline 定位、文档滚动、高亮、表格行 evidence、字段写入和 plan 进度。
+
+### 验证
+
+- `PYTHONPATH=agent python -m pytest agent/tests/file_extraction_agent/test_broad_new.py agent/tests/file_extraction_agent/test_html_index_new.py agent/tests/file_extraction_agent/test_html_tools_new.py agent/tests/file_extraction_agent/test_resolution_new.py -q`
+- 真实任务 `task_fc1c4d34a48742c9b7785f13f497ced8` 产生 `52` 个 replay actions、完整 `display_html` 和 11 个字段结果。
+
+### 遇到的问题
+
+- 当前 broad plan 仍有轻微“过度计划/幻觉式描述”，但本次先只记录状态并提交，不调整 prompt。
+- 大 PDF 中模型可能重复读取相邻 section；已通过 `read_section(depth)` 降低一次读取过多内容的风险，但后续 prompt 仍需要继续收敛行为。
+
+### 下一步
+
+- 后续单独调 prompt：让 plan 更克制，只描述查找策略；resolution 看到字段证据足够后立即 `set_field`，避免把所有字段拖到最后统一写入。
 
 ## 2026-04-30 20:42:20
 
