@@ -11,11 +11,16 @@ def build_route_policy_request(
     extracted_fields: list[dict[str, Any]],
     field_traces: list[dict[str, Any]],
     metadata: dict[str, Any],
+    block_lookup: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     trace_by_field = {trace["field_name"]: trace for trace in field_traces}
     field_outputs = [_build_field_output(field) for field in extracted_fields]
     refs_with_text = [
-        _build_refs_with_text(field["field_name"], trace_by_field.get(field["field_name"]))
+        _build_refs_with_text(
+            field["field_name"],
+            trace_by_field.get(field["field_name"]),
+            block_lookup=block_lookup or {},
+        )
         for field in extracted_fields
     ]
     field_processes = [
@@ -45,19 +50,51 @@ def _build_field_output(field: dict[str, Any]) -> dict[str, Any]:
 def _build_refs_with_text(
     field_name: str,
     trace: dict[str, Any] | None,
+    *,
+    block_lookup: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     if trace is None:
         return {"field_name": field_name, "refs": []}
 
     evidence = loads_json(trace["evidence_json"], {})
     refs = evidence.get("refs") or []
+    if not refs:
+        refs = [{"block_id": block_id} for block_id in evidence.get("block_ids") or [] if block_id]
     texts = evidence.get("texts") or []
     refs_with_text: list[dict[str, Any]] = []
     for index, ref in enumerate(refs):
         item = dict(ref)
-        item["text"] = texts[index] if index < len(texts) else ""
+        item["text"] = _resolve_ref_text(
+            ref=item,
+            texts=texts,
+            index=index,
+            block_lookup=block_lookup,
+        )
+        source_block = block_lookup.get(str(item.get("block_id") or ""))
+        if source_block:
+            if not item.get("document_id"):
+                item["document_id"] = source_block.get("document_id")
+            if not item.get("page"):
+                item["page"] = source_block.get("page_no") or source_block.get("page")
         refs_with_text.append(item)
     return {"field_name": field_name, "refs": refs_with_text}
+
+
+def _resolve_ref_text(
+    *,
+    ref: dict[str, Any],
+    texts: list[Any],
+    index: int,
+    block_lookup: dict[str, dict[str, Any]],
+) -> str:
+    if index < len(texts) and isinstance(texts[index], str) and texts[index].strip():
+        return texts[index]
+    block_id = ref.get("block_id")
+    if isinstance(block_id, str):
+        block = block_lookup.get(block_id)
+        if block and isinstance(block.get("text"), str):
+            return block["text"]
+    return ""
 
 
 def _build_field_process(

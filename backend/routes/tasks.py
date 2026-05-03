@@ -78,6 +78,14 @@ def get_trace(task_id: str, request: Request):
         raise_http_error(exc)
 
 
+@router.get("/tasks/{task_id}/replay")
+def get_replay(task_id: str, request: Request):
+    try:
+        return request.app.state.task_service.get_replay(task_id)
+    except BackendServiceError as exc:
+        raise_http_error(exc)
+
+
 @router.get("/tasks/{task_id}/audit")
 def get_audit(task_id: str, request: Request):
     try:

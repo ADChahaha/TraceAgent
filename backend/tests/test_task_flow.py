@@ -49,10 +49,12 @@ class FakeAgentClient:
                 "file_type": file_type,
             }
         )
-        text = "2-201 被列为文明寝室补充材料" if filename == "supplement.docx" else "1-101、1-102 被列为文明寝室"
+        text = "2-201 被列为文明寝室补充材料" if filename == "supplement.pdf" else "1-101、1-102 被列为文明寝室"
         return {
             "file_type": file_type,
             "filename": filename,
+            "html": f'<h1 id="dp-h1-1">测试文档</h1><p id="dp-p-1">{text}</p>',
+            "display_html": f'<h1 id="dp-h1-1">测试文档</h1><p id="dp-p-1">{text}</p>',
             "markdown": text,
             "md_list": [text],
             "blocks": [
@@ -70,28 +72,22 @@ class FakeAgentClient:
     def extract_fields(
         self,
         *,
-        blocks: list[dict[str, Any]],
-        markdown: str,
-        md_list: list[str],
+        html: str,
         task_spec: dict[str, Any],
-        metadata: dict[str, Any],
         run_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self.extraction_calls.append(
             {
-                "blocks": blocks,
-                "markdown": markdown,
-                "md_list": md_list,
+                "html": html,
                 "task_spec": task_spec,
-                "metadata": metadata,
                 "run_options": run_options,
             }
         )
         ref = {
-            "document_id": blocks[0]["document_id"],
-            "page": blocks[0]["page_no"],
+            "document_id": "doc_test",
+            "page": 2,
             "span": "p:p1",
-            "block_id": blocks[0]["block_id"],
+            "block_id": "dp-p-1",
         }
         return {
             "status": "completed",
@@ -106,12 +102,20 @@ class FakeAgentClient:
                 ]
             },
             "trace": {
+                "document_tree": [
+                    {
+                        "id": "dp-h1-1",
+                        "type": "TITLE",
+                        "text": "测试文档",
+                        "children": [],
+                    }
+                ],
                 "fields": [
                     {
                         "field_name": "room_numbers",
                         "status": "resolved",
                         "evidence": {
-                            "block_ids": [blocks[0]["block_id"]],
+                            "block_ids": ["dp-p-1"],
                             "texts": ["1-101、1-102 被列为文明寝室"],
                             "refs": [ref],
                             "status": "candidate_resolved",
@@ -126,7 +130,7 @@ class FakeAgentClient:
                                 "used_in_final_decision": False,
                                 "metadata": {
                                     "stage": "broad",
-                                    "refs": [f"{blocks[0]['block_id']}:p:p1"],
+                                    "refs": ["dp-p-1:p:p1"],
                                 },
                             },
                             {
@@ -137,7 +141,7 @@ class FakeAgentClient:
                                 "metadata": {
                                     "stage": "broad",
                                     "candidate_ids": ["c1"],
-                                    "refs": [f"{blocks[0]['block_id']}:p:p1"],
+                                    "refs": ["dp-p-1:p:p1"],
                                 },
                             },
                             {
@@ -160,7 +164,7 @@ class FakeAgentClient:
                                 "metadata": {
                                     "stage": "resolution",
                                     "candidate_ids": ["c1"],
-                                    "refs": [f"{blocks[0]['block_id']}:p:p1"],
+                                    "refs": ["dp-p-1:p:p1"],
                                 },
                             }
                         ],
@@ -204,29 +208,23 @@ class FakeAgentClient:
                     "needs_review": self.route != "accept",
                 }
             ],
-            "warnings": [],
-            "metadata": {"source": "fake-agent"},
-        }
+        "warnings": [],
+        "metadata": {"source": "fake-agent"},
+    }
 
 
 class FakeFailedExtractionAgentClient(FakeAgentClient):
     def extract_fields(
         self,
         *,
-        blocks: list[dict[str, Any]],
-        markdown: str,
-        md_list: list[str],
+        html: str,
         task_spec: dict[str, Any],
-        metadata: dict[str, Any],
         run_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self.extraction_calls.append(
             {
-                "blocks": blocks,
-                "markdown": markdown,
-                "md_list": md_list,
+                "html": html,
                 "task_spec": task_spec,
-                "metadata": metadata,
                 "run_options": run_options,
             }
         )
@@ -248,7 +246,7 @@ class FakeFailedExtractionAgentClient(FakeAgentClient):
                         "field_name": "room_numbers",
                         "status": "failed",
                         "evidence": {
-                            "block_ids": [blocks[0]["block_id"]],
+                            "block_ids": ["dp-p-1"],
                             "texts": ["1-101、1-102 被列为文明寝室"],
                             "refs": [],
                             "status": "partial",
@@ -377,6 +375,52 @@ def test_route_policy_request_counts_broad_copy_candidates_in_broad_stage():
     ]
 
 
+def test_route_policy_request_backfills_ref_text_from_document_blocks():
+    trace = {
+        "field_name": "room_numbers",
+        "evidence_json": json.dumps(
+            {
+                "refs": [{"block_id": "dp-p-1"}],
+                "texts": [],
+                "status": "resolved",
+            },
+            ensure_ascii=False,
+        ),
+        "actions_json": json.dumps([], ensure_ascii=False),
+        "reason": "候选证据支持字段值",
+        "failure_reason": None,
+    }
+
+    request = build_route_policy_request(
+        task_spec=TASK_SPEC,
+        extracted_fields=[
+            {
+                "field_name": "room_numbers",
+                "agent_status": "resolved",
+                "agent_value_json": json.dumps("1-101,1-102", ensure_ascii=False),
+                "reason": "候选证据支持字段值",
+                "failure_reason": None,
+            }
+        ],
+        field_traces=[trace],
+        metadata={},
+        block_lookup={
+            "dp-p-1": {
+                "document_id": "doc_1",
+                "block_id": "dp-p-1",
+                "text": "1-101、1-102 被列为文明寝室",
+                "page_no": 2,
+                "kind": "text",
+            }
+        },
+    )
+
+    ref = request["refs_with_text"][0]["refs"][0]
+    assert ref["text"] == "1-101、1-102 被列为文明寝室"
+    assert ref["document_id"] == "doc_1"
+    assert ref["page"] == 2
+
+
 def test_create_task_returns_pending_before_background_pipeline_finishes(tmp_path: Path):
     app, fake_agent = build_app(tmp_path, route="accept")
 
@@ -455,10 +499,21 @@ def test_create_task_accept_route_commits_agent_fields(tmp_path: Path):
         assert commit["committed_by"] == "agent"
         assert commit["agent_process"]["actions"][0]["message"] == "文明寝室 OR 房间号"
 
+        replay_response = client.get(f"/tasks/{task_id}/replay")
+        assert replay_response.status_code == 200
+        replay = replay_response.json()
+        assert replay["outline_tree"] == [
+            {
+                "id": "dp-h1-1",
+                "type": "TITLE",
+                "text": "测试文档",
+                "children": [],
+            }
+        ]
+
         extract_call = fake_agent.extraction_calls[0]
         assert extract_call["task_spec"] == TASK_SPEC
-        assert extract_call["blocks"][0]["document_id"].startswith("doc_")
-        assert extract_call["blocks"][0]["block_id"].startswith("doc_")
+        assert "dp-p-1" in extract_call["html"]
         route_call = fake_agent.route_policy_calls[0]
         assert route_call["field_outputs"] == [
             {"field_name": "room_numbers", "status": "resolved", "value": "1-101,1-102"}
@@ -502,9 +557,9 @@ def test_create_task_accepts_multiple_files_and_merges_document_blocks(tmp_path:
                 (
                     "files",
                     (
-                        "supplement.docx",
-                        b"fake docx",
-                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        "supplement.pdf",
+                        b"%PDF-1.4 supplement",
+                        "application/pdf",
                     ),
                 ),
             ],
@@ -515,27 +570,12 @@ def test_create_task_accepts_multiple_files_and_merges_document_blocks(tmp_path:
         assert response.json()["stage"] == "uploaded"
         assert [call["filename"] for call in fake_agent.document_calls] == [
             "sample.pdf",
-            "supplement.docx",
+            "supplement.pdf",
         ]
 
         extract_call = fake_agent.extraction_calls[0]
-        assert extract_call["markdown"] == (
-            "1-101、1-102 被列为文明寝室\n\n"
-            "2-201 被列为文明寝室补充材料"
-        )
-        assert extract_call["md_list"] == [
-            "1-101、1-102 被列为文明寝室",
-            "2-201 被列为文明寝室补充材料",
-        ]
-        assert [block["text"] for block in extract_call["blocks"]] == [
-            "1-101、1-102 被列为文明寝室",
-            "2-201 被列为文明寝室补充材料",
-        ]
-        assert len({block["document_id"] for block in extract_call["blocks"]}) == 2
-        assert extract_call["metadata"]["document_ids"] == [
-            extract_call["blocks"][0]["document_id"],
-            extract_call["blocks"][1]["document_id"],
-        ]
+        assert "1-101、1-102 被列为文明寝室" in extract_call["html"]
+        assert "2-201 被列为文明寝室补充材料" in extract_call["html"]
 
         trace_response = client.get(f"/tasks/{response.json()['task_id']}/trace")
         assert trace_response.status_code == 200
@@ -550,7 +590,7 @@ def test_create_task_accepts_multiple_files_and_merges_document_blocks(tmp_path:
         assert steps[0]["summary"]["document_count"] == 2
         assert [document["filename"] for document in steps[0]["documents"]] == [
             "sample.pdf",
-            "supplement.docx",
+            "supplement.pdf",
         ]
         assert steps[0]["documents"][0]["block_count"] == 1
         assert steps[1]["stage"] == "extraction"
@@ -576,9 +616,7 @@ def test_create_task_accepts_multiple_files_and_merges_document_blocks(tmp_path:
         assert process_steps[0]["evidence"]["texts"] == ["1-101、1-102 被列为文明寝室"]
         assert process_steps[0]["evidence"]["blocks"] == [
             {
-                "document_id": extract_call["blocks"][0]["document_id"],
-                "block_id": extract_call["blocks"][0]["block_id"],
-                "page": 2,
+                "block_id": "dp-p-1",
                 "text": "1-101、1-102 被列为文明寝室",
                 "kind": "text",
             }
@@ -639,10 +677,10 @@ def test_create_task_accepts_multiple_files_and_merges_document_blocks(tmp_path:
         assert agent_trace[0]["request"]["upload_size_bytes"] == len(b"%PDF-1.4 fake")
         assert "file_bytes" not in agent_trace[0]["request"]
         assert agent_trace[0]["response"]["markdown"] == "1-101、1-102 被列为文明寝室"
-        assert agent_trace[1]["request"]["filename"] == "supplement.docx"
+        assert agent_trace[1]["request"]["filename"] == "supplement.pdf"
         assert agent_trace[1]["response"]["blocks"][0]["text"] == "2-201 被列为文明寝室补充材料"
         assert agent_trace[2]["request"]["task_spec"] == TASK_SPEC
-        assert agent_trace[2]["request"]["metadata"]["document_ids"] == extract_call["metadata"]["document_ids"]
+        assert agent_trace[2]["request"]["metadata"]["document_ids"]
         assert agent_trace[2]["response"]["result"]["fields"] == [
             {"field_name": "room_numbers", "status": "resolved", "value": "1-101,1-102"}
         ]
@@ -671,9 +709,9 @@ def test_review_route_returns_handoff_and_accepts_revised_value(tmp_path: Path):
             },
             files={
                 "file": (
-                    "sample.docx",
-                    b"fake docx",
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    "sample.pdf",
+                    b"%PDF-1.4 fake",
+                    "application/pdf",
                 )
             },
         )
@@ -758,7 +796,7 @@ def test_review_route_returns_handoff_and_accepts_revised_value(tmp_path: Path):
         assert commit["agent_process"]["process_steps"][1]["title"] == "第二步 resolution / tool"
         assert commit["agent_process"]["process_steps"][2]["title"] == "第三步 agent result（route 前）"
         assert commit["agent_process"]["process_steps"][3]["title"] == "第四步 route validation"
-        assert fake_agent.document_calls[0]["file_type"] == "docx"
+        assert fake_agent.document_calls[0]["file_type"] == "pdf"
 
 
 def test_agent_process_without_tool_actions_keeps_resolution_step_completed():
@@ -822,7 +860,7 @@ def test_capabilities_returns_supported_task_and_routes(tmp_path: Path):
 
         assert response.status_code == 200
         payload = response.json()
-        assert payload["supported_file_types"] == ["pdf", "docx"]
+        assert payload["supported_file_types"] == ["pdf"]
         assert payload["task_types"] == []
         assert payload["routes"] == ["accept", "review", "reject"]
         assert payload["review_decisions"] == ["approve", "revise_and_approve", "reject"]

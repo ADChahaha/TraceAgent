@@ -235,6 +235,39 @@ class TaskService:
             "metadata": trace_payload.get("metadata", {}),
         }
 
+    def get_replay(self, task_id: str) -> dict[str, Any]:
+        task = self.get_task_or_raise(task_id)
+        agent_run = extraction_crud.get_latest_agent_run(self.connection, task_id)
+        trace_payload = loads_json(agent_run["trace_json"], {}) if agent_run else {}
+        result_payload = loads_json(agent_run["result_json"], {}) if agent_run else {}
+        documents = tasks_crud.list_documents_by_task(self.connection, task_id)
+        agent_stage_runs = agent_stage_runs_crud.list_agent_stage_runs(
+            self.connection,
+            task_id,
+        )
+        return {
+            "task_id": task["id"],
+            "status": task["status"],
+            "stage": task["stage"],
+            "documents": [
+                {
+                    "document_id": document["id"],
+                    "filename": document["filename"],
+                }
+                for document in documents
+            ],
+            "display_html": self._build_replay_display_html(agent_stage_runs),
+            "outline_tree": trace_payload.get("document_tree") or [],
+            "broad_plan": trace_payload.get("broad_plan"),
+            "actions": trace_payload.get("actions") or [],
+            "result": result_payload,
+            "field_states": trace_payload.get("field_states") or {},
+            "audit": {
+                "route": task["route"],
+                "route_reason": task["route_reason"],
+            },
+        }
+
     def get_task_or_raise(self, task_id: str) -> dict[str, Any]:
         task = tasks_crud.get_task(self.connection, task_id)
         if task is None:
@@ -318,19 +351,14 @@ class TaskService:
             **document_bundle["metadata"],
         }
         extraction_request = {
-            "blocks": document_bundle["blocks"],
-            "markdown": document_bundle["markdown"],
-            "md_list": document_bundle["md_list"],
+            "html_chars": len(document_bundle["html"]),
             "task_spec": task_spec,
             "metadata": extraction_metadata,
             "run_options": None,
         }
         extraction_result = self.agent_client.extract_fields(
-            blocks=document_bundle["blocks"],
-            markdown=document_bundle["markdown"],
-            md_list=document_bundle["md_list"],
+            html=document_bundle["html"],
             task_spec=task_spec,
-            metadata=extraction_metadata,
             run_options=None,
         )
         extraction_finished_at = utc_now()
@@ -383,6 +411,8 @@ class TaskService:
         )
         fields = extraction_crud.list_extracted_fields(self.connection, task_id)
         traces = extraction_crud.list_field_traces(self.connection, task_id)
+        route_documents = tasks_crud.list_documents_by_task(self.connection, task_id)
+        route_block_lookup = build_document_block_lookup(route_documents)
 
         route_started_at = utc_now()
         tasks_crud.update_task(
@@ -401,6 +431,7 @@ class TaskService:
                 "task_type": task_type,
                 **document_bundle["metadata"],
             },
+            block_lookup=route_block_lookup,
         )
         route_result = self.agent_client.evaluate_route_policy(**route_request)
         route_finished_at = utc_now()
@@ -455,6 +486,7 @@ class TaskService:
         all_blocks: list[dict[str, Any]] = []
         all_md_list: list[str] = []
         markdown_parts: list[str] = []
+        html_parts: list[str] = []
 
         for upload_file in upload_files:
             document_id = f"doc_{uuid.uuid4().hex}"
@@ -494,6 +526,7 @@ class TaskService:
             )
             next_trace_sequence += 1
             markdown = document_result.get("markdown") or ""
+            html = document_result.get("html") or document_result.get("display_html") or ""
             md_list = document_result.get("md_list") or []
             blocks = self._normalize_blocks(
                 document_id=document_id,
@@ -522,14 +555,20 @@ class TaskService:
             all_md_list.extend(md_list)
             if markdown:
                 markdown_parts.append(markdown)
+            if html:
+                html_parts.append(html)
 
         metadata = {"document_ids": document_ids}
         if document_ids:
             metadata["document_id"] = document_ids[0]
+        html = "\n\n".join(html_parts).strip()
+        if not html:
+            html = "\n\n".join(f'<p id="backend-fallback-p-{index}">{block.get("text", "")}</p>' for index, block in enumerate(all_blocks, start=1))
         return {
             "blocks": all_blocks,
             "markdown": "\n\n".join(markdown_parts),
             "md_list": all_md_list,
+            "html": html,
             "metadata": metadata,
             "next_trace_sequence": next_trace_sequence,
         }
@@ -543,13 +582,12 @@ class TaskService:
         now: str,
     ) -> None:
         field_specs = {
-            field["field_name"]: field for field in task_spec.get("fields", [])
+            (field.get("name") or field.get("field_name")): field
+            for field in task_spec.get("fields", [])
         }
-        trace_by_field = {
-            trace["field_name"]: trace
-            for trace in (extraction_result.get("trace") or {}).get("fields", [])
-        }
-        for field in (extraction_result.get("result") or {}).get("fields", []):
+        trace_payload = extraction_result.get("trace") or {}
+        trace_by_field = self._build_trace_by_field(trace_payload)
+        for field in self._iter_extraction_result_fields(extraction_result):
             field_name = field["field_name"]
             field_spec = field_specs.get(field_name, {})
             trace = trace_by_field.get(field_name, {})
@@ -578,6 +616,68 @@ class TaskService:
                 reason=trace.get("reason"),
                 failure_reason=trace.get("failure_reason"),
             )
+
+    def _iter_extraction_result_fields(
+        self,
+        extraction_result: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        result = extraction_result.get("result") or {}
+        if isinstance(result, dict) and isinstance(result.get("fields"), list):
+            return result["fields"]
+        if not isinstance(result, dict):
+            return []
+        field_states = (extraction_result.get("trace") or {}).get("field_states") or {}
+        fields = []
+        for field_name, value in result.items():
+            state = field_states.get(field_name) if isinstance(field_states, dict) else {}
+            fields.append(
+                {
+                    "field_name": field_name,
+                    "status": state.get("status") or "resolved",
+                    "value": value,
+                    "failure_reason": state.get("failure_reason"),
+                }
+            )
+        return fields
+
+    def _build_trace_by_field(self, trace_payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        traces = trace_payload.get("fields")
+        if isinstance(traces, list):
+            return {
+                trace["field_name"]: trace
+                for trace in traces
+                if isinstance(trace, dict) and trace.get("field_name")
+            }
+        field_states = trace_payload.get("field_states") or {}
+        actions = trace_payload.get("actions") or []
+        trace_by_field: dict[str, dict[str, Any]] = {}
+        if not isinstance(field_states, dict):
+            return trace_by_field
+        for field_name, state in field_states.items():
+            if not isinstance(state, dict):
+                continue
+            evidence_ids = state.get("evidence_ids") or []
+            trace_by_field[str(field_name)] = {
+                "field_name": field_name,
+                "status": state.get("status"),
+                "evidence": {
+                    "block_ids": evidence_ids,
+                    "refs": [{"block_id": evidence_id} for evidence_id in evidence_ids],
+                    "texts": [],
+                    "status": state.get("status"),
+                },
+                "related_fields": [],
+                "actions": [
+                    action
+                    for action in actions
+                    if isinstance(action, dict)
+                    and action.get("tool_name") == "set_field"
+                    and (action.get("args") or {}).get("name") == field_name
+                ],
+                "reason": None,
+                "failure_reason": state.get("failure_reason"),
+            }
+        return trace_by_field
 
     def _save_field_routes(
         self,
@@ -833,6 +933,17 @@ class TaskService:
             "started_at": stage_run["started_at"],
             "finished_at": stage_run["finished_at"],
         }
+
+    def _build_replay_display_html(self, stage_runs: list[dict[str, Any]]) -> str:
+        html_parts: list[str] = []
+        for stage_run in stage_runs:
+            if stage_run["agent_name"] != "document_processor":
+                continue
+            response = loads_json(stage_run["response_json"], {})
+            display_html = response.get("display_html") or response.get("html")
+            if isinstance(display_html, str) and display_html.strip():
+                html_parts.append(display_html)
+        return "\n\n".join(html_parts)
 
     def _serialize_trace_steps(
         self,

@@ -9,8 +9,8 @@ from pathlib import Path
 class BackendSettings:
     database_path: Path = Path("backend/backend.sqlite3")
     agent_service_base_url: str = "http://localhost:8001"
-    agent_request_timeout_seconds: float = 60.0
-    supported_file_types: tuple[str, ...] = ("pdf", "docx")
+    agent_request_timeout_seconds: float = 1200.0
+    supported_file_types: tuple[str, ...] = ("pdf",)
 
     def __post_init__(self) -> None:
         self.database_path = Path(self.database_path)
@@ -27,6 +27,6 @@ class BackendSettings:
                 "http://localhost:8001",
             ),
             agent_request_timeout_seconds=float(
-                os.getenv("AGENT_SERVICE_TIMEOUT_SECONDS", "60")
+                os.getenv("AGENT_SERVICE_TIMEOUT_SECONDS", "1200")
             ),
         )

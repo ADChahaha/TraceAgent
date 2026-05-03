@@ -61,7 +61,7 @@ cd ..
 ```text
 BACKEND_DATABASE_PATH=/path/to/backend.sqlite3
 AGENT_SERVICE_BASE_URL=http://localhost:8001
-AGENT_SERVICE_TIMEOUT_SECONDS=60
+AGENT_SERVICE_TIMEOUT_SECONDS=1200
 ```
 
 `backend` 不内置任何业务 task spec，也不从默认目录兜底加载。调用方必须在 `POST /tasks` 的 multipart 表单中传入 `task_spec` JSON。新版上传字段为可重复的 `files`，旧版单文件 `file` 字段仍兼容。

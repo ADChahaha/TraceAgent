@@ -37,19 +37,13 @@ class AgentClient:
     def extract_fields(
         self,
         *,
-        blocks: list[dict[str, Any]],
-        markdown: str,
-        md_list: list[str],
+        html: str,
         task_spec: dict[str, Any],
-        metadata: dict[str, Any],
         run_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "blocks": blocks,
-            "markdown": markdown,
-            "md_list": md_list,
+            "html": html,
             "task_spec": task_spec,
-            "metadata": metadata,
         }
         if run_options is not None:
             payload["run_options"] = run_options

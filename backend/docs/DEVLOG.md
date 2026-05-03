@@ -1,6 +1,36 @@
 # Backend Devlog
 
-last updated: 2026-04-30 20:42:20
+last updated: 2026-05-04 02:20:00
+
+## 2026-05-04 02:20:00
+
+### 已完成工作
+
+- 增加任务 replay 数据流：`GET /tasks/{task_id}/replay` 返回 documents、`display_html`、`outline_tree`、broad plan、actions、field states 和最终 result。
+- backend 从 `agent_stage_runs` 中复用 document_processor 的 `display_html` 和 file_extraction_agent 的 trace，不重新解析 PDF 或重跑模型。
+- route/replay validator 保留：最终 result 仍由 `set_field` actions reduce 得出，并校验证据 id 能在 document index 中定位。
+- 修复 failed task 的 replay 可见性：即使 route_policy 阶段失败，只要 document_processor/file_extraction_agent 已完成，前端仍可打开 Review 动画检查抽取过程。
+- route_policy 请求组装补齐 `refs_with_text[].refs[].text`，从保存的 `documents.blocks_json` 回填证据文本，避免下游 route 判断缺少 evidence 文本。
+- 后端超时配置支持长 PDF OCR/抽取场景，前端代理也允许更大的上传 body。
+
+### 当前进展
+
+- 真实任务 `task_fc1c4d34a48742c9b7785f13f497ced8` 虽然最终状态为 `failed`，但 replay endpoint 已返回 `52` 个 actions、约 31 万字符 `display_html` 和完整字段结果。
+- 这使得“route_policy 失败”和“file_extraction_agent 是否可信”可以分开检查，符合 Review 动画的调试需求。
+
+### 验证
+
+- `PYTHONPATH=. python -m pytest backend/tests/test_task_flow.py -q`
+- `curl http://127.0.0.1:3010/api/backend/tasks/task_fc1c4d34a48742c9b7785f13f497ced8/replay` 验证 replay payload 包含 actions/display_html/outline_tree/result。
+
+### 遇到的问题
+
+- route_policy_agent 当前读取 `OPENAI_API_KEY`，而本地 `agent/.env` 使用 `API_KEY`，导致真实任务在 route_policy 阶段 422；本次没有调整 route prompt 或 route policy 配置。
+- 旧详情页在 failed task 上会隐藏 replay，实际不利于查看已经成功的 extraction 输出，已改为只要有 trace/result 就尝试拉取 replay。
+
+### 下一步
+
+- 后续可单独修 route_policy_agent 的环境变量兼容，让它读取 `OPENAI_API_KEY or API_KEY`，并统一 route policy 模型名配置。
 
 ## 2026-04-30 20:42:20
 
