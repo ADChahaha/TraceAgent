@@ -3,6 +3,7 @@ import type {
   Capabilities,
   ReviewHandoff,
   ReviewSubmitPayload,
+  TaskReplay,
   TaskCreated,
   TaskDetailData,
   TaskResult,
@@ -44,6 +45,10 @@ export async function getTaskTrace(taskId: string): Promise<TaskTrace> {
   return requestJson<TaskTrace>(`/api/backend/tasks/${encodeURIComponent(taskId)}/trace`);
 }
 
+export async function getTaskReplay(taskId: string): Promise<TaskReplay> {
+  return requestJson<TaskReplay>(`/api/backend/tasks/${encodeURIComponent(taskId)}/replay`);
+}
+
 export async function getReviewHandoff(taskId: string): Promise<ReviewHandoff> {
   return requestJson<ReviewHandoff>(`/api/backend/tasks/${encodeURIComponent(taskId)}/review`);
 }
@@ -67,9 +72,13 @@ export async function getTaskAudit(taskId: string): Promise<AuditResult> {
 
 export async function loadTaskDetail(taskId: string): Promise<TaskDetailData> {
   const summary = await getTaskSummary(taskId);
-  const [result, trace, review, audit] = await Promise.all([
+  const [result, trace, replay, review, audit] = await Promise.all([
     optionalFetch(() => getTaskResult(taskId), summary.has_result !== false),
     optionalFetch(() => getTaskTrace(taskId), summary.has_trace !== false),
+    optionalFetch(
+      () => getTaskReplay(taskId),
+      summary.has_trace !== false || summary.has_result !== false,
+    ),
     optionalFetch(() => getReviewHandoff(taskId), summary.status === "waiting_review"),
     optionalFetch(() => getTaskAudit(taskId), summary.status !== "failed")
   ]);
@@ -78,6 +87,7 @@ export async function loadTaskDetail(taskId: string): Promise<TaskDetailData> {
     summary,
     result,
     trace,
+    replay,
     review,
     audit
   };
@@ -90,7 +100,10 @@ async function optionalFetch<T>(loader: () => Promise<T>, enabled: boolean): Pro
   try {
     return await loader();
   } catch (error) {
-    if (error instanceof ApiError && (error.status === 404 || error.status === 409)) {
+    if (
+      error instanceof ApiError &&
+      (error.status === 404 || error.status === 409 || error.status >= 500)
+    ) {
       return null;
     }
     throw error;

@@ -95,8 +95,12 @@ export interface EvidencePayload {
 
 export interface TraceAction {
   action_type?: string;
+  tool_name?: string;
   message?: string;
+  args?: Record<string, unknown>;
+  result?: unknown;
   refs?: EvidenceRef[];
+  evidence_ids?: string[];
   used_in_final_decision?: boolean;
   metadata?: Record<string, unknown>;
 }
@@ -254,8 +258,65 @@ export interface TaskDetailData {
   summary: TaskSummary;
   result: TaskResult | null;
   trace: TaskTrace | null;
+  replay: TaskReplay | null;
   review: ReviewHandoff | null;
   audit: AuditResult | null;
+}
+
+export interface TaskReplay {
+  task_id: string;
+  status: TaskStatus;
+  stage: TaskStage | string;
+  documents: Array<{
+    document_id: string;
+    filename: string;
+  }>;
+  display_html: string;
+  outline_tree?: ReplayOutlineNode[];
+  broad_plan?: ReplayBroadPlan | null;
+  actions: ReplayAction[];
+  result?: {
+    fields?: TaskResultField[];
+    [key: string]: unknown;
+  } | Record<string, unknown>;
+  field_states?: Record<string, ReplayFieldState>;
+  audit?: {
+    route?: RouteDecision | string | null;
+    route_reason?: string | null;
+  };
+}
+
+export interface ReplayBroadPlan {
+  summary?: string;
+  plan?: string[];
+  risks?: string[];
+}
+
+export interface ReplayOutlineNode {
+  id?: string;
+  type?: string;
+  text?: string;
+  label?: string | null;
+  children?: ReplayOutlineNode[];
+}
+
+export interface ReplayAction {
+  tool_name?: string;
+  action_type?: string;
+  args?: Record<string, unknown>;
+  result?: unknown;
+  message?: string;
+  metadata?: Record<string, unknown>;
+  refs?: EvidenceRef[];
+}
+
+export interface ReplayFieldState {
+  name?: string;
+  field_name?: string;
+  status?: string;
+  value?: unknown;
+  evidence_ids?: string[];
+  failure_reason?: string | null;
 }
 
 export interface ReviewSubmitPayload {

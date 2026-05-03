@@ -16,7 +16,10 @@ it("会把 multipart 表单转发到 backend 目标路径", async () => {
   );
   const request = new Request("http://frontend.test/api/backend/tasks", {
     method: "POST",
-    body: formData
+    body: formData,
+    headers: {
+      expect: "100-continue"
+    }
   });
 
   const response = await forwardBackendRequest(request, ["tasks"], {
@@ -29,9 +32,10 @@ it("会把 multipart 表单转发到 backend 目标路径", async () => {
   const [url, init] = fetcher.mock.calls[0];
   expect(url).toBe("http://backend.test/tasks");
   expect(init?.method).toBe("POST");
-  expect(init?.body).toBeInstanceOf(FormData);
-  expect((init?.body as FormData).get("task_type")).toBe("civilized_dormitory");
-  expect((init?.headers as Headers).has("content-type")).toBe(false);
+  expect(init?.body).toBeInstanceOf(ArrayBuffer);
+  expect((init?.body as ArrayBuffer).byteLength).toBeGreaterThan(0);
+  expect((init?.headers as Headers).get("content-type")).toContain("multipart/form-data");
+  expect((init?.headers as Headers).has("expect")).toBe(false);
 });
 
 it("会保留 backend 错误状态和 detail 响应", async () => {

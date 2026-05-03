@@ -454,6 +454,96 @@ it("failed 任务会展示 backend 返回的失败原因", async () => {
   expect(screen.getByText("resolution 执行失败: lookup_blocks action exceeded limit")).toBeInTheDocument();
 });
 
+it("failed 但已有 trace/result 的任务仍会展示 replay", async () => {
+  const failedSummary: TaskSummary = {
+    task_id: "task-route-policy-failed",
+    status: "failed",
+    stage: "done",
+    route: null,
+    route_reason: null,
+    has_result: true,
+    has_trace: true,
+    needs_review: false,
+    error_message: "agent service returned 422: missing api_key"
+  };
+  const loadTaskDetail = jest.fn(async (): Promise<TaskDetailData> => ({
+    summary: failedSummary,
+    result: {
+      task_id: "task-route-policy-failed",
+      status: "failed",
+      route: null,
+      fields: [
+        {
+          field_name: "room_numbers",
+          display_name: "文明寝室房间号",
+          agent_value: "1-101",
+          review_value: null,
+          final_value: null,
+          field_status: "resolved",
+          route: null,
+          source: null,
+          committed: false
+        }
+      ]
+    },
+    trace: null,
+    replay: {
+      task_id: "task-route-policy-failed",
+      status: "failed",
+      stage: "done",
+      documents: [{ document_id: "doc-1", filename: "sample.pdf" }],
+      display_html: "<h1 id=\"p001_b000\">测试文档</h1><p id=\"p001_b001\">1-101</p>",
+      outline_tree: [
+        {
+          id: "p001_b000",
+          type: "TITLE",
+          text: "测试文档",
+          children: []
+        }
+      ],
+      broad_plan: { plan: ["读取测试文档"] },
+      actions: [
+        {
+          tool_name: "set_field",
+          args: {
+            name: "room_numbers",
+            value: "1-101",
+            evidence_ids: ["p001_b001"],
+            reason: "字段已由 file_extraction_agent 写入。"
+          },
+          result: {
+            ok: true,
+            field: {
+              name: "room_numbers",
+              status: "resolved",
+              value: "1-101",
+              evidence_ids: ["p001_b001"],
+              reason: "字段已由 file_extraction_agent 写入。"
+            }
+          }
+        }
+      ],
+      result: { room_numbers: "1-101" },
+      field_states: {},
+      audit: { route: null, route_reason: null }
+    },
+    review: null,
+    audit: null
+  }));
+
+  render(
+    <TaskDetail
+      taskId="task-route-policy-failed"
+      initialSummary={failedSummary}
+      loadTaskDetail={loadTaskDetail}
+    />
+  );
+
+  expect(await screen.findByText("AI extraction replay")).toBeInTheDocument();
+  expect(screen.queryByText("暂无 replay 数据。")).not.toBeInTheDocument();
+  expect(screen.getByText("字段已由 file_extraction_agent 写入。")).toBeInTheDocument();
+});
+
 it("list 字段在结果页按条目分行展示", async () => {
   const completedSummary: TaskSummary = {
     ...waitingReviewSummary,

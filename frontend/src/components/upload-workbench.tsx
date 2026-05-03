@@ -95,7 +95,11 @@ export function UploadWorkbench({
     setError(null);
 
     if (files.length === 0) {
-      setError("请选择 PDF 或 DOCX 文件");
+      setError("请选择 PDF 文件");
+      return;
+    }
+    if (files.some((file) => !isPdfFile(file))) {
+      setError("第一版只支持 PDF 文件");
       return;
     }
     if (!taskType.trim()) {
@@ -152,7 +156,7 @@ export function UploadWorkbench({
           </div>
           <h1 className="text-3xl font-semibold tracking-normal text-foreground">上传工作台</h1>
           <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
-            上传一个或多个 PDF/DOCX，显式提交字段 schema；任务创建后立即入队，右侧列表会跟随处理进度更新。
+            上传 PDF，显式提交字段 schema；任务创建后立即入队，右侧列表会跟随处理进度更新。
           </p>
         </div>
 
@@ -184,12 +188,12 @@ export function UploadWorkbench({
           <div className="grid gap-5 md:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
             <div className="space-y-5">
               <div className="space-y-2">
-                <Label htmlFor="file">上传文件（可多选）</Label>
+                <Label htmlFor="file">上传 PDF（可多选）</Label>
                 <Input
                   id="file"
                   type="file"
                   multiple
-                  accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  accept=".pdf,application/pdf"
                   onChange={(event) =>
                     setFiles(Array.from(event.currentTarget.files ?? []))
                   }
@@ -302,6 +306,10 @@ function getTaskResultLabel(task: RecentTask): string {
     return "failed";
   }
   return task.status;
+}
+
+function isPdfFile(file: File): boolean {
+  return file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
 }
 
 function waitForPollInterval(

@@ -28,6 +28,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { MarkdownEvidence } from "@/components/markdown-evidence";
+import { HumanReviewEditor, ReplayReview } from "@/components/replay-review";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
@@ -49,7 +50,7 @@ export function TaskDetail({
 }: TaskDetailProps) {
   const [detail, setDetail] = React.useState<TaskDetailData | null>(
     initialSummary
-      ? { summary: initialSummary, result: null, trace: null, review: null, audit: null }
+      ? { summary: initialSummary, result: null, trace: null, replay: null, review: null, audit: null }
       : null
   );
   const [reviewValues, setReviewValues] = React.useState<Record<string, string>>({});
@@ -59,6 +60,7 @@ export function TaskDetail({
   const [error, setError] = React.useState<string | null>(null);
 
   const refresh = React.useCallback(async () => {
+    setError(null);
     try {
       const loaded = await loadTaskDetail(taskId);
       setDetail(loaded);
@@ -172,7 +174,30 @@ export function TaskDetail({
       ) : null}
 
       {detail ? (
-        <Tabs
+        <>
+          <ReplayReview
+            replay={detail.replay}
+            finalFields={detail.result?.fields ?? []}
+            reviewSlot={
+              detail.review ? (
+                <HumanReviewEditor
+                  fields={detail.review.fields}
+                  values={reviewValues}
+                  comment={comment}
+                  isSubmitting={isSubmitting}
+                  onValueChange={(fieldName, value) =>
+                    setReviewValues((current) => ({
+                      ...current,
+                      [fieldName]: value
+                    }))
+                  }
+                  onCommentChange={setComment}
+                  onSubmit={() => void handleSubmitReview()}
+                />
+              ) : null
+            }
+          />
+          <Tabs
           defaultValue={
             detail.review || detail.summary.status === "waiting_review" ? "review" : "result"
           }
@@ -281,6 +306,7 @@ export function TaskDetail({
             <AuditTable detail={detail} fieldLabels={fieldLabels} />
           </TabsContent>
         </Tabs>
+        </>
       ) : null}
     </main>
   );

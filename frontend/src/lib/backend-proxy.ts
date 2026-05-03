@@ -8,7 +8,14 @@ const STRIPPED_REQUEST_HEADERS = new Set([
   "host",
   "connection",
   "content-length",
-  "transfer-encoding"
+  "transfer-encoding",
+  "expect",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "upgrade"
 ]);
 const FORWARDED_RESPONSE_HEADERS = ["content-type", "cache-control"];
 
@@ -64,8 +71,7 @@ function buildRequestHeaders(sourceHeaders: Headers): Headers {
 async function buildForwardBody(request: Request, headers: Headers): Promise<BodyInit> {
   const contentType = request.headers.get("content-type") ?? "";
   if (contentType.includes("multipart/form-data")) {
-    headers.delete("content-type");
-    return request.formData();
+    return await request.arrayBuffer();
   }
   return request.text();
 }
