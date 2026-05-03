@@ -1027,7 +1027,7 @@ function getSetFieldPayload(action: ReplayAction): {
 } {
   const resultField = readObject(readObject(action.result)?.field) as ReplayFieldState | null;
   const args = readObject(action.args);
-  const name = readString(args?.name) || readString(resultField?.name) || readString(resultField?.field_name);
+  const name = readString(args?.name) || readString(resultField?.name);
   const evidenceIds = readStringArray(args?.evidence_ids) || readStringArray(resultField?.evidence_ids) || [];
   return {
     name,
