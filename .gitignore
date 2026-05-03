@@ -1,0 +1,32 @@
+.DS_Store
+**/.DS_Store
+
+# Local package/cache stores
+.pnpm-store/
+.pytest_cache/
+**/.pytest_cache/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+
+# Local runtime artifacts
+tmp/
+backend/tmp/
+*.sqlite3
+*.sqlite3-*
+
+# Build outputs
+build/
+dist/
+*.egg-info/
+
+# Local environments and caches
+.venv/
+venv/
+*_venv/
+.env
+.env.*
+
+# Large local OCR/model artifacts
+agent/service/document_processor/models/
+agent/service/document_processor/impl/pdf/models/
