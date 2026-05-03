@@ -1,4 +1,23 @@
-last updated: 2026-05-01 01:21:58 CST
+last updated: 2026-05-04 02:20:00 CST
+
+## 2026-05-04 02:20:00 CST
+- completed work:
+  - 将 PDF 结构化抽取引擎从 docling/RapidOCR 切换为 MinerU pipeline，并删除 docling converter、HTML cleaner、跨页表格合并等旧链路，不保留 fallback。
+  - 新增 MinerU JSON/Markdown 到 display HTML 的转换层，保留页面、标题、正文、列表、表格和表格行的稳定 DOM id。
+  - `ProcessResult` 继续返回 `html/display_html`、`markdown`、`md_list`、`blocks`、`meta_info` 和 `warnings`，兼容 backend 现有调用方式。
+  - 表格节点生成稳定 id：表格块使用原 block id，内部 table 使用 `{block_id}_table`，表格行使用 `{block_id}_tr_000` 这类 id，方便后续 agent 和前端 replay 定位证据。
+  - 更新 document_processor 的 README、API/DESIGN 文档和测试说明，删除旧 html_cleaner/table_merger/pdf_processor 测试，补齐 MinerU converter/html 测试。
+- current progress:
+  - 真实 PDF 已验证 MinerU pipeline 能输出更适合用户查看和 agent 查找的 display HTML，尤其表格结构比之前更稳定。
+  - 后续 file_extraction_agent 和前端 Review 均以 document_processor 返回的 id 化 HTML 作为统一文档视图。
+- encountered problems:
+  - 旧 docling HTML 对用户展示效果较差，且跨页表格修补容易引入任务特化假设。
+  - MinerU pipeline 不需要继续做后置跨页表格合并；第一版先禁用旧合并逻辑，避免破坏原始 OCR 结构。
+- verification:
+  - `PYTHONPATH=agent python -m pytest agent/tests/document_processor/test_mineru_html.py agent/tests/document_processor/test_processor.py agent/tests/routes/test_document_processor_route.py -q`
+  - 前端/后端集成任务中已通过 document processing 阶段并产生可 replay 的 `display_html`。
+- next step:
+  - 后续如果继续优化 OCR，可优先补 MinerU 输出质量评估和按页结构诊断，而不是恢复 docling fallback。
 
 ## 2026-05-01 01:21:58 CST
 - completed work:

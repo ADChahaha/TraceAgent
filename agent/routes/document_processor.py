@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from importlib import import_module
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from service.document_processor.processor import (
@@ -42,8 +41,7 @@ class HealthResponse(BaseModel):
 class CapabilitiesResponse(BaseModel):
     supported_file_types: list[str]
     implemented_file_types: list[str]
-    docling_artifacts_path: str | None = None
-    docling_artifacts_available: bool
+    engine: str
 
 
 class ProcessResponse(BaseModel):
@@ -51,6 +49,12 @@ class ProcessResponse(BaseModel):
 
     filename: str
     html: str
+    display_html: str | None = None
+    markdown: str = ""
+    md_list: list[str] = Field(default_factory=list)
+    blocks: list[dict[str, Any]] = Field(default_factory=list)
+    meta_info: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
 
 
 @router.get("/healthz", response_model=HealthResponse)
@@ -60,12 +64,10 @@ async def healthz() -> HealthResponse:
 
 @router.get("/v1/ocr/capabilities", response_model=CapabilitiesResponse)
 async def get_capabilities() -> CapabilitiesResponse:
-    artifacts_path = _resolve_docling_artifacts_path()
     return CapabilitiesResponse(
         supported_file_types=["pdf"],
         implemented_file_types=["pdf"],
-        docling_artifacts_path=_stringify_path(artifacts_path),
-        docling_artifacts_available=bool(artifacts_path and artifacts_path.exists()),
+        engine="mineru-pipeline",
     )
 
 
@@ -92,17 +94,6 @@ async def process_document(
     return _build_process_response(result)
 
 
-def _stringify_path(path: Path | None) -> str | None:
-    if path is None:
-        return None
-    return str(path)
-
-
-def _resolve_docling_artifacts_path() -> Path | None:
-    docling_converter = import_module("service.document_processor.docling_converter")
-    return docling_converter.resolve_docling_artifacts_path()
-
-
 def _process_document(file_obj, file_type: str | None):
     process_document = import_module("service.document_processor.processor").process
     return process_document(file_obj, file_type)
@@ -112,4 +103,10 @@ def _build_process_response(result) -> ProcessResponse:
     return ProcessResponse(
         filename=result.filename,
         html=result.html,
+        display_html=result.display_html,
+        markdown=result.markdown,
+        md_list=result.md_list,
+        blocks=result.blocks,
+        meta_info=result.meta_info,
+        warnings=result.warnings,
     )

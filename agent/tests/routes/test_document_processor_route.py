@@ -17,10 +17,7 @@ def test_document_processor_capabilities_route_reports_pdf_only_processor():
     payload = response.json()
     assert payload["supported_file_types"] == ["pdf"]
     assert payload["implemented_file_types"] == ["pdf"]
-    assert payload["docling_artifacts_path"].endswith(
-        "service/document_processor/models/docling"
-    )
-    assert isinstance(payload["docling_artifacts_available"], bool)
+    assert payload["engine"] == "mineru-pipeline"
 
 
 def test_document_processor_route_uses_public_processor_exception_contract():
@@ -45,6 +42,11 @@ def test_document_processor_process_route_calls_business_processor(monkeypatch):
         return ProcessResult(
             filename="sample.pdf",
             html="<html><body>正文</body></html>",
+            markdown="正文",
+            md_list=["正文"],
+            blocks=[{"block_id": "p001_b000", "text": "正文", "page_no": 1, "kind": "text"}],
+            meta_info={"engine": "fake"},
+            warnings=["fake-warning"],
         )
 
     monkeypatch.setattr(processor_module, "process", fake_process)
@@ -63,4 +65,17 @@ def test_document_processor_process_route_calls_business_processor(monkeypatch):
     assert response.json() == {
         "filename": "sample.pdf",
         "html": "<html><body>正文</body></html>",
+        "display_html": None,
+        "markdown": "正文",
+        "md_list": ["正文"],
+        "blocks": [
+            {
+                "block_id": "p001_b000",
+                "text": "正文",
+                "page_no": 1,
+                "kind": "text",
+            }
+        ],
+        "meta_info": {"engine": "fake"},
+        "warnings": ["fake-warning"],
     }

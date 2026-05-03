@@ -1,4 +1,4 @@
-"""PDF 文件对象到 HTML 的 pipeline 入口。
+"""PDF 文件对象到 MinerU HTML 的 pipeline 入口。
 
 实现步骤：
 
@@ -8,9 +8,9 @@
   -> resolve_filename(file_obj) 从 filename/name 取源文件基名，没有则用 document.pdf
   -> validate_pdf_type(file_type, filename) 确认显式类型或文件后缀是 PDF
   -> read_source_bytes(file_obj) 读取 PDF 二进制并尽量复位文件指针
-  -> convert_to_docling_document(source_bytes, filename) 调用 docling 解析 PDF
-  -> export_html(document) 让 docling 按指定 labels 导出 HTML
-  -> clean_semantic_html(raw_html) 删除无关属性并补 id
+  -> convert_pdf_bytes_to_content_list(source_bytes, filename) 调用 MinerU pipeline
+  -> build_html_from_content_list(content_list) 生成抽取友好的 traceable HTML
+  -> build_display_html_from_content_list(content_list) 生成用户展示 HTML
   -> ProcessResult(filename, html)
 ```
 """
@@ -19,14 +19,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from service.document_processor.docling_converter import (
-    convert_to_docling_document,
-    export_html,
+from service.document_processor.mineru_converter import (
+    convert_pdf_bytes_to_content_list,
 )
-from service.document_processor.display_html import build_display_html
-from service.document_processor.html_cleaner import clean_semantic_html
+from service.document_processor.mineru_html import (
+    build_blocks_from_content_list,
+    build_display_html_from_content_list,
+    build_html_from_content_list,
+    build_markdown_from_content_list,
+)
 from service.document_processor.schemas import ProcessResult
-from service.document_processor.table_merger import merge_continued_tables
 
 
 class InvalidFileObjectError(TypeError):
@@ -44,12 +46,18 @@ def process(file_obj, file_type: str | None = None) -> ProcessResult:
     filename = resolve_filename(file_obj)
     validate_pdf_type(file_type=file_type, filename=filename)
     source_bytes = read_source_bytes(file_obj)
-    document = convert_to_docling_document(source_bytes, filename)
-    raw_html = export_html(document)
-    merged_html = merge_continued_tables(raw_html)
-    html = clean_semantic_html(merged_html)
-    display_html = build_display_html(merged_html)
-    return ProcessResult(filename=filename, html=html, display_html=display_html)
+    content_list = convert_pdf_bytes_to_content_list(source_bytes, filename)
+    blocks = build_blocks_from_content_list(content_list)
+    return ProcessResult(
+        filename=filename,
+        html=build_html_from_content_list(content_list),
+        display_html=build_display_html_from_content_list(content_list),
+        markdown=build_markdown_from_content_list(content_list),
+        md_list=[block["text"] for block in blocks if block.get("text")],
+        blocks=blocks,
+        meta_info={"engine": "mineru-pipeline"},
+        warnings=[],
+    )
 
 
 def validate_file_obj(file_obj) -> None:

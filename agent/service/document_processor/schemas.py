@@ -12,7 +12,8 @@ processor.process(...) 已经拿到清理后的语义 HTML fragment
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass(slots=True)
@@ -20,3 +21,8 @@ class ProcessResult:
     filename: str
     html: str
     display_html: str | None = None
+    markdown: str = ""
+    md_list: list[str] = field(default_factory=list)
+    blocks: list[dict[str, Any]] = field(default_factory=list)
+    meta_info: dict[str, Any] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
