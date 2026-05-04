@@ -5,7 +5,7 @@ import { UploadWorkbench } from "@/components/upload-workbench";
 import type { Capabilities, TaskCreated, TaskSummary } from "@/lib/types";
 
 const capabilities: Capabilities = {
-  supported_file_types: ["pdf", "docx"],
+  supported_file_types: ["pdf"],
   task_types: [],
   routes: ["accept", "review", "reject"],
   review_decisions: ["approve", "revise_and_approve", "reject"],
@@ -74,7 +74,7 @@ it("非法 task_spec 会阻止提交并提示 JSON object 错误", async () => {
   const { createTask } = setup();
 
   await user.upload(
-    screen.getByLabelText("上传文件（可多选）"),
+    screen.getByLabelText("上传 PDF（可多选）"),
     new File(["%PDF-1.4 fake"], "sample.pdf", { type: "application/pdf" })
   );
   await user.type(screen.getByLabelText("task_type"), "paper");
@@ -88,7 +88,7 @@ it("非法 task_spec 会阻止提交并提示 JSON object 错误", async () => {
   expect(createTask).not.toHaveBeenCalled();
 });
 
-it("合法 PDF/DOCX 和 JSON 会构造 backend 需要的 FormData", async () => {
+it("合法 PDF 和 JSON 会构造 backend 需要的 FormData", async () => {
   const user = userEvent.setup();
   const created: TaskCreated = {
     task_id: "task-001",
@@ -101,12 +101,10 @@ it("合法 PDF/DOCX 和 JSON 会构造 backend 需要的 FormData", async () => 
 
   const files = [
     new File(["%PDF-1.4 fake"], "sample.pdf", { type: "application/pdf" }),
-    new File(["fake docx"], "supplement.docx", {
-      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    })
+    new File(["%PDF-1.4 fake supplement"], "supplement.pdf", { type: "application/pdf" })
   ];
 
-  await user.upload(screen.getByLabelText("上传文件（可多选）"), files);
+  await user.upload(screen.getByLabelText("上传 PDF（可多选）"), files);
   await user.clear(screen.getByLabelText("task_type"));
   await user.type(screen.getByLabelText("task_type"), "civilized_dormitory");
   const taskSpec = {
@@ -142,7 +140,7 @@ it("合法 PDF/DOCX 和 JSON 会构造 backend 需要的 FormData", async () => 
   expect(JSON.parse(String(formData.get("metadata")))).toEqual({ source: "demo" });
   expect(formData.getAll("files")).toHaveLength(2);
   expect((formData.getAll("files")[0] as File).name).toBe("sample.pdf");
-  expect((formData.getAll("files")[1] as File).name).toBe("supplement.docx");
+  expect((formData.getAll("files")[1] as File).name).toBe("supplement.pdf");
   await waitFor(() => expect(onCreated).toHaveBeenCalledWith(created));
 });
 
@@ -166,7 +164,7 @@ it("创建任务后右侧列表先显示处理中，轮询完成后显示处理�
   setup(createTask, getTaskSummary);
 
   await user.upload(
-    screen.getByLabelText("上传文件（可多选）"),
+    screen.getByLabelText("上传 PDF（可多选）"),
     new File(["%PDF-1.4 fake"], "sample.pdf", { type: "application/pdf" })
   );
   await user.clear(screen.getByLabelText("task_type"));
@@ -236,7 +234,7 @@ it("轮询旧任务完成时不会把它移动到最新任务上方", async () =
   setup(createTask, getTaskSummary);
 
   await user.upload(
-    screen.getByLabelText("上传文件（可多选）"),
+    screen.getByLabelText("上传 PDF（可多选）"),
     new File(["%PDF-1.4 fake"], "sample.pdf", { type: "application/pdf" })
   );
   await user.type(screen.getByLabelText("task_type"), "paper");
@@ -281,7 +279,7 @@ it("轮询旧任务完成时不会把它移动到最新任务上方", async () =
 it("能力边界会显示支持文件类型和 external task_spec 约束", () => {
   setup();
 
-  expect(screen.getByText("支持文件：pdf / docx")).toBeInTheDocument();
+  expect(screen.getByText("支持文件：pdf")).toBeInTheDocument();
   expect(screen.getByText("task_spec 必须由前端显式提交")).toBeInTheDocument();
   expect(screen.getByText("支持多文件任务")).toBeInTheDocument();
   expect(screen.getByText("multipart 字段：files（可重复）")).toBeInTheDocument();

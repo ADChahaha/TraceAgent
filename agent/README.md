@@ -7,7 +7,7 @@
 主链路是：
 
 ```text
-backend 上传 PDF / DOCX bytes
+backend 上传 PDF bytes
   -> service.document_processor 输出 markdown、md_list、blocks、meta_info、warnings
   -> backend 聚合多文档 blocks 并补齐 document_id / block_id
   -> service.file_extraction_agent 执行 broad evidence bundle 和 field resolution
@@ -33,50 +33,28 @@ conda activate agent-gate
 pip install -e .
 ```
 
-### PDF 模型目录
+### PDF 处理引擎
 
-`service.document_processor` 的 PDF 路径默认使用 `docling + RapidOCR`。为了让模型下载产物跟 `impl/pdf` 这块能力放在一起，同时避免散落到每台机器自己的默认用户目录，当前实现会在运行时自动把目录收口到 [`agent/service/document_processor/impl/pdf/models`](./agent/service/document_processor/impl/pdf/models)：
-
-```text
-./agent/service/document_processor/impl/pdf/models
-  -> docling/
-  -> huggingface/
-  -> rapidocr/
-```
-
-对应逻辑是：
+`service.document_processor` 当前只处理 PDF，固定走 MinerU pipeline，不保留 Docling、RapidOCR、PaddleOCR 或其他 fallback。处理链路是：
 
 ```text
-首次创建 `PdfProcessor`
-  -> 先检查调用方是否显式设置了 `DOCLING_CACHE_DIR`
-  -> 再检查是否显式设置了 `RAPIDOCR_MODEL_ROOT`
-  -> 再检查是否显式设置了 `HF_HOME` / `HF_HUB_CACHE` / `HUGGINGFACE_HUB_CACHE`
-  -> 如果都没设置，就自动把模型目录指到 `impl/pdf/models/`
-  -> 然后才延迟导入 docling 并初始化 `DocumentConverter`
+UploadFile
+  -> processor.process(file_obj, file_type)
+  -> 校验 file_obj.read()、文件名和 PDF 类型
+  -> 读取 PDF bytes 并调用 mineru_converter.convert_pdf_bytes_to_content_list(...)
+  -> mineru_html 生成 html、display_html、markdown、md_list 和 blocks
+  -> 返回 ProcessResult
 ```
 
-如果你要覆盖默认位置，可以在启动前自己设置环境变量：
+常用配置：
 
 ```bash
-export DOCLING_CACHE_DIR=/your/path/docling
-export RAPIDOCR_MODEL_ROOT=/your/path/rapidocr
-export HF_HOME=/your/path/huggingface
+export MINERU_BIN=mineru
+export DOCUMENT_PROCESSOR_MINERU_LANG=japan
+export MINERU_API_MAX_CONCURRENT_REQUESTS=1
 ```
 
-如果要绕开默认 `docling + RapidOCR`，可以切到可选的 PaddleOCR PDF 处理器：
-
-```bash
-pip install -e ".[paddle]"
-export DOCUMENT_PROCESSOR_PDF_ENGINE=pdf-paddle
-```
-
-这一路径使用 `pypdfium2` 渲染 PDF 页面，再用 `PaddleOCR PPStructureV3` 逐页解析版面、文字和表格，输出结构化 markdown；识别到表格时生成 `kind=table` blocks，普通文字生成 `kind=text` blocks。只有运行时退回普通 OCR 行结果时，才会生成 `kind=text_line` blocks。未设置该环境变量时，默认路径仍是 `docling + RapidOCR`。
-
-PaddleOCR 模型默认缓存到 `service/document_processor/impl/pdf/models/paddlex/`，不会写到 `~/.paddlex`。默认使用 `PP-OCRv4` mobile 模型以优先跑通本地 CPU/M4 推理；如果要改用更新但更慢的 `PP-OCRv5`，可以在启动前设置：
-
-```bash
-export DOCUMENT_PROCESSOR_PADDLE_OCR_VERSION=PP-OCRv5
-```
+中文 PDF 可以把 `DOCUMENT_PROCESSOR_MINERU_LANG` 设为 `ch`。MinerU 失败会直接向上返回错误，不会自动切换到其他解析引擎。
 
 ### Usage
 

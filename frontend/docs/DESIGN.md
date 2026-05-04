@@ -9,7 +9,7 @@
 核心链路是：
 
 ```text
-用户选择一个或多个 PDF/DOCX + task_type + task_spec JSON
+用户选择一个或多个 PDF + task_type + task_spec JSON
   -> UploadWorkbench 校验 task_type、task_spec JSON 和 metadata JSON
   -> createTask 组装 multipart FormData
   -> Next route handler /api/backend/* 代理请求到 backend
@@ -83,6 +83,7 @@ frontend/
 ```text
 用户在 / 看到多文件上传说明和 multipart 字段契约
   -> 选择一个或多个文件、填写 task_type、task_spec JSON、metadata JSON
+  -> UploadWorkbench 只接受 PDF 文件，遇到其他后缀或 MIME 类型会在前端拦截
   -> task_type 输入框默认值和内置类型提示都为空，由用户自己决定任务类型
   -> task_spec JSON 默认只有空 task_name 和空 fields，不预置任何业务字段
   -> UploadWorkbench 检查 files 至少存在一个、task_type 非空

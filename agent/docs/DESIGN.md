@@ -20,8 +20,8 @@
 
 - `backend` 通过 HTTP 把上传 PDF bytes 传给 `document_processor`
 - `agent service` 返回 PDF 文件名和抽取友好的语义 HTML fragment
-- 如果后续要走字段抽取，`backend` 需要自行准备并聚合 blocks，为每个 block 补齐 `document_id / block_id`
-- `backend` 通过 HTTP 把已聚合的 blocks 和外部 `task_spec` 传给 `file_extraction_agent`
+- 如果后续要走字段抽取，`backend` 需要聚合 `document_processor` 返回的 HTML；blocks 留在 backend 侧用于证据回填和 trace 展示
+- `backend` 通过 HTTP 把已聚合的 HTML 和外部 `task_spec` 传给 `file_extraction_agent`
 - `agent service` 返回字段级 `ExtractionResult(result + trace)`
 - `backend` 从字段结果、trace refs 和 trace actions 组装 `field_outputs + refs_with_text + field_processes`，再通过 HTTP 调用 `route_policy_agent`
 - `route_policy_agent` 返回字段级 `accept / review / reject`，后续 review、final result 和 audit 都由 `backend` 保存和驱动
@@ -52,13 +52,15 @@ agent/
     ├── file_extraction_agent/
     │   ├── processor.py
     │   ├── schemas.py
-    │   ├── extractor_client.py
     │   ├── input_adapter.py
-    │   ├── block_contract.py
     │   ├── impl/
-    │   │   ├── broad/
-    │   │   ├── resolution/
-    │   │   └── tools/
+    │   │   ├── broad_new.py
+    │   │   ├── graph.py
+    │   │   ├── html_index.py
+    │   │   ├── html_state.py
+    │   │   ├── html_tools.py
+    │   │   ├── model_factory.py
+    │   │   └── resolution_new.py
     │   └── docs/
     │       ├── API.md
     │       └── DESIGN.md
@@ -80,28 +82,31 @@ agent/
 
 当前 `agent` 根层运行时依赖由 [pyproject.toml](./agent/pyproject.toml) 管理，至少包括：
 
-- `docling`
 - `fastapi`
 - `langgraph`
 - `langchain-openai`
+- `mineru[core]`
+- `onnxruntime`
 - `openai`
 - `python-multipart`
+- `torch`
+- `transformers`
 - `uvicorn`
 
 ## 模块边界
 
 ### `document_processor`
 
-- 负责原始 PDF 的读取和 HTML 导出
-- 输出 `ProcessResult(filename + html)`
-- PDF 固定走 `docling + RapidOCR`，不再保留 DOCX、Paddle 或 Marker 分支
+- 负责原始 PDF 的读取、MinerU 解析和 HTML/markdown/blocks 导出
+- 输出 `ProcessResult(filename + html + display_html + markdown + md_list + blocks + meta_info + warnings)`
+- 当前只支持 PDF，固定走 MinerU pipeline，不保留 DOCX、Docling、RapidOCR、Paddle 或 Marker 分支
 - 提供两类入口：
   - Python 入口：`service.document_processor.processor.process(...)`
   - HTTP 入口：`routes/document_processor.py`
 
 ### `file_extraction_agent`
 
-- 负责消费外部已聚合的 blocks，完成字段级证据预选与字段定案
+- 负责消费 `document_processor` 产出的 HTML，完成字段级证据预选与字段定案
 - 不负责原始文件解析
 - 不负责对外部原始 payload 做第一层必填校验或协议兜底；这一层默认接收外部已经校验好的输入
 - 进入这一层前，外部必须先通过独立文件完成 session 输入校验与协议适配，不应把这部分逻辑混进 `processor.py`
@@ -109,14 +114,13 @@ agent/
 当前业务入口包括：
 
 - `service.file_extraction_agent.processor.extract(...)`
-- `service.file_extraction_agent.extractor_client.build_extractor_client(...)`
 - HTTP 入口：`routes/file_extraction_agent.py`
 
 当前固定采用两阶段流程：broad 负责字段级候选证据召回，resolution 基于候选池做字段最终定案。broad 已经演进为工具化 loop，不再是一次性模型输出：
 
 ```text
-backend 聚合后的 blocks + task_spec
-  -> input_adapter.py 组装 ExtractionInput
+backend 聚合后的 html + task_spec
+  -> input_adapter.py 校验 html/task_spec/run_options 并组装 HtmlExtractionInput
   -> 启动一个共享 broad agent loop，prompt 同时包含所有字段、pending_fields 和全字段候选池
   -> broad agent 只能调用 search_grep / add_broad_candidate / finish_broad
   -> search_grep 同时搜索正文 paragraph 和 table 级索引，query 固定使用 term1 OR term2 OR term3
@@ -156,37 +160,34 @@ table
 
 OCR 或表格结构质量提示不参与 broad、resolution 或 route policy 的自动判断。它只在 backend 组装 review handoff 时作为人工审核辅助信息展示，例如提示某个表格 block 行列错位、空 cell 比例高、文本异常字符多或 block 过长。主抽取链路仍以证据召回、字段定案和 route policy 为准。
 
-两阶段都使用结构化输出，当前固定只走 `tool_call`，由客户端内部映射到 LangChain 的 `function_calling`。`impl/graph.py` 负责编排阶段流转，模型调用层当前由 `service/file_extraction_agent/extractor_client.py` 统一处理：
+两阶段都使用 LangGraph 工具调用。`impl/graph.py` 负责编排阶段流转，模型调用层当前由 `service/file_extraction_agent/impl/model_factory.py` 统一处理：
 
 ```text
-调用方显式传入 base_url / openai_api_key / model，或部署环境提供 BASE_URL / OPENAI_API_KEY / MODEL
-  -> 如果 MODEL 仍为空，extractor_client 使用代码内默认模型
-  -> structured_output_strategy 由 processor.extract(...) 显式参数传入，默认 tool_call
-  -> 如果传入 json_schema 或 auto，客户端直接拒绝
+调用方显式传入 model_config，或部署环境提供 BASE_URL / OPENAI_API_KEY / BROAD_MODEL / RESOLUTION_MODEL / MODEL
+  -> 如果 broad/resolution 模型名为空，build_chat_model 直接拒绝
   -> 用连接配置创建 langchain_openai.ChatOpenAI(...)
-  -> 用 with_structured_output(..., method="function_calling", strict=True) 构造 runnable
+  -> broad_new / resolution_new 通过 LangGraph tool-calling 执行
   -> 如果构造或 invoke 阶段发生错误，不切换协议重试
-  -> broad extraction / field resolution 继续收到同样的 Pydantic 结构化结果
 ```
 
 这样把“连哪个模型服务”和“结构化输出协议怎么选”拆开管理：
 
-- 环境变量负责连接信息、密钥和可选模型名；如果没有 MODEL，`extractor_client.py` 使用代码内默认模型
-- `processor.extract(...)` 的显式参数负责结构化输出策略
-- `extractor_client.py` 负责把连接配置和策略合并成统一可调用 agent
+- 环境变量负责连接信息、密钥和可选模型名
+- HTTP 入参或 `processor.extract(...)` 的 `model_config` 负责显式覆盖模型连接配置
+- `model_factory.py` 负责把连接配置合并成 broad/resolution 两个 `ChatOpenAI` runnable
 
-两层结构化输出当前分别由不同的 Pydantic schema 控制：
+两阶段的动作边界由工具 schema 控制：
 
-- `broad` 绑定内部 `BroadAction`
-- `resolution` 绑定内部 `FieldResolutionAction`
+- `broad_new.py` 负责生成 plan 和字段候选读取策略
+- `resolution_new.py` 负责执行 `read_element`、`table_extraction`、`paragraph_extraction`、`set_field` 和 `finish`
 
 更具体的 schema、校验和任务配置，建议直接查看：
 
 - `service/document_processor/docs/API.md`
 - `service/file_extraction_agent/docs/API.md`
 - `service/file_extraction_agent/schemas.py`
-- `service/file_extraction_agent/impl/broad/runner.py`
-- `service/file_extraction_agent/impl/resolution/runner.py`
+- `service/file_extraction_agent/impl/broad_new.py`
+- `service/file_extraction_agent/impl/resolution_new.py`
 
 ### `route_policy_agent`
 
@@ -217,7 +218,7 @@ route policy 的结构化输出策略也固定为 `tool_call`，显式传入 `js
 raw file
   -> document_processor
   -> html
-  -> backend prepares extraction blocks when needed
+  -> backend aggregates html when needed
   -> file_extraction_agent
   -> extraction result + trace
   -> route_policy_agent
@@ -229,7 +230,7 @@ raw file
 1. `backend` 创建任务，并在当前请求内读取上传文件 bytes；原始文件不持久化。
 2. `backend` 逐个 HTTP 调用 `document_processor`，把 PDF 转成语义 HTML fragment。
 3. `backend` 保存或展示 `filename/html`。
-4. 如果任务需要字段抽取，`backend` 按任务准备 block list，并补齐 `document_id / block_id`。
+4. 如果任务需要字段抽取，`backend` 合并多文档 HTML，文档 blocks 留在 backend 侧用于证据回填和 trace 展示。
 5. `backend` 将已校验聚合结果和外部 `task_spec` 交给 `file_extraction_agent`。
 6. `file_extraction_agent` 输出字段候选证据、工具留痕和字段最终结果。
 7. `backend` 从字段结果、证据 refs 和 trace actions 组装 `field_outputs + refs_with_text + field_processes`，交给 `route_policy_agent`。

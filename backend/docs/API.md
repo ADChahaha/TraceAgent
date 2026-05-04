@@ -7,7 +7,7 @@
 后端 API 围绕一次文档治理任务展开：
 
 ```text
-前端或脚本上传一个或多个 PDF / DOCX 和任务参数
+前端或脚本上传一个或多个 PDF 和任务参数
   -> POST /tasks 创建任务
   -> POST /tasks 立即返回 task_id 和 pending/uploaded
   -> 后端在后台逐个调用 document_processor，把上传文件转成 markdown + blocks
@@ -92,7 +92,7 @@ reject
 
 请求类型建议使用 `multipart/form-data`：
 
-- `files`：必填，上传的一个或多个 PDF / DOCX；multipart 中可以重复传入多个 `files` 字段。
+- `files`：必填，上传的一个或多个 PDF；multipart 中可以重复传入多个 `files` 字段。
 - `task_type`：必填，调用方定义的任务类型标识，例如 `civilized_dormitory`。
 - `task_spec`：必填，显式字段 schema；后端不提供默认 task spec，也不按 `task_type` 兜底选择 schema。
 - `metadata`：可选，前端或脚本传入的补充信息。
@@ -104,7 +104,7 @@ reject
 ```bash
 curl -X POST "http://localhost:8000/tasks" \
   -F "files=@sample.pdf" \
-  -F "files=@supplement.docx" \
+  -F "files=@supplement.pdf" \
   -F "task_type=civilized_dormitory" \
   -F 'task_spec={"task_name":"civilized_dormitory","fields":[{"field_name":"room_numbers","display_name":"文明寝室房间号","type":"string","required":true,"critical":true}]}'
 ```
@@ -124,7 +124,7 @@ curl -X POST "http://localhost:8000/tasks" \
 
 ```text
 上传一个或多个 files、task_type、task_spec 和 metadata
-  -> 校验至少存在一个文件，逐个从 filename 推断 pdf/docx
+  -> 校验至少存在一个文件，逐个从 filename 推断 pdf
   -> 校验 task_spec 必须是 JSON object
   -> 在当前请求中读取每个上传文件 bytes，避免响应后 UploadFile 被关闭
   -> 创建 task 记录，状态设为 pending / uploaded
@@ -243,8 +243,8 @@ curl -X POST "http://localhost:8000/tasks" \
         },
         {
           "document_id": "doc-2",
-          "filename": "supplement.docx",
-          "file_type": "docx",
+          "filename": "supplement.pdf",
+          "file_type": "pdf",
           "block_count": 12,
           "markdown_chars": 2800,
           "warning_count": 0
@@ -719,7 +719,7 @@ task_id
 
 ```json
 {
-  "supported_file_types": ["pdf", "docx"],
+  "supported_file_types": ["pdf"],
   "task_types": [],
   "routes": ["accept", "review", "reject"],
   "review_decisions": ["approve", "revise_and_approve", "reject"],

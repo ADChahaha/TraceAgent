@@ -9,7 +9,7 @@
 核心链路是：
 
 ```text
-前端或脚本上传一个或多个 PDF / DOCX + task_type + task_spec
+前端或脚本上传一个或多个 PDF + task_type + task_spec
   -> backend 创建任务记录
   -> POST /tasks 立即返回 task_id 和 pending/uploaded
   -> backend 后台继续执行文档处理、字段抽取和 route policy
@@ -256,7 +256,7 @@ crud/audit.py
 ```text
 files/file + task_type + task_spec + metadata
   -> 至少收集一个上传文件，否则抛出 ValidationError
-  -> 逐个从 filename 推断 pdf/docx，否则抛出 ValidationError
+  -> 逐个从 filename 推断 pdf，否则抛出 ValidationError
   -> 如果未传 task_spec，抛出 ValidationError
   -> 创建 task_... 记录为 pending/uploaded
   -> 如果调用方要求立即返回，create_task(run_pipeline=False) 直接序列化 task_id/status/stage/error_message
@@ -343,7 +343,7 @@ final field value + route + review decision + trace refs
 | `id` | `TEXT PRIMARY KEY` | 文档 ID |
 | `task_id` | `TEXT INDEX` | 所属任务 ID |
 | `filename` | `TEXT` | 原始文件名 |
-| `file_type` | `TEXT` | `pdf` 或 `docx` |
+| `file_type` | `TEXT` | `pdf` |
 | `content_type` | `TEXT` | 上传时的 MIME 类型 |
 | `upload_size_bytes` | `INTEGER` | 上传文件大小，仅作元信息 |
 | `upload_sha256` | `TEXT` | 上传文件内容哈希，仅作去重或排查元信息 |
@@ -765,7 +765,7 @@ agent 返回 ExtractionResult.status=failed
 
 需要覆盖：
 
-- 单任务多文件 PDF / DOCX 上传。
+- 单任务多文件 PDF 上传。
 - 单任务创建、状态查询、result、trace、review、audit。
 - SQLite 本地数据库。
 - SQLite 保存 markdown、blocks、trace 和审核结果，不保存用户上传的原始文件。

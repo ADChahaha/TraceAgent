@@ -9,7 +9,7 @@ Agent Gate 是一个面向毕业设计 MVP 的文档抽取可信治理系统，�
 当前 MVP 的基本流程是：
 
 ```text
-前端上传一个或多个 PDF / DOCX + task_type + task_spec
+前端上传一个或多个 PDF + task_type + task_spec
   -> backend 创建任务并调用 agent service
   -> document_processor 输出 markdown、md_list、blocks 和处理元信息
   -> file_extraction_agent 执行 broad evidence bundle 和 field resolution
@@ -214,7 +214,7 @@ pnpm --dir frontend dev -- --port 3002
 
 负责用户界面相关工作，包括：
 
-- 上传 PDF / DOCX 和外部 `task_spec`
+- 上传 PDF 和外部 `task_spec`
 - 查看任务状态、结果、trace、review 和 audit
 - 展示 `document_processor`、`file_extraction_agent`、`route_policy_agent` 的执行过程
 - 展示 broad 候选 blocks 正文、resolution 字段输出、route validation 和复核证据
@@ -234,7 +234,7 @@ pnpm --dir frontend dev -- --port 3002
 
 负责文档处理能力相关工作，包括：
 
-- `document_processor`：PDF / DOCX 标准化，输出 blocks 和 markdown
+- `document_processor`：PDF 标准化，输出 blocks 和 markdown
 - `file_extraction_agent`：执行 broad evidence bundle、field resolution、tool/action 留痕和 validation rules
 - `route_policy_agent`：基于字段输出和证据文本判断 `accept / review / reject`
 - 通过 HTTP 接口供 `backend` 调用，不直接访问 backend 数据库

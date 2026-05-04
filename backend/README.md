@@ -1,11 +1,11 @@
 # Backend
 
-`backend` 是毕业设计原型中的任务治理服务。它接收前端或脚本上传的一个或多个 PDF / DOCX、`task_type` 和外部传入的 `task_spec`，调用 `agent service` 完成文档标准化、字段抽取和字段级 route policy，然后把任务状态、最终结果、人工复核和审计记录保存在本地 SQLite。
+`backend` 是毕业设计原型中的任务治理服务。它接收前端或脚本上传的一个或多个 PDF、`task_type` 和外部传入的 `task_spec`，调用 `agent service` 完成文档标准化、字段抽取和字段级 route policy，然后把任务状态、最终结果、人工复核和审计记录保存在本地 SQLite。
 
 ## 实现链路
 
 ```text
-上传一个或多个 PDF / DOCX + task_type + task_spec
+上传一个或多个 PDF + task_type + task_spec
   -> FastAPI `POST /tasks` 读取每个文件 bytes
   -> 校验文件类型和 task_spec，创建 tasks 记录
   -> 逐个 HTTP 调用 agent service 的 document_processor
@@ -21,7 +21,7 @@
   -> reject 或失败写入终态和错误信息
 ```
 
-第一版采用同步处理：`POST /tasks` 会在同一个请求内跑完 document processing、extraction 和 route policy，响应中的 `status/stage` 可能已经是 `completed/done`、`waiting_review/review`、`rejected/done` 或 `failed/done`。
+第一版采用请求内创建、后台处理模型：`POST /tasks` 先返回 `pending/uploaded`，随后由后台任务继续跑 document processing、extraction 和 route policy。调用方通过 `GET /tasks/{task_id}` 轮询 `completed/done`、`waiting_review/review`、`rejected/done` 或 `failed/done`。
 
 ## 主要 API
 
@@ -64,7 +64,7 @@ AGENT_SERVICE_BASE_URL=http://localhost:8001
 AGENT_SERVICE_TIMEOUT_SECONDS=1200
 ```
 
-`backend` 不内置任何业务 task spec，也不从默认目录兜底加载。调用方必须在 `POST /tasks` 的 multipart 表单中传入 `task_spec` JSON。新版上传字段为可重复的 `files`，旧版单文件 `file` 字段仍兼容。
+`backend` 不内置任何业务 task spec，也不从默认目录兜底加载。调用方必须在 `POST /tasks` 的 multipart 表单中传入 `task_spec` JSON。当前能力声明只支持 PDF；新版上传字段为可重复的 `files`，旧版单文件 `file` 字段仍兼容。
 
 启动方式：
 
