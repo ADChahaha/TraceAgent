@@ -587,7 +587,10 @@ class TaskService:
         }
         trace_payload = extraction_result.get("trace") or {}
         trace_by_field = self._build_trace_by_field(trace_payload)
-        for field in self._iter_extraction_result_fields(extraction_result):
+        for field in self._iter_extraction_result_fields(
+            extraction_result,
+            task_spec=task_spec,
+        ):
             field_name = field["field_name"]
             field_spec = field_specs.get(field_name, {})
             trace = trace_by_field.get(field_name, {})
@@ -620,12 +623,16 @@ class TaskService:
     def _iter_extraction_result_fields(
         self,
         extraction_result: dict[str, Any],
+        *,
+        task_spec: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         result = extraction_result.get("result") or {}
+        expected_fields = self._expected_task_fields(task_spec or {})
         if isinstance(result, dict) and isinstance(result.get("fields"), list):
-            return result["fields"]
+            fields = list(result["fields"])
+            return self._append_missing_expected_fields(fields, expected_fields)
         if not isinstance(result, dict):
-            return []
+            return self._append_missing_expected_fields([], expected_fields)
         field_states = (extraction_result.get("trace") or {}).get("field_states") or {}
         fields = []
         for field_name, value in result.items():
@@ -638,7 +645,48 @@ class TaskService:
                     "failure_reason": state.get("failure_reason"),
                 }
             )
-        return fields
+        return self._append_missing_expected_fields(fields, expected_fields)
+
+    def _expected_task_fields(self, task_spec: dict[str, Any]) -> list[dict[str, Any]]:
+        fields = task_spec.get("fields")
+        if not isinstance(fields, list):
+            return []
+        expected = []
+        seen: set[str] = set()
+        for field in fields:
+            if not isinstance(field, dict):
+                continue
+            field_name = field.get("name") or field.get("field_name")
+            if not isinstance(field_name, str) or not field_name or field_name in seen:
+                continue
+            seen.add(field_name)
+            expected.append(field)
+        return expected
+
+    def _append_missing_expected_fields(
+        self,
+        fields: list[dict[str, Any]],
+        expected_fields: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        existing_names = {
+            field.get("field_name")
+            for field in fields
+            if isinstance(field.get("field_name"), str)
+        }
+        next_fields = list(fields)
+        for field_spec in expected_fields:
+            field_name = field_spec.get("name") or field_spec.get("field_name")
+            if field_name in existing_names:
+                continue
+            next_fields.append(
+                {
+                    "field_name": field_name,
+                    "status": "failed",
+                    "value": None,
+                    "failure_reason": "file_extraction_agent did not return this field",
+                }
+            )
+        return next_fields
 
     def _build_trace_by_field(self, trace_payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
         traces = trace_payload.get("fields")

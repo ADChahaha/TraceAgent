@@ -271,6 +271,68 @@ class FakeFailedExtractionAgentClient(FakeAgentClient):
         }
 
 
+class FakeMissingRequiredFieldRouteClient(FakeAgentClient):
+    def extract_fields(
+        self,
+        *,
+        html: str,
+        task_spec: dict[str, Any],
+        run_options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self.extraction_calls.append(
+            {
+                "html": html,
+                "task_spec": task_spec,
+                "run_options": run_options,
+            }
+        )
+        return {
+            "status": "completed",
+            "failure_reason": None,
+            "result": {},
+            "trace": {
+                "document_tree": [],
+                "field_states": {},
+                "actions": [],
+            },
+        }
+
+    def evaluate_route_policy(
+        self,
+        *,
+        task_spec: dict[str, Any],
+        field_outputs: list[dict[str, Any]],
+        refs_with_text: list[dict[str, Any]],
+        field_processes: list[dict[str, Any]],
+        metadata: dict[str, Any],
+        policy_options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self.route_policy_calls.append(
+            {
+                "task_spec": task_spec,
+                "field_outputs": field_outputs,
+                "refs_with_text": refs_with_text,
+                "field_processes": field_processes,
+                "metadata": metadata,
+                "policy_options": policy_options,
+            }
+        )
+        return {
+            "status": "completed",
+            "failure_reason": None,
+            "field_routes": [
+                {
+                    "field_name": "room_numbers",
+                    "route": "review",
+                    "route_reason": "字段 room_numbers 是 required 字段，但 file_extraction_agent 没有返回该字段，需要人工复核或补录。",
+                    "needs_review": True,
+                }
+            ],
+            "warnings": [],
+            "metadata": {"source": "fake-agent"},
+        }
+
+
 def build_app(tmp_path: Path, route: str = "accept"):
     fake_agent = FakeAgentClient(route=route)
     app = create_app(
@@ -797,6 +859,69 @@ def test_review_route_returns_handoff_and_accepts_revised_value(tmp_path: Path):
         assert commit["agent_process"]["process_steps"][2]["title"] == "第三步 agent result（route 前）"
         assert commit["agent_process"]["process_steps"][3]["title"] == "第四步 route validation"
         assert fake_agent.document_calls[0]["file_type"] == "pdf"
+
+
+def test_review_handoff_includes_missing_required_field_placeholder(tmp_path: Path):
+    fake_agent = FakeMissingRequiredFieldRouteClient()
+    app = create_app(
+        settings=BackendSettings(database_path=tmp_path / "backend.sqlite3"),
+        agent_client=fake_agent,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/tasks",
+            data={
+                "task_type": "civilized_dormitory",
+                "task_spec": json.dumps(TASK_SPEC, ensure_ascii=False),
+            },
+            files={"file": ("sample.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        )
+
+        assert response.status_code == 200
+        task_id = response.json()["task_id"]
+
+        task_summary = client.get(f"/tasks/{task_id}").json()
+        assert task_summary["status"] == "waiting_review"
+
+        review_response = client.get(f"/tasks/{task_id}/review")
+        assert review_response.status_code == 200
+        handoff = review_response.json()
+        assert len(handoff["fields"]) == 1
+        field = handoff["fields"][0]
+        assert field["field_name"] == "room_numbers"
+        assert field["display_name"] == "文明寝室房间号"
+        assert field["agent_value"] is None
+        assert field["field_status"] == "failed"
+        assert field["needs_review"] is True
+        assert field["review_reason"] == "字段 room_numbers 是 required 字段，但 file_extraction_agent 没有返回该字段，需要人工复核或补录。"
+        assert field["evidence_texts"] == []
+        assert field["evidence_refs"] == []
+        assert field["actions"] == []
+        assert field["agent_process"]["status"] == "failed"
+
+        submit_response = client.post(
+            f"/tasks/{task_id}/review",
+            json={
+                "decision": "revise_and_approve",
+                "fields": [
+                    {
+                        "field_name": "room_numbers",
+                        "review_value": "1-101",
+                    }
+                ],
+                "comment": "人工补录 required 字段",
+                "reviewer": "teacher",
+            },
+        )
+        assert submit_response.status_code == 200
+        assert submit_response.json()["status"] == "completed"
+
+        result_field = client.get(f"/tasks/{task_id}/result").json()["fields"][0]
+        assert result_field["agent_value"] is None
+        assert result_field["review_value"] == "1-101"
+        assert result_field["final_value"] == "1-101"
+        assert result_field["source"] == "human"
 
 
 def test_agent_process_without_tool_actions_keeps_resolution_step_completed():

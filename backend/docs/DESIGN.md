@@ -18,6 +18,7 @@
   -> backend 合并多个文件的 markdown、md_list 和 blocks
   -> backend 通过 HTTP 调用 file_extraction_agent
   -> agent service 返回 ExtractionResult(result + trace)
+  -> task_service 对照 task_spec.fields 补齐 agent 没返回的预期字段，写成 failed/None 占位
   -> backend 组装 field_outputs + refs_with_text + field_processes 并调用 route_policy_agent
   -> agent service 返回 accept / review / reject 字段路由
   -> accept 自动生成字段提交记录
@@ -111,7 +112,7 @@ POST /tasks 上传一个或多个文件
   -> task_service 合并全部 markdown、md_list 和 blocks
   -> agent_client 再通过 HTTP 调用 agent service 的字段抽取接口，metadata 包含 document_ids
   -> SQLite 为 file_extraction_agent 调用写入 agent_stage_runs
-  -> SQLite 写入 agent_runs / extracted_fields / field_traces
+  -> SQLite 写入 agent_runs / extracted_fields / field_traces；task_spec 中存在但 agent 未返回的字段会补 failed/None 占位
   -> route_policy 从字段结果、trace refs 和 trace actions 组装 field_outputs + refs_with_text + field_processes
   -> agent_client 通过 HTTP 调用 agent service 的 route policy 接口
   -> SQLite 为 route_policy_agent 调用写入 agent_stage_runs
@@ -133,6 +134,7 @@ POST /tasks 上传一个或多个文件
 ```text
 GET /tasks/{task_id}/review
   -> review_service 读取 extracted_fields、field_traces、field_routes
+  -> 如果字段是 task_service 为缺失必填项补出的 failed/None 占位，也会进入 handoff
   -> 组装 handoff 包，返回字段值、证据、定位、route 原因、actions 和 agent_process
   -> agent_process.process_steps 按 broad_extraction、field_resolution、final_result、route_validation 回放 route 前抽取过程和 route policy 验证结果
 
