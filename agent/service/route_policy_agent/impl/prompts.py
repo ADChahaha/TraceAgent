@@ -28,7 +28,7 @@ def build_route_policy_messages(
                 "field_process 和 related_field_processes 只用于判断 agent 是否用合理 search 查询词查过、"
                 "是否写入候选、是否使用 count_field_candidates、是否执行 final_decision。"
                 "如果 field_process.diagnostics 里有 query_audit 或 table_audit，"
-                "它们只是工具观察到的查表事实，例如返回行数、筛选列空白数量、非空分布和输出列空值。"
+                "它们只是工具观察到的查表事实，例如返回行数、筛选列空白数量、近似未选中行、输出列空值或结构错位。"
                 "不要因为筛选列有空白就自动 review；要结合 field_resolution.reason 判断模型是否合理解释了这些观察。"
                 "如果存在近似未选中行、选中输出为空、结构错位等事实，且模型没有解释或证据无法支持字段值，返回 review。"
                 "route 只能是 accept、review 或 reject。"

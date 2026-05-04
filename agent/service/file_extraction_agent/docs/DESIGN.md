@@ -223,13 +223,13 @@ table_id + SQL
 ```
 
 `table_audit` is table-level and factual. It reports row/column counts, columns,
-blank-cell distribution, and structure signals such as repeated header-looking
+blank-cell observations, and structure signals such as repeated header-looking
 rows. It does not include a `status` and does not decide whether a field is
 wrong.
 
 `query_audit` is field/query-specific and factual. It reports returned row
 count, WHERE equality predicate columns, blank counts in filter columns,
-non-empty distributions, near matches, selected output-column empty counts, and
+near matches, selected output-column empty counts, and
 evidence integrity. It also includes a short `summary` that can be shown in the
 frontend and passed to route policy.
 

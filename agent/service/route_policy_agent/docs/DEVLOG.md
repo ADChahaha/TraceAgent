@@ -1,6 +1,18 @@
 # Route Policy Agent Devlog
 
-last updated: 2026-05-05 01:08:44
+last updated: 2026-05-05 02:30:37
+
+## 2026-05-05 02:30:37
+
+### 已完成工作
+
+- route policy 和 file extraction 的 query audit 不再输出或提示“非空分布”。
+- 空白筛选列、近似未选中行、输出列空值或结构错位等表格事实仍会进入 prompt，但不按非空数量分布提前分类。
+- 同步更新设计文档和测试说明，固定模型需要结合表头、表注、分组标题、相邻列和 refs 自己判断。
+
+### 验证
+
+- `conda run -n agent-gate python -m pytest tests/file_extraction_agent/test_html_tools_new.py tests/file_extraction_agent/test_resolution_new.py tests/route_policy_agent/test_processor.py -q`，结果 `41 passed`。
 
 ## 2026-05-05 01:08:44
 
@@ -25,7 +37,7 @@ last updated: 2026-05-05 01:08:44
 
 ### 当前进展
 
-- 空白筛选列、非空分布、输出列空值等表格事实会进入 route policy prompt，但不再提前下风险结论。
+- 空白筛选列、近似未选中行、输出列空值或结构错位等表格事实会进入 route policy prompt，但不再提前下风险结论。
 
 ### 验证
 

@@ -256,7 +256,7 @@ file_extraction_agent.table_extraction(...)
   -> 小 LLM 结合字段值、refs、查表摘要和模型解释判断 accept / review / reject
 ```
 
-这样 route policy 不需要重新读取整张表，也不会因为筛选列有空白就自动 review。工具负责把“某列空白多少行、非空值如何分布、输出列是否为空”说清楚；抽取模型在 `field_resolution.reason` 里解释这些事实对当前字段是否危险；route policy 再判断是否需要人工复核。
+这样 route policy 不需要重新读取整张表，也不会因为筛选列有空白就自动 review。工具只负责把“某列空白多少行、是否有近似未选中行、输出列是否为空、表格结构是否异常”等事实说清楚，不按数量分布提前分类；抽取模型在 `field_resolution.reason` 里结合表头、表注、分组标题、相邻列和 refs 解释这些事实对当前字段是否危险；route policy 再判断是否需要人工复核。
 
 prompt 内置了 query audit few-shot，用两个对照例子约束小模型：
 

@@ -40,7 +40,7 @@ def build_resolution_messages(state: Any) -> list[Any]:
             "如果同一字段已经在同一章节 read_element 了 3 次以上，停止零散 read_element，改用父章节 read_section 加大 depth。"
             "表格先 read_element(table_id) 看字段行，再 table_extraction 查询；SQL 里所有列名必须用双引号包住。"
             "table_extraction 会返回 query_audit.summary，它是查表事实，不是风险结论。"
-            "写 set_field reason 时必须解释 query_audit.summary 对当前字段的影响，特别是筛选列空白、非空分布、near_match_rows 和输出列空值。"
+            "写 set_field reason 时必须解释 query_audit.summary 对当前字段的影响，特别是筛选列空白、near_match_rows、输出列空值和结构错位观察。"
             "query_audit few-shot："
             "例 1：你查询 WHERE “类别列”='目标类别'，summary 显示筛选列有空白。"
             "如果表头、表注、分组标题或相邻列明确说明空白行属于非目标类别，且选中行输出列完整，"

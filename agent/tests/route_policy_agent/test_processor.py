@@ -373,7 +373,7 @@ def test_evaluate_passes_query_audit_and_reason_to_policy_prompt():
                     "table_id": "p002_b001",
                     "query": "SELECT \"房间\" FROM data WHERE \"模范/文明\" = '文明寝室'",
                     "quality_type": "query_audit",
-                    "summary": "返回 12 行；筛选列“模范/文明”空白 149 行；非空分布：文明寝室 12，模范寝室 5；输出列“房间”无空值。",
+                    "summary": "返回 12 行；筛选列“模范/文明”空白 149 行；输出列“房间”无空值。",
                 }
             ],
         ),
@@ -410,6 +410,7 @@ def test_evaluate_passes_query_audit_and_reason_to_policy_prompt():
     assert "空白筛选列必须结合表格上下文判断" in system_prompt
     assert "不能只因为空白行未被 WHERE 选中就说正常" in system_prompt
     assert "相邻列、表注或表头" in system_prompt
+    assert "非空分布" not in system_prompt
 
 
 def test_evaluate_passes_table_audit_summary_to_policy_prompt():

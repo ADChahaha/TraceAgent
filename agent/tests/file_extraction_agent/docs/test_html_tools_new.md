@@ -26,7 +26,7 @@
 - `test_table_extraction_large_tables_allow_specific_columns_without_truncating_rows`：确认大表选择具体列时不会按行数截断，工具会返回 SQL 匹配的全部行。
 - `test_table_extraction_reports_table_audit_for_empty_cells`：确认表格存在空 cell 时会返回 `table_audit.blank_cells`，让模型和人工看到整表解析事实，但不提前给出风险状态。
 - `test_table_extraction_reports_query_audit_for_possible_missed_rows`：确认当前 SQL 查询会返回 `query_audit.predicate_columns`，记录筛选列空白行和近似未选中行等事实观察。
-- `test_table_extraction_query_audit_summarizes_sparse_label_column_without_warning`：确认稀疏标签列会生成自然语言 `query_audit.summary`，但不会把空白分类列硬编码为 warning。
+- `test_table_extraction_query_audit_summarizes_sparse_label_column_without_warning`：确认稀疏标签列会生成自然语言 `query_audit.summary`，但不会把空白分类列硬编码为 warning，也不会输出按非空值数量分布做出的分类提示。
 - `test_table_extraction_returns_audit_without_status`：确认工具结果返回 `query_audit`，且不会携带诊断状态字段。
 - `test_table_extraction_row_evidence_ids_can_be_used_by_set_field`：确认 `table_extraction` 观察到的行证据可以立刻用于 `set_field` 写字段。
 - `test_table_extraction_returns_sql_errors_for_model_retry`：确认 SQL 写错时工具返回 `ok=false`、原始错误、可用列名和双引号提示，方便模型修正后重试。

@@ -71,6 +71,7 @@ def test_resolution_messages_embed_compact_document_outline():
     assert "空白筛选列必须结合表格上下文判断" in content
     assert "不能只因为空白行未被 WHERE 选中就说正常" in content
     assert "相邻列、表注或表头" in content
+    assert "非空分布" not in content
 
 
 def test_format_document_outline_prioritizes_index_pages():

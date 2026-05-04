@@ -26,7 +26,7 @@ task_spec + field_outputs + refs_with_text + field_processes
 - 派生数量字段的 prompt 能看到来源列表字段的 search 查询词和过程摘要。
 - 模型判断证据不足时，字段进入 `review`。
 - resolved 字段如果抽取过程摘要为空，直接进入 `review`，不调用小 LLM。
-- `query_audit.summary` 和 `table_audit.summary` 会进入小 LLM prompt，route policy 根据字段值、refs 和 `field_resolution.reason` 判断是否需要 review。
+- `query_audit.summary` 和 `table_audit.summary` 会进入小 LLM prompt，route policy 根据字段值、refs 和 `field_resolution.reason` 判断是否需要 review，prompt 不引导模型按非空数量分布做硬分类。
 - system prompt 内置 query audit few-shot：空白筛选列必须结合表头、表注、分组标题、相邻列和 refs 判断；不能只因为空白行未被 WHERE 选中就说正常。
 - required 字段抽取失败时直接 `review`，不调用小 LLM。
 - required 字段完全缺少 `field_output` 时补一条 `review` route。
@@ -68,6 +68,7 @@ task_spec + field_outputs + refs_with_text + field_processes
 - 构造 `query_audit.summary` 和 `field_resolution.reason`。
 - 确认 processor 仍调用小 LLM，并且 prompt 中没有 `status`，由小 LLM结合查表摘要和模型解释判断。
 - 确认 system prompt 包含 query audit few-shot，固定“空白筛选列必须结合表格上下文判断”和“不能只因为空白行未被 WHERE 选中就说正常”的判断样例。
+- 确认 system prompt 不再要求模型查看非空数量分布，避免把工具事实变成按数量硬分类的规则。
 
 `test_evaluate_passes_table_audit_summary_to_policy_prompt`
 

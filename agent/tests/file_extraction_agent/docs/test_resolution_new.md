@@ -16,7 +16,7 @@
 ## 测试函数
 
 - `test_format_document_outline_returns_compact_text_not_raw_json`：确认 outline 是模型友好的 XML-like 文本，包含章节和表格引用，不暴露原始 Python dict 或正文噪声。
-- `test_resolution_messages_embed_compact_document_outline`：确认 resolution prompt 包含 compact outline、字段写入规则、中文 replay reason 规则、按最早未完成 broad plan 顺序推进的约束、章节读取策略、SQL 列名双引号要求，以及 query audit few-shot：空白筛选列必须结合表头、表注、相邻列和字段目标判断，不能只因为 WHERE 未选中就说正常。
+- `test_resolution_messages_embed_compact_document_outline`：确认 resolution prompt 包含 compact outline、字段写入规则、中文 replay reason 规则、按最早未完成 broad plan 顺序推进的约束、章节读取策略、SQL 列名双引号要求，以及 query audit few-shot：空白筛选列必须结合表头、表注、相邻列和字段目标判断，不能只因为 WHERE 未选中就说正常，也不要求模型按非空数量分布下结论。
 - `test_format_document_outline_prioritizes_index_pages`：确认疑似目录页会被放进 `index-pages`，模型应先用它定位主章节。
 - `test_resolution_graph_nudges_model_when_it_stops_before_finish`：确认模型在字段已写但没调用 `finish` 时，会收到继续调用工具的提醒并最终触发 `finish`。
 - `test_resolution_graph_exposes_update_plan_tool`：确认 `update_plan` 是 resolution 工具列表里的第一个工具，方便模型先同步 replay plan。

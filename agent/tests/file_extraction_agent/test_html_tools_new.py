@@ -261,17 +261,15 @@ def test_table_extraction_query_audit_summarizes_sparse_label_column_without_war
 
     assert result["query_audit"]["summary"] == (
         "返回 2 行；筛选列“模范/文明”空白 2 行；"
-        "非空分布：文明寝室 2，模范寝室 1；输出列“房间”无空值。"
+        "输出列“房间”无空值。"
     )
     predicate = result["query_audit"]["predicate_columns"][0]
     assert predicate["column"] == "模范/文明"
     assert predicate["literal"] == "文明寝室"
     assert predicate["blank_count"] == 2
     assert predicate["blank_row_ids_sample"] == ["dp-dorm-tr-1", "dp-dorm-tr-5"]
-    assert predicate["non_empty_distribution"] == [
-        {"value": "文明寝室", "count": 2},
-        {"value": "模范寝室", "count": 1},
-    ]
+    assert "non_empty_distribution" not in predicate
+    assert "非空分布" not in result["query_audit"]["summary"]
 
 
 def test_table_extraction_returns_audit_without_status():

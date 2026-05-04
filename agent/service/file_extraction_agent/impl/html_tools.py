@@ -877,7 +877,6 @@ def _predicate_column_audit(
     literal: str,
 ) -> dict[str, Any]:
     blank_row_ids: list[str] = []
-    distribution: dict[str, int] = {}
     near_match_rows: list[dict[str, Any]] = []
     for row_id, row in zip(row_ids, rows, strict=False):
         value = str(row.get(column, "")).strip()
@@ -885,7 +884,6 @@ def _predicate_column_audit(
             if row_id not in selected_set:
                 blank_row_ids.append(row_id)
             continue
-        distribution[value] = distribution.get(value, 0) + 1
         if row_id not in selected_set and _normalized(value) == _normalized(literal) and value != literal:
             near_match_rows.append({"row_id": row_id, "value": value})
     return {
@@ -895,10 +893,6 @@ def _predicate_column_audit(
         "selected_count": len(selected_set),
         "blank_count": len(blank_row_ids),
         "blank_row_ids_sample": blank_row_ids[:5],
-        "non_empty_distribution": [
-            {"value": value, "count": count}
-            for value, count in sorted(distribution.items(), key=lambda item: (-item[1], item[0]))
-        ],
         "near_match_rows": near_match_rows[:5],
         "keyword_unselected_rows": [],
     }
@@ -932,12 +926,6 @@ def _query_audit_summary(
     parts = [f"返回 {selected_row_count} 行"]
     for predicate in predicate_columns:
         parts.append(f"筛选列“{predicate['column']}”空白 {predicate['blank_count']} 行")
-        distribution = predicate.get("non_empty_distribution") or []
-        if distribution:
-            distribution_text = "，".join(
-                f"{item['value']} {item['count']}" for item in distribution[:4]
-            )
-            parts.append(f"非空分布：{distribution_text}")
     for output in output_columns:
         if output["empty_selected_count"]:
             parts.append(f"输出列“{output['column']}”空值 {output['empty_selected_count']} 行")
