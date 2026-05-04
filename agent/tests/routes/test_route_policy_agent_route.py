@@ -94,7 +94,63 @@ def test_route_policy_agent_route_calls_business_evaluator(monkeypatch):
     assert seen_call["base_url"] == "https://llm.example.com/v1"
     assert seen_call["openai_api_key"] == "test-key"
     assert seen_call["structured_output_strategy"] == "tool_call"
+    assert "policy_options" not in seen_call
     assert response.json()["field_routes"][0]["route"] == "accept"
+
+
+def test_route_policy_agent_route_rejects_policy_options_payload():
+    client = TestClient(create_app())
+    response = client.post(
+        "/v1/route-policy-agent/evaluate",
+        json={
+            "task_spec": {
+                "task_name": "invoice",
+                "fields": [
+                    {
+                        "field_name": "invoice_no",
+                        "display_name": "发票号",
+                        "type": "string",
+                    }
+                ],
+            },
+            "field_outputs": [
+                {
+                    "field_name": "invoice_no",
+                    "status": "resolved",
+                    "value": "INV-001",
+                }
+            ],
+            "refs_with_text": [
+                {
+                    "field_name": "invoice_no",
+                    "refs": [
+                        {
+                            "document_id": "doc-1",
+                            "text": "发票号码：INV-001",
+                        }
+                    ],
+                }
+            ],
+            "field_processes": [
+                {
+                    "field_name": "invoice_no",
+                    "broad_extraction": {
+                        "search_queries": ["发票号 OR 发票号码"],
+                    },
+                    "field_resolution": {
+                        "final_decision_used": True,
+                    },
+                }
+            ],
+            "policy_options": {
+                "max_refs_per_field": 1,
+                "max_ref_text_chars": 10,
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "policy_options" in response.text
 
 
 def test_route_policy_agent_route_returns_422_for_business_validation_error(monkeypatch):

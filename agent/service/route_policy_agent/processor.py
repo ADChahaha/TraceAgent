@@ -29,7 +29,6 @@ from service.route_policy_agent.policy_client import build_policy_client
 from service.route_policy_agent.schemas import (
     FieldRefsWithText,
     FieldRouteDecision,
-    PolicyOptions,
     RouteFieldProcess,
     RouteFieldOutput,
     RoutePolicyDecision,
@@ -47,7 +46,6 @@ def evaluate(
     field_outputs: list[RouteFieldOutput | dict[str, Any]],
     refs_with_text: list[FieldRefsWithText | dict[str, Any]],
     field_processes: list[RouteFieldProcess | dict[str, Any]],
-    policy_options: PolicyOptions | dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
     base_url: str | None = None,
     openai_api_key: str | None = None,
@@ -62,7 +60,6 @@ def evaluate(
         field_outputs=field_outputs,
         refs_with_text=refs_with_text,
         field_processes=field_processes,
-        policy_options=policy_options or PolicyOptions(),
         metadata=metadata or {},
     )
     validated_input = validate_route_policy_input(route_input)
@@ -76,6 +73,11 @@ def evaluate(
             field_routes.append(missing_route)
             continue
 
+        missing_process_route = _route_missing_extraction_process(context)
+        if missing_process_route is not None:
+            field_routes.append(missing_process_route)
+            continue
+
         if resolved_client is None:
             resolved_client = build_policy_client(
                 base_url=base_url,
@@ -86,10 +88,7 @@ def evaluate(
 
         decision = resolved_client.invoke(
             output_schema=RoutePolicyDecision,
-            messages=build_route_policy_messages(
-                context=context,
-                policy_options=route_input.policy_options,
-            ),
+            messages=build_route_policy_messages(context=context),
         )
         field_routes.append(
             FieldRouteDecision(
@@ -144,6 +143,36 @@ def _route_missing_required_field(
         )
 
     return None
+
+
+def _route_missing_extraction_process(
+    context: FieldPolicyContext,
+) -> FieldRouteDecision | None:
+    if context.field_output.status != "resolved":
+        return None
+    process = context.field_process
+    has_broad_signal = bool(
+        process.broad_extraction.search_queries
+        or process.broad_extraction.candidate_action_count > 0
+        or process.broad_extraction.finish_reason
+    )
+    has_resolution_signal = bool(
+        process.field_resolution.search_queries
+        or process.field_resolution.candidate_action_count > 0
+        or process.field_resolution.final_decision_used
+        or process.field_resolution.reason
+    )
+    if has_broad_signal or has_resolution_signal:
+        return None
+    return FieldRouteDecision(
+        field_name=context.field_output.field_name,
+        route="review",
+        route_reason=(
+            f"字段 {context.field_output.field_name} 已返回 resolved，"
+            "但抽取过程摘要为空：没有 search 查询、候选写入、broad 结束原因或最终定案记录。"
+            "即使 refs 文本存在，也需要人工复核抽取路径是否遗漏内容。"
+        ),
+    )
 
 
 def _route_missing_required_outputs(

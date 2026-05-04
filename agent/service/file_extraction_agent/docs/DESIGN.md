@@ -14,6 +14,7 @@ html with existing ids + task_spec
   -> html_index builds lookup indexes and overview tree
   -> broad plans how resolution should extract fields
   -> resolution uses LangGraph tool calling
+  -> table_extraction returns row evidence plus quality diagnostics when tables are queried
   -> set_field records values and evidence ids
   -> finish validates required fields
   -> ExtractionResult
@@ -142,7 +143,11 @@ Broad plan[1..N]
   unbounded `SELECT *`; the model should select explicit columns with `WHERE`
   when possible, or use `SELECT * FROM data LIMIT 50 OFFSET n` as a bounded
   fallback for messy tables. Explicit-column queries are not truncated by row
-  count.
+  count. The tool also returns lightweight audit observations:
+  `table_audit` describes table-level structure facts, while `query_audit`
+  describes facts tied to this SQL result. The model-facing tool description
+  includes query audit few-shot guidance: blank filter cells must be judged from
+  table context, not from the fact that `WHERE` did not select them.
 - `paragraph_extraction(element_id, pattern)`: regex search one text-like
   element and return all matches.
 - `set_field(name, value, evidence_ids, status, failure_reason)`: record one
@@ -161,6 +166,10 @@ return_broad_plan(summary: str, plan: list[str], risks: list[str])
 The model must return its plan by function call. Do not use `json_schema` or
 response-format structured output.
 
+For table-heavy fields, broad does not see `query_audit` yet, but it must plan
+for resolution to explain `query_audit.summary` in the later `set_field.reason`.
+It should not turn blank filter cells into a risk conclusion by itself.
+
 ## Resolution
 
 `resolution.py` builds a LangGraph tool-calling loop:
@@ -173,7 +182,20 @@ agent -> tools -> agent
 
 The resolution model receives a compact built-in text outline, not raw
 `str(document.tree)` JSON. It sees only the five public tool wrappers and never
-sees `GraphState`.
+sees `GraphState`. Its system prompt includes query audit few-shot guidance:
+
+```text
+query_audit.summary says a filter column has blanks
+  -> inspect table headers, notes, grouping, adjacent columns, selected output
+     cells, and the field goal
+  -> if context proves blank rows are outside the target category
+  -> write set_field(reason=...) explaining that context
+
+query_audit.summary shows blank filter cells / near_match_rows / empty outputs
+  -> if headers, notes, grouping, adjacent columns, or refs do not prove the
+     unselected rows are irrelevant
+  -> continue checking or write failed for human review
+```
 
 ## Evidence
 
@@ -182,3 +204,36 @@ the `table_id` and matching `row_id`; column names are kept in trace when useful
 
 Cell ids are not required because `document_processor` does not automatically
 assign ids to `td`/`th`.
+
+## Table Audit Observations
+
+Table audit observations are generated inside `html_tools._table_extraction(...)`
+because this is the first point where the system knows both the parsed table
+structure and the model's concrete SQL.
+
+```text
+table_id + SQL
+  -> read parsed HtmlTable from html_index
+  -> reject unsafe SQL or unbounded large SELECT *
+  -> compute table_audit from the whole parsed table
+  -> execute SQL against in-memory SQLite table data
+  -> compute query_audit from selected rows, selected columns, and WHERE equality predicates
+  -> return rows + evidence_ids + table_audit + query_audit
+  -> record the same audit summaries in the action trace for route policy and frontend replay
+```
+
+`table_audit` is table-level and factual. It reports row/column counts, columns,
+blank-cell distribution, and structure signals such as repeated header-looking
+rows. It does not include a `status` and does not decide whether a field is
+wrong.
+
+`query_audit` is field/query-specific and factual. It reports returned row
+count, WHERE equality predicate columns, blank counts in filter columns,
+non-empty distributions, near matches, selected output-column empty counts, and
+evidence integrity. It also includes a short `summary` that can be shown in the
+frontend and passed to route policy.
+
+Route policy does not hard-review on a diagnostic status flag because audit
+observations do not carry one. The policy model receives `query_audit.summary`
+plus `field_resolution.reason`, then decides whether observations such as blank
+filter cells are harmless context or require manual review.

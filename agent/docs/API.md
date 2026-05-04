@@ -164,7 +164,6 @@ POST /v1/route-policy-agent/evaluate
 - `field_outputs[]`：必填，来自 `ExtractionResult.result.fields`。
 - `refs_with_text[]`：必填，backend 从抽取 trace 组装的证据文本。
 - `field_processes[]`：必填，backend 从抽取 trace actions 组装的两阶段过程摘要。
-- `policy_options`：可选，route prompt 的 refs 数量和文本长度预算。
 - `metadata`：可选，调用方透传元信息。
 - `base_url`、`openai_api_key`、`model`：可选，覆盖 route policy 模型连接配置；不传 `model` 时读取 `ROUTE_POLICY_MODEL`。
 - `structured_output_strategy`：可选，固定只支持 `tool_call`；显式传入 `auto` 或 `json_schema` 会返回 422。
@@ -177,5 +176,11 @@ task_spec + field_outputs + refs_with_text + field_processes
   -> processor.evaluate(...)
   -> input_validator 校验字段名、refs 分组、ref.text 和 field_processes 分组
   -> mapper 合并字段定义、字段输出、证据文本和过程摘要
+  -> 必填缺失或抽取过程摘要为空等确定性问题直接 review
+  -> query_audit/table_audit 作为事实观察交给 route policy LLM 判断
   -> route policy LLM 输出字段级 accept / review / reject
 ```
+
+`field_processes` 只传过程摘要和轻量质量诊断。它可以包含
+`diagnostics[].quality_type=table_audit|query_audit`、`summary`、`table_id`、`query`
+等摘要字段，但不能包含 `status`、工具返回的表格原始行、cell 值或 refs 列表。

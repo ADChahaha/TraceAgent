@@ -24,6 +24,10 @@
 - `test_table_extraction_large_tables_allow_select_star_with_bounded_limit`：确认大表在表格混乱、必须看全列时，可以用 `SELECT * FROM data LIMIT 50 OFFSET ...` 分页读取。
 - `test_table_extraction_large_tables_reject_select_star_above_limit`：确认大表 `SELECT *` 的分页上限是 50 行，超过上限仍会被拒绝。
 - `test_table_extraction_large_tables_allow_specific_columns_without_truncating_rows`：确认大表选择具体列时不会按行数截断，工具会返回 SQL 匹配的全部行。
+- `test_table_extraction_reports_table_audit_for_empty_cells`：确认表格存在空 cell 时会返回 `table_audit.blank_cells`，让模型和人工看到整表解析事实，但不提前给出风险状态。
+- `test_table_extraction_reports_query_audit_for_possible_missed_rows`：确认当前 SQL 查询会返回 `query_audit.predicate_columns`，记录筛选列空白行和近似未选中行等事实观察。
+- `test_table_extraction_query_audit_summarizes_sparse_label_column_without_warning`：确认稀疏标签列会生成自然语言 `query_audit.summary`，但不会把空白分类列硬编码为 warning。
+- `test_table_extraction_returns_audit_without_status`：确认工具结果返回 `query_audit`，且不会携带诊断状态字段。
 - `test_table_extraction_row_evidence_ids_can_be_used_by_set_field`：确认 `table_extraction` 观察到的行证据可以立刻用于 `set_field` 写字段。
 - `test_table_extraction_returns_sql_errors_for_model_retry`：确认 SQL 写错时工具返回 `ok=false`、原始错误、可用列名和双引号提示，方便模型修正后重试。
 - `test_paragraph_extraction_returns_all_regex_matches`：确认段落正则抽取会返回所有匹配文本及对应 evidence id。
@@ -34,4 +38,4 @@
 - `test_update_plan_rejects_invalid_plan_index`：确认越界的 `plan_index` 会返回明确错误。
 - `test_set_field_rejects_unobserved_evidence_ids`：确认未通过读取或抽取工具观察到的 evidence id 不能用于 resolved 字段。
 - `test_finish_fails_missing_required_field`：确认缺少必填字段时 `finish` 返回字段级错误。
-- `test_build_tools_exposes_model_facing_docstrings_without_state_argument`：确认公开给模型的工具 schema 隐藏内部 `state`，同时暴露必要参数和模型可读的工具说明。
+- `test_build_tools_exposes_model_facing_docstrings_without_state_argument`：确认公开给模型的工具 schema 隐藏内部 `state`，同时暴露必要参数和模型可读的工具说明，包括 table_extraction 的通用 query audit few-shot，要求模型根据表格上下文判断空白筛选行。

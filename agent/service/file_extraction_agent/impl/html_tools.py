@@ -133,6 +133,15 @@ def build_tools(state: Any) -> list[Any]:
           ``OFFSET 50`` if needed.
         - Never use unbounded ``SELECT *`` on a large table.
 
+        query_audit few-shot:
+        - Always judge blank filter cells from table context: headers, notes, group
+          titles, adjacent columns, selected output cells, and the field goal.
+          If context proves blank rows are outside the target category, explain
+          that evidence in ``set_field.reason``.
+        - do not say a blank row is normal only because WHERE did not select it.
+          If blank rows, near matches, or empty output cells may change the
+          answer, keep investigating or fail the field for human review.
+
         Args:
             table_id: Existing HTML table id, for example ``dp-table-1``.
             sql: A single SELECT statement over table name ``data``, for
@@ -474,6 +483,7 @@ def _table_extraction(state: Any, table_id: str, sql: str, *, reason: str | None
         _record_action(state, "table_extraction", _args_with_reason({"table_id": table_id, "sql": sql}, reason), result)
         return result
 
+    table_audit = _table_audit(table)
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row
     quoted_columns = [_quote_identifier(column) for column in table.columns]
@@ -507,6 +517,7 @@ def _table_extraction(state: Any, table_id: str, sql: str, *, reason: str | None
         return result
     selected_columns = [description[0] for description in cursor.description or []]
     rows = []
+    selected_row_ids: list[str] = []
     for sqlite_row in cursor.fetchall():
         row_id = sqlite_row["__row_id"] if "__row_id" in sqlite_row.keys() else None
         values = {
@@ -518,6 +529,8 @@ def _table_extraction(state: Any, table_id: str, sql: str, *, reason: str | None
             row_id = _match_row_id(table, values)
         evidence_ids = [table_id, row_id] if row_id else [table_id]
         _mark_observed(state, evidence_ids)
+        if row_id:
+            selected_row_ids.append(row_id)
         rows.append(
             {
                 "row_id": row_id,
@@ -526,10 +539,18 @@ def _table_extraction(state: Any, table_id: str, sql: str, *, reason: str | None
             }
         )
     connection.close()
+    query_audit = _query_audit(
+        table=table,
+        sql=sql,
+        selected_row_ids=selected_row_ids,
+        selected_columns=[column for column in selected_columns if column != "__row_id"],
+    )
     result = {
         "table_id": table_id,
         "columns": [column for column in selected_columns if column != "__row_id"],
         "rows": rows,
+        "table_audit": table_audit,
+        "query_audit": query_audit,
     }
     _record_action(state, "table_extraction", _args_with_reason({"table_id": table_id, "sql": sql}, reason), _summarize_tool_result(result))
     return result
@@ -755,6 +776,212 @@ def _match_row_id(table: Any, values: dict[str, Any]) -> str | None:
         if all(str(row.get(column, "")) == str(value) for column, value in values.items()):
             return row_id
     return None
+
+
+def _table_audit(table: Any) -> dict[str, Any]:
+    rows = _read(table, "rows", []) or []
+    columns = _read(table, "columns", []) or []
+    row_ids = _read(table, "row_ids", []) or []
+
+    by_column = []
+    for column in columns:
+        blank_row_ids = [
+            row_id
+            for row_id, row in zip(row_ids, rows, strict=False)
+            if not str(row.get(column, "")).strip()
+        ]
+        if blank_row_ids:
+            by_column.append(
+                {
+                    "column": column,
+                    "blank_count": len(blank_row_ids),
+                    "blank_row_ids_sample": blank_row_ids[:5],
+                }
+            )
+
+    repeated_header_rows = [
+        row_id
+        for row_id, row in zip(row_ids, rows, strict=False)
+        if columns and all(str(row.get(column, "")).strip() == str(column).strip() for column in columns)
+    ]
+
+    return {
+        "row_count": len(rows),
+        "column_count": len(columns),
+        "columns": columns,
+        "blank_cells": {
+            "total_blank_cell_count": sum(item["blank_count"] for item in by_column),
+            "by_column": by_column,
+        },
+        "structure_signals": [
+            {
+                "code": "repeated_header_row",
+                "row_ids": repeated_header_rows,
+            }
+        ] if repeated_header_rows else [],
+    }
+
+
+def _query_audit(
+    *,
+    table: Any,
+    sql: str,
+    selected_row_ids: list[str],
+    selected_columns: list[str],
+) -> dict[str, Any]:
+    rows = _read(table, "rows", []) or []
+    row_ids = _read(table, "row_ids", []) or []
+    selected_set = set(selected_row_ids)
+    predicates = _where_equal_predicates(sql)
+    predicate_columns = [
+        _predicate_column_audit(
+            rows=rows,
+            row_ids=row_ids,
+            selected_set=selected_set,
+            column=column,
+            literal=literal,
+        )
+        for column, literal in predicates
+    ]
+    output_columns = [
+        _output_column_audit(
+            rows=rows,
+            row_ids=row_ids,
+            selected_set=selected_set,
+            column=column,
+        )
+        for column in selected_columns
+    ]
+    return {
+        "summary": _query_audit_summary(
+            selected_row_count=len(selected_set),
+            predicate_columns=predicate_columns,
+            output_columns=output_columns,
+        ),
+        "selected_row_count": len(selected_set),
+        "predicate_columns": predicate_columns,
+        "output_columns": output_columns,
+        "evidence_integrity": {
+            "unresolved_selected_row_count": 0,
+            "unresolved_selected_row_ids": [],
+        },
+    }
+
+
+def _predicate_column_audit(
+    *,
+    rows: list[dict[str, Any]],
+    row_ids: list[str],
+    selected_set: set[str],
+    column: str,
+    literal: str,
+) -> dict[str, Any]:
+    blank_row_ids: list[str] = []
+    distribution: dict[str, int] = {}
+    near_match_rows: list[dict[str, Any]] = []
+    for row_id, row in zip(row_ids, rows, strict=False):
+        value = str(row.get(column, "")).strip()
+        if not value:
+            if row_id not in selected_set:
+                blank_row_ids.append(row_id)
+            continue
+        distribution[value] = distribution.get(value, 0) + 1
+        if row_id not in selected_set and _normalized(value) == _normalized(literal) and value != literal:
+            near_match_rows.append({"row_id": row_id, "value": value})
+    return {
+        "column": column,
+        "operator": "=",
+        "literal": literal,
+        "selected_count": len(selected_set),
+        "blank_count": len(blank_row_ids),
+        "blank_row_ids_sample": blank_row_ids[:5],
+        "non_empty_distribution": [
+            {"value": value, "count": count}
+            for value, count in sorted(distribution.items(), key=lambda item: (-item[1], item[0]))
+        ],
+        "near_match_rows": near_match_rows[:5],
+        "keyword_unselected_rows": [],
+    }
+
+
+def _output_column_audit(
+    *,
+    rows: list[dict[str, Any]],
+    row_ids: list[str],
+    selected_set: set[str],
+    column: str,
+) -> dict[str, Any]:
+    empty_selected_row_ids = [
+        row_id
+        for row_id, row in zip(row_ids, rows, strict=False)
+        if row_id in selected_set and not str(row.get(column, "")).strip()
+    ]
+    return {
+        "column": column,
+        "empty_selected_count": len(empty_selected_row_ids),
+        "empty_selected_row_ids": empty_selected_row_ids,
+    }
+
+
+def _query_audit_summary(
+    *,
+    selected_row_count: int,
+    predicate_columns: list[dict[str, Any]],
+    output_columns: list[dict[str, Any]],
+) -> str:
+    parts = [f"返回 {selected_row_count} 行"]
+    for predicate in predicate_columns:
+        parts.append(f"筛选列“{predicate['column']}”空白 {predicate['blank_count']} 行")
+        distribution = predicate.get("non_empty_distribution") or []
+        if distribution:
+            distribution_text = "，".join(
+                f"{item['value']} {item['count']}" for item in distribution[:4]
+            )
+            parts.append(f"非空分布：{distribution_text}")
+    for output in output_columns:
+        if output["empty_selected_count"]:
+            parts.append(f"输出列“{output['column']}”空值 {output['empty_selected_count']} 行")
+        else:
+            parts.append(f"输出列“{output['column']}”无空值")
+    return "；".join(parts) + "。"
+
+
+def _where_equal_predicates(sql: str) -> list[tuple[str, str]]:
+    normalized = sql.strip().rstrip(";").strip()
+    match = re.search(r"(?is)\bwhere\b(.*?)(?:\border\s+by\b|\bgroup\s+by\b|\blimit\b|\boffset\b|$)", normalized)
+    if not match:
+        return []
+    where_clause = match.group(1)
+    predicates: list[tuple[str, str]] = []
+    for column, quote, value in re.findall(
+        r'"([^"]+)"\s*=\s*([\'"])(.*?)\2',
+        where_clause,
+        flags=re.DOTALL,
+    ):
+        predicates.append((column, value))
+    return predicates
+
+
+def _query_literals(sql: str, reason: str | None) -> list[str]:
+    raw_literals = [value for _quote, value in re.findall(r"([\'\"])(.*?)\1", sql)]
+    if reason:
+        raw_literals.extend(re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{2,}", reason))
+    literals: list[str] = []
+    for literal in raw_literals:
+        literal = literal.strip()
+        if not literal or literal in literals:
+            continue
+        literals.append(literal)
+    return literals
+
+
+def _row_contains_any_literal(row: dict[str, Any], literals: list[str]) -> bool:
+    text = " ".join(str(value) for value in row.values())
+    return any(literal in text for literal in literals)
+
+
+def _normalized(value: str) -> str:
+    return re.sub(r"\s+", "", value)
 
 
 def _heading_level(tag: str) -> int | None:

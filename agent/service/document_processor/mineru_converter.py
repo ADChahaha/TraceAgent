@@ -6,7 +6,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -77,9 +76,6 @@ def resolve_mineru_executable() -> str:
     configured = os.getenv("MINERU_BIN")
     if configured:
         return configured
-    sibling = Path(sys.executable).with_name("mineru")
-    if sibling.exists() and os.access(sibling, os.X_OK):
-        return str(sibling)
     found = shutil.which("mineru")
     if found:
         return found

@@ -7,3 +7,8 @@ Tests `service.document_processor.schemas.ProcessResult`.
 - `filename`
 - `html`
 - `display_html`
+- `markdown`
+- `md_list`
+- `blocks`
+- `meta_info`
+- `warnings`

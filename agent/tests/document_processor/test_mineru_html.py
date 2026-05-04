@@ -50,7 +50,8 @@ def test_build_html_from_content_list_preserves_ids_metadata_and_tables():
     assert 'id="p001_b001_list"' in result
     assert 'id="p001_b001_item_000"' in result
     assert '<table id="p001_b002_table"><tr id="p001_b002_tr_000"><td>専攻</td></tr></table>' in result
-    assert "images/table.jpg" in result
+    assert "images/table.jpg" not in result
+    assert "source:" not in result.lower()
 
 
 def test_build_display_html_wraps_extraction_html_with_replay_style():
@@ -62,6 +63,62 @@ def test_build_display_html_wraps_extraction_html_with_replay_style():
     assert 'id="p001_b000"' in result
     assert "dp-evidence-highlight" in result
     assert "正文" in result
+
+
+def test_build_html_skips_pages_without_visible_content():
+    pages = [
+        [
+            {
+                "type": "image",
+                "content": {"image_source": {"path": "images/blank.jpg"}},
+            }
+        ],
+        [],
+        [
+            {
+                "type": "paragraph",
+                "content": {"paragraph_content": [{"type": "text", "content": "正文"}]},
+            }
+        ],
+    ]
+
+    result = build_html_from_content_list(pages)
+    display_html = build_display_html_from_content_list(pages)
+
+    assert 'id="page_001"' not in result
+    assert 'id="page_002"' not in result
+    assert 'id="page_003"' in result
+    assert 'id="p003_b000"' in result
+    assert "SOURCE:" not in display_html
+    assert "images/blank.jpg" not in display_html
+
+
+def test_build_html_skips_pages_with_only_page_number():
+    pages = [
+        [
+            {
+                "type": "page_number",
+                "content": {"text": "第2页，共7页"},
+                "bbox": [455, 939, 551, 963],
+            }
+        ],
+        [
+            {
+                "type": "paragraph",
+                "content": {"paragraph_content": [{"type": "text", "content": "正文"}]},
+            }
+        ],
+    ]
+
+    result = build_html_from_content_list(pages)
+    blocks = build_blocks_from_content_list(pages)
+    markdown = build_markdown_from_content_list(pages)
+
+    assert 'id="page_001"' not in result
+    assert "第2页，共7页" not in result
+    assert 'id="page_002"' in result
+    assert [block["block_id"] for block in blocks] == ["p002_b000"]
+    assert markdown == "正文"
 
 
 def test_build_blocks_from_content_list_uses_rendered_ids_for_text_list_and_table_rows():

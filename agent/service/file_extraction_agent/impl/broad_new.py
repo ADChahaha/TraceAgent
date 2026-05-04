@@ -65,6 +65,8 @@ def build_broad_messages(state: Any) -> list[dict[str, str]]:
         "小表可以 SELECT *；大表不要规划裸 SELECT *，要规划选择必要列并尽量加 WHERE 条件。"
         "如果表格结构混乱、无法可靠 WHERE，保底规划 SELECT * FROM data LIMIT 50 OFFSET 0 "
         "这种 50 行以内的分页读取。"
+        "规划 set_field reason 要解释 query_audit.summary；"
+        "不要把空白筛选列直接规划成风险结论，要让 resolution 结合字段语义、refs 和输出列空值判断。"
         "示例写法：'读取 p004_b002 表格，用 table_extraction 提取募集人数相关字段'；"
         "'阅读 <日本語基準> 博士課程前期課程 的出願資格章节，提取申请资格字段'。"
     )

@@ -80,7 +80,9 @@ p001_b001_item_000
 ```
 
 The converter preserves page, type, title level, bbox, table HTML, captions,
-footnotes, and source image paths.
+and footnotes for visible text/table content. Empty pages, image-only blocks,
+and source image debug paths are filtered out so replay HTML only shows content
+that the extraction agent can actually use.
 
 ## Table Handling
 

@@ -92,5 +92,8 @@ The processor converts MinerU `content_list_v2.json` to HTML and preserves:
 - table HTML
 - table captions and footnotes
 
+Pages without visible text/table content are omitted from generated HTML.
+Image-only blocks and MinerU source image paths are not rendered.
+
 The processor does not perform field extraction and does not merge continued
 tables in this version.

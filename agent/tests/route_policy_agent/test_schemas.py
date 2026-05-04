@@ -106,7 +106,216 @@ def test_route_policy_input_accepts_list_field_output():
         "学术论文 OR 论文题目 OR 作品类型"
     ]
     assert route_input.field_processes[0].broad_extraction.counted_fields[0].count == 2
-    assert route_input.policy_options.max_refs_per_field == 50
+
+
+def test_route_policy_input_accepts_quality_diagnostics_summary():
+    route_input = RoutePolicyInput(
+        task_spec=TaskSpec(
+            task_name="academic_paper_extraction",
+            fields=[
+                FieldDefinition(
+                    field_name="academic_paper_titles",
+                    display_name="学术论文名称",
+                    type="list",
+                    required=True,
+                )
+            ],
+        ),
+        field_outputs=[
+            RouteFieldOutput(
+                field_name="academic_paper_titles",
+                status="resolved",
+                value=["论文 A"],
+            )
+        ],
+        refs_with_text=[
+            FieldRefsWithText(
+                field_name="academic_paper_titles",
+                refs=[],
+            )
+        ],
+        field_processes=[
+            RouteFieldProcess(
+                field_name="academic_paper_titles",
+                broad_extraction=RouteProcessStage(
+                    search_queries=["SELECT \"论文题目\" FROM data WHERE \"作品类型\" = '学术论文'"],
+                    candidate_action_count=1,
+                    diagnostics=[
+                        {
+                            "source": "table_extraction",
+                            "table_id": "p002_b001",
+                            "query": "SELECT \"论文题目\" FROM data WHERE \"作品类型\" = '学术论文'",
+                            "quality_type": "query_audit",
+                            "summary": "返回 1 行；筛选列“作品类型”空白 1 行；输出列“论文题目”无空值。",
+                        }
+                    ],
+                ),
+                field_resolution=RouteProcessStage(final_decision_used=True),
+            )
+        ],
+    )
+
+    diagnostic = route_input.field_processes[0].broad_extraction.diagnostics[0]
+    assert diagnostic.quality_type == "query_audit"
+    assert diagnostic.summary == "返回 1 行；筛选列“作品类型”空白 1 行；输出列“论文题目”无空值。"
+
+
+def test_route_policy_input_rejects_diagnostic_status_payload():
+    try:
+        RoutePolicyInput(
+            task_spec=TaskSpec(
+                task_name="academic_paper_extraction",
+                fields=[
+                    FieldDefinition(
+                        field_name="academic_paper_titles",
+                        display_name="学术论文名称",
+                        type="list",
+                    )
+                ],
+            ),
+            field_outputs=[
+                RouteFieldOutput(
+                    field_name="academic_paper_titles",
+                    status="resolved",
+                    value=["论文 A"],
+                )
+            ],
+            refs_with_text=[
+                FieldRefsWithText(
+                    field_name="academic_paper_titles",
+                    refs=[],
+                )
+            ],
+            field_processes=[
+                {
+                    "field_name": "academic_paper_titles",
+                    "broad_extraction": {
+                        "diagnostics": [
+                            {
+                                "source": "table_extraction",
+                                "table_id": "p002_b001",
+                                "quality_type": "query_audit",
+                                "status": "warning",
+                                "summary": "返回 1 行；筛选列“作品类型”空白 1 行。",
+                            }
+                        ],
+                    },
+                    "field_resolution": {
+                        "final_decision_used": True,
+                    },
+                }
+            ],
+        )
+    except ValidationError as exc:
+        assert "status" in str(exc)
+    else:
+        raise AssertionError("route policy 工具观察摘要不应接收 status")
+
+
+def test_route_policy_input_rejects_raw_rows_in_quality_diagnostics():
+    try:
+        RoutePolicyInput(
+            task_spec=TaskSpec(
+                task_name="academic_paper_extraction",
+                fields=[
+                    FieldDefinition(
+                        field_name="academic_paper_titles",
+                        display_name="学术论文名称",
+                        type="list",
+                    )
+                ],
+            ),
+            field_outputs=[
+                RouteFieldOutput(
+                    field_name="academic_paper_titles",
+                    status="resolved",
+                    value=["论文 A"],
+                )
+            ],
+            refs_with_text=[
+                FieldRefsWithText(
+                    field_name="academic_paper_titles",
+                    refs=[],
+                )
+            ],
+            field_processes=[
+                {
+                    "field_name": "academic_paper_titles",
+                    "broad_extraction": {
+                        "diagnostics": [
+                            {
+                                "source": "table_extraction",
+                                "table_id": "p002_b001",
+                                "quality_type": "query_audit",
+                                "summary": "返回 1 行；筛选列“作品类型”空白 1 行。",
+                                "issues": [
+                                    {
+                                        "code": "empty_filter_cell",
+                                        "severity": "warning",
+                                        "message": "筛选列存在空值",
+                                        "row_values": {"作品类型": "", "论文题目": "论文 B"},
+                                    }
+                                ],
+                                "rows": [{"论文题目": "论文 B"}],
+                            }
+                        ],
+                    },
+                    "field_resolution": {
+                        "final_decision_used": True,
+                    },
+                }
+            ],
+        )
+    except ValidationError as exc:
+        message = str(exc)
+        assert "rows" in message
+        assert "row_values" in message
+    else:
+        raise AssertionError("route policy 质量诊断不应接收原始表格行或 cell 值")
+
+
+def test_route_policy_input_rejects_policy_options_payload():
+    try:
+        RoutePolicyInput(
+            task_spec=TaskSpec(
+                task_name="invoice",
+                fields=[
+                    FieldDefinition(
+                        field_name="invoice_no",
+                        display_name="发票号",
+                        type="string",
+                    )
+                ],
+            ),
+            field_outputs=[
+                RouteFieldOutput(
+                    field_name="invoice_no",
+                    status="resolved",
+                    value="INV-001",
+                )
+            ],
+            refs_with_text=[
+                FieldRefsWithText(
+                    field_name="invoice_no",
+                    refs=[],
+                )
+            ],
+            field_processes=[
+                RouteFieldProcess(
+                    field_name="invoice_no",
+                    broad_extraction=RouteProcessStage(search_queries=["发票号 OR 发票号码"]),
+                    field_resolution=RouteProcessStage(final_decision_used=True),
+                )
+            ],
+            policy_options={
+                "max_refs_per_field": 1,
+                "max_ref_text_chars": 10,
+            },
+        )
+    except ValidationError as exc:
+        assert "policy_options" in str(exc)
+    else:
+        raise AssertionError("route policy 输入不应接收 policy_options")
 
 
 def test_route_policy_input_rejects_tool_result_in_field_processes():

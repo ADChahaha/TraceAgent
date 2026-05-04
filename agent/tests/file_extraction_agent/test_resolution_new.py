@@ -67,6 +67,10 @@ def test_resolution_messages_embed_compact_document_outline():
     assert "depth=2 看相邻子章节" in content
     assert "同一字段已经在同一章节 read_element 了 3 次以上" in content
     assert "所有列名必须用双引号包住" in content
+    assert "query_audit few-shot" in content
+    assert "空白筛选列必须结合表格上下文判断" in content
+    assert "不能只因为空白行未被 WHERE 选中就说正常" in content
+    assert "相邻列、表注或表头" in content
 
 
 def test_format_document_outline_prioritizes_index_pages():

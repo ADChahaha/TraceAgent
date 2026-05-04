@@ -1,6 +1,54 @@
 # Route Policy Agent Devlog
 
-last updated: 2026-04-30 20:42:20
+last updated: 2026-05-05 01:08:44
+
+## 2026-05-05 01:08:44
+
+### 已完成工作
+
+- route policy system prompt 增加 query audit few-shot。
+- few-shot 固定两个判断样例：空白筛选列被合理解释且 refs 支持时可 `accept`；存在 near match 或输出列空值但模型未解释时应 `review`。
+- 同步更新设计文档和 `test_processor.py` 测试说明。
+
+### 验证
+
+- `conda run -n agent-gate python -m pytest tests/route_policy_agent/test_processor.py tests/route_policy_agent/test_schemas.py -q`，结果 `19 passed`。
+
+## 2026-05-05 01:05:20
+
+### 已完成工作
+
+- route policy 诊断输入改为消费 `table_audit/query_audit` 事实观察摘要，不再接收或依赖诊断 `status` 字段。
+- 删除 `query_quality` warning 的硬规则 review 路径，改为把 `query_audit.summary` 和 `field_resolution.reason` 一起交给小 LLM 判断。
+- prompt 明确说明筛选列空白不应自动 review，需要结合模型解释、refs 证据和工具观察判断。
+- 同步更新 schema、processor、prompt、设计文档和测试说明，固定旧 `status` 诊断输入会被拒绝。
+
+### 当前进展
+
+- 空白筛选列、非空分布、输出列空值等表格事实会进入 route policy prompt，但不再提前下风险结论。
+
+### 验证
+
+- `conda run -n agent-gate python -m pytest tests/file_extraction_agent/test_html_tools_new.py tests/route_policy_agent/test_processor.py tests/route_policy_agent/test_schemas.py -q`，结果 `44 passed`。
+
+## 2026-05-04 22:37:01
+
+### 已完成工作
+
+- 删除 route policy 输入契约里的 `policy_options`，HTTP route 和 processor 都不再接收 refs 条数或文本长度裁剪参数。
+- prompt 组装层改为完整序列化当前字段的 `refs_with_text`，不再按 `max_refs_per_field` 或 `max_ref_text_chars` 静默截断证据。
+- 新增回归测试，固定 55 条 refs 和长文本尾部都必须完整进入 route policy prompt。
+- 新增 schema / HTTP route 测试，固定旧 `policy_options` payload 会被拒绝。
+- 同步更新 `route_policy_agent/docs/DESIGN.md`、`agent/docs/API.md` 和对应 `tests/docs/` 测试说明。
+
+### 当前进展
+
+- route policy 仍只把 `refs_with_text.text` 作为证据文本来源；`field_process` 继续只用于判断 broad / resolution 搜索和定案路径是否合理。
+- 如果后续需要控制 token，需要在上游做显式证据选择，而不是在 route policy prompt 层静默截断。
+
+### 验证
+
+- `python -m pytest tests/route_policy_agent tests/routes/test_route_policy_agent_route.py -q`，结果 `28 passed`。
 
 ## 2026-04-30 20:42:20
 

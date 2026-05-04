@@ -79,13 +79,12 @@ POST /v1/route-policy-agent/evaluate
   - 字段最终值和字段状态；`type=list` 字段的值应是字符串数组，route policy 只评价该数组是否被 refs 支持，不把它改写成字符串。
 - `refs_with_text`
   - 每条 ref 必须包含证据文本和来源位置，例如 `document_id`、`page`、`block_id`、`span`、`text`。
+  - prompt 组装层不按条数或字符数静默截断 `refs_with_text`；backend 传入多少最终证据文本，route policy 就看到多少。
 - `field_processes`
   - 每个待评估字段必须有一条过程摘要，包含 `broad_extraction` 和 `field_resolution` 两段。
   - 两段中的 `search_queries` 只记录统一 search 工具发起过的查询词，例如 `学术论文 OR 论文题目 OR 作品类型`，不记录 `search_text` / `search_table_rows` 这类内部拆分。
-  - 过程摘要可以包含候选写入数量、broad 结束原因、是否执行 `final_decision`、resolution 原因和失败原因。
+  - 过程摘要可以包含候选写入数量、broad 结束原因、是否执行 `final_decision`、resolution 原因、失败原因和轻量质量诊断。
   - 过程摘要不能包含 search 工具返回的正文、表格行、cell、block_id 列表或 action refs；最终证据文本仍只从 `refs_with_text` 读取。
-- 可选 `policy_options`
-  - route prompt 的 refs 数量和文本长度预算，`max_refs_per_field` 默认 50。
 
 这里的 `refs` 不能只是定位信息。如果 ref 只有 `document_id/page/span/block_id`，它只能说明证据位置，不能让 route policy 判断字段值是否真的被证据支持。`refs_with_text` 仍是最终证据来源；`field_processes` 只说明 agent 搜索和定案路径是否合理，不替代证据文本。
 
@@ -193,6 +192,7 @@ processor.evaluate(task_spec, field_outputs, refs_with_text, field_processes)
   -> mapper 按 field_name 合并 FieldDefinition、RouteFieldOutput、EvidenceTextRef[]、RouteFieldProcess
   -> 派生字段额外带上 source_field/source_fields 对应的 related_field_processes
   -> required + allow_missing=false 且没填的字段直接生成 FieldRouteDecision(route=review)
+  -> resolved 但抽取过程摘要为空的字段直接生成 FieldRouteDecision(route=review)
   -> resolved 字段由 prompts 构造只含字段定义、字段输出、refs 文本和过程摘要的 messages
   -> policy_client.invoke(RoutePolicyDecision, messages)
   -> 如果 task_spec 中还有 required + allow_missing=false 但完全缺席的字段，补一条 route=review
@@ -243,6 +243,37 @@ ValidatedPolicyInput
 
 小 LLM 不允许输出新的字段值。如果它认为值需要修改，只能输出 `route=review`，由 backend 的人工审核流程处理。
 
+### 3. 表格工具观察参与 route
+
+`field_processes` 可以携带 `diagnostics`，用于描述抽取工具发现但 refs 文本本身不一定能表达的事实观察。当前只允许摘要字段进入 route policy，不允许塞入表格原始行、cell 列表或 action refs，也不允许用 `status` 提前替模型下风险结论。
+
+```text
+file_extraction_agent.table_extraction(...)
+  -> 产出 table_audit 和 query_audit
+  -> backend 只保留 table_id / query / summary / quality_type 等摘要
+  -> route_policy_agent 读取当前字段 field_process.diagnostics
+  -> prompt 同时提供 query_audit.summary 和 field_resolution.reason
+  -> 小 LLM 结合字段值、refs、查表摘要和模型解释判断 accept / review / reject
+```
+
+这样 route policy 不需要重新读取整张表，也不会因为筛选列有空白就自动 review。工具负责把“某列空白多少行、非空值如何分布、输出列是否为空”说清楚；抽取模型在 `field_resolution.reason` 里解释这些事实对当前字段是否危险；route policy 再判断是否需要人工复核。
+
+prompt 内置了 query audit few-shot，用两个对照例子约束小模型：
+
+```text
+query_audit.summary 说明筛选列有空白
+  -> field_resolution.reason 引用表头、表注、分组标题或相邻列
+     证明空白行不属于目标类别
+  -> refs_with_text 支持选中行字段值
+  -> accept
+
+query_audit.summary 说明筛选列有空白、near_match_rows 或选中输出列空值
+  -> field_resolution.reason 只说空白行未被 WHERE 选中属正常
+  -> 没有用表格上下文证明这些行不影响结果
+  -> refs_with_text 也无法排除漏行或空值问题
+  -> review
+```
+
 ## 与 Backend 的关系
 
 `backend` 调用顺序建议是：
@@ -268,7 +299,7 @@ POST /tasks
 
 - 抽取和治理决策是两个不同问题。
 - route policy 需要作为第三方评价者，只看字段输出、refs 证据文本和抽取过程摘要来判断是否放行。
-- route policy 后续可以独立做消融实验，例如不同小 LLM、不同 prompt 或不同 refs 裁剪策略。
+- route policy 后续可以独立做消融实验，例如不同小 LLM、不同 prompt 或显式证据选择策略。
 - 把 route policy 独立出来，可以避免 `service.file_extraction_agent` 同时承担抽取、证据留痕和业务放行判断。
 
 ## 测试重点
@@ -280,6 +311,8 @@ POST /tasks
 - resolved 且证据充分的非关键字段可以 `accept`。
 - resolved 但 refs 文本无法充分支持字段值时进入 `review`。
 - resolved 且 refs 支持字段值，但 broad / resolution 搜索路径明显不足时进入 `review`。
+- resolved 且 refs 支持字段值，但 `query_audit.summary` 暴露空白、近似值或输出为空等事实时，应进入 prompt，由小 LLM 结合 `field_resolution.reason` 判断是否 `review`。
+- `table_audit` 进入 prompt 作为表格结构上下文，但不单独硬判 review。
 - 派生字段 prompt 能看到来源字段的 search 查询词和过程摘要，例如数量字段能看到列表字段查过什么。
 - required 且不允许缺失的字段 failed、空值或缺少 field_output 时必须 `review`，且不调用小 LLM。
 - 输入校验能拒绝未知字段名、缺少 refs、ref 没有 text 或只有定位信息的请求。

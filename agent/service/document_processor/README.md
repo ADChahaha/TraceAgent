@@ -59,7 +59,10 @@ The generated HTML keeps MinerU structure metadata:
 - `data-type`
 - `data-level` for titles
 - `data-bbox` when MinerU provides a bounding box
-- MinerU table HTML, captions, footnotes, and source image path
+- MinerU table HTML, captions, and footnotes
+
+Pages without visible text/table content are skipped. Image-only blocks and
+MinerU source image paths are not rendered in `html` or `display_html`.
 
 Continued-table merging is currently disabled. Table structure is kept as
 MinerU emits it.

@@ -33,6 +33,8 @@ def test_build_broad_messages_includes_task_and_tree():
     assert "用 update_plan 标记" in content
     assert "读取 p004_b002 表格" in content
     assert "不能预先填答案" in content
+    assert "规划 set_field reason 要解释 query_audit.summary" in content
+    assert "不要把空白筛选列直接规划成风险结论" in content
 
 
 def test_run_broad_planner_binds_only_plan_output_function():

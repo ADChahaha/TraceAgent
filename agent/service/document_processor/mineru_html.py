@@ -12,7 +12,9 @@ def build_html_from_content_list(pages: list[list[dict[str, Any]]]) -> str:
     """Build extraction HTML with stable ids and MinerU metadata."""
 
     return "\n".join(
-        render_page(page, page_idx) for page_idx, page in enumerate(pages)
+        rendered
+        for page_idx, page in enumerate(pages)
+        if (rendered := render_page(page, page_idx))
     )
 
 
@@ -44,7 +46,7 @@ table {{ border-collapse: collapse; width: 100%; font-size: 12px; margin: 8px 0;
 td, th {{ border: 1px solid #737373; padding: 5px 7px; vertical-align: top; }}
 .caption {{ font-size: 13px; font-weight: 600; margin-bottom: 6px; }}
 .footnote {{ font-size: 12px; color: #525252; margin-top: 6px; }}
-.source-image, .block-label {{ font-size: 11px; color: #737373; text-transform: uppercase; letter-spacing: .04em; }}
+.block-label {{ font-size: 11px; color: #737373; text-transform: uppercase; letter-spacing: .04em; }}
 .block:hover {{ outline: 2px solid #2563eb; outline-offset: 2px; }}
 .dp-evidence-highlight {{ outline: 3px solid #f59e0b; background-color: #fff7cc; transition: background-color 160ms ease, outline-color 160ms ease; }}
 </style>
@@ -66,6 +68,8 @@ def build_blocks_from_content_list(pages: list[list[dict[str, Any]]]) -> list[di
     for page_idx, page in enumerate(pages):
         page_no = page_idx + 1
         for block_idx, block in enumerate(page):
+            if not should_render_block(block):
+                continue
             block_id = f"p{page_no:03d}_b{block_idx:03d}"
             block_type = str(block.get("type", "unknown"))
             blocks.append(
@@ -97,6 +101,8 @@ def build_markdown_from_content_list(pages: list[list[dict[str, Any]]]) -> str:
     lines: list[str] = []
     for page in pages:
         for block in page:
+            if not should_render_block(block):
+                continue
             text = block_text(block)
             if not text:
                 continue
@@ -116,7 +122,13 @@ def build_markdown_from_content_list(pages: list[list[dict[str, Any]]]) -> str:
 
 
 def render_page(blocks: list[dict[str, Any]], page_idx: int) -> str:
-    rendered = [render_block(block, page_idx, block_idx) for block_idx, block in enumerate(blocks)]
+    rendered = [
+        render_block(block, page_idx, block_idx)
+        for block_idx, block in enumerate(blocks)
+        if should_render_block(block)
+    ]
+    if not rendered:
+        return ""
     page_no = page_idx + 1
     return (
         f'<section class="page" id="page_{page_no:03d}" data-page="{page_no}">'
@@ -159,7 +171,6 @@ def render_table(block: dict[str, Any], block_id: str, page_idx: int, attrs: str
     caption = flatten_text(content.get("table_caption"))
     footnote = flatten_text(content.get("table_footnote"))
     table_html = ensure_table_evidence_ids(content.get("html") or "", block_id=block_id)
-    image_path = content.get("image_source", {}).get("path")
     pieces: list[str] = []
     if caption:
         pieces.append(f'<div class="caption">{html.escape(caption)}</div>')
@@ -169,8 +180,6 @@ def render_table(block: dict[str, Any], block_id: str, page_idx: int, attrs: str
     )
     if footnote:
         pieces.append(f'<div class="footnote">{html.escape(footnote)}</div>')
-    if image_path:
-        pieces.append(f'<div class="source-image">source: {html.escape(image_path)}</div>')
     return f"<figure {attrs}>{''.join(pieces)}</figure>"
 
 
@@ -210,6 +219,36 @@ def block_attrs(block_id: str, page_idx: int, block: dict[str, Any]) -> str:
     if bbox:
         attrs.append(f"data-bbox='{html.escape(json.dumps(bbox, ensure_ascii=False))}'")
     return " ".join(attrs)
+
+
+def should_render_block(block: dict[str, Any]) -> bool:
+    """Return true only for blocks that have visible text or table structure."""
+
+    block_type = str(block.get("type", "unknown"))
+    if block_type == "page_number":
+        return False
+    if block_type == "table":
+        content = block.get("content", {})
+        return bool(content.get("html") or flatten_text(content.get("table_caption")) or flatten_text(content.get("table_footnote")))
+    if "image" in block_type or block_type in {"interline_equation", "inline_equation"}:
+        return False
+    content = block.get("content", {})
+    if isinstance(content, dict) and content.get("image_source") and not any(
+        content.get(key)
+        for key in (
+            "title_content",
+            "paragraph_content",
+            "list_items",
+            "table_caption",
+            "table_footnote",
+            "html",
+            "page_footnote_content",
+            "text",
+            "content",
+        )
+    ):
+        return False
+    return bool(block_text(block).strip())
 
 
 def flatten_text(parts: Any) -> str:

@@ -14,22 +14,6 @@ RouteDecision = Literal["accept", "review", "reject"]
 RunStatus = Literal["completed", "failed"]
 
 
-class PolicyOptions(BaseModel):
-    """route policy 阶段的 prompt 和模型调用预算。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    max_refs_per_field: int = 50
-    max_ref_text_chars: int = 1200
-
-    @field_validator("max_refs_per_field", "max_ref_text_chars")
-    @classmethod
-    def validate_positive_limit(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError("policy option limits must be greater than 0")
-        return value
-
-
 class EvidenceTextRef(BaseModel):
     """带证据文本的字段 ref，供 route policy 独立判断字段值是否被支持。"""
 
@@ -74,6 +58,54 @@ class CountedFieldSummary(BaseModel):
         return value
 
 
+class QualityDiagnosticIssue(BaseModel):
+    """工具质量诊断中的单条风险摘要，不携带原始 row/cell 内容。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str
+    severity: str = "warning"
+    message: str
+    row_id: str | None = None
+    row_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("code", "severity", "message")
+    @classmethod
+    def validate_non_empty_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("diagnostic text fields must not be empty")
+        return value.strip()
+
+
+class QualityDiagnosticSummary(BaseModel):
+    """route policy 可见的轻量工具观察摘要。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: str
+    quality_type: str
+    issues: list[QualityDiagnosticIssue] = Field(default_factory=list)
+    table_id: str | None = None
+    query: str | None = None
+    summary: str | None = None
+
+    @field_validator("source", "quality_type")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("diagnostic summary text fields must not be empty")
+        return value.strip()
+
+    @field_validator("summary")
+    @classmethod
+    def validate_summary(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not value.strip():
+            raise ValueError("diagnostic summary must not be empty")
+        return value.strip()
+
+
 class RouteProcessStage(BaseModel):
     """route policy 可见的单阶段抽取过程摘要。"""
 
@@ -87,6 +119,7 @@ class RouteProcessStage(BaseModel):
     final_decision_used: bool = False
     reason: str | None = None
     failure_reason: str | None = None
+    diagnostics: list[QualityDiagnosticSummary] = Field(default_factory=list)
 
     @field_validator("search_queries")
     @classmethod
@@ -142,7 +175,6 @@ class RoutePolicyInput(BaseModel):
     field_outputs: list[RouteFieldOutput]
     refs_with_text: list[FieldRefsWithText]
     field_processes: list[RouteFieldProcess]
-    policy_options: PolicyOptions = Field(default_factory=PolicyOptions)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -208,7 +240,8 @@ __all__ = [
     "FieldRouteDecision",
     "FieldStatus",
     "FieldType",
-    "PolicyOptions",
+    "QualityDiagnosticIssue",
+    "QualityDiagnosticSummary",
     "RouteFieldProcess",
     "RouteDecision",
     "RouteFieldOutput",

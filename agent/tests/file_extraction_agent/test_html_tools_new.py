@@ -69,6 +69,41 @@ def _large_table_state(row_count: int = 40):
     return state
 
 
+def _risky_table_state():
+    html = """
+    <h2 id="dp-risk-h2-1">作品名单</h2>
+    <table id="dp-risk-table-1">
+      <caption id="dp-risk-caption-1">作品替代名单</caption>
+      <tr id="dp-risk-tr-0"><th>序号</th><th>作品类型</th><th>论文题目</th></tr>
+      <tr id="dp-risk-tr-1"><td>1</td><td>学术论文</td><td>论文 A</td></tr>
+      <tr id="dp-risk-tr-2"><td>2</td><td></td><td>论文 B</td></tr>
+      <tr id="dp-risk-tr-3"><td>3</td><td>学术 论文</td><td>论文 C</td></tr>
+      <tr id="dp-risk-tr-4"><td>4</td><td>大学生创新创业项目成果</td><td>项目 D</td></tr>
+    </table>
+    """
+    state = _state()
+    state.document = build_html_document(html)
+    return state
+
+
+def _sparse_label_table_state():
+    html = """
+    <h2 id="dp-dorm-h2-1">文明模范寝室</h2>
+    <table id="dp-dorm-table-1">
+      <caption id="dp-dorm-caption-1">文明模范寝室</caption>
+      <tr id="dp-dorm-tr-0"><th>楼栋</th><th>房间</th><th>模范/文明</th></tr>
+      <tr id="dp-dorm-tr-1"><td>18栋</td><td>101</td><td></td></tr>
+      <tr id="dp-dorm-tr-2"><td>18栋</td><td>106</td><td>模范寝室</td></tr>
+      <tr id="dp-dorm-tr-3"><td>18栋</td><td>212</td><td>文明寝室</td></tr>
+      <tr id="dp-dorm-tr-4"><td>18栋</td><td>214</td><td>文明寝室</td></tr>
+      <tr id="dp-dorm-tr-5"><td>18栋</td><td>215</td><td></td></tr>
+    </table>
+    """
+    state = _state()
+    state.document = build_html_document(html)
+    return state
+
+
 def test_overview_returns_document_tree():
     result = _overview(_state())
 
@@ -182,6 +217,73 @@ def test_table_extraction_large_tables_allow_specific_columns_without_truncating
     assert len(result["rows"]) == 40
     assert result["rows"][0]["values"] == {"姓名": "学生1"}
     assert result["rows"][-1]["values"] == {"姓名": "学生40"}
+
+
+def test_table_extraction_reports_table_audit_for_empty_cells():
+    result = _table_extraction(
+        _risky_table_state(),
+        "dp-risk-table-1",
+        'SELECT "论文题目" FROM data WHERE "作品类型" = "学术论文"',
+        reason="抽取作品类型为学术论文的论文题目",
+    )
+
+    assert result["table_audit"]["blank_cells"]["total_blank_cell_count"] == 1
+    assert result["table_audit"]["blank_cells"]["by_column"] == [
+        {
+            "column": "作品类型",
+            "blank_count": 1,
+            "blank_row_ids_sample": ["dp-risk-tr-2"],
+        }
+    ]
+
+
+def test_table_extraction_reports_query_audit_for_possible_missed_rows():
+    result = _table_extraction(
+        _risky_table_state(),
+        "dp-risk-table-1",
+        'SELECT "论文题目" FROM data WHERE "作品类型" = "学术论文"',
+        reason="抽取作品类型为学术论文的论文题目",
+    )
+
+    predicate = result["query_audit"]["predicate_columns"][0]
+    assert predicate["blank_count"] == 1
+    assert predicate["blank_row_ids_sample"] == ["dp-risk-tr-2"]
+    assert predicate["near_match_rows"] == [{"row_id": "dp-risk-tr-3", "value": "学术 论文"}]
+
+
+def test_table_extraction_query_audit_summarizes_sparse_label_column_without_warning():
+    result = _table_extraction(
+        _sparse_label_table_state(),
+        "dp-dorm-table-1",
+        'SELECT "房间" FROM data WHERE "模范/文明" = "文明寝室"',
+        reason="抽取文明寝室名称字段，筛选类别为文明寝室的行",
+    )
+
+    assert result["query_audit"]["summary"] == (
+        "返回 2 行；筛选列“模范/文明”空白 2 行；"
+        "非空分布：文明寝室 2，模范寝室 1；输出列“房间”无空值。"
+    )
+    predicate = result["query_audit"]["predicate_columns"][0]
+    assert predicate["column"] == "模范/文明"
+    assert predicate["literal"] == "文明寝室"
+    assert predicate["blank_count"] == 2
+    assert predicate["blank_row_ids_sample"] == ["dp-dorm-tr-1", "dp-dorm-tr-5"]
+    assert predicate["non_empty_distribution"] == [
+        {"value": "文明寝室", "count": 2},
+        {"value": "模范寝室", "count": 1},
+    ]
+
+
+def test_table_extraction_returns_audit_without_status():
+    result = _table_extraction(
+        _risky_table_state(),
+        "dp-risk-table-1",
+        'SELECT "论文题目" FROM data WHERE "作品类型" = "学术论文"',
+        reason="抽取作品类型为学术论文的论文题目",
+    )
+
+    assert "query_quality" not in result
+    assert "status" not in result["query_audit"]
 
 
 def test_table_extraction_row_evidence_ids_can_be_used_by_set_field():
@@ -369,6 +471,9 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
     table_fields = getattr(table_schema, "model_fields", None) or getattr(table_schema, "__fields__", {})
     assert "reason" in table_fields
     assert "double quotes" in _tool_description(table_extraction)
+    assert "query_audit few-shot" in _tool_description(table_extraction)
+    assert "judge blank filter cells from table context" in _tool_description(table_extraction)
+    assert "do not say a blank row is normal only because WHERE did not select it" in _tool_description(table_extraction)
     set_field = tools[names.index("set_field")]
     set_field_schema = getattr(set_field, "args_schema", None)
     set_field_fields = getattr(set_field_schema, "model_fields", None) or getattr(set_field_schema, "__fields__", {})
