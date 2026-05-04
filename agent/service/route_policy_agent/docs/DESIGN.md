@@ -76,7 +76,7 @@ POST /v1/route-policy-agent/evaluate
 - `task_spec`
   - 字段定义、是否 required、是否 critical、是否 allow_missing、字段类型、业务提示。
 - `field_outputs`
-  - 字段最终值和字段状态；`type=list` 字段的值应是字符串数组，route policy 只评价该数组是否被 refs 支持，不把它改写成字符串。
+  - 字段最终值和字段状态；列表字段必须声明为 `type=list[string]` 或 `type=list[number]`。route policy 只评价数组值是否被 refs 支持，不把它改写成字符串。
 - `refs_with_text`
   - 每条 ref 必须包含证据文本和来源位置，例如 `document_id`、`page`、`block_id`、`span`、`text`。
   - prompt 组装层不按条数或字符数静默截断 `refs_with_text`；backend 传入多少最终证据文本，route policy 就看到多少。

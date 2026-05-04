@@ -8,7 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-FieldType = Literal["string", "number", "boolean", "list", "list[string]", "list[number]"]
+FieldType = Literal["string", "number", "boolean", "list[string]", "list[number]"]
 ResultStatus = Literal["completed", "failed"]
 
 

@@ -627,15 +627,27 @@ def _set_field(
                 }
             ],
         }
+    expected_type = _read(_field_defs_by_name(state)[name], "type", "string")
+    if status == "resolved" and not _value_matches_type(value, expected_type):
+        return {
+            "ok": False,
+            "errors": [
+                {
+                    "field": name,
+                    "message": "field value does not match type",
+                    "expected_type": expected_type,
+                }
+            ],
+        }
 
     field_state = {
         "name": name,
         "status": status,
         "value": value,
         "evidence_ids": list(evidence_ids),
-            "failure_reason": failure_reason,
-            "reason": reason,
-        }
+        "failure_reason": failure_reason,
+        "reason": reason,
+    }
     _read(state, "field_states")[name] = field_state
     _record_action(
         state,
@@ -1107,7 +1119,7 @@ def _value_matches_type(value: Any, field_type: str) -> bool:
         return isinstance(value, list) and all(isinstance(item, str) for item in value)
     if field_type == "list[number]":
         return isinstance(value, list) and all(isinstance(item, int | float) and not isinstance(item, bool) for item in value)
-    return True
+    return False
 
 
 def _args_with_reason(args: dict[str, Any], reason: str | None) -> dict[str, Any]:

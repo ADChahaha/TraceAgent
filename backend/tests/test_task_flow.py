@@ -469,7 +469,7 @@ def test_route_policy_request_summarizes_tool_name_actions():
                 {
                     "field_name": "academic_paper_titles",
                     "display_name": "学术论文题目",
-                    "type": "list",
+                    "type": "list[string]",
                     "required": True,
                 }
             ],
@@ -572,7 +572,7 @@ def test_route_policy_request_preserves_table_and_query_audit_summaries():
                 {
                     "field_name": "academic_paper_titles",
                     "display_name": "学术论文题目",
-                    "type": "list",
+                    "type": "list[string]",
                     "required": True,
                 }
             ],
@@ -671,7 +671,7 @@ def test_route_policy_request_preserves_query_audit_summary_without_raw_samples(
                 {
                     "field_name": "civilized_dormitory_names",
                     "display_name": "文明寝室名称",
-                    "type": "list",
+                    "type": "list[string]",
                     "required": True,
                 }
             ],

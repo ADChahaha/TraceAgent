@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from service.file_extraction_agent.schemas import (
     ExtractionResult,
     FieldDefinition,
@@ -22,6 +24,11 @@ def test_task_spec_normalizes_field_dicts():
     assert task_spec.fields[0].required is True
     assert task_spec.fields[1].name == "rooms"
     assert task_spec.instructions == "Extract the document."
+
+
+def test_field_definition_rejects_untyped_list():
+    with pytest.raises(ValueError):
+        FieldDefinition(name="rooms", type="list")
 
 
 def test_model_config_keeps_stage_model_names_and_sampling_options():

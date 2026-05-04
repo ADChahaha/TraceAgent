@@ -16,7 +16,7 @@ backend 传入 task_spec、field_outputs、refs_with_text、field_processes
 ## 测什么
 
 - route policy 输入不接收抽取 trace。
-- route policy 输入可以消费 `type=list` 字段和数组字段值。
+- route policy 输入可以消费 `type=list[string]` 字段和数组字段值。
 - route policy 输入可以消费 `table_audit/query_audit` 这类轻量工具观察摘要。
 - route policy 输入拒绝质量诊断里夹带原始表格行、cell 值或工具结果。
 - route policy 输入拒绝 `status` 这类提前下风险结论的诊断字段。
@@ -33,7 +33,7 @@ backend 传入 task_spec、field_outputs、refs_with_text、field_processes
 
 `test_route_policy_input_accepts_list_field_output`
 
-- 构造 `type=list` 的学术论文名称字段。
+- 构造 `type=list[string]` 的学术论文名称字段。
 - 字段输出使用 `["论文 A", "论文 B"]` 数组。
 - 同时传入 broad / resolution 的 `search_queries`、`counted_fields` 等过程摘要。
 - 确认 route policy 阶段能接收 file extraction 已定案的 list 值和过程摘要。

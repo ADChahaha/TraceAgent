@@ -49,6 +49,7 @@ task_spec + field_outputs + refs_with_text + field_processes
 `test_evaluate_includes_source_field_process_for_derived_count_field`
 
 - 构造 `academic_paper_count` 指向 `academic_paper_names` 的 `source_field`。
+- 来源列表字段使用 `type=list[string]`，和 file extraction 字段类型契约保持一致。
 - 确认 system prompt 明确解释 `related_field_processes` 是来源字段过程摘要。
 - 确认数量字段自己的 payload 里除了当前字段过程摘要，还包含来源字段 `academic_paper_names` 的 `related_field_processes`。
 - 确认来源字段 broad 查过的 `学术论文 OR 论文题目 OR 作品类型` 会传给 route policy，但工具返回结果不会进入 prompt。

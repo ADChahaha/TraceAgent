@@ -51,6 +51,22 @@ def _state():
     )
 
 
+def _list_state():
+    state = _state()
+    state.task_spec.fields.append(
+        SimpleNamespace(name="student_names", type="list[string]", required=True)
+    )
+    return state
+
+
+def _mark_list_evidence_observed(state):
+    _table_extraction(
+        state,
+        "dp-table-1",
+        "SELECT 姓名 FROM data WHERE 学院 = '计算机学院'",
+    )
+
+
 def _large_table_state(row_count: int = 40):
     rows = "\n".join(
         f'<tr id="dp-big-tr-{index}"><td>学生{index}</td><td>学院{index % 3}</td></tr>'
@@ -352,6 +368,32 @@ def test_set_field_records_value_and_finish_validates_required_fields():
     assert set_result["ok"] is True
     assert state.field_states["student_name"]["value"] == "张三"
     assert finish_result == {"ok": True, "errors": []}
+
+
+def test_set_field_rejects_value_that_does_not_match_field_type():
+    state = _list_state()
+    _mark_list_evidence_observed(state)
+
+    result = _set_field(
+        state,
+        "student_names",
+        "张三",
+        ["dp-table-1", "dp-tr-2"],
+        "resolved",
+        None,
+    )
+
+    assert result == {
+        "ok": False,
+        "errors": [
+            {
+                "field": "student_names",
+                "message": "field value does not match type",
+                "expected_type": "list[string]",
+            }
+        ],
+    }
+    assert "student_names" not in state.field_states
 
 
 def test_update_plan_records_plan_status_and_action():

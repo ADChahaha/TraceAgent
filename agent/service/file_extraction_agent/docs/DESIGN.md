@@ -15,8 +15,8 @@ html with existing ids + task_spec
   -> broad plans how resolution should extract fields
   -> resolution uses LangGraph tool calling
   -> table_extraction returns row evidence plus quality diagnostics when tables are queried
-  -> set_field records values and evidence ids
-  -> finish validates required fields
+  -> set_field validates value type, then records values and evidence ids
+  -> finish validates required fields, evidence completeness, and final consistency
   -> ExtractionResult
 ```
 
@@ -151,8 +151,13 @@ Broad plan[1..N]
 - `paragraph_extraction(element_id, pattern)`: regex search one text-like
   element and return all matches.
 - `set_field(name, value, evidence_ids, status, failure_reason)`: record one
-  field value or failure.
-- `finish()`: validate required fields, value types, and evidence ids.
+  field value or failure. For `resolved` fields it first checks that evidence
+  ids exist, have been observed by read/extraction tools, and that `value`
+  matches the field type (`string`, `number`, `boolean`, `list[string]`, or
+  `list[number]`). Type mismatch returns `ok=false` as a tool result and does
+  not write `field_states`.
+- `finish()`: validate required fields, evidence completeness, and final value
+  consistency before producing the extraction result.
 
 ## Broad
 

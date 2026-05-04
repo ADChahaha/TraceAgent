@@ -1,4 +1,18 @@
-last updated: 2026-05-04 02:20:00
+last updated: 2026-05-05 03:13:09
+
+## 2026-05-05 03:13:09
+
+### 已完成工作
+
+- 移除字段定义里的宽泛 `type=list`，列表字段必须显式声明为 `list[string]` 或 `list[number]`。
+- `file_extraction_agent` 的 `set_field` 在写入 `resolved` 字段前立即校验值类型；类型不匹配时返回 `ok=false` 的工具结果，并且不写入 `field_states`。
+- 同步 route policy 和 backend 测试 fixture 的列表字段类型，避免下游继续依赖裸 `list`。
+
+### 验证
+
+- `python -m pytest tests/file_extraction_agent/test_schemas.py tests/file_extraction_agent/test_html_tools_new.py tests/route_policy_agent -q`，结果 `62 passed`。
+- `python -m pytest`，在 `agent/` 下结果 `120 passed`。
+- `python -m pytest backend/tests`，结果 `16 passed`。
 
 ## 2026-05-04 02:20:00
 

@@ -32,6 +32,7 @@
 - `test_table_extraction_returns_sql_errors_for_model_retry`：确认 SQL 写错时工具返回 `ok=false`、原始错误、可用列名和双引号提示，方便模型修正后重试。
 - `test_paragraph_extraction_returns_all_regex_matches`：确认段落正则抽取会返回所有匹配文本及对应 evidence id。
 - `test_set_field_records_value_and_finish_validates_required_fields`：确认字段写入后会保存值和证据，且必填字段齐全时 `finish` 成功。
+- `test_set_field_rejects_value_that_does_not_match_field_type`：确认 `set_field` 会在写入时立即校验字段值类型；如果 `list[string]` 字段收到字符串，会返回可重试的工具错误，并且不会污染 `field_states`。
 - `test_update_plan_records_plan_status_and_action`：确认 `update_plan` 能按 `in_progress -> completed` 记录当前计划项状态，并写入 replay action。
 - `test_update_plan_rejects_starting_later_plan_before_previous_completed`：确认模型不能跳过前面的 broad plan 直接把后面的 `plan_index` 标记为 `in_progress`。
 - `test_update_plan_rejects_completing_plan_that_is_not_in_progress`：确认模型不能在某个 plan 没有先进入 `in_progress` 时直接标记 `completed`。

@@ -62,7 +62,7 @@ def test_route_policy_input_accepts_list_field_output():
                 FieldDefinition(
                     field_name="academic_paper_titles",
                     display_name="学术论文名称",
-                    type="list",
+                    type="list[string]",
                     required=True,
                 )
             ],
@@ -100,7 +100,7 @@ def test_route_policy_input_accepts_list_field_output():
         ],
     )
 
-    assert route_input.task_spec.fields[0].type == "list"
+    assert route_input.task_spec.fields[0].type == "list[string]"
     assert route_input.field_outputs[0].value == ["论文 A", "论文 B"]
     assert route_input.field_processes[0].broad_extraction.search_queries == [
         "学术论文 OR 论文题目 OR 作品类型"
@@ -116,7 +116,7 @@ def test_route_policy_input_accepts_quality_diagnostics_summary():
                 FieldDefinition(
                     field_name="academic_paper_titles",
                     display_name="学术论文名称",
-                    type="list",
+                    type="list[string]",
                     required=True,
                 )
             ],
@@ -169,7 +169,7 @@ def test_route_policy_input_rejects_diagnostic_status_payload():
                     FieldDefinition(
                         field_name="academic_paper_titles",
                         display_name="学术论文名称",
-                        type="list",
+                        type="list[string]",
                     )
                 ],
             ),
@@ -221,7 +221,7 @@ def test_route_policy_input_rejects_raw_rows_in_quality_diagnostics():
                     FieldDefinition(
                         field_name="academic_paper_titles",
                         display_name="学术论文名称",
-                        type="list",
+                        type="list[string]",
                     )
                 ],
             ),

@@ -209,7 +209,7 @@ def test_evaluate_includes_source_field_process_for_derived_count_field():
             FieldDefinition(
                 field_name="academic_paper_names",
                 display_name="学术论文名称",
-                type="list",
+                type="list[string]",
                 required=True,
             ),
         ],
