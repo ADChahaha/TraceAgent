@@ -37,20 +37,15 @@ conda activate agent-gate
 
 ```bash
 cd /path/to/agent_gate
-cd agent
-pip install -e ".[dev]"
-cd ../backend
-pip install -e ".[dev]"
-cd ..
+pip install -e "agent[dev]"
+pip install -e "backend[dev]"
 ```
 
 安装前端依赖：
 
 ```bash
 cd /path/to/agent_gate
-cd frontend
-pnpm install
-cd ..
+pnpm --dir frontend install
 ```
 
 如果要连接真实 LLM，在启动 `agent` 前设置模型服务环境变量：
@@ -58,7 +53,9 @@ cd ..
 ```bash
 export BASE_URL="https://your-model-endpoint/v1"
 export OPENAI_API_KEY="your-api-key"
-export MODEL="your-model-name"
+export BROAD_MODEL="your-broad-model-name"
+export RESOLUTION_MODEL="your-resolution-model-name"
+export ROUTE_POLICY_MODEL="your-route-policy-model-name"
 ```
 
 如果要处理真实 PDF，尤其是扫描件或带坏 OCR/text layer 的表格 PDF，当前默认链路是 MinerU pipeline。需要先确保 `mineru` CLI 在 `agent-gate` 环境中可执行，或显式指定路径：
@@ -92,8 +89,7 @@ MinerU 模型缓存由 MinerU 自身管理。更完整的 PDF 引擎说明见 `a
 ```bash
 conda activate agent-gate
 cd /path/to/agent_gate
-cd agent
-python -m uvicorn main:app --reload --host 127.0.0.1 --port 8001
+python -m uvicorn --app-dir agent main:app --reload --host 127.0.0.1 --port 8001
 ```
 
 启动后可访问：
@@ -108,7 +104,8 @@ python -m uvicorn main:app --reload --host 127.0.0.1 --port 8001
 ```bash
 conda activate agent-gate
 cd /path/to/agent_gate
-AGENT_SERVICE_BASE_URL=http://127.0.0.1:8001 uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+AGENT_SERVICE_BASE_URL=http://127.0.0.1:8001 \
+uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 backend 默认使用本地 SQLite，数据库文件为 `backend/backend.sqlite3`。如需改路径：
@@ -125,8 +122,8 @@ uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
 
 ```bash
 cd /path/to/agent_gate
-cd frontend
-BACKEND_BASE_URL=http://127.0.0.1:8000 pnpm dev --port 3000
+BACKEND_BASE_URL=http://127.0.0.1:8000 \
+pnpm --dir frontend dev -- --port 3000
 ```
 
 打开：
@@ -138,7 +135,8 @@ http://127.0.0.1:3000/
 如果 `3000` 被占用，可以改用：
 
 ```bash
-BACKEND_BASE_URL=http://127.0.0.1:8000 pnpm dev -- --port 3002
+BACKEND_BASE_URL=http://127.0.0.1:8000 \
+pnpm --dir frontend dev -- --port 3002
 ```
 
 然后打开 `http://127.0.0.1:3002/`。
@@ -193,6 +191,13 @@ BACKEND_BASE_URL=http://127.0.0.1:8000 pnpm dev -- --port 3002
 - 写库前通过 route policy 分层处置风险
 - 人工复核接收证据包，而不是只看到最终字段值
 - MVP 保持同步处理和本地 SQLite，避免提前引入生产级复杂度
+
+## 待开发（Maybe）
+
+以下内容不是当前 MVP 的完成条件，只作为后续可能实现的方向：
+
+- 流式返回结果：让 backend / agent service 把文档处理、字段抽取、route policy 和 replay action 增量推给前端，减少长任务等待感。
+- 前端接入 LLM 辅助写字段：在创建任务或人工复核时，由前端调用 LLM 根据用户描述生成字段定义、补全字段配置或给出字段值草稿，最终仍由用户确认后提交。
 
 ## 目录规划
 
