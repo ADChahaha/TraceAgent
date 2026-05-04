@@ -72,24 +72,22 @@ export async function getTaskAudit(taskId: string): Promise<AuditResult> {
 
 export async function loadTaskDetail(taskId: string): Promise<TaskDetailData> {
   const summary = await getTaskSummary(taskId);
-  const [result, trace, replay, review, audit] = await Promise.all([
+  const [result, replay, review] = await Promise.all([
     optionalFetch(() => getTaskResult(taskId), summary.has_result !== false),
-    optionalFetch(() => getTaskTrace(taskId), summary.has_trace !== false),
     optionalFetch(
       () => getTaskReplay(taskId),
       summary.has_trace !== false || summary.has_result !== false,
     ),
-    optionalFetch(() => getReviewHandoff(taskId), summary.status === "waiting_review"),
-    optionalFetch(() => getTaskAudit(taskId), summary.status !== "failed")
+    optionalFetch(() => getReviewHandoff(taskId), summary.status === "waiting_review")
   ]);
 
   return {
     summary,
     result,
-    trace,
+    trace: null,
     replay,
     review,
-    audit
+    audit: null
   };
 }
 

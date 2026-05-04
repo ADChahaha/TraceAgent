@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import type { ReviewField } from "@/lib/types";
 
 type ReplayMode = "auto" | "paused" | "backlog";
 
@@ -18,10 +19,18 @@ type ReplayField = {
   status: string;
   value: unknown;
   evidenceIds: string[];
+  route?: string | null;
+  routeReason?: string | null;
+  needsReview: boolean;
+  reviewField?: ReviewField;
 };
 
 type HighlightState = {
   currentIds: string[];
+  tableReferenceIds: string[];
+  tableRowIds: string[];
+  readIds: string[];
+  preserveReadOrder: boolean;
 };
 
 type DocumentOutlineItem = {
@@ -69,7 +78,6 @@ type PlanReplayItem = {
   reason: string;
 };
 
-const BASE_ACTION_MS = 2600;
 const TEXT_READ_DELAY_MS = 900;
 const OUTLINE_STEP_MS = 520;
 const DOCUMENT_READ_DELAY_MS = 520;
@@ -78,11 +86,23 @@ const DOCUMENT_LINE_SCAN_MS = 340;
 export function ReplayReview({
   replay,
   finalFields,
-  reviewSlot
+  reviewFields = [],
+  reviewValues = {},
+  reviewComment = "",
+  isSubmittingReview = false,
+  onReviewValueChange,
+  onReviewCommentChange,
+  onSubmitReview,
 }: {
   replay: TaskReplay | null;
   finalFields: TaskResultField[];
-  reviewSlot?: React.ReactNode;
+  reviewFields?: ReviewField[];
+  reviewValues?: Record<string, string>;
+  reviewComment?: string;
+  isSubmittingReview?: boolean;
+  onReviewValueChange?: (fieldName: string, value: string) => void;
+  onReviewCommentChange?: (value: string) => void;
+  onSubmitReview?: () => void;
 }) {
   const actions = React.useMemo(() => replay?.actions ?? [], [replay?.actions]);
   const [index, setIndex] = React.useState(0);
@@ -92,6 +112,7 @@ export function ReplayReview({
   const [manualOutlineId, setManualOutlineId] = React.useState("");
   const [manualOutlineTick, setManualOutlineTick] = React.useState(0);
   const [animatedPathIndex, setAnimatedPathIndex] = React.useState(-1);
+  const [isUserInspecting, setIsUserInspecting] = React.useState(false);
   const [iframeInteractionTick, setIframeInteractionTick] = React.useState(0);
   const [replayCursor, setReplayCursor] = React.useState<ReplayCursor>({
     visible: true,
@@ -105,11 +126,15 @@ export function ReplayReview({
   const outlineScrollRef = React.useRef<HTMLDivElement | null>(null);
   const outlineRefs = React.useRef(new Map<string, HTMLButtonElement>());
   const userInspectingRef = React.useRef(false);
+  const lastAutoNavigationKeyRef = React.useRef("");
 
   React.useEffect(() => {
     const timeout = window.setTimeout(() => {
       setIndex(0);
       setMode("paused");
+      userInspectingRef.current = false;
+      setIsUserInspecting(false);
+      lastAutoNavigationKeyRef.current = "";
       setManualOutlineId("");
       setIframeHtml(replay?.display_html ? buildReplayHtml(replay.display_html) : "");
     }, 0);
@@ -143,22 +168,30 @@ export function ReplayReview({
     [currentReason, documentOutline],
   );
   const replayFields = React.useMemo(
-    () => reduceReplayFields(actions.slice(0, index + 1), finalFields),
-    [actions, finalFields, index],
+    () => reduceReplayFields(actions.slice(0, index + 1), finalFields, reviewFields),
+    [actions, finalFields, index, reviewFields],
   );
   const currentSetField = React.useMemo(
     () => replayFields.find((field) => field.sourceName === currentSetFieldName) ?? null,
     [currentSetFieldName, replayFields],
   );
+  const fallbackReviewField = React.useMemo(() => {
+    if (currentSetField || (actions.length > 0 && index < actions.length - 1)) {
+      return null;
+    }
+    return replayFields.find((field) => field.needsReview) ?? null;
+  }, [actions.length, currentSetField, index, replayFields]);
+  const visibleFieldWrite = currentSetField ?? fallbackReviewField;
   const highlights = React.useMemo(
     () => getHighlightState(actions.slice(0, index + 1), currentAction),
     [actions, currentAction, index],
   );
+  const highlightAnchorIds = React.useMemo(() => getHighlightAnchorIds(highlights), [highlights]);
   const actionOutlineId = React.useMemo(
-    () => getActiveOutlineId(documentOutline, highlights.currentIds),
-    [documentOutline, highlights.currentIds],
+    () => getActiveOutlineId(documentOutline, highlightAnchorIds),
+    [documentOutline, highlightAnchorIds],
   );
-  const activeOutlineId = userInspectingRef.current && manualOutlineId ? manualOutlineId : actionOutlineId;
+  const activeOutlineId = isUserInspecting && manualOutlineId ? manualOutlineId : actionOutlineId;
   const activeOutlinePathIds = React.useMemo(
     () => new Set(activeOutlineId ? getOutlinePathIds(documentOutline, activeOutlineId) : []),
     [activeOutlineId, documentOutline],
@@ -178,6 +211,8 @@ export function ReplayReview({
 
   const goNext = React.useCallback(() => {
     userInspectingRef.current = false;
+    setIsUserInspecting(false);
+    lastAutoNavigationKeyRef.current = "";
     setMode("paused");
     setManualOutlineId("");
     setIndex((current) => Math.min(current + 1, Math.max(actions.length - 1, 0)));
@@ -189,12 +224,12 @@ export function ReplayReview({
     }
     setMode("backlog");
     setManualOutlineId("");
+    lastAutoNavigationKeyRef.current = "";
     setIndex((current) => Math.max(current - 1, 0));
   }, [actions.length]);
 
   React.useEffect(() => {
     clearReadingLineHighlight(iframeRef.current);
-    setAnimatedPathIndex(-1);
     applyHighlights(iframeRef.current, highlights, currentActionType === "set_field");
   }, [currentActionType, highlights, index]);
 
@@ -232,46 +267,57 @@ export function ReplayReview({
       if (shouldStop()) {
         return;
       }
-      for (let pathIndex = 0; pathIndex < activeOutlinePath.length; pathIndex += 1) {
-        await wait(pathIndex === 0 ? 260 : OUTLINE_STEP_MS);
-        if (shouldStop()) {
-          return;
-        }
-        const outlineId = activeOutlinePath[pathIndex];
-        setAnimatedPathIndex(pathIndex);
-        setExpandedOutlineIds((current) => {
-          const next = new Set(current);
-          next.add(outlineId);
-          return next;
-        });
-        scrollOutlineItemIntoView(outlineScrollRef.current, outlineRefs.current.get(outlineId) ?? null);
-        await wait(140);
-        if (shouldStop()) {
-          return;
-        }
-        const point = getElementPointInContainer(
-          reviewRef.current,
-          outlineRefs.current.get(outlineId) ?? null,
-        );
-        if (point) {
-          setReplayCursor((current) => ({
-            visible: true,
-            x: point.x,
-            y: point.y,
-            clickTick: current.clickTick,
-          }));
-        }
-        await wait(560);
-        if (shouldStop()) {
-          return;
-        }
-        setReplayCursor((current) => ({
-          ...current,
-          clickTick: current.clickTick + 1,
-        }));
-        await wait(280);
+      const readableEvidenceIds = getReadableEvidenceIdsForHighlightState(animationIframe, highlights, highlightAnchorIds, {
+        preserveOrder: highlights.preserveReadOrder,
+        documentOrder: currentActionType === "set_field",
+        fieldWrite: currentActionType === "set_field",
+      });
+      const navigationKey = getReplayNavigationKey(activeOutlineId, readableEvidenceIds);
+      const shouldReplayOutlinePath = Boolean(navigationKey && navigationKey !== lastAutoNavigationKeyRef.current);
+      if (navigationKey) {
+        lastAutoNavigationKeyRef.current = navigationKey;
       }
-      const readableEvidenceIds = getReadableEvidenceIds(animationIframe, highlights.currentIds);
+      if (shouldReplayOutlinePath) {
+        for (let pathIndex = 0; pathIndex < activeOutlinePath.length; pathIndex += 1) {
+          await wait(pathIndex === 0 ? 260 : OUTLINE_STEP_MS);
+          if (shouldStop()) {
+            return;
+          }
+          const outlineId = activeOutlinePath[pathIndex];
+          setAnimatedPathIndex(pathIndex);
+          setExpandedOutlineIds((current) => {
+            const next = new Set(current);
+            next.add(outlineId);
+            return next;
+          });
+          scrollOutlineItemIntoView(outlineScrollRef.current, outlineRefs.current.get(outlineId) ?? null);
+          await wait(140);
+          if (shouldStop()) {
+            return;
+          }
+          const point = getElementPointInContainer(
+            reviewRef.current,
+            outlineRefs.current.get(outlineId) ?? null,
+          );
+          if (point) {
+            setReplayCursor((current) => ({
+              visible: true,
+              x: point.x,
+              y: point.y,
+              clickTick: current.clickTick,
+            }));
+          }
+          await wait(560);
+          if (shouldStop()) {
+            return;
+          }
+          setReplayCursor((current) => ({
+            ...current,
+            clickTick: current.clickTick + 1,
+          }));
+          await wait(280);
+        }
+      }
       for (const evidenceId of readableEvidenceIds) {
         if (shouldStop()) {
           return;
@@ -339,6 +385,7 @@ export function ReplayReview({
     activeOutlineId,
     activeOutlinePath,
     currentActionType,
+    highlightAnchorIds,
     highlights,
     index,
     manualOutlineTick,
@@ -360,6 +407,7 @@ export function ReplayReview({
 
   function pauseForUserInspection() {
     userInspectingRef.current = true;
+    setIsUserInspecting(true);
     setMode("paused");
     clearReadingLineHighlight(iframeRef.current);
   }
@@ -370,6 +418,8 @@ export function ReplayReview({
         return "paused";
       }
       userInspectingRef.current = false;
+      setIsUserInspecting(false);
+      lastAutoNavigationKeyRef.current = "";
       setManualOutlineId("");
       return "auto";
     });
@@ -405,14 +455,11 @@ export function ReplayReview({
 
   function jumpToEvidence(evidenceId: string, options?: { outlineId?: string }) {
     userInspectingRef.current = true;
+    setIsUserInspecting(true);
     setMode("paused");
     if (options?.outlineId) {
       setManualOutlineId(options.outlineId);
       setManualOutlineTick((current) => current + 1);
-    }
-    const nextIndex = findFirstActionIndexForEvidence(actions, evidenceId);
-    if (nextIndex >= 0) {
-      setIndex(nextIndex);
     }
     window.setTimeout(() => scrollToEvidence(iframeRef.current, evidenceId), 0);
   }
@@ -602,7 +649,7 @@ export function ReplayReview({
 
           <div className="replay-dialogue" onWheel={handleDialogueWheel}>
               <div
-                className={currentSetField ? "replay-dialogue-main has-field-write" : "replay-dialogue-main"}
+                className={visibleFieldWrite ? "replay-dialogue-main has-field-write" : "replay-dialogue-main"}
                 onClick={(event) => {
                   if ((event.target as HTMLElement).closest("button, input, label, .replay-field-write, .replay-plan-call-card")) {
                     return;
@@ -619,35 +666,22 @@ export function ReplayReview({
                 <div className="replay-dialogue-footer">
                   {currentActionType === "update_plan" ? (
                     <PlanToolCallCard key={`plan-${index}`} action={currentAction} documentOutline={documentOutline} />
-                  ) : currentSetField ? (
-                    <div
-                      key={`field-${index}-${currentSetField.sourceName}`}
-                      className="replay-field-write"
-                      onClick={(event) => event.stopPropagation()}
-                      onPointerDown={(event) => event.stopPropagation()}
-                      onWheel={(event) => event.stopPropagation()}
-                    >
-                      <div className="replay-field-write-title">写入字段：{currentSetField.fieldName}</div>
-                      <div className="replay-field-write-value">{stringifyValue(currentSetField.value)}</div>
-                      {currentSetField.evidenceIds.length > 0 ? (
-                        <div className="replay-field-evidence">
-                          {currentSetField.evidenceIds.map((evidenceId) => (
-                            <button
-                              key={evidenceId}
-                              type="button"
-                              className="replay-field-evidence-chip"
-                              title={formatEvidenceLabel(evidenceId, documentOutline)}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                jumpToEvidence(evidenceId);
-                              }}
-                            >
-                              {formatEvidenceLabel(evidenceId, documentOutline)}
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
+                  ) : visibleFieldWrite ? (
+                    <ReplayFieldWriteCard
+                      key={`field-${index}-${visibleFieldWrite.sourceName}`}
+                      field={visibleFieldWrite}
+                      documentOutline={documentOutline}
+                      reviewValue={
+                        reviewValues[visibleFieldWrite.sourceName] ??
+                        stringifyValue(visibleFieldWrite.reviewField?.agent_value)
+                      }
+                      reviewComment={reviewComment}
+                      isSubmittingReview={isSubmittingReview}
+                      onJumpToEvidence={jumpToEvidence}
+                      onReviewValueChange={onReviewValueChange}
+                      onReviewCommentChange={onReviewCommentChange}
+                      onSubmitReview={onSubmitReview}
+                    />
                   ) : (
                     <span aria-hidden="true" />
                   )}
@@ -705,9 +739,141 @@ export function ReplayReview({
                 </div>
               </div>
           </div>
-          {reviewSlot ? <div>{reviewSlot}</div> : null}
       </div>
     </section>
+  );
+}
+
+function ReplayFieldRouteBadge({ field }: { field: ReplayField }) {
+  if (field.route === "accept") {
+    return <Badge variant="success">accept</Badge>;
+  }
+  if (field.route === "review") {
+    return <Badge variant="warning">review</Badge>;
+  }
+  if (field.route === "reject") {
+    return <Badge variant="destructive">reject</Badge>;
+  }
+  return <Badge variant="outline">{field.route}</Badge>;
+}
+
+function ReplayFieldWriteCard({
+  field,
+  documentOutline,
+  reviewValue,
+  reviewComment,
+  isSubmittingReview,
+  onJumpToEvidence,
+  onReviewValueChange,
+  onReviewCommentChange,
+  onSubmitReview,
+}: {
+  field: ReplayField;
+  documentOutline: DocumentOutline;
+  reviewValue: string;
+  reviewComment: string;
+  isSubmittingReview: boolean;
+  onJumpToEvidence: (evidenceId: string) => void;
+  onReviewValueChange?: (fieldName: string, value: string) => void;
+  onReviewCommentChange?: (value: string) => void;
+  onSubmitReview?: () => void;
+}) {
+  const valueText = stringifyValue(field.value);
+  return (
+    <div
+      className="replay-field-write"
+      onClick={(event) => event.stopPropagation()}
+      onPointerDown={(event) => event.stopPropagation()}
+      onWheel={(event) => event.stopPropagation()}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="replay-field-write-title">写入字段：{field.fieldName}</div>
+        {field.route ? <ReplayFieldRouteBadge field={field} /> : null}
+      </div>
+      <div className="replay-field-write-value">
+        {valueText || <span className="text-muted-foreground">等待人工补录</span>}
+      </div>
+      {field.routeReason ? (
+        <div className="replay-field-route-reason">{field.routeReason}</div>
+      ) : null}
+      {field.evidenceIds.length > 0 ? (
+        <div className="replay-field-evidence">
+          {field.evidenceIds.map((evidenceId) => (
+            <button
+              key={evidenceId}
+              type="button"
+              className="replay-field-evidence-chip"
+              title={formatEvidenceLabel(evidenceId, documentOutline)}
+              onClick={(event) => {
+                event.stopPropagation();
+                onJumpToEvidence(evidenceId);
+              }}
+            >
+              {formatEvidenceLabel(evidenceId, documentOutline)}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {field.needsReview ? (
+        <InlineFieldReviewEditor
+          field={field}
+          value={reviewValue}
+          comment={reviewComment}
+          isSubmitting={isSubmittingReview}
+          onValueChange={onReviewValueChange}
+          onCommentChange={onReviewCommentChange}
+          onSubmit={onSubmitReview}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function InlineFieldReviewEditor({
+  field,
+  value,
+  comment,
+  isSubmitting,
+  onValueChange,
+  onCommentChange,
+  onSubmit,
+}: {
+  field: ReplayField;
+  value: string;
+  comment: string;
+  isSubmitting: boolean;
+  onValueChange?: (fieldName: string, value: string) => void;
+  onCommentChange?: (value: string) => void;
+  onSubmit?: () => void;
+}) {
+  return (
+    <div className="replay-inline-review" onClick={(event) => event.stopPropagation()}>
+      <div className="space-y-2">
+        <Label htmlFor={`review-${field.sourceName}`} className="text-xs">
+          {field.fieldName} 复核值
+        </Label>
+        <Textarea
+          id={`review-${field.sourceName}`}
+          value={value}
+          onChange={(event) => onValueChange?.(field.sourceName, event.currentTarget.value)}
+          className="min-h-16 text-xs"
+        />
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="review-comment" className="text-xs">
+          复核备注
+        </Label>
+        <Textarea
+          id="review-comment"
+          value={comment}
+          onChange={(event) => onCommentChange?.(event.currentTarget.value)}
+          className="min-h-12 text-xs"
+        />
+      </div>
+      <Button type="button" className="w-full" onClick={onSubmit} disabled={isSubmitting}>
+        {isSubmitting ? "提交中..." : "提交修正并通过"}
+      </Button>
+    </div>
   );
 }
 
@@ -925,15 +1091,42 @@ function OutlineTreeNode({
   );
 }
 
-function reduceReplayFields(actions: ReplayAction[], finalFields: TaskResultField[]): ReplayField[] {
+function reduceReplayFields(
+  actions: ReplayAction[],
+  finalFields: TaskResultField[],
+  reviewFields: ReviewField[],
+): ReplayField[] {
   const fields = new Map<string, ReplayField>();
+  const reviewByName = new Map(reviewFields.map((field) => [field.field_name, field]));
   for (const field of finalFields) {
+    const reviewField = reviewByName.get(field.field_name);
+    const route = field.route ?? (reviewField?.needs_review ? "review" : null);
     fields.set(field.field_name, {
       sourceName: field.field_name,
-      fieldName: field.display_name || field.field_name,
+      fieldName: field.display_name || reviewField?.display_name || field.field_name,
       status: "pending",
-      value: null,
+      value: field.agent_value ?? null,
       evidenceIds: [],
+      route,
+      routeReason: reviewField?.review_reason ?? null,
+      needsReview: route === "review" && Boolean(reviewField?.needs_review),
+      reviewField,
+    });
+  }
+  for (const reviewField of reviewFields) {
+    if (fields.has(reviewField.field_name)) {
+      continue;
+    }
+    fields.set(reviewField.field_name, {
+      sourceName: reviewField.field_name,
+      fieldName: reviewField.display_name || reviewField.field_name,
+      status: reviewField.field_status || "failed",
+      value: reviewField.agent_value,
+      evidenceIds: [],
+      route: reviewField.needs_review ? "review" : null,
+      routeReason: reviewField.review_reason ?? null,
+      needsReview: reviewField.needs_review,
+      reviewField,
     });
   }
   for (const action of actions) {
@@ -945,12 +1138,17 @@ function reduceReplayFields(actions: ReplayAction[], finalFields: TaskResultFiel
       continue;
     }
     const previous = fields.get(payload.name);
+    const route = previous?.route ?? null;
     fields.set(payload.name, {
       sourceName: payload.name,
       fieldName: previous?.fieldName || payload.name,
       status: payload.status || "resolved",
       value: payload.value,
       evidenceIds: payload.evidenceIds,
+      route,
+      routeReason: previous?.routeReason ?? null,
+      needsReview: route === "review" && Boolean(previous?.needsReview),
+      reviewField: previous?.reviewField,
     });
   }
   return Array.from(fields.values());
@@ -989,34 +1187,155 @@ function reducePlanItems(plan: TaskReplay["broad_plan"], actions: ReplayAction[]
 }
 
 function getHighlightState(_actions: ReplayAction[], currentAction: ReplayAction | null): HighlightState {
+  if (!currentAction) {
+    return emptyHighlightState();
+  }
+  const type = getActionType(currentAction);
+  if (type === "read_element" || type === "read_section") {
+    return getReadActionHighlightState(currentAction);
+  }
+  if (type === "table_extraction") {
+    return getTableExtractionHighlightState(currentAction);
+  }
+  if (type === "paragraph_extraction") {
+    return getParagraphExtractionHighlightState(currentAction);
+  }
+  if (type === "set_field") {
+    const payload = getSetFieldPayload(currentAction);
+    return {
+      ...emptyHighlightState(),
+      currentIds: payload.evidenceIds,
+      readIds: payload.evidenceIds,
+    };
+  }
+  return getGenericEvidenceHighlightState(currentAction);
+}
+
+function emptyHighlightState(): HighlightState {
   return {
-    currentIds: currentAction ? extractHighlightIds(currentAction) : [],
+    currentIds: [],
+    tableReferenceIds: [],
+    tableRowIds: [],
+    readIds: [],
+    preserveReadOrder: false,
   };
 }
 
-function extractHighlightIds(action: ReplayAction): string[] {
-  const type = getActionType(action);
-  if (type === "table_extraction") {
-    const tableIds = extractEvidenceIds(action);
-    const rowIds = extractTableExtractionRowIds(action);
-    return Array.from(new Set([...tableIds, ...rowIds]));
+function getReadActionHighlightState(action: ReplayAction): HighlightState {
+  const args = readObject(action.args);
+  const result = readObject(action.result);
+  const elementId = readString(result?.id) || readString(result?.section_id) || readString(args?.element_id) || readString(args?.section_id);
+  const html = readString(result?.html);
+  const visibleIds = extractIdsFromToolHtml(html);
+  if (readString(result?.type).toUpperCase() === "TABLE" || html.includes("<table-ref")) {
+    return {
+      ...emptyHighlightState(),
+      tableReferenceIds: elementId ? [elementId] : visibleIds,
+      readIds: elementId ? [elementId] : visibleIds,
+      preserveReadOrder: true,
+    };
   }
-  return extractEvidenceIds(action);
+  const currentIds = visibleIds.length > 0 ? visibleIds : readStringArray(result?.evidence_ids) ?? [];
+  return {
+    ...emptyHighlightState(),
+    currentIds,
+    readIds: currentIds,
+    preserveReadOrder: true,
+  };
 }
 
-function extractTableExtractionRowIds(action: ReplayAction): string[] {
+function getTableExtractionHighlightState(action: ReplayAction): HighlightState {
+  const args = readObject(action.args);
   const result = readObject(action.result);
+  const tableId = readString(result?.table_id) || readString(args?.table_id);
+  const rowIds = extractTableExtractionRowIds(result);
+  if (!tableId) {
+    return emptyHighlightState();
+  }
+  return {
+    ...emptyHighlightState(),
+    tableRowIds: rowIds,
+    readIds: rowIds.length > 0 ? rowIds : [tableId],
+    preserveReadOrder: rowIds.length > 0,
+  };
+}
+
+function getParagraphExtractionHighlightState(action: ReplayAction): HighlightState {
+  const args = readObject(action.args);
+  const result = readObject(action.result);
+  const matches = Array.isArray(result?.matches) ? result.matches : [];
+  const ids = matches.flatMap((match) => readStringArray(readObject(match)?.evidence_ids) ?? []);
+  const fallbackId = readString(result?.element_id) || readString(args?.element_id);
+  const currentIds = Array.from(new Set((ids.length > 0 ? ids : [fallbackId]).filter(Boolean)));
+  return {
+    ...emptyHighlightState(),
+    currentIds,
+    readIds: currentIds,
+    preserveReadOrder: true,
+  };
+}
+
+function getGenericEvidenceHighlightState(action: ReplayAction): HighlightState {
+  const args = readObject(action.args);
+  const result = readObject(action.result);
+  const evidenceIds = readStringArray(result?.evidence_ids) ?? [];
+  const fallbackId =
+    readString(args?.element_id) ||
+    readString(args?.section_id) ||
+    readString(args?.table_id);
+  const currentIds = Array.from(new Set((evidenceIds.length > 0 ? evidenceIds : [fallbackId]).filter(Boolean)));
+  if (currentIds.length === 0) {
+    return emptyHighlightState();
+  }
+  return {
+    ...emptyHighlightState(),
+    currentIds,
+    readIds: currentIds,
+    preserveReadOrder: false,
+  };
+}
+
+function extractTableExtractionRowIds(result: Record<string, unknown> | null): string[] {
   const rows = Array.isArray(result?.rows) ? result.rows : [];
   const ids: string[] = [];
   for (const row of rows) {
-    const rowObject = readObject(row);
-    const rowId = readString(rowObject?.row_id);
+    const rowId = readString(readObject(row)?.row_id);
     if (rowId) {
       ids.push(rowId);
     }
-    ids.push(...(readStringArray(rowObject?.evidence_ids) ?? []));
   }
-  return ids.filter(Boolean);
+  return Array.from(new Set(ids));
+}
+
+function extractIdsFromToolHtml(html: string): string[] {
+  if (!html || typeof window === "undefined") {
+    return [];
+  }
+  const parsed = new DOMParser().parseFromString(html, "text/html");
+  return Array.from(parsed.body.querySelectorAll<HTMLElement>("[id]"))
+    .map((element) => element.id)
+    .filter(Boolean);
+}
+
+function getHighlightAnchorIds(state: HighlightState): string[] {
+  if (state.readIds.length > 0) {
+    return state.readIds;
+  }
+  if (state.currentIds.length > 0) {
+    return state.currentIds;
+  }
+  if (state.tableReferenceIds.length > 0) {
+    return state.tableReferenceIds;
+  }
+  return state.tableRowIds;
+}
+
+function getReplayNavigationKey(activeOutlineId: string, readableEvidenceIds: string[]): string {
+  const evidenceKey = readableEvidenceIds[0] ?? "";
+  if (!activeOutlineId && !evidenceKey) {
+    return "";
+  }
+  return `${activeOutlineId}::${evidenceKey}`;
 }
 
 function getSetFieldPayload(action: ReplayAction): {
@@ -1035,49 +1354,6 @@ function getSetFieldPayload(action: ReplayAction): {
     evidenceIds,
     status: readString(args?.status) || readString(resultField?.status) || "resolved",
   };
-}
-
-function extractEvidenceIds(action: ReplayAction): string[] {
-  const ids = new Set<string>();
-  const args = readObject(action.args);
-  for (const key of ["element_id", "section_id", "table_id"]) {
-    const value = readString(args?.[key]);
-    if (value) {
-      ids.add(value);
-    }
-  }
-  for (const evidenceId of collectEvidenceIds(action.result)) {
-    ids.add(evidenceId);
-  }
-  for (const ref of action.refs ?? []) {
-    if (ref.block_id) {
-      ids.add(ref.block_id);
-    }
-  }
-  return Array.from(ids);
-}
-
-function collectEvidenceIds(value: unknown): string[] {
-  if (!value || typeof value !== "object") {
-    return [];
-  }
-  if (Array.isArray(value)) {
-    return value.flatMap(collectEvidenceIds);
-  }
-  const record = value as Record<string, unknown>;
-  const ids = readStringArray(record.evidence_ids) ?? [];
-  for (const key of ["row_id", "table_id", "element_id", "section_id"]) {
-    const id = readString(record[key]);
-    if (id) {
-      ids.push(id);
-    }
-  }
-  for (const nested of Object.values(record)) {
-    if (nested && typeof nested === "object") {
-      ids.push(...collectEvidenceIds(nested));
-    }
-  }
-  return Array.from(new Set(ids));
 }
 
 function getActionTarget(action: ReplayAction): string {
@@ -1125,18 +1401,133 @@ function applyHighlights(iframe: HTMLIFrameElement | null, state: HighlightState
   document.querySelectorAll(".is-committed-evidence").forEach((element) => {
     element.classList.remove("is-committed-evidence");
   });
+  document.querySelectorAll(".is-table-row-result-highlight").forEach((element) => {
+    element.classList.remove("is-table-row-result-highlight");
+  });
+  document.querySelectorAll(".is-table-reference-highlight").forEach((element) => {
+    element.classList.remove("is-table-reference-highlight");
+  });
   for (const id of state.currentIds) {
     const element = document.getElementById(id);
+    const tableAnchors = getWholeTableEvidenceAnchors(document, id);
+    if (tableAnchors.length > 0) {
+      for (const anchor of tableAnchors) {
+        anchor.classList.add("is-current-highlight");
+        if (isFieldWrite) {
+          anchor.classList.add("is-field-write-highlight");
+        }
+      }
+      continue;
+    }
     element?.classList.add("is-current-highlight");
     if (isFieldWrite) {
       element?.classList.add("is-field-write-highlight");
     }
   }
+  for (const id of state.tableReferenceIds) {
+    highlightTableReference(document, id);
+  }
+  for (const id of state.tableRowIds) {
+    document.getElementById(id)?.classList.add("is-table-row-result-highlight");
+  }
+}
+
+function highlightTableReference(document: Document, tableId: string) {
+  for (const anchor of getWholeTableEvidenceAnchors(document, tableId)) {
+    anchor.classList.add("is-table-reference-highlight");
+  }
+}
+
+function ensureTableReferenceReadAnchor(document: Document, tableId: string) {
+  return getWholeTableEvidenceAnchors(document, tableId)[0] ?? null;
+}
+
+function ensureElementId(document: Document, element: HTMLElement, preferredId: string) {
+  if (element.id) {
+    return;
+  }
+  let candidate = preferredId;
+  let suffix = 2;
+  while (document.getElementById(candidate)) {
+    candidate = `${preferredId}-${suffix}`;
+    suffix += 1;
+  }
+  element.id = candidate;
+}
+
+function getWholeTableEvidenceAnchors(document: Document, tableId: string): HTMLElement[] {
+  const element = document.getElementById(tableId);
+  if (!element || !isWholeTableEvidenceElement(element)) {
+    return [];
+  }
+  const anchors: HTMLElement[] = [];
+  const caption = getTableCaptionElement(element);
+  if (caption) {
+    ensureElementId(document, caption, getTableCaptionAnchorId(tableId));
+    caption.setAttribute("data-table-evidence-anchor", "true");
+    anchors.push(caption);
+  }
+  const header = getTableHeaderRowElement(element);
+  if (header) {
+    ensureElementId(document, header, getTableHeaderAnchorId(tableId));
+    header.setAttribute("data-table-evidence-anchor", "true");
+    anchors.push(header);
+  }
+  return anchors;
+}
+
+function getWholeTableEvidenceReadAnchorId(document: Document, tableId: string): string | null {
+  return getWholeTableEvidenceAnchors(document, tableId)[0]?.id ?? null;
+}
+
+function getScrollTargetElement(document: Document, evidenceId: string): HTMLElement | null {
+  return getWholeTableEvidenceAnchors(document, evidenceId)[0] ?? document.getElementById(evidenceId);
+}
+
+function getScrollBlock(element: HTMLElement | null): ScrollLogicalPosition {
+  if (!element) {
+    return "center";
+  }
+  return isTableEvidenceAnchor(element) ? "start" : "center";
+}
+
+function isTableEvidenceAnchor(element: HTMLElement): boolean {
+  return element.getAttribute("data-table-evidence-anchor") === "true";
+}
+
+function isWholeTableEvidenceElement(element: HTMLElement): boolean {
+  const tagName = element.tagName.toLowerCase();
+  const dataType = (element.getAttribute("data-type") || "").toLowerCase();
+  const className = element.getAttribute("class") || "";
+  return tagName === "table" || dataType.includes("table") || className.includes("block-table") || Boolean(element.querySelector("table"));
+}
+
+function getTableCaptionElement(element: Element): HTMLElement | null {
+  return element.querySelector<HTMLElement>(".caption, figcaption, caption");
+}
+
+function getTableHeaderRowElement(element: Element): HTMLElement | null {
+  if (element.tagName.toLowerCase() === "tr") {
+    return element as HTMLElement;
+  }
+  const table = element.tagName.toLowerCase() === "table" ? element : element.querySelector("table");
+  return table?.querySelector<HTMLElement>("thead tr, tr") ?? null;
+}
+
+function getTableCaptionAnchorId(tableId: string) {
+  return `table-caption-anchor-${tableId}`;
+}
+
+function getTableHeaderAnchorId(tableId: string) {
+  return `table-header-anchor-${tableId}`;
 }
 
 function scrollToEvidence(iframe: HTMLIFrameElement | null, evidenceId: string) {
-  const element = iframe?.contentDocument?.getElementById(evidenceId);
-  element?.scrollIntoView({ behavior: "smooth", block: "center" });
+  const document = iframe?.contentDocument;
+  const element = document ? getScrollTargetElement(document, evidenceId) : null;
+  if (typeof element?.scrollIntoView === "function") {
+    element.scrollIntoView({ behavior: "smooth", block: getScrollBlock(element) });
+  }
 }
 
 function scrollOutlineItemIntoView(container: HTMLDivElement | null, item: HTMLButtonElement | null) {
@@ -1146,7 +1537,12 @@ function scrollOutlineItemIntoView(container: HTMLDivElement | null, item: HTMLB
   const containerRect = container.getBoundingClientRect();
   const itemRect = item.getBoundingClientRect();
   const nextTop = container.scrollTop + itemRect.top - containerRect.top - container.clientHeight * 0.35;
-  container.scrollTo({ top: Math.max(0, nextTop), behavior: "smooth" });
+  const top = Math.max(0, nextTop);
+  if (typeof container.scrollTo === "function") {
+    container.scrollTo({ top, behavior: "smooth" });
+    return;
+  }
+  container.scrollTop = top;
 }
 
 function getElementPointInContainer(container: HTMLElement | null, element: HTMLElement | null) {
@@ -1161,7 +1557,11 @@ function getElementPointInContainer(container: HTMLElement | null, element: HTML
   };
 }
 
-function getReadableEvidenceIds(iframe: HTMLIFrameElement | null, ids: string[]): string[] {
+function getReadableEvidenceIds(
+  iframe: HTMLIFrameElement | null,
+  ids: string[],
+  options?: { preserveOrder?: boolean; documentOrder?: boolean; fieldWrite?: boolean },
+): string[] {
   const iframeDocument = iframe?.contentDocument;
   if (!iframeDocument) {
     return ids;
@@ -1170,11 +1570,12 @@ function getReadableEvidenceIds(iframe: HTMLIFrameElement | null, ids: string[])
   const readable: string[] = [];
   const fallback: string[] = [];
   for (const id of ids) {
-    const element = iframeDocument.getElementById(id);
-    if (!element || seen.has(id)) {
+    const resolvedId = options?.fieldWrite ? getWholeTableEvidenceReadAnchorId(iframeDocument, id) ?? id : id;
+    const element = iframeDocument.getElementById(resolvedId);
+    if (!element || seen.has(resolvedId)) {
       continue;
     }
-    seen.add(id);
+    seen.add(resolvedId);
     const expanded = expandReadableDescendantIds(element);
     if (expanded.length > 0) {
       for (const expandedId of expanded) {
@@ -1186,22 +1587,77 @@ function getReadableEvidenceIds(iframe: HTMLIFrameElement | null, ids: string[])
       continue;
     }
     if (isCoarseNavigationElement(element)) {
-      fallback.push(id);
+      fallback.push(resolvedId);
     } else {
-      readable.push(id);
+      readable.push(resolvedId);
     }
   }
-  return readable.length > 0 ? readable : fallback;
+  const candidates = readable.length > 0 ? readable : fallback;
+  if (options?.documentOrder) {
+    return sortEvidenceIdsByDocumentOrder(iframe, candidates);
+  }
+  if (options?.preserveOrder) {
+    return candidates;
+  }
+  return sortEvidenceIdsByViewportDistance(iframe, candidates);
 }
 
-function getEvidenceReadDuration(iframe: HTMLIFrameElement | null, evidenceIds: string[]): number {
-  return evidenceIds.reduce((total, evidenceId) => {
-    if (getEvidenceReadMode(iframe, evidenceId) === "block") {
-      return total + DOCUMENT_READ_DELAY_MS + getEvidenceBlockReadDuration(iframe, evidenceId);
-    }
-    const lines = getEvidenceTextLineBoxes(iframe, evidenceId).length;
-    return total + DOCUMENT_READ_DELAY_MS + Math.max(1, lines) * DOCUMENT_LINE_SCAN_MS * 2;
-  }, 0);
+function getReadableEvidenceIdsForHighlightState(
+  iframe: HTMLIFrameElement | null,
+  state: HighlightState,
+  fallbackIds: string[],
+  options?: { preserveOrder?: boolean; documentOrder?: boolean; fieldWrite?: boolean },
+): string[] {
+  const iframeDocument = iframe?.contentDocument;
+  if (!iframeDocument || state.tableReferenceIds.length === 0) {
+    return getReadableEvidenceIds(iframe, fallbackIds, options);
+  }
+  const ids = state.tableReferenceIds.flatMap((tableId) => {
+    const anchor = ensureTableReferenceReadAnchor(iframeDocument, tableId);
+    return anchor?.id ? [anchor.id] : [];
+  });
+  return getReadableEvidenceIds(iframe, ids.length > 0 ? ids : fallbackIds, options);
+}
+
+function sortEvidenceIdsByDocumentOrder(iframe: HTMLIFrameElement | null, ids: string[]): string[] {
+  const iframeDocument = iframe?.contentDocument;
+  if (!iframeDocument || ids.length <= 1) {
+    return ids;
+  }
+  const indexById = new Map<string, number>();
+  Array.from(iframeDocument.body.querySelectorAll<HTMLElement>("[id]")).forEach((element, index) => {
+    indexById.set(element.id, index);
+  });
+  return [...ids].sort(
+    (a, b) =>
+      (indexById.get(a) ?? Number.MAX_SAFE_INTEGER) -
+      (indexById.get(b) ?? Number.MAX_SAFE_INTEGER),
+  );
+}
+
+function sortEvidenceIdsByViewportDistance(iframe: HTMLIFrameElement | null, ids: string[]): string[] {
+  const iframeWindow = iframe?.contentWindow;
+  const iframeDocument = iframe?.contentDocument;
+  if (!iframeWindow || !iframeDocument || ids.length <= 1) {
+    return ids;
+  }
+  const viewportCenter = iframeWindow.scrollY + iframeWindow.innerHeight / 2;
+  return [...ids]
+    .map((id, index) => {
+      const element = iframeDocument.getElementById(id);
+      if (!element) {
+        return { id, index, distance: Number.POSITIVE_INFINITY };
+      }
+      const rect = element.getBoundingClientRect();
+      const elementCenter = iframeWindow.scrollY + rect.top + rect.height / 2;
+      return {
+        id,
+        index,
+        distance: Math.abs(elementCenter - viewportCenter),
+      };
+    })
+    .sort((a, b) => (a.distance === b.distance ? a.index - b.index : a.distance - b.distance))
+    .map((item) => item.id);
 }
 
 function getEvidenceReadMode(iframe: HTMLIFrameElement | null, evidenceId: string): EvidenceReadMode {
@@ -1294,10 +1750,6 @@ function isCoarseNavigationElement(element: Element): boolean {
   );
 }
 
-function getEvidenceTextLineBoxes(iframe: HTMLIFrameElement | null, evidenceId?: string): TextLineBox[] {
-  return getEvidenceReadingLines(iframe, evidenceId);
-}
-
 function getEvidenceReadingLines(iframe: HTMLIFrameElement | null, evidenceId?: string): ReadingLine[] {
   const iframeWindow = iframe?.contentWindow;
   const iframeDocument = iframe?.contentDocument;
@@ -1316,14 +1768,16 @@ function getEvidenceReadingLines(iframe: HTMLIFrameElement | null, evidenceId?: 
 
   const range = iframeDocument.createRange();
   range.selectNodeContents(element);
-  const rawRects = Array.from(range.getClientRects())
+  const rawRects = typeof range.getClientRects === "function"
+    ? Array.from(range.getClientRects())
     .filter((rect) => rect.width > 8 && rect.height > 4)
     .map((rect) => ({
       left: rect.left + iframeWindow.scrollX,
       right: rect.right + iframeWindow.scrollX,
       top: rect.top + iframeWindow.scrollY,
       bottom: rect.bottom + iframeWindow.scrollY,
-    }));
+    }))
+    : [];
   range.detach();
 
   if (rawRects.length === 0) {
@@ -1415,12 +1869,24 @@ function ensureTextLineVisible(iframe: HTMLIFrameElement | null, line: TextLineB
   }
   const viewportTop = iframeWindow.scrollY;
   const viewportBottom = viewportTop + iframeWindow.innerHeight;
-  if (line.top < viewportTop + 72 || line.bottom > viewportBottom - 72) {
-    iframeWindow.scrollTo({
-      top: Math.max(0, line.top - iframeWindow.innerHeight * 0.36),
-      behavior: "smooth",
-    });
+  if (
+    (line.top < viewportTop + 72 || line.bottom > viewportBottom - 72) &&
+    typeof iframeWindow.scrollTo === "function" &&
+    !isJsdomWindow(iframeWindow)
+  ) {
+    try {
+      iframeWindow.scrollTo({
+        top: Math.max(0, line.top - iframeWindow.innerHeight * 0.36),
+        behavior: "smooth",
+      });
+    } catch {
+      // jsdom 暂不实现 iframe window.scrollTo；真实浏览器会正常滚动。
+    }
   }
+}
+
+function isJsdomWindow(iframeWindow: Window): boolean {
+  return iframeWindow.navigator.userAgent.toLowerCase().includes("jsdom");
 }
 
 function getTextLinePointInContainer(
@@ -1450,10 +1916,6 @@ function cssEscape(value: string) {
     return CSS.escape(value);
   }
   return value.replace(/["\\]/g, "\\$&");
-}
-
-function findFirstActionIndexForEvidence(actions: ReplayAction[], evidenceId: string): number {
-  return actions.findIndex((action) => extractEvidenceIds(action).includes(evidenceId));
 }
 
 function buildReplayHtml(displayHtml: string): string {
@@ -1489,6 +1951,27 @@ tr.is-current-highlight {
 tr.is-current-highlight > td,
 tr.is-current-highlight > th {
   background: rgba(14, 165, 164, 0.18) !important;
+}
+.is-table-row-result-highlight > td,
+.is-table-row-result-highlight > th {
+  background: rgba(14, 165, 164, 0.2) !important;
+  box-shadow: inset 0 0 0 1px rgba(14, 165, 164, 0.28);
+  transition: background 180ms ease, box-shadow 180ms ease;
+}
+.is-table-reference-highlight {
+  display: inline-block;
+  border-radius: 4px;
+  background: rgba(14, 165, 164, 0.16) !important;
+  box-shadow: 0 0 0 2px rgba(14, 165, 164, 0.34);
+  transition: background 180ms ease, box-shadow 180ms ease;
+}
+tr.is-table-reference-highlight {
+  display: table-row;
+}
+tr.is-table-reference-highlight > td,
+tr.is-table-reference-highlight > th {
+  background: rgba(14, 165, 164, 0.16) !important;
+  box-shadow: inset 0 0 0 1px rgba(14, 165, 164, 0.26);
 }
 @keyframes fieldWriteFlash {
   0% { box-shadow: 0 0 0 0 rgba(14, 165, 164, 0.55); transform: scale(1); }

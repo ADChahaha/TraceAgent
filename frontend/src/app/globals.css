@@ -380,6 +380,15 @@ samp,
   line-height: 1.55;
 }
 
+.replay-field-route-reason {
+  margin-top: 7px;
+  max-height: 4.25rem;
+  overflow: auto;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .replay-field-evidence {
   margin-top: 10px;
   display: flex;
@@ -403,6 +412,12 @@ samp,
 
 .replay-field-evidence-chip:hover {
   background: var(--accent);
+}
+
+.replay-inline-review {
+  margin-top: 10px;
+  display: grid;
+  gap: 10px;
 }
 
 @media (max-width: 1024px) {

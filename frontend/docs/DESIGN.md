@@ -1,6 +1,6 @@
 # Frontend Design
 
-这份文档是 `frontend` 服务的设计入口。`frontend` 是 Agent Gate 的浏览器工作台，负责上传文档、提交外部 `task_spec`、查看任务结果、处理人工复核，并展示 trace 与 audit。
+这份文档是 `frontend` 服务的设计入口。`frontend` 是 Agent Gate 的浏览器工作台，负责上传文档、提交外部 `task_spec`、查看任务 replay，并在 replay 字段卡片里处理人工复核。
 
 ## 1. 目标与边界
 
@@ -17,11 +17,11 @@
   -> 前端把任务写入右侧最近任务列表并显示处理中
   -> UploadWorkbench 轮询 getTaskSummary(task_id)，终态后把最近任务更新为处理结果
   -> 用户点击最近任务进入 /tasks/{task_id}
-  -> TaskDetail 读取 summary/result/trace/review/audit
-  -> trace.steps 展示 document_processor、file_extraction_agent、route_policy_agent 的执行过程
-  -> trace.agent_trace 展示 backend 持久化的每次 agent 调用 request/response/trace 摘要
-  -> 如果任务 waiting_review，展示 evidence/actions 并提交 review payload
-  -> 刷新任务详情，展示最终字段、证据和审计记录
+  -> TaskDetail 读取 summary/result/replay/review
+  -> ReplayReview 展示文档 HTML、outline、plan 和字段写入动作
+  -> 字段卡片显示 route policy 的 accept/review/reject 结论
+  -> 如果字段 route=review，在对应字段卡片里提交 revise_and_approve
+  -> 刷新任务详情，并用最新 summary 回写最近任务列表
 ```
 
 职责边界：
@@ -30,6 +30,7 @@
 - `frontend` 必须显式提交 `task_spec`，不假设 backend 存在默认业务 schema。
 - `frontend` 只在浏览器 `localStorage` 保存最近任务 id，不新增任务列表、登录、权限、多用户或批量任务能力。
 - `frontend` 的类型定义镜像 backend 文档中的状态、route、review、result、trace 和 audit 响应。
+- 任务详情页当前只把 replay 作为主展示面；底层 API 仍保留 trace 和 audit 读取函数，但 `loadTaskDetail` 不主动拉取它们。
 
 ## 2. 项目结构
 
@@ -48,6 +49,7 @@ frontend/
       home-workspace.tsx
       upload-workbench.tsx
       task-detail.tsx
+      replay-review.tsx
       markdown-evidence.tsx
       ui/
     lib/
@@ -116,24 +118,29 @@ frontend/
 /tasks/{task_id}
   -> TaskDetail 调用 loadTaskDetail(task_id)
   -> 先 GET /tasks/{task_id} 读取 summary
-  -> 根据 summary.has_result/has_trace/status 决定是否读取 result、trace、review
-  -> 非 failed 状态尝试读取 audit，404/409 返回 null
+  -> summary.has_result 不是 false 时读取 result，用于字段显示名、agent_value 和 route
+  -> summary.has_result 或 summary.has_trace 不是 false 时读取 replay
+  -> summary.status=waiting_review 时读取 review handoff
   -> 如果 summary.status=failed 且带有 error_message，在详情页顶部展示失败原因
-  -> 页面用 Tabs 展示 result、review、trace、audit
-  -> result tab 只展示 backend 治理后的字段值、来源和提交状态，不混入 evidence/actions
-  -> trace tab 先由 AgentExecutionSteps 渲染 trace.steps，按调用顺序展示 agent 名称、阶段、状态、时间、文件摘要、file_extraction_agent 字段决策过程和 route 统计
-  -> trace tab 从 trace.agent_trace 中读取 document_processor.response.markdown，按文件直接展示完整原始 Markdown，便于排查 OCR 和表格结构问题
-  -> 字段决策过程优先展示 backend 返回的 agent_process.process_steps，按 broad_extraction、field_resolution/tool、final_result、route_validation 说明候选 block 正文、route 前 resolution 字段输出、工具动作、route 前 agent 结果和 route policy 验证结论
-  -> broad_extraction 的候选 blocks 用默认展开的 details 区域展示 markdown 正文，可手动折叠；正文区域不展示 document_id/block_id，backend 没返回 blocks 时从 refs.text 或 evidence.texts 兜底显示正文
-  -> field_resolution 展示 output_fields、related_fields、notes 和 actions；没有额外 tool/action 时展示 backend 的 completed 直接定案说明，不把 resolution 渲染成 skipped
-  -> route_validation 单独展示 route、needs_review 和 route_reason，避免把 agent final result 误读成 route policy 验证结论
-  -> AgentRawTrace 渲染 trace.agent_trace，按 sequence 展示每次 agent 调用的 agent/stage/status 和 request/response/trace key 摘要，JSON 明细放入可展开区域；document_processor 的完整 markdown 会额外在原始 Markdown 区域直接显示
-  -> review tab 对 waiting_review 字段展示 agent_process，包含字段值、证据状态、四段过程、reason、search_grep/add_broad_candidate/final_decision 等 action 明细；action refs 只展示引用数量、文档、页码和 span，不展示 block_id；复核证据文本默认放在可折叠区域，展开后按 markdown 渲染
-  -> audit tab 对 field_commits 展示最终提交记录，并在每条提交下方展示对应 agent_process 和三段过程
-  -> review/trace 中的 evidence_texts/texts 先交给 MarkdownEvidence 渲染标题、列表、标准/紧凑表格、加粗和行内代码
-  -> result、review、trace 和 audit 中的字段值统一经过 ValueDisplay 展示；数组值按 list item 分行渲染，避免 list 字段被压成 JSON 单行
-  -> waiting_review 时把 agent_value 作为默认复核值
-  -> 用户提交 revise_and_approve
+  -> 页面不渲染 result/review/trace/audit Tabs，只渲染 ReplayReview
+  -> ReplayReview 左侧展示 outline，中间用 iframe 展示 backend 的 display_html，右侧展示 plan 和当前动作对话
+  -> reduceReplayFields 从 result.fields 建立字段名、显示名、agent_value 和 route
+  -> 再把 review.fields 合并进去，补齐 agent 没有写入但 route_policy 要求 review 的字段
+  -> 当前 action 是 set_field 时，在字段写入卡显示字段值、证据 chip、route badge 和 route_reason
+  -> 如果没有 set_field action 但存在 needs_review 字段，replay 末尾显示同样的字段卡，并提示等待人工补录
+  -> 字段卡上的 evidence chip 只把 iframe 文档滚动到对应 HTML 证据块，不改变当前 replay action 序号，避免用户查证据时被带回旧动作
+  -> ReplayReview 的高亮边界只跟随当前 tool 实际返回给模型看的内容，不根据完整 HTML 自行扩展
+  -> read_element(TABLE) 的结果是 table-ref 表结构摘要，因此只高亮原 HTML 里的 caption/表名和表头，不高亮整张表或表体内容
+  -> 如果表格 HTML 没有 caption，ReplayReview 只高亮表头，不生成额外表摘要 marker
+  -> read_element(TABLE)、整表 evidence chip 和左侧 overview 表格项都会把滚动锚点映射到 caption 优先、表头兜底，并靠上滚动
+  -> table_extraction 的结果是 SQL rows，因此只高亮返回的 row_id，并在自动播放时逐行读取；columns 只作为结果数据展示，不触发表格列高亮
+  -> set_field 的 evidence_ids 是字段写入依据，自动播放会按 iframe 里的真实 HTML 顺序从上到下读取，而不是按数组顺序乱跳
+  -> 自动播放每个 action 时，先从当前 tool 可见证据推出 HTML 证据锚点
+  -> 多个证据锚点按 iframe 当前 scrollY 与元素中心距离排序，优先滚到当前视口最近的 block
+  -> 如果相邻 action 的 outline/block 锚点不变，跳过重复的左侧 outline 鼠标路径，只更新 iframe HTML 滚动、阅读线和高亮
+  -> route=review 且 review handoff 标记 needs_review 时才显示复核输入
+  -> route=accept 或 route=reject 只显示 badge 和原因，不提供编辑入口
+  -> 用户在字段卡里提交 revise_and_approve
   -> submitTaskReview POST /tasks/{task_id}/review
   -> 成功后重新 loadTaskDetail
   -> updateRecentTask 用最新 summary 回写 localStorage，避免最近任务仍显示 waiting_review/review

@@ -30,9 +30,7 @@ export async function forwardBackendRequest(
   const targetUrl = buildBackendUrl(backendBaseUrl, pathSegments, request.url);
   const method = request.method.toUpperCase();
   const headers = buildRequestHeaders(request.headers);
-  const body = BODYLESS_METHODS.has(method)
-    ? undefined
-    : await buildForwardBody(request, headers);
+  const body = BODYLESS_METHODS.has(method) ? undefined : await buildForwardBody(request);
 
   let backendResponse: Response;
   try {
@@ -68,7 +66,7 @@ function buildRequestHeaders(sourceHeaders: Headers): Headers {
   return headers;
 }
 
-async function buildForwardBody(request: Request, headers: Headers): Promise<BodyInit> {
+async function buildForwardBody(request: Request): Promise<BodyInit> {
   const contentType = request.headers.get("content-type") ?? "";
   if (contentType.includes("multipart/form-data")) {
     return await request.arrayBuffer();
