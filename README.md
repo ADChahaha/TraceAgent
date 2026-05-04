@@ -20,6 +20,24 @@ Agent Gate 是一个面向毕业设计 MVP 的文档抽取可信治理系统，�
 
 这个流程服务于“写库前治理”：字段只有在 route policy 自动通过，或人工复核确认后，才进入最终提交记录。
 
+核心想法：
+
+```mermaid
+flowchart TD
+    Upload["用户提交 PDF 和想抽取的字段"]
+    Extract["AI 抽取字段\n同时保留证据"]
+    Gate{"写库前治理"}
+    Auto["可信字段\n自动通过"]
+    Review["不确定字段\n交给人工复核"]
+    Reject["明显不可信\n拒绝写入"]
+    Record["最终结果\n带证据和审计记录"]
+
+    Upload --> Extract --> Gate
+    Gate --> Auto --> Record
+    Gate --> Review --> Record
+    Gate --> Reject
+```
+
 ## Quickstart
 
 ### 1. 准备环境
