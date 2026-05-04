@@ -120,10 +120,11 @@ def _build_field_process(
             "search_queries": _search_queries(broad_actions),
             "candidate_action_count": _candidate_action_count(
                 broad_actions,
-                action_types={"add_broad_candidate", "copy_field_candidates"},
+                action_types={"add_broad_candidate", "copy_field_candidates", "table_extraction"},
             ),
             "counted_fields": _counted_fields(broad_actions),
             "finish_reason": _finish_reason(broad_actions),
+            **_diagnostics_payload(broad_actions),
         },
         "field_resolution": {
             "status": field["agent_status"],
@@ -134,11 +135,12 @@ def _build_field_process(
             ),
             "counted_fields": _counted_fields(resolution_actions),
             "final_decision_used": any(
-                action.get("action_type") == "final_decision"
+                _action_type(action) in {"final_decision", "set_field"}
                 for action in resolution_actions
             ),
             "reason": trace["reason"] if trace else field["reason"],
             "failure_reason": trace["failure_reason"] if trace else field["failure_reason"],
+            **_diagnostics_payload(resolution_actions),
         },
     }
 
@@ -149,7 +151,7 @@ def _action_stage(action: dict[str, Any]) -> str:
     if stage in {"broad", "resolution"}:
         return stage
 
-    action_type = action.get("action_type")
+    action_type = _action_type(action)
     if action_type in {"add_broad_candidate", "copy_field_candidates", "finish_broad"}:
         return "broad"
     if action_type in {
@@ -157,6 +159,7 @@ def _action_stage(action: dict[str, Any]) -> str:
         "add_resolution_candidate",
         "count_field_candidates",
         "final_decision",
+        "set_field",
     }:
         return "resolution"
     return "broad"
@@ -167,7 +170,7 @@ def _broad_status(
     broad_actions: list[dict[str, Any]],
 ) -> str | None:
     for action in broad_actions:
-        if action.get("action_type") != "finish_broad":
+        if _action_type(action) != "finish_broad":
             continue
         metadata = action.get("metadata") if isinstance(action.get("metadata"), dict) else {}
         status = metadata.get("status")
@@ -184,13 +187,15 @@ def _broad_status(
 def _search_queries(actions: list[dict[str, Any]]) -> list[str]:
     queries: list[str] = []
     for action in actions:
-        if action.get("action_type") not in {
+        action_type = _action_type(action)
+        if action_type not in {
             "search",
             "search_grep",
             "search_text_grep",
             "search_table_rows_grep",
             "text_grep",
             "table_row_grep",
+            "table_extraction",
         }:
             continue
         query = _action_query(action)
@@ -200,6 +205,11 @@ def _search_queries(actions: list[dict[str, Any]]) -> list[str]:
 
 
 def _action_query(action: dict[str, Any]) -> str | None:
+    args = action.get("args") if isinstance(action.get("args"), dict) else {}
+    for key in ("query", "sql", "reason"):
+        value = args.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
     for key in ("query", "message"):
         value = action.get(key)
         if isinstance(value, str) and value.strip():
@@ -208,6 +218,16 @@ def _action_query(action: dict[str, Any]) -> str | None:
     value = metadata.get("query")
     if isinstance(value, str) and value.strip():
         return value.strip()
+    return None
+
+
+def _action_type(action: dict[str, Any]) -> str | None:
+    action_type = action.get("action_type")
+    if isinstance(action_type, str) and action_type.strip():
+        return action_type.strip()
+    tool_name = action.get("tool_name")
+    if isinstance(tool_name, str) and tool_name.strip():
+        return tool_name.strip()
     return None
 
 
@@ -221,18 +241,23 @@ def _candidate_action_count(
     return sum(
         1
         for action in actions
-        if action.get("action_type") in expected_action_types
+        if _action_type(action) in expected_action_types
     )
 
 
 def _counted_fields(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     counted_fields: list[dict[str, Any]] = []
     for action in actions:
-        if action.get("action_type") != "count_field_candidates":
+        if _action_type(action) != "count_field_candidates":
             continue
         metadata = action.get("metadata") if isinstance(action.get("metadata"), dict) else {}
+        args = action.get("args") if isinstance(action.get("args"), dict) else {}
         field_name = metadata.get("counted_field_name")
         count = metadata.get("count")
+        if not isinstance(field_name, str) or not field_name.strip():
+            field_name = args.get("field_name") or args.get("source_field_name")
+        if not isinstance(count, int):
+            count = args.get("count")
         if not isinstance(field_name, str) or not field_name.strip():
             continue
         if not isinstance(count, int):
@@ -243,9 +268,116 @@ def _counted_fields(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _finish_reason(actions: list[dict[str, Any]]) -> str | None:
     for action in actions:
-        if action.get("action_type") != "finish_broad":
+        if _action_type(action) != "finish_broad":
             continue
         message = action.get("message")
         if isinstance(message, str) and message.strip():
             return message.strip()
+        args = action.get("args") if isinstance(action.get("args"), dict) else {}
+        reason = args.get("reason")
+        if isinstance(reason, str) and reason.strip():
+            return reason.strip()
+    return None
+
+
+def _diagnostics_payload(actions: list[dict[str, Any]]) -> dict[str, Any]:
+    diagnostics = _diagnostics(actions)
+    return {"diagnostics": diagnostics} if diagnostics else {}
+
+
+def _diagnostics(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for action in actions:
+        action_type = _action_type(action)
+        if action_type != "table_extraction":
+            continue
+        result = action.get("result") if isinstance(action.get("result"), dict) else {}
+        args = action.get("args") if isinstance(action.get("args"), dict) else {}
+        table_id = _text_or_none(result.get("table_id")) or _text_or_none(args.get("table_id"))
+        query = _text_or_none(args.get("sql")) or _text_or_none(args.get("query"))
+        for audit_type in ("table_audit", "query_audit"):
+            audit = result.get(audit_type) if isinstance(result.get(audit_type), dict) else None
+            if not audit:
+                continue
+            summary = _audit_summary(
+                source=action_type,
+                audit_type=audit_type,
+                audit=audit,
+                table_id=table_id,
+                query=query,
+            )
+            if summary is not None:
+                items.append(summary)
+    return items
+
+
+def _audit_summary(
+    *,
+    source: str,
+    audit_type: str,
+    audit: dict[str, Any],
+    table_id: str | None,
+    query: str | None,
+) -> dict[str, Any] | None:
+    summary_text = _text_or_none(audit.get("summary"))
+    if summary_text is None and audit_type == "table_audit":
+        summary_text = _table_audit_summary(audit)
+    if summary_text is None and audit_type == "query_audit":
+        return None
+    summary: dict[str, Any] = {
+        "source": source,
+        "quality_type": audit_type,
+        "issues": [],
+    }
+    if summary_text:
+        summary["summary"] = summary_text
+    if table_id:
+        summary["table_id"] = table_id
+    if query:
+        summary["query"] = query
+    return summary
+
+
+def _table_audit_summary(audit: dict[str, Any]) -> str | None:
+    parts: list[str] = []
+    row_count = audit.get("row_count")
+    column_count = audit.get("column_count")
+    if isinstance(row_count, int):
+        parts.append(f"表格 {row_count} 行")
+    if isinstance(column_count, int):
+        parts.append(f"{column_count} 列")
+
+    blank_cells = audit.get("blank_cells") if isinstance(audit.get("blank_cells"), dict) else {}
+    by_column = blank_cells.get("by_column") if isinstance(blank_cells.get("by_column"), list) else []
+    blank_parts: list[str] = []
+    for item in by_column[:5]:
+        if not isinstance(item, dict):
+            continue
+        column = _text_or_none(item.get("column"))
+        blank_count = item.get("blank_count")
+        if column and isinstance(blank_count, int) and blank_count > 0:
+            blank_parts.append(f"{column} 空白 {blank_count} 行")
+    if blank_parts:
+        parts.append("空白单元格：" + "，".join(blank_parts))
+
+    structure_signals = audit.get("structure_signals")
+    if isinstance(structure_signals, list) and structure_signals:
+        codes = [
+            code
+            for signal in structure_signals[:5]
+            if isinstance(signal, dict)
+            for code in [_text_or_none(signal.get("code"))]
+            if code
+        ]
+        if codes:
+            parts.append("结构信号：" + "，".join(codes))
+
+    if not parts:
+        return None
+    return "；".join(parts) + "。"
+
+
+def _text_or_none(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
     return None

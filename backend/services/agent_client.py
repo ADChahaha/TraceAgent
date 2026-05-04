@@ -57,7 +57,6 @@ class AgentClient:
         refs_with_text: list[dict[str, Any]],
         field_processes: list[dict[str, Any]],
         metadata: dict[str, Any],
-        policy_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "task_spec": task_spec,
@@ -66,8 +65,6 @@ class AgentClient:
             "field_processes": field_processes,
             "metadata": metadata,
         }
-        if policy_options is not None:
-            payload["policy_options"] = policy_options
         return self._post("/v1/route-policy-agent/evaluate", json=payload)
 
     def _post(self, path: str, **kwargs) -> dict[str, Any]:

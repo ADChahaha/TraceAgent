@@ -623,12 +623,25 @@ task_spec + extracted_fields + field_traces
        field_resolution.counted_fields 只保留 count_field_candidates 的字段名和数量
        field_resolution.final_decision_used 来自 final_decision 是否执行
        field_resolution.reason / failure_reason 来自字段 trace
+       diagnostics 来自 table_extraction 等工具的观察摘要，只保留 quality_type/summary/table_id/query
   -> agent route_policy_agent 校验输入完整性
   -> agent route_policy_agent 根据字段输出、refs 文本和两阶段过程摘要判断 route
   -> backend 写入 field_routes(route, route_reason, needs_review)
 ```
 
-`field_processes` 不能包含 search 工具返回的正文、表格行、cell、block_id 列表或 action refs。route policy 如果需要判断字段值是否被原文支持，只能读取 `refs_with_text.text`；`field_processes` 只用于判断 agent 是否用合理关键词查过、是否写入候选、是否执行最终定案。
+`field_processes` 不能包含 search 工具返回的正文、表格行、cell、block_id 列表或 action refs。route policy 如果需要判断字段值是否被原文支持，只能读取 `refs_with_text.text`；`field_processes` 只用于判断 agent 是否用合理关键词查过、是否写入候选、是否执行最终定案，以及当前工具是否报告质量风险。
+
+表格工具观察的传递规则：
+
+```text
+field_traces.actions_json[].result.table_audit / query_audit
+  -> route_policy._diagnostics(...) 提取轻量观察摘要
+  -> broad_extraction.diagnostics 或 field_resolution.diagnostics
+  -> route_policy_agent prompt 同时看到查表摘要和 field_resolution.reason
+  -> 小 LLM 结合字段值、refs 文本、工具观察和模型解释判断 route
+```
+
+这条链路只传“事实观察摘要”，不传整表内容，也不传 `status` 这种提前下结论的风险字段。这样 backend 不重新解释 OCR，也不让 route policy 重新查大表；表格工具发现的空 cell、非空分布、输出列空值或结构信号会被保留下来，由抽取模型 reason 和 route policy 共同判断是否需要人工 review。
 
 `route_policy.py` 的输出必须落库到 `field_routes`，不能只保存在内存里。这样 `GET /tasks/{task_id}/review` 和 `GET /tasks/{task_id}/audit` 都能解释字段为什么进入某条路径。
 

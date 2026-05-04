@@ -76,7 +76,7 @@ review
 reject
 ```
 
-`route` 由 agent service 的 `route_policy_agent` 给出。backend 提交任务/字段定义、字段输出、`refs_with_text` 和 `field_processes`，然后保存 `accept / review / reject` 输出并驱动状态流转。`refs_with_text` 提供最终证据文本；`field_processes` 只提供 broad / resolution 两阶段的 search 查询词、候选写入数量、count 摘要、broad 结束原因和是否执行最终定案，不包含工具返回结果。
+`route` 由 agent service 的 `route_policy_agent` 给出。backend 提交任务/字段定义、字段输出、`refs_with_text` 和 `field_processes`，然后保存 `accept / review / reject` 输出并驱动状态流转。`refs_with_text` 提供最终证据文本；`field_processes` 提供 broad / resolution 两阶段的 search 查询词、候选写入数量、count 摘要、broad 结束原因、是否执行最终定案，以及 `table_audit/query_audit` 这类轻量工具观察摘要，不包含 `status`、工具返回的原始表格行、cell 值或 refs 列表。
 
 人工审核结论 `review_decision`：
 
@@ -447,7 +447,7 @@ file_extraction_agent 一次记录
   -> trace 保存 ExtractionResult.trace
 
 route_policy_agent 一次记录
-  -> request 保存 task_spec、field_outputs、refs_with_text、field_processes、metadata、policy_options
+  -> request 保存 task_spec、field_outputs、refs_with_text、field_processes、metadata
   -> response 保存 RoutePolicyResult 完整 JSON
   -> trace 保存 response.trace；没有 trace 时保存 field_routes/warnings/metadata 摘要
 ```

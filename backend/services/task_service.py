@@ -717,15 +717,33 @@ class TaskService:
                 "related_fields": [],
                 "actions": [
                     action
-                    for action in actions
-                    if isinstance(action, dict)
-                    and action.get("tool_name") == "set_field"
-                    and (action.get("args") or {}).get("name") == field_name
+                    for action in self._actions_for_field_from_flat_trace(
+                        actions=actions,
+                        field_name=str(field_name),
+                    )
                 ],
                 "reason": None,
                 "failure_reason": state.get("failure_reason"),
             }
         return trace_by_field
+
+    def _actions_for_field_from_flat_trace(
+        self,
+        *,
+        actions: list[Any],
+        field_name: str,
+    ) -> list[dict[str, Any]]:
+        matched: list[dict[str, Any]] = []
+        for action in actions:
+            if not isinstance(action, dict):
+                continue
+            matched.append(action)
+            if (
+                action.get("tool_name") == "set_field"
+                and (action.get("args") or {}).get("name") == field_name
+            ):
+                return matched
+        return []
 
     def _save_field_routes(
         self,

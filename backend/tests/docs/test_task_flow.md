@@ -10,6 +10,7 @@ TestClient 上传 PDF / DOCX
   -> backend 创建 SQLite 任务并让 POST /tasks 先返回 pending/uploaded
   -> 后台任务调用 fake agent 返回 document / extraction / route policy 结果
   -> task_service 对照 task_spec.fields 补齐 agent 没返回的字段占位
+  -> backend 从 trace actions 汇总 route policy 输入，包含表格工具观察摘要
   -> backend 保存 result、trace、route、review、audit 和失败原因
   -> GET /tasks/{task_id} 返回最终任务状态、失败原因、复核包、最终结果和审计记录
 ```
@@ -18,6 +19,10 @@ TestClient 上传 PDF / DOCX
 
 - `test_failed_task_summary_returns_error_message`：验证 agent 抽取阶段返回 `failed` 时，`POST /tasks` 先返回 `pending/uploaded/error_message=null`，后台处理结束后 `GET /tasks/{task_id}` summary 会变成 `failed/done` 并带出 `error_message`，让前端能解释任务为什么失败。
 - `test_route_policy_request_counts_broad_copy_candidates_in_broad_stage`：验证 backend 从 trace actions 组装 route policy `field_processes` 时，把 `copy_field_candidates` 计入 broad 候选写入数量，把 resolution 候选写入数量限定为 `add_resolution_candidate`，并只在 resolution 摘要里保留 `count_field_candidates` 的字段名和数量。
+- `test_route_policy_request_summarizes_tool_name_actions`：验证新版工具 trace 只有 `tool_name/args` 时，backend 仍能把 `table_extraction` 的 SQL 汇总为 broad 查询信号，把 `set_field` 识别为最终定案，并把写入 reason 放到 resolution 摘要里。
+- `test_route_policy_request_preserves_table_and_query_audit_summaries`：验证 `table_extraction` action result 中的 `table_audit/query_audit` 会被汇总到 `field_processes` 的 diagnostics 摘要里，只保留 summary/table_id/query 等事实观察，不携带 status、表格原始行或 cell 内容。
+- `test_route_policy_request_preserves_query_audit_summary_without_raw_samples`：验证稀疏标签列的 `query_audit.summary` 会进入 route policy 请求，空白行样本和原始表格值不会进入。
+- `test_route_policy_request_backfills_ref_text_from_document_blocks`：验证 route policy 请求组装 refs 时，如果 trace evidence 缺少 texts，会从已保存的 document blocks 回填证据文本、document_id 和 page。
 - `test_create_task_returns_pending_before_background_pipeline_finishes`：验证创建接口不等待耗时 pipeline，响应体先返回 `pending/uploaded`；TestClient 中后台任务执行完后，summary 能查询到最终 `completed` 状态。
 - `test_create_task_accept_route_commits_agent_fields`：验证 `POST /tasks` 在 route 为 `accept` 时先返回入队状态，后台 pipeline 会给标准化 block 补 `document_id/block_id`，把字段结果提交为 agent 来源，并在 audit 中记录证据、action_types 和字段级 agent 决策过程；`result` 只承载字段值，证据和 actions 留在 `trace`；route policy request 额外带 `field_processes`，只包含 broad / resolution 的统一 search 查询词、候选写入数量、count 摘要、结束原因和 final_decision 状态，不带工具返回结果。
 - `test_create_task_accepts_multiple_files_and_merges_document_blocks`：验证 `POST /tasks` 支持重复 `files` 上传多个 PDF/DOCX，并且先返回入队状态；后台会逐个调用 document processor，合并 markdown、md_list 和 blocks 后再执行字段抽取，并把所有 `document_id` 传入抽取 metadata；同时验证 `GET /trace` 会返回 document processor、file extraction agent 和 route policy agent 三段执行过程，其中 extraction 字段决策必须包含 `process_steps`，按 `broad_extraction -> field_resolution -> final_result -> route_validation` 展示 broad 候选 block 正文、search_grep/add_broad_candidate/finish_broad、route 前 final_decision 输出、route policy 验证结论和最终 route 原因；route policy 的 `agent_trace.request.field_processes` 只保留 search 查询词，不暴露 refs 或 block 结果；并额外返回按调用顺序保存的 `agent_trace` 原始请求摘要、完整 agent 响应和 trace payload。

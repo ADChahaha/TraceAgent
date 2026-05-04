@@ -1,6 +1,41 @@
 # Backend Devlog
 
-last updated: 2026-05-04 02:20:00
+last updated: 2026-05-05 01:05:20
+
+## 2026-05-05 01:05:20
+
+### 已完成工作
+
+- route policy 请求组装改为从 `table_extraction` action 中提取 `table_audit/query_audit`，只传 `quality_type/summary/table_id/query` 等事实摘要。
+- backend 不再向 route_policy_agent 传递诊断 `status`，也不会把空白行样本、原始表格行或 cell 值塞进 `field_processes.diagnostics`。
+- `table_audit` 没有现成 summary 时，backend 会从行列数、空白列分布和结构信号生成简短摘要。
+- 同步更新 backend 设计/API 文档和测试说明，固定 `query_audit.summary` 会保留，而原始样本不会进入 route policy 请求。
+
+### 当前进展
+
+- 前端 replay 字段卡可使用 `query_audit.summary` 展示“查表摘要”，再用 `set_field.reason` 展示“模型判断”。
+
+### 验证
+
+- `python -m pytest backend/tests/test_task_flow.py -q`，结果 `15 passed`。
+- `npm test -- task-detail.test.tsx --runInBand`，结果 `19 passed`。
+- `npm run lint`，通过。
+
+## 2026-05-04 22:37:01
+
+### 已完成工作
+
+- `AgentClient.evaluate_route_policy(...)` 删除 `policy_options` 参数，backend 不再向 route_policy_agent 发送 refs 裁剪配置。
+- route_policy_agent 的 agent_stage_runs request 记录同步变为 `task_spec / field_outputs / refs_with_text / field_processes / metadata`。
+- 同步更新 `backend/docs/API.md`，避免文档继续暗示 route policy request 带 `policy_options`。
+
+### 当前进展
+
+- backend 继续负责从抽取结果和 trace 组装完整 `refs_with_text`，route_policy_agent 负责完整消费这些最终证据文本。
+
+### 验证
+
+- `python -m pytest backend/tests/test_task_flow.py -q`，结果 `12 passed`。
 
 ## 2026-05-04 02:20:00
 

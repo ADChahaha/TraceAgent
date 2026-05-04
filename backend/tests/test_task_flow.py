@@ -185,7 +185,6 @@ class FakeAgentClient:
         refs_with_text: list[dict[str, Any]],
         field_processes: list[dict[str, Any]],
         metadata: dict[str, Any],
-        policy_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self.route_policy_calls.append(
             {
@@ -194,7 +193,6 @@ class FakeAgentClient:
                 "refs_with_text": refs_with_text,
                 "field_processes": field_processes,
                 "metadata": metadata,
-                "policy_options": policy_options,
             }
         )
         return {
@@ -305,7 +303,6 @@ class FakeMissingRequiredFieldRouteClient(FakeAgentClient):
         refs_with_text: list[dict[str, Any]],
         field_processes: list[dict[str, Any]],
         metadata: dict[str, Any],
-        policy_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self.route_policy_calls.append(
             {
@@ -314,7 +311,6 @@ class FakeMissingRequiredFieldRouteClient(FakeAgentClient):
                 "refs_with_text": refs_with_text,
                 "field_processes": field_processes,
                 "metadata": metadata,
-                "policy_options": policy_options,
             }
         )
         return {
@@ -435,6 +431,280 @@ def test_route_policy_request_counts_broad_copy_candidates_in_broad_stage():
     assert field_process["field_resolution"]["counted_fields"] == [
         {"field_name": "room_rows", "count": 2}
     ]
+
+
+def test_route_policy_request_summarizes_tool_name_actions():
+    trace = {
+        "field_name": "academic_paper_titles",
+        "evidence_json": json.dumps({"refs": [], "texts": []}, ensure_ascii=False),
+        "actions_json": json.dumps(
+            [
+                {
+                    "tool_name": "table_extraction",
+                    "args": {
+                        "table_id": "p002_b001",
+                        "sql": "SELECT \"论文题目\" FROM data WHERE \"作品类型\" = '学术论文'",
+                        "reason": "筛选作品类型为学术论文的行",
+                    },
+                },
+                {
+                    "tool_name": "set_field",
+                    "args": {
+                        "name": "academic_paper_titles",
+                        "status": "resolved",
+                        "reason": "写入学术论文题目",
+                    },
+                },
+            ],
+            ensure_ascii=False,
+        ),
+        "reason": "写入学术论文题目",
+        "failure_reason": None,
+    }
+
+    request = build_route_policy_request(
+        task_spec={
+            "task_name": "extract_academic_paper_titles",
+            "fields": [
+                {
+                    "field_name": "academic_paper_titles",
+                    "display_name": "学术论文题目",
+                    "type": "list",
+                    "required": True,
+                }
+            ],
+        },
+        extracted_fields=[
+            {
+                "field_name": "academic_paper_titles",
+                "agent_status": "resolved",
+                "agent_value_json": json.dumps(["论文 A"], ensure_ascii=False),
+                "reason": "写入学术论文题目",
+                "failure_reason": None,
+            }
+        ],
+        field_traces=[trace],
+        metadata={},
+    )
+
+    field_process = request["field_processes"][0]
+    assert field_process["broad_extraction"]["search_queries"] == [
+        "SELECT \"论文题目\" FROM data WHERE \"作品类型\" = '学术论文'"
+    ]
+    assert field_process["broad_extraction"]["candidate_action_count"] == 1
+    assert field_process["field_resolution"]["final_decision_used"] is True
+    assert field_process["field_resolution"]["reason"] == "写入学术论文题目"
+
+
+def test_route_policy_request_preserves_table_and_query_audit_summaries():
+    trace = {
+        "field_name": "academic_paper_titles",
+        "evidence_json": json.dumps({"refs": [], "texts": []}, ensure_ascii=False),
+        "actions_json": json.dumps(
+            [
+                {
+                    "tool_name": "table_extraction",
+                    "args": {
+                        "table_id": "p002_b001",
+                        "sql": "SELECT \"论文题目\" FROM data WHERE \"作品类型\" = '学术论文'",
+                        "reason": "筛选作品类型为学术论文的行",
+                    },
+                    "result": {
+                        "table_id": "p002_b001",
+                        "columns": ["论文题目"],
+                        "row_count": 14,
+                        "rows": [
+                            {
+                                "row_id": "p002_b001_tr_001",
+                                "values": {"论文题目": "论文 A"},
+                                "evidence_ids": ["p002_b001", "p002_b001_tr_001"],
+                            }
+                        ],
+                        "table_audit": {
+                            "row_count": 14,
+                            "column_count": 3,
+                            "blank_cells": {
+                                "total_blank_cell_count": 1,
+                                "by_column": [
+                                    {
+                                        "column": "作品类型",
+                                        "blank_count": 1,
+                                        "blank_row_ids_sample": ["p002_b001_tr_007"],
+                                    }
+                                ],
+                                "cell_texts": ["不应该进入 route policy"],
+                            },
+                            "structure_signals": [],
+                        },
+                        "query_audit": {
+                            "summary": "返回 14 行；筛选列“作品类型”空白 1 行；非空分布：学术论文 14；输出列“论文题目”无空值。",
+                            "predicate_columns": [
+                                {
+                                    "column": "作品类型",
+                                    "literal": "学术论文",
+                                    "blank_count": 1,
+                                    "blank_row_ids_sample": ["p002_b001_tr_007"],
+                                    "row_values": {"作品类型": "", "论文题目": "不应该进入 route policy"},
+                                }
+                            ],
+                        },
+                    },
+                },
+                {
+                    "tool_name": "set_field",
+                    "args": {
+                        "name": "academic_paper_titles",
+                        "status": "resolved",
+                        "reason": "写入学术论文题目",
+                    },
+                },
+            ],
+            ensure_ascii=False,
+        ),
+        "reason": "写入学术论文题目",
+        "failure_reason": None,
+    }
+
+    request = build_route_policy_request(
+        task_spec={
+            "task_name": "extract_academic_paper_titles",
+            "fields": [
+                {
+                    "field_name": "academic_paper_titles",
+                    "display_name": "学术论文题目",
+                    "type": "list",
+                    "required": True,
+                }
+            ],
+        },
+        extracted_fields=[
+            {
+                "field_name": "academic_paper_titles",
+                "agent_status": "resolved",
+                "agent_value_json": json.dumps(["论文 A"], ensure_ascii=False),
+                "reason": "写入学术论文题目",
+                "failure_reason": None,
+            }
+        ],
+        field_traces=[trace],
+        metadata={},
+    )
+
+    diagnostics = request["field_processes"][0]["broad_extraction"]["diagnostics"]
+    assert diagnostics == [
+        {
+            "source": "table_extraction",
+            "table_id": "p002_b001",
+            "query": "SELECT \"论文题目\" FROM data WHERE \"作品类型\" = '学术论文'",
+            "quality_type": "table_audit",
+            "issues": [],
+            "summary": "表格 14 行；3 列；空白单元格：作品类型 空白 1 行。",
+        },
+        {
+            "source": "table_extraction",
+            "table_id": "p002_b001",
+            "query": "SELECT \"论文题目\" FROM data WHERE \"作品类型\" = '学术论文'",
+            "quality_type": "query_audit",
+            "issues": [],
+            "summary": "返回 14 行；筛选列“作品类型”空白 1 行；非空分布：学术论文 14；输出列“论文题目”无空值。",
+        },
+    ]
+    assert "status" not in diagnostics[0]
+    assert "status" not in diagnostics[1]
+    assert "row_values" not in json.dumps(diagnostics, ensure_ascii=False)
+    assert "不应该进入 route policy" not in json.dumps(diagnostics, ensure_ascii=False)
+
+
+def test_route_policy_request_preserves_query_audit_summary_without_raw_samples():
+    trace = {
+        "field_name": "civilized_dormitory_names",
+        "evidence_json": json.dumps({"refs": [], "texts": []}, ensure_ascii=False),
+        "actions_json": json.dumps(
+            [
+                {
+                    "tool_name": "table_extraction",
+                    "args": {
+                        "table_id": "p001_b000",
+                        "sql": "SELECT \"房间\" FROM data WHERE \"模范/文明\" = '文明寝室'",
+                        "reason": "筛选类别为文明寝室的行",
+                    },
+                    "result": {
+                        "table_id": "p001_b000",
+                        "columns": ["房间"],
+                        "row_count": 12,
+                        "query_audit": {
+                            "summary": "返回 12 行；筛选列“模范/文明”空白 149 行；非空分布：文明寝室 12，模范寝室 5；输出列“房间”无空值。",
+                            "predicate_columns": [
+                                {
+                                    "column": "模范/文明",
+                                    "literal": "文明寝室",
+                                    "blank_count": 149,
+                                    "blank_row_ids_sample": ["p001_b000_tr_001"],
+                                    "non_empty_distribution": [
+                                        {"value": "文明寝室", "count": 12},
+                                        {"value": "模范寝室", "count": 5},
+                                    ],
+                                }
+                            ],
+                        },
+                    },
+                },
+                {
+                    "tool_name": "set_field",
+                    "args": {
+                        "name": "civilized_dormitory_names",
+                        "status": "resolved",
+                        "reason": "使用“模范/文明 = 文明寝室”筛出 12 行；空白行表示未获评普通寝室。",
+                    },
+                },
+            ],
+            ensure_ascii=False,
+        ),
+        "reason": "使用“模范/文明 = 文明寝室”筛出 12 行；空白行表示未获评普通寝室。",
+        "failure_reason": None,
+    }
+
+    request = build_route_policy_request(
+        task_spec={
+            "task_name": "civilized_model_dormitory_names",
+            "fields": [
+                {
+                    "field_name": "civilized_dormitory_names",
+                    "display_name": "文明寝室名称",
+                    "type": "list",
+                    "required": True,
+                }
+            ],
+        },
+        extracted_fields=[
+            {
+                "field_name": "civilized_dormitory_names",
+                "agent_status": "resolved",
+                "agent_value_json": json.dumps(["212", "214"], ensure_ascii=False),
+                "reason": "使用“模范/文明 = 文明寝室”筛出 12 行；空白行表示未获评普通寝室。",
+                "failure_reason": None,
+            }
+        ],
+        field_traces=[trace],
+        metadata={},
+    )
+
+    diagnostics = request["field_processes"][0]["broad_extraction"]["diagnostics"]
+    assert diagnostics == [
+        {
+            "source": "table_extraction",
+            "table_id": "p001_b000",
+            "query": "SELECT \"房间\" FROM data WHERE \"模范/文明\" = '文明寝室'",
+            "quality_type": "query_audit",
+            "issues": [],
+            "summary": "返回 12 行；筛选列“模范/文明”空白 149 行；非空分布：文明寝室 12，模范寝室 5；输出列“房间”无空值。",
+        }
+    ]
+    assert "status" not in diagnostics[0]
+    assert "blank_row_ids_sample" not in json.dumps(diagnostics, ensure_ascii=False)
+    assert request["field_processes"][0]["field_resolution"]["reason"] == (
+        "使用“模范/文明 = 文明寝室”筛出 12 行；空白行表示未获评普通寝室。"
+    )
 
 
 def test_route_policy_request_backfills_ref_text_from_document_blocks():
