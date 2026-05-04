@@ -48,7 +48,21 @@ cd /path/to/agent_gate
 pnpm --dir frontend install
 ```
 
-如果要连接真实 LLM，在启动 `agent` 前设置模型服务环境变量：
+### 2. 配置运行环境
+
+三层服务各自读取不同环境变量。`BASE_URL` 是 `agent service` 调 LLM 的地址；`AGENT_SERVICE_BASE_URL` 是 `backend` 调本地 `agent service` 的地址，不是同一个东西。
+
+端口约定：
+
+| 服务 | 默认地址 | 说明 |
+| --- | --- | --- |
+| `agent service` | `http://127.0.0.1:8001` | 文档处理、字段抽取和 route policy HTTP API。 |
+| `backend` | `http://127.0.0.1:8000` | 任务、结果、review、audit API。 |
+| `frontend` | `http://127.0.0.1:3000` | 浏览器工作台。 |
+
+#### Agent service / LLM
+
+如果要连接真实 LLM，在启动 `agent service` 前设置模型服务环境变量：
 
 ```bash
 export BASE_URL="https://your-model-endpoint/v1"
@@ -57,6 +71,14 @@ export BROAD_MODEL="your-broad-model-name"
 export RESOLUTION_MODEL="your-resolution-model-name"
 export ROUTE_POLICY_MODEL="your-route-policy-model-name"
 ```
+
+| 环境变量 | 默认值 | 作用 |
+| --- | --- | --- |
+| `BASE_URL` | 无 | `agent service` 调用 OpenAI-compatible LLM endpoint 的地址。 |
+| `OPENAI_API_KEY` | 无 | LLM endpoint 的 API key。 |
+| `BROAD_MODEL` | 无 | `file_extraction_agent` 的 broad planning 模型。 |
+| `RESOLUTION_MODEL` | 无 | `file_extraction_agent` 的 field resolution 模型。 |
+| `ROUTE_POLICY_MODEL` | 无 | `route_policy_agent` 的 route 判断模型。 |
 
 如果要处理真实 PDF，尤其是扫描件或带坏 OCR/text layer 的表格 PDF，当前默认链路是 MinerU pipeline。需要先确保 `mineru` CLI 在 `agent-gate` 环境中可执行，或显式指定路径：
 
@@ -82,7 +104,25 @@ MinerU 相关配置在 `agent service` 启动时读取，修改后需要重启 `
 
 MinerU 模型缓存由 MinerU 自身管理。更完整的 PDF 引擎说明见 `agent/service/document_processor/README.md`。
 
-### 2. 启动 agent service
+#### Backend
+
+backend 读取这些环境变量：
+
+| 环境变量 | 默认值 | 作用 |
+| --- | --- | --- |
+| `AGENT_SERVICE_BASE_URL` | `http://localhost:8001` | backend 调用本地 `agent service` 的 HTTP 地址。 |
+| `AGENT_SERVICE_TIMEOUT_SECONDS` | `1200` | backend 调用 `agent service` 的 HTTP 超时时间；PDF 处理、MinerU 或 LLM 较慢时需要调大。 |
+| `BACKEND_DATABASE_PATH` | `backend/backend.sqlite3` | SQLite 数据库文件路径。 |
+
+#### Frontend
+
+frontend 读取这些环境变量：
+
+| 环境变量 | 默认值 | 作用 |
+| --- | --- | --- |
+| `BACKEND_BASE_URL` | `http://localhost:8000` | Next.js API route 转发到 backend 的地址。 |
+
+### 3. 启动 agent service
 
 新开一个终端：
 
@@ -97,7 +137,7 @@ python -m uvicorn --app-dir agent main:app --reload --host 127.0.0.1 --port 8001
 - `http://127.0.0.1:8001/healthz`
 - `http://127.0.0.1:8001/docs`
 
-### 3. 启动 backend
+### 4. 启动 backend
 
 再开一个终端：
 
@@ -105,6 +145,7 @@ python -m uvicorn --app-dir agent main:app --reload --host 127.0.0.1 --port 8001
 conda activate agent-gate
 cd /path/to/agent_gate
 AGENT_SERVICE_BASE_URL=http://127.0.0.1:8001 \
+AGENT_SERVICE_TIMEOUT_SECONDS=1200 \
 uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
@@ -113,17 +154,18 @@ backend 默认使用本地 SQLite，数据库文件为 `backend/backend.sqlite3`
 ```bash
 BACKEND_DATABASE_PATH=/private/tmp/agent_gate.sqlite3 \
 AGENT_SERVICE_BASE_URL=http://127.0.0.1:8001 \
+AGENT_SERVICE_TIMEOUT_SECONDS=1200 \
 uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-### 4. 启动 frontend
+### 5. 启动 frontend
 
 再开一个终端：
 
 ```bash
 cd /path/to/agent_gate
 BACKEND_BASE_URL=http://127.0.0.1:8000 \
-pnpm --dir frontend dev -- --port 3000
+pnpm --dir frontend dev --port 3000
 ```
 
 打开：
@@ -140,6 +182,13 @@ pnpm --dir frontend dev -- --port 3002
 ```
 
 然后打开 `http://127.0.0.1:3002/`。
+
+### 6. 常见启动问题
+
+- backend 跑真实 PDF 时中途超时：先把 `AGENT_SERVICE_TIMEOUT_SECONDS` 调大，例如 `1800` 或 `2400`。
+- backend 连不上 agent service：检查 `AGENT_SERVICE_BASE_URL` 是否指向 `agent service` 的监听地址，例如 `http://127.0.0.1:8001`。
+- agent service 调不了模型：检查 `BASE_URL`、`OPENAI_API_KEY` 和对应模型名是否设置在启动 `agent service` 的终端里。
+- frontend 页面提示 backend unavailable：检查启动 frontend 时的 `BACKEND_BASE_URL` 是否指向 backend，例如 `http://127.0.0.1:8000`。
 
 ## 项目架构
 
