@@ -357,6 +357,10 @@ samp,
 }
 
 .replay-field-write {
+  display: flex;
+  min-height: 0;
+  max-height: min(34rem, calc(100svh - 9rem));
+  flex-direction: column;
   border: 1px solid color-mix(in oklch, var(--primary) 40%, var(--border));
   border-radius: 7px;
   background: rgb(255 255 255 / 0.72);
@@ -371,13 +375,18 @@ samp,
   font-weight: 800;
 }
 
-.replay-field-write-value {
+.replay-field-write-body {
   margin-top: 6px;
-  max-height: 6rem;
+  min-height: 0;
   overflow: auto;
+}
+
+.replay-field-write-value {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, ui-monospace, monospace;
   font-size: 12px;
   line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .replay-field-route-reason {
@@ -442,8 +451,15 @@ samp,
 
 .replay-inline-review {
   margin-top: 10px;
+  flex: 0 0 auto;
+  border-top: 1px solid color-mix(in oklch, var(--primary) 24%, var(--border));
   display: grid;
   gap: 10px;
+  padding-top: 10px;
+}
+
+.replay-review-root:fullscreen .replay-field-write {
+  max-height: min(28rem, calc(100svh - var(--replay-header-h) - 7rem));
 }
 
 @media (max-width: 1024px) {

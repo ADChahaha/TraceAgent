@@ -1288,6 +1288,73 @@ it("必填字段没有 agent value 时在 replay 末尾显示空复核输入", a
   });
 });
 
+it("长字段写入卡把字段内容和复核区分离，避免全屏时复核入口被撑出视口", async () => {
+  const longValue = Array.from({ length: 36 }, (_, index) => `论文题目 ${index + 1}`);
+  const longFieldDetail: TaskDetailData = {
+    ...detailData,
+    result: {
+      ...reviewResult,
+      fields: [
+        {
+          ...reviewResult.fields[0],
+          agent_value: longValue
+        }
+      ]
+    },
+    replay: {
+      ...baseReplay,
+      actions: [
+        {
+          tool_name: "set_field",
+          args: {
+            name: "room_numbers",
+            value: longValue,
+            evidence_ids: ["p001_b001"],
+            reason: "长列表字段写入"
+          },
+          result: {
+            ok: true,
+            field: {
+              name: "room_numbers",
+              status: "resolved",
+              value: longValue,
+              evidence_ids: ["p001_b001"]
+            }
+          }
+        }
+      ]
+    },
+    review: {
+      ...detailData.review,
+      fields: [
+        {
+          ...detailData.review.fields[0],
+          agent_value: longValue,
+          review_reason: "字段很长，需要人工确认"
+        }
+      ]
+    }
+  };
+  const injectedLoadTaskDetail = jest.fn(async () => longFieldDetail);
+
+  render(
+    <TaskDetail
+      taskId="task-001"
+      initialSummary={waitingReviewSummary}
+      loadTaskDetail={injectedLoadTaskDetail}
+    />
+  );
+
+  expect(await screen.findByText("AI extraction replay")).toBeInTheDocument();
+  const fieldCard = screen.getByLabelText("字段写入卡");
+  const fieldContent = within(fieldCard).getByLabelText("字段写入内容");
+  const reviewArea = within(fieldCard).getByLabelText("字段复核区");
+  expect(within(fieldContent).getByText(/论文题目 36/)).toBeInTheDocument();
+  expect(within(reviewArea).getByLabelText("文明寝室房间号 复核值")).toBeInTheDocument();
+  expect(within(reviewArea).getByRole("button", { name: "提交修正并通过" })).toBeInTheDocument();
+  expect(within(fieldContent).queryByRole("button", { name: "提交修正并通过" })).not.toBeInTheDocument();
+});
+
 it("reject 字段只显示拒绝路由，不提供人工修改入口", async () => {
   const rejectedSummary: TaskSummary = {
     task_id: "task-rejected",

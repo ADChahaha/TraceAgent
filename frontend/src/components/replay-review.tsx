@@ -794,6 +794,7 @@ function ReplayFieldWriteCard({
   return (
     <div
       className="replay-field-write"
+      aria-label="字段写入卡"
       onClick={(event) => event.stopPropagation()}
       onPointerDown={(event) => event.stopPropagation()}
       onWheel={(event) => event.stopPropagation()}
@@ -802,30 +803,32 @@ function ReplayFieldWriteCard({
         <div className="replay-field-write-title">写入字段：{field.fieldName}</div>
         {field.route ? <ReplayFieldRouteBadge field={field} /> : null}
       </div>
-      <div className="replay-field-write-value">
-        {valueText || <span className="text-muted-foreground">等待人工补录</span>}
-      </div>
-      {field.routeReason ? (
-        <div className="replay-field-route-reason">{field.routeReason}</div>
-      ) : null}
-      {field.evidenceIds.length > 0 ? (
-        <div className="replay-field-evidence">
-          {field.evidenceIds.map((evidenceId) => (
-            <button
-              key={evidenceId}
-              type="button"
-              className="replay-field-evidence-chip"
-              title={formatEvidenceLabel(evidenceId, documentOutline)}
-              onClick={(event) => {
-                event.stopPropagation();
-                onJumpToEvidence(evidenceId);
-              }}
-            >
-              {formatEvidenceLabel(evidenceId, documentOutline)}
-            </button>
-          ))}
+      <div className="replay-field-write-body" aria-label="字段写入内容">
+        <div className="replay-field-write-value">
+          {valueText || <span className="text-muted-foreground">等待人工补录</span>}
         </div>
-      ) : null}
+        {field.routeReason ? (
+          <div className="replay-field-route-reason">{field.routeReason}</div>
+        ) : null}
+        {field.evidenceIds.length > 0 ? (
+          <div className="replay-field-evidence">
+            {field.evidenceIds.map((evidenceId) => (
+              <button
+                key={evidenceId}
+                type="button"
+                className="replay-field-evidence-chip"
+                title={formatEvidenceLabel(evidenceId, documentOutline)}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onJumpToEvidence(evidenceId);
+                }}
+              >
+                {formatEvidenceLabel(evidenceId, documentOutline)}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
       {field.needsReview ? (
         <InlineFieldReviewEditor
           field={field}
@@ -872,7 +875,7 @@ function InlineFieldReviewEditor({
   onSubmit?: () => void;
 }) {
   return (
-    <div className="replay-inline-review" onClick={(event) => event.stopPropagation()}>
+    <div className="replay-inline-review" aria-label="字段复核区" onClick={(event) => event.stopPropagation()}>
       <div className="space-y-2">
         <Label htmlFor={`review-${field.sourceName}`} className="text-xs">
           {field.fieldName} 复核值

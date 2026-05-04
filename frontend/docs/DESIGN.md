@@ -128,6 +128,7 @@ frontend/
   -> 再把 review.fields 合并进去，补齐 agent 没有写入但 route_policy 要求 review 的字段
   -> 当前 action result 里如果返回 query_audit.summary、table_audit.summary 或其他 *_audit.summary，ReplayReview 会在该 action 的模型输出区显示诊断摘要
   -> 当前 action 是 set_field 时，在字段写入卡显示字段值、证据 chip、route badge 和 route_reason
+  -> 字段值很长时，字段写入卡把字段内容放进独立滚动区，复核输入和提交按钮留在卡片底部，避免 fullscreen review 时被长列表顶出视口
   -> 如果没有 set_field action 但存在 needs_review 字段，replay 末尾显示同样的字段卡，并提示等待人工补录
   -> 字段卡上的 evidence chip 只把 iframe 文档滚动到对应 HTML 证据块，不改变当前 replay action 序号，避免用户查证据时被带回旧动作
   -> ReplayReview 的高亮边界只跟随当前 tool 实际返回给模型看的内容，不根据完整 HTML 自行扩展
