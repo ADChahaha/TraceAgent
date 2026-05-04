@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import {
@@ -284,6 +284,109 @@ it("waiting_review 任务只展示 replay，并在 review 字段卡片里提交�
     stage: "done"
   });
   expect(recentTasks[0].created_at).toBe("2026-04-29T08:00:00Z");
+});
+
+it("动作输出展示返回的诊断摘要，字段写入卡不再承接诊断文字", async () => {
+  const qualityDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      display_html: [
+        '<figure id="p001_b002" data-type="table">',
+        '<table id="p001_b002_table">',
+        '<tr id="p001_b002_tr_000"><td>作品类型</td><td>论文题目</td></tr>',
+        '<tr id="p001_b002_tr_001"><td>学术论文</td><td>论文 A</td></tr>',
+        '<tr id="p001_b002_tr_002"><td></td><td>论文 B</td></tr>',
+        '<tr id="p001_b002_tr_003"><td>学术 论文</td><td>论文 C</td></tr>',
+        '</table>',
+        '</figure>'
+      ].join(""),
+      actions: [
+        {
+          tool_name: "custom_extraction",
+          args: {
+            table_id: "p001_b002",
+            sql: 'SELECT "论文题目" FROM data WHERE "作品类型" = "学术论文"',
+            reason: "抽取作品类型为学术论文的论文题目"
+          },
+          result: {
+            table_id: "p001_b002",
+            columns: ["论文题目"],
+            rows: [
+              {
+                row_id: "p001_b002_tr_001",
+                values: { "论文题目": "论文 A" },
+                evidence_ids: ["p001_b002", "p001_b002_tr_001"]
+              }
+            ],
+            table_audit: {
+              summary: "表格 3 行；2 列；空白单元格：作品类型 空白 1 行。"
+            },
+            query_audit: {
+              summary: "返回 1 行；筛选列“作品类型”空白 1 行；非空分布：学术论文 1，学术 论文 1；输出列“论文题目”无空值。",
+              predicate_columns: [
+                {
+                  column: "作品类型",
+                  literal: "学术论文",
+                  blank_count: 1,
+                  blank_row_ids_sample: ["p001_b002_tr_002"],
+                  non_empty_distribution: [
+                    { value: "学术论文", count: 1 },
+                    { value: "学术 论文", count: 1 }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          tool_name: "set_field",
+          args: {
+            name: "room_numbers",
+            value: "论文 A",
+            evidence_ids: ["p001_b002", "p001_b002_tr_001"],
+            reason: "使用“作品类型 = 学术论文”筛出 1 行；空白作品类型行需要结合上下文判断，本次未作为学术论文证据；选中行论文题目无空值。"
+          },
+          result: {
+            ok: true,
+            field: {
+              name: "room_numbers",
+              status: "resolved",
+              value: "论文 A",
+              evidence_ids: ["p001_b002", "p001_b002_tr_001"],
+              reason: "使用“作品类型 = 学术论文”筛出 1 行；空白作品类型行需要结合上下文判断，本次未作为学术论文证据；选中行论文题目无空值。"
+            }
+          }
+        }
+      ]
+    }
+  };
+  const injectedLoadTaskDetail = jest.fn(async () => qualityDetail);
+
+  render(
+    <TaskDetail
+      taskId="task-001"
+      initialSummary={waitingReviewSummary}
+      loadTaskDetail={injectedLoadTaskDetail}
+    />
+  );
+
+  expect(await screen.findByText("AI extraction replay")).toBeInTheDocument();
+  expect(screen.getByText("抽取作品类型为学术论文的论文题目")).toBeInTheDocument();
+  const actionDiagnostics = screen.getByLabelText("动作诊断摘要");
+  expect(within(actionDiagnostics).getByText("表格摘要")).toBeInTheDocument();
+  expect(
+    within(actionDiagnostics).getByText("表格 3 行；2 列；空白单元格：作品类型 空白 1 行。")
+  ).toBeInTheDocument();
+  expect(within(actionDiagnostics).getByText("查表摘要")).toBeInTheDocument();
+  expect(
+    within(actionDiagnostics).getByText("返回 1 行；筛选列“作品类型”空白 1 行；非空分布：学术论文 1，学术 论文 1；输出列“论文题目”无空值。")
+  ).toBeInTheDocument();
+  fireEvent.click(screen.getByText("抽取作品类型为学术论文的论文题目"));
+  expect(screen.getByText("写入字段：文明寝室房间号")).toBeInTheDocument();
+  expect(screen.queryByLabelText("字段模型判断")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("动作诊断摘要")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("字段质量风险")).not.toBeInTheDocument();
 });
 
 it("字段证据 chip 只定位文档证据，不回跳 replay action", async () => {
@@ -1332,5 +1435,5 @@ it("failed 但已有 result/trace 的任务仍展示 replay", async () => {
 
   expect(await screen.findByText("AI extraction replay")).toBeInTheDocument();
   expect(screen.queryByText("暂无 replay 数据。")).not.toBeInTheDocument();
-  expect(screen.getByText("候选证据支持字段值")).toBeInTheDocument();
+  expect(screen.getAllByText("候选证据支持字段值").length).toBeGreaterThan(0);
 });

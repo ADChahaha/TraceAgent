@@ -25,6 +25,12 @@ type ReplayField = {
   reviewField?: ReviewField;
 };
 
+type ActionDiagnosticSummary = {
+  key: string;
+  label: string;
+  summary: string;
+};
+
 type HighlightState = {
   currentIds: string[];
   tableReferenceIds: string[];
@@ -166,6 +172,10 @@ export function ReplayReview({
   const currentDisplayReason = React.useMemo(
     () => formatReasonText(currentReason, documentOutline),
     [currentReason, documentOutline],
+  );
+  const currentActionDiagnostics = React.useMemo(
+    () => collectActionDiagnosticSummaries(currentAction),
+    [currentAction],
   );
   const replayFields = React.useMemo(
     () => reduceReplayFields(actions.slice(0, index + 1), finalFields, reviewFields),
@@ -682,6 +692,8 @@ export function ReplayReview({
                       onReviewCommentChange={onReviewCommentChange}
                       onSubmitReview={onSubmitReview}
                     />
+                  ) : currentActionDiagnostics.length > 0 ? (
+                    <ActionDiagnosticsCard diagnostics={currentActionDiagnostics} />
                   ) : (
                     <span aria-hidden="true" />
                   )}
@@ -825,6 +837,19 @@ function ReplayFieldWriteCard({
           onSubmit={onSubmitReview}
         />
       ) : null}
+    </div>
+  );
+}
+
+function ActionDiagnosticsCard({ diagnostics }: { diagnostics: ActionDiagnosticSummary[] }) {
+  return (
+    <div className="replay-action-diagnostics" aria-label="动作诊断摘要">
+      {diagnostics.map((diagnostic) => (
+        <div key={`${diagnostic.key}-${diagnostic.summary}`} className="replay-action-diagnostics-row">
+          <span className="replay-action-diagnostics-label">{diagnostic.label}</span>
+          <span>{diagnostic.summary}</span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -1184,6 +1209,30 @@ function reducePlanItems(plan: TaskReplay["broad_plan"], actions: ReplayAction[]
     };
   }
   return items;
+}
+
+function collectActionDiagnosticSummaries(action: ReplayAction | null): ActionDiagnosticSummary[] {
+  const result = readObject(action?.result);
+  if (!result) {
+    return [];
+  }
+  return Object.entries(result)
+    .filter(([key]) => key.endsWith("_audit"))
+    .map(([key, value]) => {
+      const summary = readString(readObject(value)?.summary);
+      return summary ? { key, label: formatDiagnosticLabel(key), summary } : null;
+    })
+    .filter((item): item is ActionDiagnosticSummary => Boolean(item));
+}
+
+function formatDiagnosticLabel(key: string): string {
+  if (key === "query_audit") {
+    return "查表摘要";
+  }
+  if (key === "table_audit") {
+    return "表格摘要";
+  }
+  return `${key.replace(/_audit$/, "").replaceAll("_", " ")} 摘要`;
 }
 
 function getHighlightState(_actions: ReplayAction[], currentAction: ReplayAction | null): HighlightState {

@@ -126,6 +126,7 @@ frontend/
   -> ReplayReview 左侧展示 outline，中间用 iframe 展示 backend 的 display_html，右侧展示 plan 和当前动作对话
   -> reduceReplayFields 从 result.fields 建立字段名、显示名、agent_value 和 route
   -> 再把 review.fields 合并进去，补齐 agent 没有写入但 route_policy 要求 review 的字段
+  -> 当前 action result 里如果返回 query_audit.summary、table_audit.summary 或其他 *_audit.summary，ReplayReview 会在该 action 的模型输出区显示诊断摘要
   -> 当前 action 是 set_field 时，在字段写入卡显示字段值、证据 chip、route badge 和 route_reason
   -> 如果没有 set_field action 但存在 needs_review 字段，replay 末尾显示同样的字段卡，并提示等待人工补录
   -> 字段卡上的 evidence chip 只把 iframe 文档滚动到对应 HTML 证据块，不改变当前 replay action 序号，避免用户查证据时被带回旧动作
