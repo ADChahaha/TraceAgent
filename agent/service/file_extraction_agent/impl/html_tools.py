@@ -13,6 +13,10 @@ import sqlite3
 from html import escape
 from typing import Any
 
+LARGE_TABLE_SELECT_STAR_ROW_LIMIT = 30
+LARGE_TABLE_SELECT_STAR_CELL_LIMIT = 300
+MAX_LARGE_TABLE_SELECT_STAR_LIMIT = 50
+
 try:
     from langchain_core.tools import tool
 except Exception:  # pragma: no cover - import fallback for early tests
@@ -35,7 +39,10 @@ def build_tools(state: Any) -> list[Any]:
         a broad-plan step, and call ``update_plan(plan_index, "completed",
         reason)`` immediately after the step has produced its field value,
         evidence, or routing decision. ``plan_index`` is 1-based and refers to
-        the numbered Broad plan shown in the prompt.
+        the numbered Broad plan shown in the prompt. Plan steps must advance
+        sequentially: only the earliest unfinished step may become
+        ``in_progress``, and a step must be ``in_progress`` before it can be
+        marked ``completed``.
 
         Args:
             plan_index: 1-based index of the Broad plan item.
@@ -113,7 +120,18 @@ def build_tools(state: Any) -> list[Any]:
 
         Use this only after ``read_element(table_id)`` has shown the table
         columns. The SQL must be a single SELECT statement over table name
-        ``data``.
+        ``data``. ``SELECT *`` is allowed for small tables. For large tables,
+        prefer explicit columns and WHERE filters. If the table is messy and
+        you truly need all columns, page through it with ``LIMIT 50`` or less.
+
+        Examples:
+        - Small table: ``SELECT * FROM data`` is acceptable.
+        - Large table with clear columns: use
+          ``SELECT "寝室名称", "类别" FROM data WHERE "类别" = '文明寝室'``.
+        - Large messy table where WHERE is not reliable: use
+          ``SELECT * FROM data LIMIT 50 OFFSET 0``, then continue with
+          ``OFFSET 50`` if needed.
+        - Never use unbounded ``SELECT *`` on a large table.
 
         Args:
             table_id: Existing HTML table id, for example ``dp-table-1``.
@@ -253,13 +271,21 @@ def _update_plan(state: Any, plan_index: int, status: str, *, reason: str | None
         _record_action(state, "update_plan", _args_with_reason({"plan_index": index, "status": status}, reason), result)
         return result
 
+    statuses = _read(state, "plan_statuses", None)
+    if not isinstance(statuses, dict):
+        statuses = {}
+    sequence_error = _validate_plan_sequence(statuses, index, status, len(plan_items))
+    if sequence_error is not None:
+        result = {"ok": False, "errors": [sequence_error]}
+        _record_action(state, "update_plan", _args_with_reason({"plan_index": index, "status": status}, reason), result)
+        return result
+
     plan_state = {
         "plan_index": index,
         "status": status,
         "step": str(plan_items[index - 1]),
         "reason": reason,
     }
-    statuses = _read(state, "plan_statuses", None)
     if isinstance(statuses, dict):
         statuses[index] = plan_state
     _record_action(
@@ -269,6 +295,53 @@ def _update_plan(state: Any, plan_index: int, status: str, *, reason: str | None
         {"ok": True, "plan": plan_state},
     )
     return {"ok": True, "plan": plan_state}
+
+
+def _validate_plan_sequence(
+    statuses: dict[Any, Any],
+    index: int,
+    status: str,
+    plan_count: int,
+) -> dict[str, Any] | None:
+    current_status = _plan_status_at(statuses, index)
+    next_index = _next_unfinished_plan_index(statuses, plan_count)
+    if status == "in_progress":
+        if current_status == "completed":
+            return {
+                "message": "plan is already completed",
+                "plan_index": index,
+            }
+        if index != next_index:
+            return {
+                "message": "plan_index must advance sequentially",
+                "requested_plan_index": index,
+                "next_plan_index": next_index,
+            }
+        return None
+
+    if current_status != "in_progress":
+        return {
+            "message": "plan must be in_progress before completed",
+            "plan_index": index,
+            "current_status": current_status,
+        }
+    return None
+
+
+def _next_unfinished_plan_index(statuses: dict[Any, Any], plan_count: int) -> int:
+    for index in range(1, plan_count + 1):
+        if _plan_status_at(statuses, index) != "completed":
+            return index
+    return plan_count
+
+
+def _plan_status_at(statuses: dict[Any, Any], index: int) -> str | None:
+    raw = statuses.get(index, statuses.get(str(index)))
+    if isinstance(raw, dict):
+        value = raw.get("status")
+    else:
+        value = getattr(raw, "status", None)
+    return value if value in {"in_progress", "completed"} else None
 
 
 def _read_element(state: Any, element_id: str, *, reason: str | None = None) -> dict[str, Any]:
@@ -379,6 +452,25 @@ def _table_extraction(state: Any, table_id: str, sql: str, *, reason: str | None
         return result
     if not _is_safe_select(sql):
         result = {"ok": False, "error": "sql must be a single SELECT statement"}
+        _record_action(state, "table_extraction", _args_with_reason({"table_id": table_id, "sql": sql}, reason), result)
+        return result
+    if _is_large_table_select_star(table, sql):
+        result = {
+            "ok": False,
+            "error": "table is too large for unbounded SELECT *",
+            "table_id": table_id,
+            "row_count": len(table.rows),
+            "column_count": len(table.columns),
+            "cell_count": len(table.rows) * len(table.columns),
+            "max_select_star_limit": MAX_LARGE_TABLE_SELECT_STAR_LIMIT,
+            "columns": table.columns,
+            "sql_hint": (
+                "Select only the needed columns instead of SELECT *. "
+                "Add a WHERE clause when possible. If the table is messy and "
+                "you need all columns, use SELECT * FROM data LIMIT 50 OFFSET 0 "
+                "and continue with OFFSET 50 if needed."
+            ),
+        }
         _record_action(state, "table_extraction", _args_with_reason({"table_id": table_id, "sql": sql}, reason), result)
         return result
 
@@ -622,6 +714,38 @@ def _is_safe_select(sql: str) -> bool:
     return not any(re.search(rf"\b{word}\b", normalized, flags=re.IGNORECASE) for word in forbidden)
 
 
+def _is_large_table_select_star(table: Any, sql: str) -> bool:
+    if not _selects_all_columns(sql):
+        return False
+    row_count = len(_read(table, "rows", []) or [])
+    column_count = len(_read(table, "columns", []) or [])
+    is_large = (
+        row_count > LARGE_TABLE_SELECT_STAR_ROW_LIMIT
+        or row_count * column_count > LARGE_TABLE_SELECT_STAR_CELL_LIMIT
+    )
+    if not is_large:
+        return False
+    limit = _select_limit(sql)
+    return limit is None or limit > MAX_LARGE_TABLE_SELECT_STAR_LIMIT
+
+
+def _selects_all_columns(sql: str) -> bool:
+    normalized = sql.strip().rstrip(";").strip()
+    match = re.match(r"(?is)^select\s+(.*?)\s+from\s+data\b", normalized)
+    if not match:
+        return False
+    selected = match.group(1).strip()
+    return selected == "*" or re.fullmatch(r"(?:data|\"data\")\s*\.\s*\*", selected, flags=re.IGNORECASE) is not None
+
+
+def _select_limit(sql: str) -> int | None:
+    normalized = sql.strip().rstrip(";").strip()
+    match = re.search(r"(?is)\blimit\s+(\d+)\b", normalized)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
 def _quote_identifier(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
@@ -660,8 +784,10 @@ def _element_html(document: Any, element: Any) -> str:
         columns = " | ".join(table.columns if table else [])
         row_count = len(table.rows) if table else 0
         header_row_id = table.header_row_id if table else ""
+        label = table.label if table else ""
+        label_attr = f' label="{_attr(label)}"' if label else ""
         return (
-            f'<table-ref id="{_attr(element.id)}" rows="{_attr(row_count)}" '
+            f'<table-ref id="{_attr(element.id)}"{label_attr} rows="{_attr(row_count)}" '
             f'header-row-id="{_attr(header_row_id)}" columns="{_attr(columns)}" />'
         )
     tag = _html_like_tag(element)
@@ -683,8 +809,11 @@ def _section_item_html_lines(document: Any, item: dict[str, Any], indent: str) -
     item_type = item["type"]
     if item_type == "TABLE":
         columns = " | ".join(str(column) for column in item.get("columns", []) or [])
+        table = document.tables_by_id.get(item_id)
+        label = table.label if table else ""
+        label_attr = f' label="{_attr(label)}"' if label else ""
         return [
-            f'{indent}<table-ref id="{_attr(item_id)}" rows="{_attr(item.get("row_count", 0))}" '
+            f'{indent}<table-ref id="{_attr(item_id)}"{label_attr} rows="{_attr(item.get("row_count", 0))}" '
             f'header-row-id="{_attr(item.get("header_row_id", ""))}" columns="{_attr(columns)}" />'
         ]
     if item_type == "TEXT" and _element_tag(document, item_id) in {"ul", "ol"}:

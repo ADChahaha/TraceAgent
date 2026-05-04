@@ -38,6 +38,26 @@ def _task_spec(*, critical: bool = False, required: bool = True) -> TaskSpec:
     )
 
 
+def _two_field_task_spec() -> TaskSpec:
+    return TaskSpec(
+        task_name="invoice",
+        fields=[
+            FieldDefinition(
+                field_name="invoice_no",
+                display_name="发票号",
+                type="string",
+                required=True,
+            ),
+            FieldDefinition(
+                field_name="due_date",
+                display_name="付款期限",
+                type="string",
+                required=True,
+            ),
+        ],
+    )
+
+
 def _refs_group(ref_text: str = "发票号码：INV-001") -> list[FieldRefsWithText]:
     return [
         FieldRefsWithText(
@@ -253,7 +273,7 @@ def test_evaluate_marks_resolved_field_for_review_when_evidence_is_insufficient(
     assert "不能支持" in result.field_routes[0].route_reason
 
 
-def test_evaluate_rejects_failed_critical_required_field_without_model_call():
+def test_evaluate_reviews_failed_required_field_without_model_call():
     fake_client = FakePolicyClient(decisions=[])
 
     result = processor_module.evaluate(
@@ -274,9 +294,66 @@ def test_evaluate_rejects_failed_critical_required_field_without_model_call():
         policy_client=fake_client,
     )
 
-    assert result.field_routes[0].route == "reject"
+    assert result.field_routes[0].route == "review"
     assert result.field_routes[0].needs_review is True
-    assert "critical" in result.field_routes[0].route_reason
+    assert "required" in result.field_routes[0].route_reason
+    assert fake_client.calls == []
+
+
+def test_evaluate_reviews_missing_required_field_output_without_model_call():
+    fake_client = FakePolicyClient(
+        decisions=[
+            {
+                "route": "accept",
+                "route_reason": "发票号证据充分",
+            }
+        ]
+    )
+
+    result = processor_module.evaluate(
+        task_spec=_two_field_task_spec(),
+        field_outputs=[
+            RouteFieldOutput(
+                field_name="invoice_no",
+                status="resolved",
+                value="INV-001",
+            )
+        ],
+        refs_with_text=_refs_group(),
+        field_processes=_field_processes(),
+        policy_client=fake_client,
+    )
+
+    routes_by_name = {route.field_name: route for route in result.field_routes}
+    assert routes_by_name["invoice_no"].route == "accept"
+    assert routes_by_name["due_date"].route == "review"
+    assert routes_by_name["due_date"].needs_review is True
+    assert "required" in routes_by_name["due_date"].route_reason
+    assert "没有返回该字段" in routes_by_name["due_date"].route_reason
+    assert len(fake_client.calls) == 1
+
+
+def test_evaluate_reviews_empty_required_field_value_without_model_call():
+    fake_client = FakePolicyClient(decisions=[])
+
+    result = processor_module.evaluate(
+        task_spec=_task_spec(required=True),
+        field_outputs=[
+            RouteFieldOutput(
+                field_name="invoice_no",
+                status="resolved",
+                value="",
+            )
+        ],
+        refs_with_text=_refs_group(ref_text="发票号码为空"),
+        field_processes=_field_processes(),
+        policy_client=fake_client,
+    )
+
+    assert result.field_routes[0].route == "review"
+    assert result.field_routes[0].needs_review is True
+    assert "required" in result.field_routes[0].route_reason
+    assert "字段值为空" in result.field_routes[0].route_reason
     assert fake_client.calls == []
 
 

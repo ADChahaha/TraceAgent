@@ -15,7 +15,6 @@ StructuredOutputStrategy = Literal["tool_call"]
 LangChainStructuredOutputMethod = Literal["function_calling"]
 
 SUPPORTED_STRATEGY = "tool_call"
-DEFAULT_MODEL = "gpt-5.4-mini"
 LANGCHAIN_METHOD_MAP: dict[StructuredOutputStrategy, LangChainStructuredOutputMethod] = {
     "tool_call": "function_calling",
 }
@@ -88,10 +87,11 @@ def _validate_runtime_config(
 ) -> dict[str, str]:
     resolved_base_url = base_url or os.getenv("BASE_URL")
     resolved_api_key = api_key or os.getenv("OPENAI_API_KEY")
-    resolved_model = model or os.getenv("MODEL") or DEFAULT_MODEL
+    resolved_model = model or os.getenv("ROUTE_POLICY_MODEL")
     values = {
         "base_url": resolved_base_url,
         "api_key": resolved_api_key,
+        "model": resolved_model,
     }
     missing = [name for name, value in values.items() if not value]
     if missing:

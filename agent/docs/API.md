@@ -41,10 +41,12 @@ python -m uvicorn main:app --host 127.0.0.1 --port 8000
 ```text
 BASE_URL
 OPENAI_API_KEY
-MODEL
+BROAD_MODEL
+RESOLUTION_MODEL
+ROUTE_POLICY_MODEL
 ```
 
-`MODEL` 如果缺失，代码会使用默认模型；`BASE_URL` 和 `OPENAI_API_KEY` 缺失时，抽取和 route policy 阶段会返回 422。
+`BASE_URL` 和 `OPENAI_API_KEY` 是模型服务连接参数。`BROAD_MODEL` / `RESOLUTION_MODEL` 分别用于字段抽取的 broad / resolution 阶段；`ROUTE_POLICY_MODEL` 只用于 route policy 阶段。route policy 不读取通用 `MODEL`，也没有默认模型名；缺少 `ROUTE_POLICY_MODEL` 时会返回 422。
 
 ## 健康检查
 
@@ -127,7 +129,7 @@ POST /v1/file-extraction-agent/extract
 - `task_spec`：必填，字段抽取 schema。
 - `run_options`：可选，抽取运行预算。
 - `metadata`：可选，调用方透传元信息。
-- `base_url`、`openai_api_key`、`model`：可选，覆盖环境变量里的模型连接配置。
+- `base_url`、`openai_api_key`、`model`：可选，覆盖字段抽取模型连接配置。
 - `structured_output_strategy`：可选，固定只支持 `tool_call`；显式传入 `auto` 或 `json_schema` 会返回 422。
 
 处理流程：
@@ -164,7 +166,7 @@ POST /v1/route-policy-agent/evaluate
 - `field_processes[]`：必填，backend 从抽取 trace actions 组装的两阶段过程摘要。
 - `policy_options`：可选，route prompt 的 refs 数量和文本长度预算。
 - `metadata`：可选，调用方透传元信息。
-- `base_url`、`openai_api_key`、`model`：可选，覆盖环境变量里的模型连接配置。
+- `base_url`、`openai_api_key`、`model`：可选，覆盖 route policy 模型连接配置；不传 `model` 时读取 `ROUTE_POLICY_MODEL`。
 - `structured_output_strategy`：可选，固定只支持 `tool_call`；显式传入 `auto` 或 `json_schema` 会返回 422。
 
 处理流程：

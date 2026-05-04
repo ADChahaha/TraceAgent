@@ -58,6 +58,8 @@ def test_resolution_messages_embed_compact_document_outline():
     assert "每个字段最终必须且只能调用一次 set_field" in content
     assert "reason 是展示给用户看的中文旁白" in content
     assert "先调用 update_plan(plan_index, 'in_progress', reason)" in content
+    assert "只能推进最早一个未完成的 broad plan" in content
+    assert "不能跳过前面的 plan_index" in content
     assert "立刻调用 update_plan(plan_index, 'completed', reason)" in content
     assert "右侧 plan 可以画线标记完成" in content
     assert "一旦某个字段证据足够，下一次相关工具调用必须是 set_field" in content

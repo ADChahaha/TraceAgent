@@ -19,7 +19,14 @@ def test_build_broad_messages_includes_task_and_tree():
     assert "dp-h2-1" in content
     assert '<p id="dp-p-1">全文正文</p>' in content
     assert "resolution agent" in content
-    assert "Available resolution tools" not in content
+    assert "Resolution 后续可用工具" in content
+    assert "read_element(element_id, reason)" in content
+    assert "table_extraction(table_id, sql, reason)" in content
+    assert "set_field(name, value, evidence_ids, reason" in content
+    assert "你现在不能调用这些工具" in content
+    assert "大表不要规划裸 SELECT *" in content
+    assert "小表可以 SELECT *" in content
+    assert "SELECT * FROM data LIMIT 50 OFFSET 0" in content
     assert "只能 return_broad_plan" in content
     assert "不能直接抽取最终字段值" in content
     assert "field=value" in content

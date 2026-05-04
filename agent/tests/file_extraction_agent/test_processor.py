@@ -40,7 +40,7 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
         "\n".join(
             [
                 'BASE_URL="https://example.com/v1"',
-                'API_KEY="key"',
+                'OPENAI_API_KEY="key"',
                 'BROAD_MODEL="broad"',
                 'RESOLUTION_MODEL="resolution"',
                 'TEMPERATURE="0.1"',
@@ -76,3 +76,37 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
     assert config.temperature == 0.1
     assert config.top_p == 0.9
     assert config.top_k == 40
+
+
+def test_normalize_model_config_ignores_generic_api_key_env(monkeypatch, tmp_path):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "\n".join(
+            [
+                'BASE_URL="https://example.com/v1"',
+                'API_KEY="legacy-key"',
+                'MODEL="model"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(model_factory_module, "_candidate_env_paths", lambda: [env_path])
+    for name in (
+        "BASE_URL",
+        "API_KEY",
+        "OPENAI_API_KEY",
+        "BROAD_MODEL",
+        "RESOLUTION_MODEL",
+        "MODEL",
+        "TEMPERATURE",
+        "TOP_P",
+        "TOP_K",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    config = normalize_model_config(None)
+
+    assert config.base_url == "https://example.com/v1"
+    assert config.api_key is None
+    assert config.broad_model_name == "model"
+    assert config.resolution_model_name == "model"

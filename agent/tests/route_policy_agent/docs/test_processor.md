@@ -10,9 +10,10 @@ task_spec + field_outputs + refs_with_text + field_processes
   -> input_validator.validate_route_policy_input(...) 做字段名、refs 和过程摘要完整性校验
   -> mapper.build_field_policy_contexts(...) 合并单字段定义、输出、证据和过程摘要
   -> 如果字段定义声明 source_field/source_fields，把来源字段过程摘要作为 related_field_processes 放入 prompt
-  -> failed 的 critical/required 字段直接 reject，不调用模型
+  -> required 且 allow_missing=false 的字段如果 failed、空值或缺少 field_output，直接 review，不调用模型
   -> resolved 字段用 prompts.build_route_policy_messages(...) 构造只含字段、refs、field_process 和 related_field_processes 的评价上下文
   -> policy_client.invoke(RoutePolicyDecision, messages) 得到 accept/review/reject
+  -> 对 task_spec 中缺席的 required 字段补 route=review
   -> 汇总 RoutePolicyResult(field_routes[])
 ```
 
@@ -21,7 +22,9 @@ task_spec + field_outputs + refs_with_text + field_processes
 - 模型判断 `accept` 时，字段 route 可自动放行。
 - 派生数量字段的 prompt 能看到来源列表字段的 search 查询词和过程摘要。
 - 模型判断证据不足时，字段进入 `review`。
-- critical required 字段抽取失败时直接 `reject`，不调用小 LLM。
+- required 字段抽取失败时直接 `review`，不调用小 LLM。
+- required 字段完全缺少 `field_output` 时补一条 `review` route。
+- required 字段值为空时直接 `review`，不调用小 LLM。
 - 未显式传入 policy client 时，会把连接参数交给 client builder。
 
 ## 每个函数在干什么
@@ -44,10 +47,21 @@ task_spec + field_outputs + refs_with_text + field_processes
 - 用假的 policy client 返回 `review`。
 - 确认 processor 保留模型给出的证据不足原因，并标记需要人工检查。
 
-`test_evaluate_rejects_failed_critical_required_field_without_model_call`
+`test_evaluate_reviews_failed_required_field_without_model_call`
 
 - 构造一个 failed 且 critical required 的字段。
-- 确认 processor 直接返回 `reject`，不会调用模型。
+- 确认 processor 直接返回 `review`，不会调用模型。
+
+`test_evaluate_reviews_missing_required_field_output_without_model_call`
+
+- 构造两个 required 字段，但只传入其中一个字段的 `field_output`。
+- 确认已返回的字段正常进入 policy client，缺席字段会被补成 `review`。
+- 确认缺席字段的 route reason 说明 file_extraction_agent 没有返回该字段。
+
+`test_evaluate_reviews_empty_required_field_value_without_model_call`
+
+- 构造 required 字段，状态是 resolved 但值为空字符串。
+- 确认 processor 直接返回 `review`，不会调用模型。
 
 `test_evaluate_builds_policy_client_when_not_provided`
 

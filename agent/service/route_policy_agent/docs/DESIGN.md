@@ -12,6 +12,7 @@
 TaskSpec + field_outputs + refs_with_text + field_processes
   -> route_policy_agent
   -> 按 field_name 合并字段定义、字段输出、refs 证据文本和抽取过程摘要
+  -> required 且 allow_missing=false 的字段如果没有填，直接 route=review
   -> 小 LLM 结合最终证据和抽取路径判断 accept / review / reject
   -> RoutePolicyResult(field_routes[])
   -> backend 保存 field_routes 并驱动 review / audit
@@ -102,6 +103,7 @@ backend 传入 task_description / task_spec
   -> input_validator 校验字段名、字段输出、refs 文本和 field_processes 是否完整
   -> mapper 按 field_name 合并 FieldDefinition、FieldOutput、refs_with_text、field_process
   -> 如果字段声明了 source_field/source_fields，mapper 附加来源字段的 related_field_processes
+  -> deterministic rule 先把 required 且 allow_missing=false 的未填写字段 route=review
   -> prompts 构造只包含字段定义、字段输出、refs 文本、当前字段过程摘要和来源字段过程摘要的 route prompt
   -> policy_client 调小 LLM 独立判断 accept / review / reject
   -> 返回 RoutePolicyResult
@@ -158,21 +160,29 @@ reject
 
 ## Route 判断流程
 
-字段级 route 判断围绕字段输出、refs 文本和抽取过程摘要展开：
+字段级 route 判断先执行 deterministic rule，再围绕字段输出、refs 文本和抽取过程摘要展开：
 
 ```text
 FieldDefinition + FieldOutput + refs_with_text + field_process
   -> input_validator 校验输入完整性和字段对应关系
   -> mapper 合并字段定义、字段值、该字段 refs 和两阶段过程摘要
+  -> required 且 allow_missing=false 的字段如果 failed、空字符串、空列表或缺少 field_output，直接 review
   -> prompts 构造不包含工具返回结果、不包含原始推理的评价上下文
   -> policy_client.invoke(RoutePolicyDecision)
   -> FieldRouteDecision
 ```
 
-当前第一版对 `failed` 字段先做最小阻断判断：如果字段是
-`critical`，或是 `required` 且不允许缺失，直接返回 `reject`，避免在
-关键字段没有字段值时继续请求模型。其他 `failed` 字段进入 `review`。
-`resolved` 字段才会进入小 LLM 判断。
+当前第一版对“必填但没填”的字段先做硬规则判断：如果字段是
+`required` 且 `allow_missing=false`，并且出现以下情况之一，直接返回
+`review`，避免让模型决定是否可以放行：
+
+- `file_extraction_agent` 没有返回该字段的 `field_output`。
+- 字段状态是 `failed`。
+- 字段状态是 `resolved`，但值是空字符串、空列表、空对象或 `null`。
+
+这条规则只负责把“必填没填”的字段送入人工复核或补录，不直接判
+`reject`。`reject` 仍用于字段不可提交、关键证据不支持或其他业务上必须拒绝
+的情况。
 
 实际处理 pipeline 是：
 
@@ -182,14 +192,25 @@ processor.evaluate(task_spec, field_outputs, refs_with_text, field_processes)
   -> input_validator 校验字段名、refs 分组、ref.text、来源位置和 field_processes 分组
   -> mapper 按 field_name 合并 FieldDefinition、RouteFieldOutput、EvidenceTextRef[]、RouteFieldProcess
   -> 派生字段额外带上 source_field/source_fields 对应的 related_field_processes
-  -> failed + critical/required 字段直接生成 FieldRouteDecision(route=reject)
+  -> required + allow_missing=false 且没填的字段直接生成 FieldRouteDecision(route=review)
   -> resolved 字段由 prompts 构造只含字段定义、字段输出、refs 文本和过程摘要的 messages
   -> policy_client.invoke(RoutePolicyDecision, messages)
+  -> 如果 task_spec 中还有 required + allow_missing=false 但完全缺席的字段，补一条 route=review
   -> 汇总 RoutePolicyResult(field_routes[])
 ```
 
 `policy_client` 只接受 `with_structured_output(...)` 产出的结构化结果，不解析裸
 `model.invoke(...)` JSON 文本。当前 route policy 固定只支持 `structured_output_strategy=tool_call`，客户端内部映射到 LangChain 的 `function_calling`；显式传入 `json_schema` 或 `auto` 会被拒绝，结构化调用失败时直接作为 route policy 模型调用失败向上抛出。
+
+route policy 的模型名必须显式配置，不使用默认模型，也不读取通用 `MODEL`。配置入口保持为：
+
+```text
+HTTP 请求显式传入 model
+  -> 否则读取 agent 进程环境变量 ROUTE_POLICY_MODEL
+  -> 两者都没有时抛 RoutePolicyClientConfigError，HTTP 层返回 422
+```
+
+这样可以避免 route policy 隐式复用 broad / resolution 的抽取模型，让“抽取字段”和“治理判断”两个阶段的模型选择保持可解释。
 
 ### 1. 合并字段上下文
 
@@ -260,10 +281,10 @@ POST /tasks
 - resolved 但 refs 文本无法充分支持字段值时进入 `review`。
 - resolved 且 refs 支持字段值，但 broad / resolution 搜索路径明显不足时进入 `review`。
 - 派生字段 prompt 能看到来源字段的 search 查询词和过程摘要，例如数量字段能看到列表字段查过什么。
-- critical required 字段 failed 时必须 `reject`。
+- required 且不允许缺失的字段 failed、空值或缺少 field_output 时必须 `review`，且不调用小 LLM。
 - 输入校验能拒绝未知字段名、缺少 refs、ref 没有 text 或只有定位信息的请求。
 - 小 LLM 不允许产生新的字段值。
-- 输入缺少字段输出、refs 文本或 `field_processes` 时返回 failed 或明确 warning。
+- 输入缺少 refs 文本或 `field_processes` 时返回 failed 或明确 warning。
 
 ## 原型范围
 

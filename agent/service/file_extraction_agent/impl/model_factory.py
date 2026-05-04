@@ -57,7 +57,7 @@ def _model_config_from_env() -> ModelConfig:
     return ModelConfig(
         provider=values.get("PROVIDER", "openai"),
         base_url=values.get("BASE_URL") or None,
-        api_key=values.get("API_KEY") or values.get("OPENAI_API_KEY") or None,
+        api_key=values.get("OPENAI_API_KEY") or None,
         broad_model_name=values.get("BROAD_MODEL") or model,
         resolution_model_name=values.get("RESOLUTION_MODEL") or model,
         temperature=_float_env(values.get("TEMPERATURE"), 0.0),

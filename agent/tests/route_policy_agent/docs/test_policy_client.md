@@ -7,7 +7,8 @@
 ```text
 evaluate(...) 未传 policy_client
   -> build_policy_client(base_url, api_key, model, structured_output_strategy="tool_call")
-  -> 校验连接参数，缺少 base_url / api_key 时抛 RoutePolicyClientConfigError
+  -> 校验连接参数，缺少 base_url / api_key / model 时抛 RoutePolicyClientConfigError
+  -> 未显式传 model 时，只从 ROUTE_POLICY_MODEL 读取 route policy 专用模型名
   -> 校验 structured_output_strategy 只能是 tool_call
   -> 创建 ChatOpenAI
   -> invoke(output_schema=RoutePolicyDecision, messages=...)
@@ -18,8 +19,8 @@ evaluate(...) 未传 policy_client
 
 ## 测什么
 
-- 未提供显式连接参数且环境变量缺失时，会明确指出缺少 `base_url` 和 `api_key`。
-- 不要求用户显式传 `model`，因为实现提供默认小模型名。
+- 未提供显式连接参数且环境变量缺失时，会明确指出缺少 `base_url`、`api_key` 和 `model`。
+- 未显式传 `model` 时，只读取 `ROUTE_POLICY_MODEL`，不读取通用 `MODEL`，也不使用默认模型名。
 - route policy client 固定只支持 `tool_call`，内部映射成 LangChain 的 `function_calling`。
 - `json_schema` 和 `auto` 策略会在构造阶段被拒绝。
 - 结构化调用失败后，不会再调用裸 `model.invoke(...)` 解析 JSON 文本。
@@ -30,7 +31,17 @@ evaluate(...) 未传 policy_client
 
 - 清空连接相关环境变量。
 - 调用 `build_policy_client()`。
-- 确认错误信息包含 `base_url` 和 `api_key`，不包含 `model`。
+- 确认错误信息包含 `base_url`、`api_key` 和 `model`。
+
+`test_build_policy_client_reads_route_policy_model_from_env`
+
+- 设置 `BASE_URL`、`OPENAI_API_KEY`、`ROUTE_POLICY_MODEL` 和一个干扰用的通用 `MODEL`。
+- 确认 client 和底层 `ChatOpenAI` 都使用 `ROUTE_POLICY_MODEL`。
+
+`test_build_policy_client_does_not_fallback_to_generic_model_env`
+
+- 只设置通用 `MODEL`，不设置 `ROUTE_POLICY_MODEL`。
+- 确认构造阶段仍然报缺少 `model`，避免 route policy 隐式复用抽取模型。
 
 `test_build_policy_client_uses_tool_call_only`
 

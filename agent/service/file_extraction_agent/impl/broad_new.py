@@ -53,6 +53,18 @@ def build_broad_messages(state: Any) -> list[dict[str, str]]:
         "用 update_plan 标记 in_progress/completed 的动作单元。"
         "优先按字段或强相关字段分组，每条计划要说明应该读哪里、用什么工具、完成后应写入什么字段类别。"
         "不要把计划拆得过碎，也不要把整份文档塞进一个大步骤。"
+        "Resolution 后续可用工具如下，你必须据此写计划，但你现在不能调用这些工具："
+        "update_plan(plan_index, status, reason) 用于同步 plan 状态；"
+        "read_element(element_id, reason) 读取单个元素，表格只返回 table-ref 和列名；"
+        "read_section(section_id, reason, depth) 读取章节；"
+        "table_extraction(table_id, sql, reason) 对 SQL 表 data 做 SELECT 查询；"
+        "paragraph_extraction(element_id, pattern, reason) 对文本元素做正则匹配；"
+        "set_field(name, value, evidence_ids, reason, status, failure_reason) 写字段；"
+        "finish() 结束抽取。"
+        "规划表格步骤时，必须先 read_element(table_id) 看列名，再 table_extraction。"
+        "小表可以 SELECT *；大表不要规划裸 SELECT *，要规划选择必要列并尽量加 WHERE 条件。"
+        "如果表格结构混乱、无法可靠 WHERE，保底规划 SELECT * FROM data LIMIT 50 OFFSET 0 "
+        "这种 50 行以内的分页读取。"
         "示例写法：'读取 p004_b002 表格，用 table_extraction 提取募集人数相关字段'；"
         "'阅读 <日本語基準> 博士課程前期課程 的出願資格章节，提取申请资格字段'。"
     )
@@ -62,10 +74,9 @@ def build_broad_messages(state: Any) -> list[dict[str, str]]:
             "文档树 document_tree:\n" + _to_json(_read(_read(state, "document"), "tree")),
             "完整 HTML 文档:\n" + _read(_read(state, "extraction_input"), "html", ""),
             (
-                "resolution agent 后续可用能力仅供你规划参考：它可以使用内置文档 outline、"
-                "read_section/read_element 阅读 HTML 片段、table_extraction 对表格做 SQL 查询、"
-                "paragraph_extraction 对文本做正则检索、set_field 写字段、update_plan 更新计划状态、"
-                "finish 结束。你现在不能使用这些工具，只能 return_broad_plan。"
+                "Resolution 后续可用工具仅供你规划参考；你现在不能调用这些工具，"
+                "只能 return_broad_plan。规划时要写出 resolution 应该用哪个 tool、哪个 id、"
+                "以及表格查询应选择哪些必要列。"
             ),
         ]
     )

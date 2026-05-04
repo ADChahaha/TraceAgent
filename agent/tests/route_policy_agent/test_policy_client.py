@@ -16,6 +16,7 @@ class DummyRouteOutput(BaseModel):
 def test_build_policy_client_requires_connection_params(monkeypatch):
     monkeypatch.delenv("BASE_URL", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ROUTE_POLICY_MODEL", raising=False)
     monkeypatch.delenv("MODEL", raising=False)
 
     try:
@@ -24,9 +25,45 @@ def test_build_policy_client_requires_connection_params(monkeypatch):
         message = str(exc)
         assert "base_url" in message
         assert "api_key" in message
-        assert "model" not in message
+        assert "model" in message
     else:
         raise AssertionError("未提供 policy client 和连接参数时应明确拒绝")
+
+
+def test_build_policy_client_reads_route_policy_model_from_env(monkeypatch):
+    from service.route_policy_agent import policy_client as policy_client_module
+
+    seen_kwargs: dict[str, object] = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            seen_kwargs.update(kwargs)
+
+    monkeypatch.setattr(policy_client_module, "ChatOpenAI", FakeChatOpenAI)
+    monkeypatch.setenv("BASE_URL", "https://llm.example.com/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("ROUTE_POLICY_MODEL", "route-policy-model")
+    monkeypatch.setenv("MODEL", "generic-model")
+
+    client = build_policy_client()
+
+    assert client.model_name == "route-policy-model"
+    assert seen_kwargs["model"] == "route-policy-model"
+
+
+def test_build_policy_client_does_not_fallback_to_generic_model_env(monkeypatch):
+    monkeypatch.setenv("BASE_URL", "https://llm.example.com/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.delenv("ROUTE_POLICY_MODEL", raising=False)
+    monkeypatch.setenv("MODEL", "generic-model")
+
+    try:
+        build_policy_client()
+    except RoutePolicyClientConfigError as exc:
+        message = str(exc)
+        assert "model" in message
+    else:
+        raise AssertionError("route policy 不应回退读取通用 MODEL")
 
 
 def test_build_policy_client_uses_tool_call_only(monkeypatch):

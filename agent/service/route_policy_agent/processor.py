@@ -7,7 +7,7 @@
   -> RoutePolicyInput 解析，只保留 route 判断需要的输入
   -> input_validator 校验字段名、字段输出、refs 文本和过程摘要完整性
   -> mapper 按 field_name 合并字段定义、字段输出、refs 文本和两阶段过程摘要
-  -> failed 且 critical/required 的字段直接 reject
+  -> required 且不允许缺失的字段如果没填，直接 review
   -> resolved 字段构造单字段 route prompt，并调用 policy_client 输出 RoutePolicyDecision
   -> 汇总成 RoutePolicyResult(field_routes[])
 ```
@@ -21,7 +21,10 @@ from service.file_extraction_agent.schemas import TaskSpec
 from service.route_policy_agent.impl.mapper import FieldPolicyContext
 from service.route_policy_agent.impl.mapper import build_field_policy_contexts
 from service.route_policy_agent.impl.prompts import build_route_policy_messages
-from service.route_policy_agent.input_validator import validate_route_policy_input
+from service.route_policy_agent.input_validator import (
+    ValidatedPolicyInput,
+    validate_route_policy_input,
+)
 from service.route_policy_agent.policy_client import build_policy_client
 from service.route_policy_agent.schemas import (
     FieldRefsWithText,
@@ -68,8 +71,9 @@ def evaluate(
     resolved_client = policy_client
     field_routes: list[FieldRouteDecision] = []
     for context in contexts:
-        if context.field_output.status == "failed":
-            field_routes.append(_route_failed_field(context))
+        missing_route = _route_missing_required_field(context)
+        if missing_route is not None:
+            field_routes.append(missing_route)
             continue
 
         if resolved_client is None:
@@ -95,40 +99,85 @@ def evaluate(
             )
         )
 
+    field_routes.extend(_route_missing_required_outputs(validated_input))
+
     return RoutePolicyResult(
         field_routes=field_routes,
         metadata=dict(route_input.metadata),
     )
 
 
-def _route_failed_field(context: FieldPolicyContext) -> FieldRouteDecision:
+def _route_missing_required_field(
+    context: FieldPolicyContext,
+) -> FieldRouteDecision | None:
     field = context.field_definition
-    if field.critical or (field.required and not field.allow_missing):
-        flags = _field_blocking_flags(context)
+    if not _is_required_without_missing_allowed(field):
+        if context.field_output.status == "failed":
+            return FieldRouteDecision(
+                field_name=context.field_output.field_name,
+                route="review",
+                route_reason=(
+                    f"字段 {field.field_name} 抽取失败，但不是阻断字段，"
+                    "需要人工检查后决定是否补录。"
+                ),
+            )
+        return None
+
+    if context.field_output.status == "failed":
         return FieldRouteDecision(
             field_name=context.field_output.field_name,
-            route="reject",
+            route="review",
             route_reason=(
-                f"字段 {field.field_name} 抽取失败，且属于 {flags} 字段，"
-                "不允许自动进入提交。"
+                f"字段 {field.field_name} 是 required 字段，"
+                "抽取失败导致字段没有填，需要人工复核或补录。"
             ),
         )
 
-    return FieldRouteDecision(
-        field_name=context.field_output.field_name,
-        route="review",
-        route_reason=(
-            f"字段 {field.field_name} 抽取失败，但不是阻断字段，"
-            "需要人工检查后决定是否补录。"
-        ),
-    )
+    if _is_empty_value(context.field_output.value):
+        return FieldRouteDecision(
+            field_name=context.field_output.field_name,
+            route="review",
+            route_reason=(
+                f"字段 {field.field_name} 是 required 字段，"
+                "但字段值为空，需要人工复核或补录。"
+            ),
+        )
+
+    return None
 
 
-def _field_blocking_flags(context: FieldPolicyContext) -> str:
-    field = context.field_definition
-    flags: list[str] = []
-    if field.critical:
-        flags.append("critical")
-    if field.required and not field.allow_missing:
-        flags.append("required")
-    return " / ".join(flags)
+def _route_missing_required_outputs(
+    validated_input: ValidatedPolicyInput,
+) -> list[FieldRouteDecision]:
+    missing_routes: list[FieldRouteDecision] = []
+    output_names = set(validated_input.field_outputs_by_name)
+    for field in validated_input.route_input.task_spec.fields:
+        if field.field_name in output_names:
+            continue
+        if not _is_required_without_missing_allowed(field):
+            continue
+        missing_routes.append(
+            FieldRouteDecision(
+                field_name=field.field_name,
+                route="review",
+                route_reason=(
+                    f"字段 {field.field_name} 是 required 字段，"
+                    "但 file_extraction_agent 没有返回该字段，需要人工复核或补录。"
+                ),
+            )
+        )
+    return missing_routes
+
+
+def _is_required_without_missing_allowed(field: Any) -> bool:
+    return bool(field.required and not field.allow_missing)
+
+
+def _is_empty_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, tuple, set, dict)):
+        return len(value) == 0
+    return False

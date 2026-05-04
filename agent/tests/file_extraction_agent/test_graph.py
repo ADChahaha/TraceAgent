@@ -19,7 +19,7 @@ class FakeBroadModel:
                     "name": "return_broad_plan",
                     "args": {
                         "summary": "名单",
-                        "plan": ["query table", "set field", "finish"],
+                        "plan": ["query table", "set field"],
                         "risks": [],
                     },
                 }
@@ -31,15 +31,43 @@ class FakeResolutionModel:
     def __init__(self):
         self.calls = [
             {
-                "tool_name": "table_extraction",
+                "tool_name": "update_plan",
                 "arguments": {
-                    "table_id": "dp-table-1",
-                    "sql": "SELECT 姓名 FROM data WHERE 学院 = '计算机学院'",
+                    "plan_index": 1,
+                    "status": "in_progress",
+                    "reason": "开始查询名单表",
                 },
             },
             {
                 "tool_name": "read_element",
-                "arguments": {"element_id": "dp-tr-2"},
+                "arguments": {
+                    "element_id": "dp-table-1",
+                    "reason": "先确认名单表的列名",
+                },
+            },
+            {
+                "tool_name": "table_extraction",
+                "arguments": {
+                    "table_id": "dp-table-1",
+                    "sql": "SELECT \"姓名\" FROM data WHERE \"学院\" = '计算机学院'",
+                    "reason": "查询计算机学院对应的姓名行",
+                },
+            },
+            {
+                "tool_name": "update_plan",
+                "arguments": {
+                    "plan_index": 1,
+                    "status": "completed",
+                    "reason": "表格查询已经得到字段证据",
+                },
+            },
+            {
+                "tool_name": "update_plan",
+                "arguments": {
+                    "plan_index": 2,
+                    "status": "in_progress",
+                    "reason": "开始写入学生姓名字段",
+                },
             },
             {
                 "tool_name": "set_field",
@@ -47,6 +75,15 @@ class FakeResolutionModel:
                     "name": "student_name",
                     "value": "张三",
                     "evidence_ids": ["dp-table-1", "dp-tr-2"],
+                    "reason": "dp-table-1 和 dp-tr-2 支持学生姓名为张三",
+                },
+            },
+            {
+                "tool_name": "update_plan",
+                "arguments": {
+                    "plan_index": 2,
+                    "status": "completed",
+                    "reason": "学生姓名字段已写入",
                 },
             },
             {"tool_name": "finish", "arguments": {}},

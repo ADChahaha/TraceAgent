@@ -26,6 +26,8 @@ def build_resolution_messages(state: Any) -> list[Any]:
             "要短、具体、像人在解释自己为什么现在看这里；不要写内部术语、不要写泛泛的'继续抽取'。"
             "调用轨迹必须适合前端 replay："
             "1. 开始执行某条 broad plan 前，先调用 update_plan(plan_index, 'in_progress', reason)。"
+            "只能推进最早一个未完成的 broad plan，不能跳过前面的 plan_index，"
+            "也不能在前一项未 completed 时直接 update 后面的 plan。"
             "2. 然后只读取完成这条 plan 所需的证据。"
             "3. 一旦某个字段证据足够，下一次相关工具调用必须是 set_field，不要继续乱看。"
             "4. 与该 plan 相关的字段写入或失败决策完成后，立刻调用 update_plan(plan_index, 'completed', reason)，"
@@ -156,6 +158,7 @@ def _continue_instruction(state: Any) -> str:
             "如果当前字段证据已经足够，下一次工具调用必须是 set_field。"
             "如果证据还不够，只能再做一次针对同一字段的精确工具调用，然后 set_field。"
             "不要切换到别的字段。相关 plan 完成后调用 update_plan，status=completed。"
+            "继续时只能推进最早未完成的 broad plan，不要跳到后面的 plan_index。"
             "不要用普通文本回答。"
         )
     missing = [
@@ -169,6 +172,7 @@ def _continue_instruction(state: Any) -> str:
             + ", ".join(missing)
             + "。继续使用工具。每个缺失字段只读取必要证据，证据足够后立刻 set_field，"
             "然后再处理下一个字段。开始和完成相关 broad plan 时都要调用 update_plan。"
+            "update_plan 只能按最早未完成的 broad plan 顺序推进，不能跳过前面的 plan_index。"
             "不要先收集多个字段的证据再统一写入。不要用普通文本回答。"
         )
     return (

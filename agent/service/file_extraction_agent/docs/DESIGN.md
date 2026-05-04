@@ -120,10 +120,29 @@ docstrings are the model-facing function descriptions.
 
 Tools:
 
-- `read_element(element_id)`: read one element. Tables return columns/header
-  metadata only.
+- `update_plan(plan_index, status, reason)`: record replay plan progress. Plan
+  status is a strict sequence:
+
+```text
+Broad plan[1..N]
+  -> 只能把最早一个未完成项标记为 in_progress
+  -> 该项完成证据读取、字段写入或失败决策
+  -> 只能把当前 in_progress 的同一项标记为 completed
+  -> 进入下一项
+```
+
+  这条规则同时写在 prompt 和工具校验里；如果模型直接跳到后面的
+  `plan_index`，或者没有先 `in_progress` 就 `completed`，工具会返回
+  `ok=false`，让模型按最早未完成项重试。
+- `read_element(element_id)`: read one element. Tables return `table-ref`
+  metadata only: table id, optional label, row count, header row id, and
+  columns. They never return table data rows.
 - `table_extraction(table_id, sql)`: run a single `SELECT` against one table as
-  SQL table `data`.
+  SQL table `data`. Small tables may use `SELECT *`. Large tables reject
+  unbounded `SELECT *`; the model should select explicit columns with `WHERE`
+  when possible, or use `SELECT * FROM data LIMIT 50 OFFSET n` as a bounded
+  fallback for messy tables. Explicit-column queries are not truncated by row
+  count.
 - `paragraph_extraction(element_id, pattern)`: regex search one text-like
   element and return all matches.
 - `set_field(name, value, evidence_ids, status, failure_reason)`: record one

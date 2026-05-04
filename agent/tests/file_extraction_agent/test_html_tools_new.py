@@ -51,6 +51,24 @@ def _state():
     )
 
 
+def _large_table_state(row_count: int = 40):
+    rows = "\n".join(
+        f'<tr id="dp-big-tr-{index}"><td>学生{index}</td><td>学院{index % 3}</td></tr>'
+        for index in range(1, row_count + 1)
+    )
+    html = f"""
+    <h2 id="dp-big-h2-1">大表</h2>
+    <table id="dp-big-table-1">
+      <caption id="dp-big-caption-1">大名单</caption>
+      <tr id="dp-big-tr-0"><th>姓名</th><th>学院</th></tr>
+      {rows}
+    </table>
+    """
+    state = _state()
+    state.document = build_html_document(html)
+    return state
+
+
 def test_overview_returns_document_tree():
     result = _overview(_state())
 
@@ -81,7 +99,7 @@ def test_read_element_table_returns_header_only():
     assert result["id"] == "dp-table-1"
     assert result["type"] == "TABLE"
     assert result["html"] == (
-        '<table-ref id="dp-table-1" rows="2" header-row-id="dp-tr-1" '
+        '<table-ref id="dp-table-1" label="学生名单" rows="2" header-row-id="dp-tr-1" '
         'columns="姓名 | 学院" />'
     )
     assert result["evidence_ids"] == ["dp-table-1"]
@@ -99,7 +117,7 @@ def test_read_section_returns_section_content_and_table_refs_by_depth():
     assert '<item-ref id="dp-li-1">' in result["html"]
     assert '<truncated remaining="1" />' in result["html"]
     assert (
-        '<table-ref id="dp-table-1" rows="2" header-row-id="dp-tr-1" columns="姓名 | 学院" />'
+        '<table-ref id="dp-table-1" label="学生名单" rows="2" header-row-id="dp-tr-1" columns="姓名 | 学院" />'
         in result["html"]
     )
     assert "dp-table-1" in result["evidence_ids"]
@@ -120,6 +138,50 @@ def test_table_extraction_selects_rows_with_evidence_ids():
             "evidence_ids": ["dp-table-1", "dp-tr-2"],
         }
     ]
+
+
+def test_table_extraction_all_columns_allowed_for_small_tables():
+    result = _table_extraction(_state(), "dp-table-1", "SELECT * FROM data")
+
+    assert result["columns"] == ["姓名", "学院"]
+    assert [row["row_id"] for row in result["rows"]] == ["dp-tr-2", "dp-tr-3"]
+    assert result["rows"][0]["values"] == {"姓名": "张三", "学院": "计算机学院"}
+
+
+def test_table_extraction_rejects_select_star_for_large_tables():
+    result = _table_extraction(_large_table_state(), "dp-big-table-1", "SELECT * FROM data")
+
+    assert result["ok"] is False
+    assert result["error"] == "table is too large for unbounded SELECT *"
+    assert result["row_count"] == 40
+    assert result["column_count"] == 2
+    assert "Select only the needed columns" in result["sql_hint"]
+    assert "LIMIT 50 OFFSET 0" in result["sql_hint"]
+
+
+def test_table_extraction_large_tables_allow_select_star_with_bounded_limit():
+    result = _table_extraction(_large_table_state(80), "dp-big-table-1", "SELECT * FROM data LIMIT 50 OFFSET 50")
+
+    assert result["columns"] == ["姓名", "学院"]
+    assert len(result["rows"]) == 30
+    assert result["rows"][0]["values"] == {"姓名": "学生51", "学院": "学院0"}
+
+
+def test_table_extraction_large_tables_reject_select_star_above_limit():
+    result = _table_extraction(_large_table_state(80), "dp-big-table-1", "SELECT * FROM data LIMIT 51")
+
+    assert result["ok"] is False
+    assert result["error"] == "table is too large for unbounded SELECT *"
+    assert result["max_select_star_limit"] == 50
+
+
+def test_table_extraction_large_tables_allow_specific_columns_without_truncating_rows():
+    result = _table_extraction(_large_table_state(), "dp-big-table-1", 'SELECT "姓名" FROM data')
+
+    assert result["columns"] == ["姓名"]
+    assert len(result["rows"]) == 40
+    assert result["rows"][0]["values"] == {"姓名": "学生1"}
+    assert result["rows"][-1]["values"] == {"姓名": "学生40"}
 
 
 def test_table_extraction_row_evidence_ids_can_be_used_by_set_field():
@@ -208,6 +270,32 @@ def test_update_plan_records_plan_status_and_action():
         "status": "completed",
         "reason": "名单表已产生字段证据",
     }
+
+
+def test_update_plan_rejects_starting_later_plan_before_previous_completed():
+    state = _state()
+    state.broad_plan = SimpleNamespace(
+        summary="测试",
+        plan=["读取名单表", "确认联系人", "确认字段", "写入字段"],
+        risks=[],
+    )
+
+    _update_plan(state, 1, "in_progress", reason="开始读取名单表")
+    _update_plan(state, 1, "completed", reason="名单表已产生字段证据")
+    result = _update_plan(state, 4, "in_progress", reason="跳到写字段")
+
+    assert result["ok"] is False
+    assert result["errors"][0]["message"] == "plan_index must advance sequentially"
+    assert result["errors"][0]["next_plan_index"] == 2
+    assert result["errors"][0]["requested_plan_index"] == 4
+
+
+def test_update_plan_rejects_completing_plan_that_is_not_in_progress():
+    result = _update_plan(_state(), 1, "completed", reason="直接完成")
+
+    assert result["ok"] is False
+    assert result["errors"][0]["message"] == "plan must be in_progress before completed"
+    assert result["errors"][0]["plan_index"] == 1
 
 
 def test_update_plan_rejects_invalid_plan_index():
