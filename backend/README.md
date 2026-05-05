@@ -1,6 +1,6 @@
 # Backend
 
-`backend` 是毕业设计原型中的任务治理服务。它接收前端或脚本上传的一个或多个 PDF、`task_type` 和外部传入的 `task_spec`，调用 `agent service` 完成文档标准化、字段抽取和字段级 route policy，然后把任务状态、最终结果、人工复核和审计记录保存在本地 SQLite。
+`backend` 是 TraceAgent 的任务治理服务。它接收前端或脚本上传的一个或多个 PDF、`task_type` 和外部传入的 `task_spec`，调用 `agent service` 完成文档标准化、字段抽取和字段级 route policy，然后把任务状态、最终结果、人工复核和审计记录保存在本地 SQLite。
 
 ## 实现链路
 
@@ -10,7 +10,7 @@
   -> 校验文件类型和 task_spec，创建 tasks 记录
   -> 逐个 HTTP 调用 agent service 的 document_processor
   -> 每个文件生成 document_id，并保存 markdown、md_list、blocks 和处理元信息，不保存原始文件
-  -> 合并多个文件的 markdown、md_list 和 blocks
+  -> 合并多个文件的 html 作为字段抽取输入，markdown、md_list 和 blocks 留作展示、证据回填和 trace
   -> HTTP 调用 file_extraction_agent
   -> 保存 agent_runs、extracted_fields 和 field_traces
   -> 组装 field_outputs + refs_with_text
@@ -30,6 +30,7 @@ POST /tasks
 GET  /tasks/{task_id}
 GET  /tasks/{task_id}/result
 GET  /tasks/{task_id}/trace
+GET  /tasks/{task_id}/replay
 GET  /tasks/{task_id}/review
 POST /tasks/{task_id}/review
 GET  /tasks/{task_id}/audit

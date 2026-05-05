@@ -30,14 +30,15 @@ HTTP endpoints:
 ## Pipeline
 
 ```text
-PDF file_obj
+调用方传入 PDF file_obj，可选传 file_type
   -> validate file object and PDF type
   -> read PDF bytes
   -> MinerU pipeline CLI
   -> content_list_v2.json
   -> traceable extraction HTML
   -> self-contained display HTML
-  -> ProcessResult(filename, html, display_html)
+  -> markdown, md_list, backend evidence blocks, meta_info, warnings
+  -> ProcessResult(filename, html, display_html, markdown, md_list, blocks, meta_info, warnings)
 ```
 
 Source files:
@@ -46,6 +47,11 @@ Source files:
 - `mineru_converter.py`: MinerU CLI invocation and `content_list_v2` loading.
 - `mineru_html.py`: MinerU content list to HTML conversion.
 - `schemas.py`: `ProcessResult`.
+
+`blocks` 使用和 HTML 一致的可追踪 id。普通 block id 形如
+`p001_b000`，列表项形如 `p001_b000_item_000`，表格行形如
+`p001_b000_tr_000`。backend 会再补上自己的 `document_id`，用于
+route policy 证据文本回填和 replay/audit 展示。
 
 ## Output HTML
 
