@@ -11,12 +11,13 @@
   -> TaskDetail 顶部展示任务 status/stage/route 和失败原因
   -> ReplayReview 展示文档文件名、outline、iframe 文档、plan 和当前 action
   -> result.fields 与 review.fields 合并成 replay 字段卡
-  -> action result 返回 query_audit.summary、table_audit.summary 或其他 *_audit.summary 时，在当前动作输出区展示诊断摘要
+  -> action result 返回 query_audit.summary、table_audit.summary 或其他 *_audit.summary 时，在当前动作输出区展示诊断摘要；table_extraction 失败显示警示，正常执行但 0 行显示普通提示
   -> set_field action 到达时显示字段值、route badge、route_reason 和证据 chip
   -> 长字段值在字段写入卡内部独立滚动，复核输入和提交按钮不被长列表挤出卡片底部
   -> 字段证据 chip 只滚动 iframe 文档到对应证据块，不改变当前 replay action
   -> read_element 读取表结构时只高亮并自动读取 caption/表名和表头，不把整张表内容当成已读内容
   -> table_extraction 返回具体行时只高亮返回行，并在自动播放中逐行读取
+  -> table_extraction 失败或返回 0 行时不使用 table_id、SQL 或动作 reason 兜底高亮或读取文档
   -> 连续 action 指向同一 HTML block 时跳过重复 outline 鼠标路径，只继续处理文档证据
   -> 一个 action 有多个证据块时，按 iframe 当前视口距离优先读取最近的 HTML block
   -> set_field 写入证据按 HTML 文档顺序从上到下读取，不按 evidence_ids 数组顺序乱跳
@@ -40,6 +41,7 @@
 - `左侧 overview 表格项也滚到表名而不是整表`：验证用户点击左侧表格 overview 时，iframe 滚动目标映射到 caption 优先、表头兜底，而不是原始 table/figure 容器。
 - `read_element 查询无 caption 表格时高亮表头而不框整表`：验证表格没有可见 caption 时，ReplayReview 只高亮表头，不生成额外 marker，也不 fallback 框住整张表。
 - `table_extraction 只高亮返回行，不高亮整张表或列`：验证 `table_extraction.result.rows` 指定具体返回行时，前端只给这些行加结果高亮，不再高亮整张表或整列。
+- `table_extraction 失败或空结果时不自动读取整表`：验证 SQL 工具失败时显示“查询失败”警示，条件查询返回 0 行时显示“未查到结果”普通提示；两种情况都不把 `table_id`、SQL 或动作 reason 当作回放锚点，避免前端表现成模型读取了结果之外的文档内容。
 - `table_extraction 返回具体行时会逐行动画读取`：验证表格查询返回多行时，自动播放会按返回行逐个滚动和读取。
 - `set_field 写入证据按 HTML 顺序从上到下读取`：验证字段写入证据即使按乱序 `evidence_ids` 返回，自动播放也会按 iframe 中的真实 HTML 顺序从上到下读取。
 - `连续 action 指向同一 block 时不重复播放 outline 鼠标路径`：验证自动播放进入相邻 action 后，如果新的证据仍落在同一个 outline/block 锚点，前端不会再次滚动左侧 outline 和播放鼠标点击路径，但仍会继续滚动 HTML 证据块。

@@ -837,6 +837,119 @@ it("table_extraction 只高亮返回行，不高亮整张表或列", async () =>
   expect(table?.rows[2]).not.toHaveClass("is-table-row-result-highlight");
 });
 
+it("table_extraction 失败或空结果时不自动读取整表", async () => {
+  jest.useFakeTimers();
+  const tableScrolls: string[] = [];
+  const emptyQueryDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      display_html: [
+        '<figure id="p001_b002" data-type="table">',
+        '<table id="p001_b002_table">',
+        '<tr id="p001_b002_tr_000"><td>序号</td><td>作品类型</td><td>论文题目</td></tr>',
+        '<tr id="p001_b002_tr_001"><td>1</td><td>学术论文</td><td>论文 A</td></tr>',
+        '<tr id="p001_b002_tr_112"><td>112</td><td>学术论文</td><td>论文 B</td></tr>',
+        '</table>',
+        '</figure>'
+      ].join(""),
+      actions: [
+        {
+          tool_name: "table_extraction",
+          args: {
+            table_id: "p001_b002",
+            sql: 'SELECT * FROM data WHERE "作品类型" LIKE \'%学术论文%\'',
+            reason: "LIKE 查询学术论文行"
+          },
+          result: {
+            ok: false,
+            table_id: "p001_b002",
+            row_count: 114,
+            rows: [],
+            error: "table is too large for unbounded SELECT *"
+          }
+        },
+        {
+          tool_name: "table_extraction",
+          args: {
+            table_id: "p001_b002",
+            sql: 'SELECT "序号","论文题目" FROM data WHERE "序号" = \'112\'',
+            reason: "只查询序号 112"
+          },
+          result: {
+            ok: true,
+            table_id: "p001_b002",
+            row_count: 0,
+            rows: []
+          }
+        },
+        {
+          tool_name: "update_plan",
+          args: {
+            plan_index: 1,
+            status: "completed",
+            reason: "继续改用姓名查询"
+          },
+          result: {
+            ok: true
+          }
+        }
+      ]
+    }
+  };
+  const injectedLoadTaskDetail = jest.fn(async () => emptyQueryDetail);
+
+  try {
+    render(
+      <TaskDetail
+        taskId="task-001"
+        initialSummary={waitingReviewSummary}
+        loadTaskDetail={injectedLoadTaskDetail}
+      />
+    );
+
+    expect(await screen.findByText("AI extraction replay")).toBeInTheDocument();
+    const iframe = screen.getByTitle("document replay") as HTMLIFrameElement;
+    iframe.contentDocument?.open();
+    iframe.contentDocument?.write(emptyQueryDetail.replay?.display_html ?? "");
+    iframe.contentDocument?.close();
+    for (const id of ["p001_b002", "p001_b002_table", "p001_b002_tr_000", "p001_b002_tr_001", "p001_b002_tr_112"]) {
+      const element = iframe.contentDocument?.getElementById(id);
+      if (!element) {
+        continue;
+      }
+      Object.defineProperty(element, "scrollIntoView", {
+        configurable: true,
+        value: function scrollIntoView(this: Element) {
+          tableScrolls.push(this.id);
+        }
+      });
+    }
+    await loadReplayIframe(iframe);
+
+    expect(screen.getByText("查询失败")).toBeInTheDocument();
+    expect(screen.getByText("table is too large for unbounded SELECT *")).toBeInTheDocument();
+    expect(screen.queryByText("未查到结果")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("LIKE 查询学术论文行"));
+    expect(await screen.findByText("未查到结果")).toBeInTheDocument();
+    expect(screen.getByText("没有查到匹配行。")).toBeInTheDocument();
+    expect(screen.queryByText("查询失败")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "自动播放" }));
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(6000);
+    });
+
+    expect(tableScrolls).toEqual([]);
+    expect(iframe.contentDocument?.getElementById("p001_b002")).not.toHaveClass("is-reading-line");
+    expect(iframe.contentDocument?.getElementById("p001_b002_tr_000")).not.toHaveClass("is-table-row-result-highlight");
+    expect(iframe.contentDocument?.getElementById("p001_b002_tr_001")).not.toHaveClass("is-table-row-result-highlight");
+    expect(iframe.contentDocument?.getElementById("p001_b002_tr_112")).not.toHaveClass("is-table-row-result-highlight");
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
 it("table_extraction 返回具体行时会逐行动画读取", async () => {
   jest.useFakeTimers();
   const rowScrolls: string[] = [];

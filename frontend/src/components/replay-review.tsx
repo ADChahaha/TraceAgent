@@ -31,6 +31,12 @@ type ActionDiagnosticSummary = {
   summary: string;
 };
 
+type ActionNotice = {
+  kind: "warning" | "info";
+  label: string;
+  message: string;
+};
+
 type HighlightState = {
   currentIds: string[];
   tableReferenceIds: string[];
@@ -175,6 +181,10 @@ export function ReplayReview({
   );
   const currentActionDiagnostics = React.useMemo(
     () => collectActionDiagnosticSummaries(currentAction),
+    [currentAction],
+  );
+  const currentActionNotice = React.useMemo(
+    () => getActionNotice(currentAction),
     [currentAction],
   );
   const replayFields = React.useMemo(
@@ -699,8 +709,8 @@ export function ReplayReview({
                       onReviewCommentChange={onReviewCommentChange}
                       onSubmitReview={onSubmitReview}
                     />
-                  ) : currentActionDiagnostics.length > 0 ? (
-                    <ActionDiagnosticsCard diagnostics={currentActionDiagnostics} />
+                  ) : currentActionNotice || currentActionDiagnostics.length > 0 ? (
+                    <ActionDiagnosticsCard notice={currentActionNotice} diagnostics={currentActionDiagnostics} />
                   ) : (
                     <span aria-hidden="true" />
                   )}
@@ -851,9 +861,21 @@ function ReplayFieldWriteCard({
   );
 }
 
-function ActionDiagnosticsCard({ diagnostics }: { diagnostics: ActionDiagnosticSummary[] }) {
+function ActionDiagnosticsCard({
+  notice,
+  diagnostics,
+}: {
+  notice: ActionNotice | null;
+  diagnostics: ActionDiagnosticSummary[];
+}) {
   return (
     <div className="replay-action-diagnostics" aria-label="动作诊断摘要">
+      {notice ? (
+        <div className={`replay-action-notice is-${notice.kind}`} role={notice.kind === "warning" ? "alert" : "status"}>
+          <span className="replay-action-notice-label">{notice.label}</span>
+          <span>{notice.message}</span>
+        </div>
+      ) : null}
       {diagnostics.map((diagnostic) => (
         <div key={`${diagnostic.key}-${diagnostic.summary}`} className="replay-action-diagnostics-row">
           <span className="replay-action-diagnostics-label">{diagnostic.label}</span>
@@ -1235,6 +1257,33 @@ function collectActionDiagnosticSummaries(action: ReplayAction | null): ActionDi
     .filter((item): item is ActionDiagnosticSummary => Boolean(item));
 }
 
+function getActionNotice(action: ReplayAction | null): ActionNotice | null {
+  if (!action || getActionType(action) !== "table_extraction") {
+    return null;
+  }
+  const result = readObject(action.result);
+  if (!result) {
+    return null;
+  }
+  if (result.ok === false) {
+    return {
+      kind: "warning",
+      label: "查询失败",
+      message: readString(result.error) || "工具调用失败。",
+    };
+  }
+  const rows = Array.isArray(result.rows) ? result.rows : [];
+  const rowCount = readNumber(result.row_count);
+  if (rows.length === 0 && rowCount === 0) {
+    return {
+      kind: "info",
+      label: "未查到结果",
+      message: "没有查到匹配行。",
+    };
+  }
+  return null;
+}
+
 function formatDiagnosticLabel(key: string): string {
   if (key === "query_audit") {
     return "查表摘要";
@@ -1304,18 +1353,16 @@ function getReadActionHighlightState(action: ReplayAction): HighlightState {
 }
 
 function getTableExtractionHighlightState(action: ReplayAction): HighlightState {
-  const args = readObject(action.args);
   const result = readObject(action.result);
-  const tableId = readString(result?.table_id) || readString(args?.table_id);
   const rowIds = extractTableExtractionRowIds(result);
-  if (!tableId) {
+  if (rowIds.length === 0) {
     return emptyHighlightState();
   }
   return {
     ...emptyHighlightState(),
     tableRowIds: rowIds,
-    readIds: rowIds.length > 0 ? rowIds : [tableId],
-    preserveReadOrder: rowIds.length > 0,
+    readIds: rowIds,
+    preserveReadOrder: true,
   };
 }
 

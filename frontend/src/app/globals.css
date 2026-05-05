@@ -412,6 +412,34 @@ samp,
   overflow: auto;
 }
 
+.replay-action-notice {
+  display: grid;
+  grid-template-columns: 5rem minmax(0, 1fr);
+  gap: 8px;
+  border: 1px solid color-mix(in oklch, var(--primary) 46%, var(--border));
+  border-left-width: 4px;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.replay-action-notice.is-warning {
+  border-color: #dc2626;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.replay-action-notice.is-info {
+  border-color: #f59e0b;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.replay-action-notice-label {
+  font-weight: 800;
+}
+
 .replay-action-diagnostics-row {
   display: grid;
   grid-template-columns: 4.5rem minmax(0, 1fr);

@@ -127,7 +127,7 @@ frontend/
   -> ReplayReview 左侧展示 outline，中间用 iframe 展示 backend 的 display_html，右侧展示 plan 和当前动作对话
   -> reduceReplayFields 从 result.fields 建立字段名、显示名、agent_value 和 route
   -> 再把 review.fields 合并进去，补齐 agent 没有写入但 route_policy 要求 review 的字段
-  -> 当前 action result 里如果返回 query_audit.summary、table_audit.summary 或其他 *_audit.summary，ReplayReview 会在该 action 的模型输出区显示诊断摘要
+  -> 当前 action result 里如果返回 query_audit.summary、table_audit.summary 或其他 *_audit.summary，ReplayReview 会在该 action 的模型输出区显示诊断摘要；table_extraction 失败时显示“查询失败”警示，SQL 正常但返回 0 行时显示“未查到结果”普通提示
   -> 当前 action 是 set_field 时，在字段写入卡显示字段值、证据 chip、route badge 和 route_reason
   -> 字段值很长时，字段写入卡把字段内容放进独立滚动区，复核输入和提交按钮留在卡片底部；全屏且存在字段写入卡时，ReplayReview 根节点带 `has-field-write` 状态，让布局为底部复核区预留更高空间，避免 review 区被长列表顶出视口
   -> 如果没有 set_field action 但存在 needs_review 字段，replay 末尾显示同样的字段卡，并提示等待人工补录
@@ -136,7 +136,7 @@ frontend/
   -> read_element(TABLE) 的结果是 table-ref 表结构摘要，因此只高亮原 HTML 里的 caption/表名和表头，不高亮整张表或表体内容
   -> 如果表格 HTML 没有 caption，ReplayReview 只高亮表头，不生成额外表摘要 marker
   -> read_element(TABLE)、整表 evidence chip 和左侧 overview 表格项都会把滚动锚点映射到 caption 优先、表头兜底，并靠上滚动
-  -> table_extraction 的结果是 SQL rows，因此只高亮返回的 row_id，并在自动播放时逐行读取；columns 只作为结果数据展示，不触发表格列高亮
+  -> table_extraction 的结果是 SQL rows，因此只高亮返回的 row_id，并在自动播放时逐行读取；columns 只作为结果数据展示，不触发表格列高亮；如果 SQL 失败或返回 0 行，不用 table_id、SQL 或动作 reason 兜底高亮/读取文档，避免前端表现成模型看过查询结果之外的内容
   -> set_field 的 evidence_ids 是字段写入依据，自动播放会按 iframe 里的真实 HTML 顺序从上到下读取，而不是按数组顺序乱跳
   -> 自动播放每个 action 时，先从当前 tool 可见证据推出 HTML 证据锚点
   -> 多个证据锚点按 iframe 当前 scrollY 与元素中心距离排序，优先滚到当前视口最近的 block
