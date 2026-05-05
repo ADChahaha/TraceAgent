@@ -27,8 +27,8 @@ TaskSpec + field_outputs + refs_with_text + field_processes
 - 不写最终结果，不执行人工审核，不生成 audit。
 - 只输出字段级 route 决策和原因。
 - 不读取抽取 agent 的完整 prompt、raw model response、chain-of-thought 或详细推理过程。
-- 不读取 search 工具返回的候选正文、table row、cell、block_id 列表或其他工具结果。
-- 只消费抽取过程的事实摘要：broad / resolution 阶段各自执行过哪些统一 `search_grep` 查询词、是否写入过候选、是否执行最终定案，以及阶段状态和失败原因。
+- 不读取工具返回的候选正文、table row、cell、block_id 列表或其他工具结果。
+- 只消费抽取过程的事实摘要：broad / resolution 阶段各自执行过哪些可识别查询或查表动作、是否写入字段、是否完成定案，以及阶段状态、失败原因和轻量诊断摘要。
 
 这层和 `service.file_extraction_agent` 的区别是：
 
@@ -82,13 +82,13 @@ POST /v1/route-policy-agent/evaluate
   - prompt 组装层不按条数或字符数静默截断 `refs_with_text`；backend 传入多少最终证据文本，route policy 就看到多少。
 - `field_processes`
   - 每个待评估字段必须有一条过程摘要，包含 `broad_extraction` 和 `field_resolution` 两段。
-  - 两段中的 `search_queries` 只记录统一 search 工具发起过的查询词，例如 `学术论文 OR 论文题目 OR 作品类型`，不记录 `search_text` / `search_table_rows` 这类内部拆分。
-  - 过程摘要可以包含候选写入数量、broad 结束原因、是否执行 `final_decision`、resolution 原因、失败原因和轻量质量诊断。
-  - 过程摘要不能包含 search 工具返回的正文、表格行、cell、block_id 列表或 action refs；最终证据文本仍只从 `refs_with_text` 读取。
+  - 两段中的 `search_queries` 记录 backend 能从 actions 中识别出的查询词或查表语句；当前规划型 broad 通常为空，resolution 常见来源是 `table_extraction` SQL。
+  - 过程摘要可以包含候选动作数量、broad 结束原因、是否执行 `set_field` 或旧版 `final_decision`、resolution 原因、失败原因和轻量质量诊断。
+  - 过程摘要不能包含工具返回的正文、表格行、cell、block_id 列表或 action refs；最终证据文本仍只从 `refs_with_text` 读取。
 
-这里的 `refs` 不能只是定位信息。如果 ref 只有 `document_id/page/span/block_id`，它只能说明证据位置，不能让 route policy 判断字段值是否真的被证据支持。`refs_with_text` 仍是最终证据来源；`field_processes` 只说明 agent 搜索和定案路径是否合理，不替代证据文本。
+这里的 `refs` 不能只是定位信息。如果 ref 只有 `document_id/page/span/block_id`，它只能说明证据位置，不能让 route policy 判断字段值是否真的被证据支持。`refs_with_text` 仍是最终证据来源；`field_processes` 只说明 agent 规划、读取、查表、写字段和定案路径是否合理，不替代证据文本。
 
-对于派生字段，mapper 会按字段定义中的 `validation_rules.source_field` 或 `validation_rules.source_fields` 找到来源字段过程摘要，并在单字段 prompt 中额外放入 `related_field_processes`。例如 `academic_paper_count` 的 broad 可能只是复制 `academic_paper_names` 的候选，route policy 判断数量字段时必须能看到来源字段 broad 查过 `学术论文 OR 论文题目 OR 作品类型`。这里仍只传过程摘要，不传 search 工具返回结果。
+对于派生字段，mapper 会按字段定义中的 `validation_rules.source_field` 或 `validation_rules.source_fields` 找到来源字段过程摘要，并在单字段 prompt 中额外放入 `related_field_processes`。例如数量字段依赖列表字段时，route policy 判断数量字段可以看到来源字段是否读过相关章节、查过相关表格并完成字段写入。这里仍只传过程摘要，不传工具返回结果。
 
 推荐输入 pipeline：
 
@@ -97,7 +97,7 @@ backend 传入 task_description / task_spec
   -> 传入待评估 field_outputs
   -> 传入每个字段对应的 refs_with_text
   -> 从 field_traces.actions_json 提取每个字段的 broad / resolution 过程摘要
-  -> 只保留 search_grep 查询词、候选写入数量、finish_broad 信息和 final_decision 是否执行
+  -> 只保留可识别查询或查表语句、候选/写入动作数量、阶段结束信息、set_field 或旧 final_decision 是否执行
   -> service.route_policy_agent.schemas 做 Pydantic 解析
   -> input_validator 校验字段名、字段输出、refs 文本和 field_processes 是否完整
   -> mapper 按 field_name 合并 FieldDefinition、FieldOutput、refs_with_text、field_process
@@ -237,7 +237,7 @@ ValidatedPolicyInput
   -> refs 的来源位置
   -> broad_extraction.search_queries / candidate_action_count / counted_fields / finish_reason
   -> field_resolution.search_queries / candidate_action_count / counted_fields / final_decision_used / reason / failure_reason
-  -> 派生字段的 related_field_processes，说明来源字段 broad/resolution 查过什么、写入过多少候选和如何定案
+  -> 派生字段的 related_field_processes，说明来源字段 broad/resolution 做过哪些读取、查表、写字段或定案动作
   -> 输出 route + reason
 ```
 

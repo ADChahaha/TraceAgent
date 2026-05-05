@@ -18,9 +18,11 @@ file_obj
   -> validate_pdf_type(...)
   -> read_source_bytes(...)
   -> mineru_converter.convert_pdf_bytes_to_content_list(...)
+  -> mineru_html.build_blocks_from_content_list(...)
   -> mineru_html.build_html_from_content_list(...)
   -> mineru_html.build_display_html_from_content_list(...)
-  -> ProcessResult(filename, html, display_html)
+  -> mineru_html.build_markdown_from_content_list(...)
+  -> ProcessResult(filename, html, display_html, markdown, md_list, blocks, meta_info, warnings)
 ```
 
 ## Files
@@ -70,6 +72,10 @@ Owns conversion from MinerU pages to HTML.
 
 - `build_html_from_content_list(...)`: extraction HTML fragment.
 - `build_display_html_from_content_list(...)`: full HTML document with CSS.
+- `build_blocks_from_content_list(...)`: backend evidence blocks using the same
+  rendered ids as HTML.
+- `build_markdown_from_content_list(...)`: markdown-like text for storage and
+  audit views.
 
 IDs are deterministic from page and block position:
 
@@ -80,9 +86,11 @@ p001_b001_item_000
 ```
 
 The converter preserves page, type, title level, bbox, table HTML, captions,
-and footnotes for visible text/table content. Empty pages, image-only blocks,
-and source image debug paths are filtered out so replay HTML only shows content
-that the extraction agent can actually use.
+and footnotes for visible text/table content. `blocks` reuse the rendered HTML
+ids for paragraphs, headings, list items and table rows so backend can recover
+evidence text by id. Empty pages, image-only blocks, and source image debug
+paths are filtered out so replay HTML only shows content that the extraction
+agent can actually use.
 
 ## Table Handling
 

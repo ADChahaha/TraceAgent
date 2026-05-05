@@ -116,39 +116,37 @@ agent/
 - `service.file_extraction_agent.processor.extract(...)`
 - HTTP 入口：`routes/file_extraction_agent.py`
 
-当前固定采用两阶段流程：broad 负责字段级候选证据召回，resolution 基于候选池做字段最终定案。broad 已经演进为工具化 loop，不再是一次性模型输出：
+当前固定采用两阶段流程：broad 负责规划抽取路线，resolution 按计划调用 HTML 工具读取证据并写字段。broad 不写字段值，resolution 必须让每个字段通过 `set_field` 进入 `resolved` 或 `failed`：
 
 ```text
 backend 聚合后的 html + task_spec
   -> input_adapter.py 校验 html/task_spec/run_options 并组装 HtmlExtractionInput
-  -> 启动一个共享 broad agent loop，prompt 同时包含所有字段、pending_fields 和全字段候选池
-  -> broad agent 只能调用 search_grep / add_broad_candidate / finish_broad
-  -> search_grep 同时搜索正文 paragraph 和 table 级索引，query 固定使用 term1 OR term2 OR term3
-  -> add_broad_candidate 把命中的 paragraph 或 table refs 写入指定字段候选池
-  -> 如果模型把不存在的 ref 传给候选写入工具，runner 记录 tool_error 并把错误作为下一轮工具结果返回给模型修正
-  -> 每个字段用 finish_broad 正常退出，记录 enough_evidence / partial_evidence / no_evidence 和结束原因
-  -> graph 把 candidate_evidence、broad_search_history 和 finish_broad 结果交给 resolution
-  -> 启动一个共享 resolution agent loop，prompt 同时包含所有字段、候选池和已完成定案
-  -> resolution agent 可读取候选池；如果候选不足，可以继续调用 search_grep / add_resolution_candidate 补查
-  -> 多个字段复用同一来源证据时，broad 必须给每个目标字段显式写入候选
-  -> resolution 可调用 add_count_candidate 统计来源字段候选数量，并直接把数字写入目标字段候选池
-  -> 每个字段最终返回 final_decision，且必须引用对应字段候选池里的 candidate_id
-  -> graph 映射成 ExtractionResult(result + trace)，trace.debug_steps 保留运行级调试步骤
+  -> html_index.py 基于已有 HTML id 构建 document tree、elements、tables 和 row_index
+  -> broad_new.py 读取 task_spec、document tree 和完整 HTML
+  -> broad model 只能调用 return_broad_plan(summary, plan, risks)
+  -> graph 把 BroadPlan 写入 state.broad_plan
+  -> resolution_new.py 把 broad plan、task fields 和 document outline 交给 LangGraph tool-calling loop
+  -> resolution model 按计划调用 update_plan / read_element / read_section / table_extraction / paragraph_extraction
+  -> 证据足够或失败明确后调用 set_field 写入字段状态、值、证据 id 和原因
+  -> 所有字段 set_field 后调用 finish 做完整性校验
+  -> graph 映射成 ExtractionResult(result + trace)
+  -> trace 保留 broad_plan、plan_statuses、document_tree、field_states 和 actions
 ```
 
-这个设计不承诺 100% 召回。它的目标是让系统从“单次 broad 漏了就无法恢复”改成“broad 主动查找候选，resolution 还能二次补查，证据仍不足时交给 route/review”。所有搜索、候选写入、阶段退出和最终定案都必须进入 trace，方便后续审核和调试。
+这个设计不承诺 100% 召回。它的目标是让抽取过程变成可回放的“计划、读取、查表、写字段、完成”动作链路；证据不足或工具诊断提示风险时，字段可以先 `failed`，后续由 route policy 和人工 review 接住。所有读取、查表、计划推进、字段写入和 finish 都必须进入 trace，方便后续审核和调试。
 
 工具边界保持精简：
 
-- `search_grep(field_name, query)`：同时搜索普通文本段落和 table 级索引；paragraph 返回 `ref/text`，table 返回 `ref/section/columns/row_count/hint`，不做最终字段判断。
-- `add_broad_candidate(field_name, refs, reason)`：只写 broad 候选证据和写入原因，不改字段值。
-- `add_resolution_candidate(field_name, refs | values, reason)`：只写 resolution 二次补证候选；`values` 用于把 count 等工具返回的数字写入候选池。
-- `add_count_candidate(field_name, source_field_name, reason)`：只在 resolution 阶段统计来源字段当前候选数量，并把数字作为目标字段候选写入。
-- `finish_broad(field_name, status, reason)`：结束指定字段 broad；`status=enough_evidence` 时必须已有候选证据。
-- `get_candidate_bundle(field_name)`：供 resolution 读取 broad 已写入的候选证据。
-- `final_decision(...)`：只允许 resolution 调用，用候选 `candidate_id` 支撑字段最终值或失败原因。
+- `return_broad_plan(summary, plan, risks)`：只允许 broad 调用，用于返回可执行计划，不写字段值。
+- `update_plan(plan_index, status, reason)`：按 broad plan 顺序推进 replay 状态。
+- `read_element(element_id, reason)`：读取单个元素；表格只返回 table-ref 元信息和列名。
+- `read_section(section_id, reason, depth)`：读取标题下的章节内容。
+- `table_extraction(table_id, sql, reason)`：对单张 HTML 表格执行安全 SELECT，并返回 rows、evidence_ids、table_audit 和 query_audit。
+- `paragraph_extraction(element_id, pattern, reason)`：对文本元素执行正则抽取。
+- `set_field(name, value, evidence_ids, reason, status, failure_reason)`：写字段值或失败状态，并校验证据 id 与字段类型。
+- `finish()`：校验所有字段已完成、必填字段和证据一致性。
 
-表格处理是 `file_extraction_agent` 内部的专用检索能力，而不是业务特例。它只理解通用表格结构和字段提示，不硬编码“学术论文”“文明寝室”等业务词。对于列名不固定的表格，模型应通过统一 `search_grep` 做宽召回：根据 `field_name`、`display_name`、`lookup_hints`、`cross_field_hints` 形成查询词，在正文段落、表头、表级摘要和邻近标题中做匹配；命中表格时先把 table 级 ref 写入候选池，字段最终定案仍必须引用候选 `candidate_id`。
+表格处理是 `file_extraction_agent` 内部的专用检索能力，而不是业务特例。它只理解通用表格结构和字段提示，不硬编码“学术论文”“文明寝室”等业务词。模型应先用 document outline 定位表格，再通过 `read_element(table_id)` 查看列名，最后用 `table_extraction(table_id, sql)` 查询必要行列。字段最终定案通过 `set_field` 引用已观察到的 table id、row id 或其他 evidence id。
 
 当前不把 image 作为抽取对象。文档内容类型先收敛为：
 
@@ -178,8 +176,8 @@ OCR 或表格结构质量提示不参与 broad、resolution 或 route policy 的
 
 两阶段的动作边界由工具 schema 控制：
 
-- `broad_new.py` 负责生成 plan 和字段候选读取策略
-- `resolution_new.py` 负责执行 `read_element`、`table_extraction`、`paragraph_extraction`、`set_field` 和 `finish`
+- `broad_new.py` 负责生成 `BroadPlan(summary, plan, risks)`。
+- `resolution_new.py` 负责执行 `update_plan`、`read_element`、`read_section`、`table_extraction`、`paragraph_extraction`、`set_field` 和 `finish`。
 
 更具体的 schema、校验和任务配置，建议直接查看：
 
@@ -197,16 +195,16 @@ OCR 或表格结构质量提示不参与 broad、resolution 或 route policy 的
 - 不直接访问 backend 数据库
 - 不写最终结果、不执行人工审核、不生成 audit
 - 不读取抽取 agent 的完整 prompt、raw model response 或 chain-of-thought
-- 只读取抽取过程摘要，不读取 search 工具返回的候选正文、table row、cell、block_id 列表或 action refs
+- 只读取抽取过程摘要，不读取工具返回正文、table row、cell、block_id 列表或 action refs
 
 当前规划入口包括：
 
 - Python 入口：`service.route_policy_agent.processor.evaluate(...)`
 - HTTP 入口：`routes/route_policy_agent.py`
 
-这一层只看任务/字段定义、字段输出、refs 中携带的证据文本与来源位置，以及每个字段 broad / resolution 两阶段的过程摘要。过程摘要只包含统一 `search_grep` 查询词、候选写入数量、broad 结束原因、是否执行 `final_decision` 和失败原因，不包含工具返回结果或完整原文。更具体的设计见：
+这一层只看任务/字段定义、字段输出、refs 中携带的证据文本与来源位置，以及每个字段 broad / resolution 两阶段的过程摘要。过程摘要来自 backend 对 `actions` 的归一化：会保留读取、查表、计划推进、字段写入、finish、表格诊断摘要和失败原因等事实，不包含完整原文、表格原始行、cell 列表、action refs 或模型原始推理。更具体的设计见：
 
-对于由其他字段派生的字段，`route_policy_agent` 会按 `validation_rules.source_field/source_fields` 把来源字段的过程摘要作为 `related_field_processes` 注入 prompt。这样数量字段或复制候选字段能看到源字段 broad 具体查过哪些关键词，但仍不会看到 search 工具返回正文或表格行。
+对于由其他字段派生的字段，`route_policy_agent` 会按 `validation_rules.source_field/source_fields` 把来源字段的过程摘要作为 `related_field_processes` 注入 prompt。这样数量字段或复制候选字段能看到源字段执行过哪些读取、查表、写字段和定案动作，但仍不会看到工具返回正文或表格行。
 
 route policy 的结构化输出策略也固定为 `tool_call`，显式传入 `json_schema` 或 `auto` 会被拒绝。
 
@@ -261,7 +259,7 @@ HTTP 请求
   - 返回 `filename/html`
   - 兼容保留旧路径 `POST /v1/ocr/process`
 - `POST /v1/file-extraction-agent/extract`
-  - 接收外部已准备好的 `blocks`、可选 `markdown/md_list`、必填 `task_spec`、可选 `run_options`、`metadata` 以及可选模型连接参数
+  - 接收外部已准备好的 `html`、必填 `task_spec`、可选 `run_options` 以及可选模型连接参数
   - 调用 `service.file_extraction_agent.processor.extract(...)`
   - 返回 `ExtractionResult`
 - `POST /v1/route-policy-agent/evaluate`

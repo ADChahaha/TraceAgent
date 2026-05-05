@@ -15,7 +15,7 @@
   -> backend 后台继续执行文档处理、字段抽取和 route policy
   -> backend 通过 HTTP 逐个调用 document_processor，把上传文件转成 markdown + blocks
   -> backend 为每个文件保存标准化文本结果，不保存原始文件
-  -> backend 合并多个文件的 markdown、md_list 和 blocks
+  -> backend 合并多个文件的 html 作为字段抽取输入，markdown、md_list 和 blocks 留作展示和证据回填
   -> backend 通过 HTTP 调用 file_extraction_agent
   -> agent service 返回 ExtractionResult(result + trace)
   -> task_service 对照 task_spec.fields 补齐 agent 没返回的预期字段，写成 failed/None 占位
@@ -109,8 +109,8 @@ POST /tasks 上传一个或多个文件
   -> SQLite 为每次 document_processor 调用写入 agent_stage_runs，不保存原始文件 bytes
   -> task_service 为每个文件生成 document_id，并为 blocks 补 document_id / block_id
   -> SQLite 为每个文件写入 documents(markdown / md_list_json / blocks_json / meta_info_json / warnings_json)
-  -> task_service 合并全部 markdown、md_list 和 blocks
-  -> agent_client 再通过 HTTP 调用 agent service 的字段抽取接口，metadata 包含 document_ids
+  -> task_service 合并全部 html 作为字段抽取输入，同时保留 markdown、md_list 和 blocks
+  -> agent_client 再通过 HTTP 调用 agent service 的字段抽取接口，只发送聚合后的 html、task_spec 和可选 run_options
   -> SQLite 为 file_extraction_agent 调用写入 agent_stage_runs
   -> SQLite 写入 agent_runs / extracted_fields / field_traces；task_spec 中存在但 agent 未返回的字段会补 failed/None 占位
   -> route_policy 从字段结果、trace refs 和 trace actions 组装 field_outputs + refs_with_text + field_processes
@@ -266,7 +266,7 @@ files/file + task_type + task_spec + metadata
   -> 每个文件生成独立 document_id，并为返回 blocks 补 document_id 和 block_id
   -> 逐个写入 documents，只保存标准化文本结果和上传元信息
   -> 合并全部 blocks、markdown 和 md_list
-  -> 调用 agent_client.extract_fields(blocks, markdown, md_list, task_spec)，metadata 携带 document_ids
+  -> 调用 agent_client.extract_fields(html, task_spec, run_options=None)，metadata 只保存在 backend 的请求摘要中
   -> 保存 file_extraction_agent 的 agent_stage_runs
   -> 写入 agent_runs、extracted_fields、field_traces
   -> route_policy.build_route_policy_request(...) 组装 field_outputs + refs_with_text + field_processes
@@ -449,7 +449,7 @@ task_service 准备某次 agent HTTP 调用
 field_traces.evidence_json + documents.blocks_json + extracted_fields.agent_value_json
   -> 用 evidence.block_ids / refs[].block_id 回查 documents.blocks_json，补出候选 blocks 的正文、页码和 kind
   -> broad_extraction：展示 broad 阶段预选出的候选 block 正文、证据文本、refs 和 notes
-  -> field_resolution：展示 resolution 阶段产出的 route 前 output_fields(field_name/status/value/reason)，并说明读取了哪些 related_fields、实际执行了哪些 final_decision / add_resolution_candidate 等 actions；如果没有额外 action，只标记 completed 并说明 resolution 直接把候选证据定案为字段输出
+  -> field_resolution：展示 resolution 阶段产出的 route 前 output_fields(field_name/status/value/reason)，并说明实际执行了哪些 update_plan / read_element / read_section / table_extraction / paragraph_extraction / set_field / finish 等 actions；如果没有额外 action，只标记 completed 并说明 resolution 直接把已观察证据写成字段输出
   -> final_result：展示 route policy 之前的 agent 抽取 status、agent value、reason 或 failure_reason
   -> route_validation：展示 route_policy_agent 的 route、needs_review 和 route_reason，让验证结论与 agent final result 分离
   -> agent_process.process_steps
@@ -462,7 +462,7 @@ field_traces.evidence_json + documents.blocks_json + extracted_fields.agent_valu
 | `field_name` | `TEXT` | 字段名 |
 | `evidence_json` | `TEXT` | 证据文本和 refs |
 | `related_fields_json` | `TEXT` | 相关字段列表 |
-| `actions_json` | `TEXT` | `search_grep / add_broad_candidate / copy_field_candidates / count_field_candidates / finish_broad / final_decision / model_call_error` 等动作 |
+| `actions_json` | `TEXT` | `update_plan / read_element / read_section / table_extraction / paragraph_extraction / set_field / finish / model_call_error` 等动作 |
 | `trace_status` | `TEXT` | trace 字段状态 |
 | `reason` | `TEXT NULL` | 成功定案原因 |
 | `failure_reason` | `TEXT NULL` | 失败原因 |
@@ -614,14 +614,14 @@ task_spec + extracted_fields + field_traces
   -> backend 组装 field_outputs
   -> backend 从 refs 和证据文本组装 refs_with_text
   -> backend 从 actions_json 归一化 field_processes：
-       broad_extraction.search_queries 只保留 search_grep 查询词
-       broad_extraction.candidate_action_count 统计 add_broad_candidate 和 copy_field_candidates
+       broad_extraction.search_queries 保留 broad 阶段可识别的查询或查表语句，当前规划型 broad 通常为空
+       broad_extraction.candidate_action_count 统计 broad 阶段候选/查表类动作，当前规划型 broad 通常为 0
        broad_extraction.counted_fields 通常为空，保留兼容字段
-       broad_extraction.finish_reason 来自 finish_broad.message
-       field_resolution.search_queries 只保留 resolution 阶段 search_grep 查询词
-       field_resolution.candidate_action_count 统计 add_resolution_candidate
-       field_resolution.counted_fields 只保留 count_field_candidates 的字段名和数量
-       field_resolution.final_decision_used 来自 final_decision 是否执行
+       broad_extraction.finish_reason 来自 broad 结束或 trace 摘要，当前规划型 broad 通常为空
+       field_resolution.search_queries 保留 resolution 阶段 table_extraction SQL 或其他可识别查询
+       field_resolution.candidate_action_count 统计 resolution 阶段候选类动作，当前 set_field 工具链路通常为 0
+       field_resolution.counted_fields 保留兼容字段
+       field_resolution.final_decision_used 来自 set_field 或旧 final_decision 是否执行
        field_resolution.reason / failure_reason 来自字段 trace
        diagnostics 来自 table_extraction 等工具的观察摘要，只保留 quality_type/summary/table_id/query
   -> agent route_policy_agent 校验输入完整性
@@ -629,7 +629,7 @@ task_spec + extracted_fields + field_traces
   -> backend 写入 field_routes(route, route_reason, needs_review)
 ```
 
-`field_processes` 不能包含 search 工具返回的正文、表格行、cell、block_id 列表或 action refs。route policy 如果需要判断字段值是否被原文支持，只能读取 `refs_with_text.text`；`field_processes` 只用于判断 agent 是否用合理关键词查过、是否写入候选、是否执行最终定案，以及当前工具是否报告质量风险。
+`field_processes` 不能包含工具返回的正文、表格行、cell、block_id 列表或 action refs。route policy 如果需要判断字段值是否被原文支持，只能读取 `refs_with_text.text`；`field_processes` 只用于判断 agent 是否实际读取证据、是否查过相关表格、是否写入字段、是否完成定案，以及当前工具是否报告质量风险。
 
 表格工具观察的传递规则：
 
@@ -724,11 +724,11 @@ field final value + route + review + trace refs
 ```text
 上传请求中的原始文件 bytes
   -> POST agent /v1/document-processor/process
-  -> ProcessResult(blocks + markdown + md_list)
+  -> ProcessResult(html + display_html + blocks + markdown + md_list)
   -> backend 写 agent_stage_runs(document_processor)，request 只含文件摘要
   -> backend 保存 markdown / md_list / blocks
   -> backend 为 blocks 补 document_id / block_id
-  -> POST agent /v1/file-extraction-agent/extract
+  -> POST agent /v1/file-extraction-agent/extract(html + task_spec)
   -> ExtractionResult(result + trace)
   -> backend 写 agent_stage_runs(file_extraction_agent)
   -> backend 组装 field_outputs + refs_with_text + field_processes
@@ -740,9 +740,9 @@ field final value + route + review + trace refs
 `agent_client.py` 负责：
 
 - 从 `UploadFile` 读取到的 bytes 构造 multipart 文件，提交给 `document_processor`。
-- 将 `ProcessResult.blocks` 转成 `file_extraction_agent` 需要的 `NormalizedBlock[]`。
+- 将多个 `ProcessResult.html` 拼接成 `file_extraction_agent` 需要的聚合 HTML。
 - 为每个 block 生成稳定 `block_id`，例如 `"{document_id}:p{page_no}:b{index}"`。
-- 传入后端选择的 `task_spec`、`run_options` 和 `metadata`。
+- 传入后端选择的 `task_spec` 和 `run_options`；`metadata` 只保存在 backend 请求摘要和 route policy metadata 中。
 - 将字段输出和 refs 证据文本提交给 `route_policy_agent`。
 - 返回完整 `ExtractionResult` 和 `RoutePolicyResult` 给 `task_service`。
 

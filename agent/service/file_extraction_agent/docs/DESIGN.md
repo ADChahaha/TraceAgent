@@ -1,50 +1,60 @@
 # File Extraction Agent Design
 
-## Goal
+`service.file_extraction_agent` 负责从 `document_processor` 产出的语义 HTML 中抽取结构化字段。它不处理原始 PDF，不保存任务状态，也不做 route policy；这些分别属于 `document_processor`、`backend` 和 `route_policy_agent`。
 
-`file_extraction_agent` extracts structured fields from HTML produced by
-`document_processor`.
+## 基本实现思路
 
-The HTML already contains stable ids. This package never creates, rewrites, or
-repairs ids. It only validates the ids it needs and builds runtime indexes from
-those existing ids.
+当前实现是“HTML 索引 + broad 规划 + resolution 工具执行”：
 
 ```text
-html with existing ids + task_spec
-  -> html_index builds lookup indexes and overview tree
-  -> broad plans how resolution should extract fields
-  -> resolution uses LangGraph tool calling
-  -> table_extraction returns row evidence plus quality diagnostics when tables are queried
-  -> set_field validates value type, then records values and evidence ids
-  -> finish validates required fields, evidence completeness, and final consistency
-  -> ExtractionResult
+调用方传入 html、task_spec、run_options、model_config
+  -> input_adapter 校验 html 非空、task_spec.fields 非空、max_tool_calls > 0
+  -> html_index 解析 HTML，基于已有 id 构建 document.tree、elements_by_id、tables_by_id、row_index
+  -> model_factory 从显式 model_config 或环境变量构造 broad / resolution 两个 ChatOpenAI
+  -> broad_new 读取 task_spec、document.tree 和完整 HTML，只用 return_broad_plan 产出摘要、计划和风险
+  -> resolution_new 把 broad plan 和 document outline 交给 LangGraph tool-calling loop
+  -> html_tools 提供 update_plan / read_element / read_section / table_extraction / paragraph_extraction / set_field / finish
+  -> 每个字段通过 set_field 写入 resolved 或 failed，并记录 evidence_ids 与 actions
+  -> finish 校验字段完成度和证据一致性
+  -> graph 映射成 ExtractionResult(status, result, failure_reason, trace)
 ```
 
-## File Tree
+`trace` 是前端 replay 和 backend route policy 的共同来源。它包含：
+
+- `broad_plan`：broad 阶段返回的摘要、计划和风险。
+- `plan_statuses`：resolution 执行计划时的 in_progress / completed 状态。
+- `document_tree`：从 HTML 推出的目录和表格概览。
+- `field_states`：每个字段的值、状态、证据 id、原因或失败原因。
+- `actions`：resolution 工具调用轨迹，包含读取、查表、写字段、完成等动作。
+
+## 文件结构
 
 ```text
 service/file_extraction_agent/
 ├── processor.py
+├── input_adapter.py
 ├── schemas.py
 └── impl/
+    ├── broad_new.py
     ├── graph.py
     ├── html_index.py
+    ├── html_state.py
+    ├── html_tools.py
     ├── model_factory.py
-    ├── broad_new.py
-    ├── resolution_new.py
-    └── html_tools.py
-
-tests/file_extraction_agent/
-├── test_processor.py
-├── test_html_index_new.py
-├── test_graph.py
-├── test_broad_new.py
-└── test_html_tools_new.py
+    └── resolution_new.py
 ```
 
-## Public API
+测试位于：
 
-`processor.extract(...)` is the public entrypoint.
+```text
+agent/tests/file_extraction_agent/
+```
+
+每个测试文件需要在 `agent/tests/file_extraction_agent/docs/` 下维护一份一一对应的说明文档。
+
+## 公共入口
+
+`processor.extract(...)` 是 Python 入口：
 
 ```python
 extract(
@@ -56,46 +66,57 @@ extract(
 ) -> ExtractionResult
 ```
 
-Parameters:
+HTTP 入口由 `agent/routes/file_extraction_agent.py` 暴露：
 
-- `html`: HTML fragment/string from `document_processor`. Required tracking
-  elements must already have `id`.
-- `task_spec`: fields to extract and optional global instructions.
-- `model_config`: same provider for broad and resolution, with separate model
-  names.
-- `run_options`: runtime budget. First version only exposes `max_tool_calls`.
+```text
+POST /v1/file-extraction-agent/extract
+```
 
-There is no `metadata` parameter in the extraction core.
+请求体只需要 `html` 和 `task_spec`，可选 `run_options` 与模型连接配置。核心抽取入口没有 `metadata` 参数；backend 可以在自己的 `agent_stage_runs.request_json` 中保存 metadata，但不会把 metadata 传入 `processor.extract(...)`。
 
-## HTML Indexing
+## 输入适配
 
-`html_index.py` parses the HTML and builds indexes from existing ids:
+`input_adapter.py` 负责把外部输入变成内部 `HtmlExtractionInput`：
 
-- `elements_by_id`: existing element id -> normalized element record.
-- `tree`: model-facing document overview.
-- `tables_by_id`: existing table id -> parsed table rows.
-- `row_index`: existing row id -> table row location.
+```text
+html + task_spec + run_options
+  -> 校验 html 必须是非空字符串
+  -> TaskSpec 解析 dict / TaskSpec / 兼容对象
+  -> 校验 task_spec.fields 至少一个字段，每个字段必须有 name
+  -> RunOptions 解析 dict / RunOptions / 兼容对象
+  -> 校验 max_tool_calls 为正数，默认 200
+  -> build_html_document(html)
+  -> HtmlExtractionInput(html, task_spec, document, run_options)
+```
 
-The indexer validates:
+字段类型只允许：
 
-- required tags have ids: headings, `p`, `li`, `table`, `tr`, `caption`, `ul`,
-  and `ol`;
-- ids are unique;
-- table rows used as evidence have ids.
+```text
+string / number / boolean / list[string] / list[number]
+```
 
-The indexer does not:
+`FieldDefinition` 兼容旧入参里的 `field_name`，但规范化后统一使用 `name`。
 
-- generate ids;
-- mutate HTML;
-- preserve full DOM noise in the overview tree.
+## HTML 索引
 
-## Document Tree
+`html_index.py` 只索引已有 HTML id，不生成或修复 id。它会构建：
 
-The final `document_processor` HTML keeps tags and ids, but not Docling label
-attributes. The tree therefore infers semantic type from tags:
+- `elements_by_id`：元素 id 到规范化元素记录。
+- `tree`：给模型看的文档 outline。
+- `tables_by_id`：表格 id 到解析后的表格行列。
+- `row_index`：表格行 id 到行位置。
+
+索引规则：
+
+- 标题、`p`、`li`、`table`、`tr`、`caption`、`ul`、`ol` 等可追踪元素必须有 id。
+- id 必须唯一。
+- 表格行作为证据时必须能定位到已有行 id。
+- outline 只保留标题层级和表格概览，不把整张表或完整 DOM 噪声塞给模型。
+
+语义类型从 HTML tag 推断：
 
 | HTML tag | Tree type |
-|---|---|
+| --- | --- |
 | `h1` | `TITLE` |
 | `h2`-`h6` | `SECTION_HEADER` |
 | `p` | `TEXT` |
@@ -103,142 +124,127 @@ attributes. The tree therefore infers semantic type from tags:
 | `table` | `TABLE` |
 | `caption` | `CAPTION` |
 
-Tree construction rules:
+## Broad 阶段
 
-- headings form hierarchy by numeric level;
-- only headings and tables appear in the overview tree;
-- tables attach to the nearest active heading;
-- if no heading exists, tables attach to root;
-- table rows and cells do not appear in the overview tree;
-- table nodes show table name, columns, and row count, never full rows.
-
-## Tools
-
-`tools.py` exposes resolution tools through `build_tools(state)`.
-
-Internal implementations take `state`; public tool wrappers do not. The wrapper
-docstrings are the model-facing function descriptions.
-
-Tools:
-
-- `update_plan(plan_index, status, reason)`: record replay plan progress. Plan
-  status is a strict sequence:
+`broad_new.py` 是规划器，不是抽取器。它读取 task spec、document tree 和完整 HTML，只允许通过 `return_broad_plan(summary, plan, risks)` 返回结构化计划。
 
 ```text
-Broad plan[1..N]
-  -> 只能把最早一个未完成项标记为 in_progress
-  -> 该项完成证据读取、字段写入或失败决策
-  -> 只能把当前 in_progress 的同一项标记为 completed
-  -> 进入下一项
+GraphState
+  -> build_broad_messages(...)
+  -> broad_model.bind_tools([return_broad_plan], tool_choice="return_broad_plan")
+  -> parse_broad_plan_tool_call(...)
+  -> state.broad_plan = BroadPlan(summary, plan, risks)
 ```
 
-  这条规则同时写在 prompt 和工具校验里；如果模型直接跳到后面的
-  `plan_index`，或者没有先 `in_progress` 就 `completed`，工具会返回
-  `ok=false`，让模型按最早未完成项重试。
-- `read_element(element_id)`: read one element. Tables return `table-ref`
-  metadata only: table id, optional label, row count, header row id, and
-  columns. They never return table data rows.
-- `table_extraction(table_id, sql)`: run a single `SELECT` against one table as
-  SQL table `data`. Small tables may use `SELECT *`. Large tables reject
-  unbounded `SELECT *`; the model should select explicit columns with `WHERE`
-  when possible, or use `SELECT * FROM data LIMIT 50 OFFSET n` as a bounded
-  fallback for messy tables. Explicit-column queries are not truncated by row
-  count. The tool also returns lightweight audit observations:
-  `table_audit` describes table-level structure facts, while `query_audit`
-  describes facts tied to this SQL result. The model-facing tool description
-  includes query audit few-shot guidance: blank filter cells must be judged from
-  table context, not from the fact that `WHERE` did not select them.
-- `paragraph_extraction(element_id, pattern)`: regex search one text-like
-  element and return all matches.
-- `set_field(name, value, evidence_ids, status, failure_reason)`: record one
-  field value or failure. For `resolved` fields it first checks that evidence
-  ids exist, have been observed by read/extraction tools, and that `value`
-  matches the field type (`string`, `number`, `boolean`, `list[string]`, or
-  `list[number]`). Type mismatch returns `ok=false` as a tool result and does
-  not write `field_states`.
-- `finish()`: validate required fields, evidence completeness, and final value
-  consistency before producing the extraction result.
+约束：
 
-## Broad
+- broad 不能调用文档读取工具。
+- broad 不能写最终字段值。
+- plan 要写清楚 resolution 后续应读哪个章节、哪个元素或哪张表，以及应该使用什么工具。
+- 表格计划应先读取表格结构，再规划 SQL 查询。
+- 表格质量问题只写成后续需要检查的事实，不在 broad 阶段提前下风险结论。
 
-`broad.py` is a planner only. It receives task spec, overview context, and the
-full HTML document, then uses a single bound function tool:
+## Resolution 阶段
 
-```python
-return_broad_plan(summary: str, plan: list[str], risks: list[str])
-```
-
-The model must return its plan by function call. Do not use `json_schema` or
-response-format structured output.
-
-For table-heavy fields, broad does not see `query_audit` yet, but it must plan
-for resolution to explain `query_audit.summary` in the later `set_field.reason`.
-It should not turn blank filter cells into a risk conclusion by itself.
-
-## Resolution
-
-`resolution.py` builds a LangGraph tool-calling loop:
+`resolution_new.py` 使用 LangGraph 编排模型和工具：
 
 ```text
-agent -> tools -> agent
-          |
-          finish ok / max_tool_calls -> END
+broad_plan + task_spec + document outline
+  -> resolution_model.bind_tools(html_tools.build_tools(state))
+  -> agent 选择工具
+  -> ToolNode 执行工具并把结果返回给模型
+  -> 如果 finish 成功，结束
+  -> 如果仍有缺失字段或模型停顿，追加 nudge 继续
+  -> 超过 max_tool_calls 或未 finish，返回失败
 ```
 
-The resolution model receives a compact built-in text outline, not raw
-`str(document.tree)` JSON. It sees only the five public tool wrappers and never
-sees `GraphState`. Its system prompt includes query audit few-shot guidance:
+resolution 的目标是让每个字段恰好通过一次 `set_field` 进入最终状态：
+
+- `resolved`：字段值已找到，并且 evidence ids 来自本轮读取或查表结果。
+- `failed`：字段无法可靠抽取，需要给出 `failure_reason`。
+
+## 工具边界
+
+`html_tools.py` 通过 `build_tools(state)` 暴露模型可调用工具，`state` 只通过闭包绑定，不出现在模型参数里。
+
+工具链路：
 
 ```text
-query_audit.summary says a filter column has blanks
-  -> inspect table headers, notes, grouping, adjacent columns, selected output
-     cells, and the field goal
-  -> if context proves blank rows are outside the target category
-  -> write set_field(reason=...) explaining that context
+update_plan(plan_index, status, reason)
+  -> 只能按 broad plan 顺序推进 in_progress / completed
 
-query_audit.summary shows blank filter cells / near_match_rows / empty outputs
-  -> if headers, notes, grouping, adjacent columns, or refs do not prove the
-     unselected rows are irrelevant
-  -> continue checking or write failed for human review
+read_element(element_id, reason)
+  -> 读取单个已有 HTML 元素
+  -> 如果是 table，只返回 table-ref 元信息和列名，不返回表格数据行
+
+read_section(section_id, reason, depth)
+  -> 读取某个标题下的章节内容
+  -> depth 控制包含的子章节层级
+
+table_extraction(table_id, sql, reason)
+  -> 对单张 HTML 表格建立内存 SQLite data 表
+  -> 只允许单条 SELECT
+  -> 大表拒绝无边界 SELECT *
+  -> 返回 rows、evidence_ids、table_audit 和 query_audit
+
+paragraph_extraction(element_id, pattern, reason)
+  -> 对文本类元素执行 Python 正则
+  -> 返回匹配文本、span 和 evidence ids
+
+set_field(name, value, evidence_ids, reason, status, failure_reason)
+  -> 校验字段存在、状态合法、值类型匹配
+  -> 校验证据 id 已经被本轮工具观察到
+  -> 写入 state.field_states
+
+finish()
+  -> 校验所有字段都已 set_field
+  -> 校验必填字段、证据完整性和最终一致性
+  -> 返回 ok=true 或错误列表
 ```
 
-## Evidence
+工具调用都会写入 `state.actions`，供 replay、route policy 输入组装和测试断言使用。
 
-Evidence ids are existing HTML ids. For table values, evidence should include
-the `table_id` and matching `row_id`; column names are kept in trace when useful.
+## 表格观察
 
-Cell ids are not required because `document_processor` does not automatically
-assign ids to `td`/`th`.
-
-## Table Audit Observations
-
-Table audit observations are generated inside `html_tools._table_extraction(...)`
-because this is the first point where the system knows both the parsed table
-structure and the model's concrete SQL.
+`table_extraction` 是当前抽取链路里的表格能力。它不做业务硬编码，只根据 HTML 表格结构和模型给出的 SQL 返回事实。
 
 ```text
 table_id + SQL
-  -> read parsed HtmlTable from html_index
-  -> reject unsafe SQL or unbounded large SELECT *
-  -> compute table_audit from the whole parsed table
-  -> execute SQL against in-memory SQLite table data
-  -> compute query_audit from selected rows, selected columns, and WHERE equality predicates
-  -> return rows + evidence_ids + table_audit + query_audit
-  -> record the same audit summaries in the action trace for route policy and frontend replay
+  -> 查找 HtmlTable
+  -> 校验 SQL 安全性和大表边界
+  -> 计算 table_audit：行列数、空白单元格、重复表头等结构事实
+  -> 执行 SQL
+  -> 计算 query_audit：返回行数、WHERE 等值列、近似未选中行、输出列空值等查询事实
+  -> 返回 rows + evidence_ids + table_audit + query_audit
+  -> 同步把摘要写入 action trace
 ```
 
-`table_audit` is table-level and factual. It reports row/column counts, columns,
-blank-cell observations, and structure signals such as repeated header-looking
-rows. It does not include a `status` and does not decide whether a field is
-wrong.
+`table_audit` 和 `query_audit` 是事实观察，不带 route 结论。resolution 必须在 `set_field.reason` 里解释这些观察对当前字段是否有影响；route policy 后续再结合字段值、证据文本和过程摘要判断是否需要 review。
 
-`query_audit` is field/query-specific and factual. It reports returned row
-count, WHERE equality predicate columns, blank counts in filter columns,
-near matches, selected output-column empty counts, and
-evidence integrity. It also includes a short `summary` that can be shown in the
-frontend and passed to route policy.
+## 输出映射
 
-Route policy does not hard-review on a diagnostic status flag because audit
-observations do not carry one. The policy model receives `query_audit.summary`
-plus `field_resolution.reason`, then decides whether observations such as blank
-filter cells are harmless context or require manual review.
+`graph.py` 把 `GraphState` 映射成 `ExtractionResult`：
+
+```text
+state.field_states 中 status=resolved 的字段
+  -> result[field_name] = value
+
+state.broad_plan / plan_statuses / document.tree / field_states / actions
+  -> trace
+
+broad 或 resolution 抛异常
+  -> status=failed
+  -> failure_reason=str(exc)
+  -> trace.failed_stage = broad 或 resolution
+```
+
+如果 resolution 调用 `finish` 返回 `ok=false`，整体结果也会是 `failed`，失败原因来自 `finish` 错误列表。
+
+## 设计约束
+
+- 不从文件路径读取原始文件，只消费 `document_processor` 已产出的 HTML。
+- 不创建、修复或重写 HTML id。
+- 不把 metadata 作为核心抽取输入。
+- 不在本模块执行 route policy、人工审核、审计或数据库写入。
+- 不把表格工具观察直接解释成 accept/review/reject。
+- 任何涉及抽取流程、工具边界、trace 结构或输入契约的变更，都需要同步更新本文档。
