@@ -500,7 +500,14 @@ export function ReplayReview({
   }
 
   return (
-    <section ref={reviewRef} className="replay-review-root min-h-[calc(100svh-7rem)] space-y-4 bg-background">
+    <section
+      ref={reviewRef}
+      className={
+        visibleFieldWrite
+          ? "replay-review-root has-field-write min-h-[calc(100svh-7rem)] space-y-4 bg-background"
+          : "replay-review-root min-h-[calc(100svh-7rem)] space-y-4 bg-background"
+      }
+    >
       <div
         className={replayCursor.visible ? "replay-cursor is-visible" : "replay-cursor"}
         style={{ left: replayCursor.x, top: replayCursor.y }}

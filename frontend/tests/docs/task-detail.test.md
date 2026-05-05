@@ -45,7 +45,7 @@
 - `连续 action 指向同一 block 时不重复播放 outline 鼠标路径`：验证自动播放进入相邻 action 后，如果新的证据仍落在同一个 outline/block 锚点，前端不会再次滚动左侧 outline 和播放鼠标点击路径，但仍会继续滚动 HTML 证据块。
 - `自动读取多个证据块时优先滚到当前视口最近的 HTML block`：验证一个 action 返回多个 `evidence_ids` 时，ReplayReview 会按 iframe 当前滚动位置选择距离视口中心最近的证据块先读，避免每次都从返回列表第一个块开始。
 - `必填字段没有 agent value 时在 replay 末尾显示空复核输入`：验证 agent 没有写入必填字段但 route_policy 要求 review 时，replay 仍会显示“等待人工补录”的字段卡和空输入框，提交时把人工补录值发给 review 接口。
-- `长字段写入卡把字段内容和复核区分离，避免全屏时复核入口被撑出视口`：验证长列表字段写入时，字段值位于独立内容区，复核 textarea 和提交按钮仍在字段卡的复核区中，不会混进长内容滚动区域。
+- `长字段写入卡把字段内容和复核区分离，避免全屏时复核入口被撑出视口`：验证长列表字段写入时，字段值位于独立内容区，复核 textarea 和提交按钮仍在字段卡的复核区中，不会混进长内容滚动区域；同时确认 replay 根节点带有字段写入布局状态，供全屏样式为底部复核区预留高度。
 - `reject 字段只显示拒绝路由，不提供人工修改入口`：验证 route 为 `reject` 的字段不出现复核 textarea 和提交按钮，避免用户在前端绕过拒绝结论。
 - `failed 任务会展示 backend 返回的失败原因`：验证 summary 中的 `error_message` 会在 failed 详情页顶部以“任务失败”提示展示。
 - `failed 但已有 result/trace 的任务仍展示 replay`：验证 route_policy 或后置流程失败时，只要 backend 已经能返回 replay，详情页仍展示 replay，不退回到空白或旧 trace 面板。

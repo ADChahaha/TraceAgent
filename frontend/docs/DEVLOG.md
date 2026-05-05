@@ -1,6 +1,19 @@
 # Frontend Devlog
 
-last updated: 2026-05-04 02:20:00
+last updated: 2026-05-05 15:21:45
+
+## 2026-05-05 15:21:45
+
+### 已完成工作
+
+- 修复 replay 全屏模式下长字段值把人工复核区顶出视口的问题。
+- `ReplayReview` 在存在字段写入卡时给根节点增加 `has-field-write` 布局状态，让全屏样式为底部字段卡和复核区预留更高空间。
+- 字段写入卡内部改为字段内容区独立滚动，复核 textarea 和提交按钮固定留在卡片底部。
+- 同步更新设计文档和任务详情测试说明，补充全屏长字段 review 的回归测试。
+
+### 验证
+
+- `pnpm --dir frontend test -- task-detail.test.tsx --runInBand`，结果 `20 passed`。
 
 ## 2026-05-04 02:20:00
 

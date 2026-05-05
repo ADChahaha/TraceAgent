@@ -1349,10 +1349,12 @@ it("长字段写入卡把字段内容和复核区分离，避免全屏时复核�
   const fieldCard = screen.getByLabelText("字段写入卡");
   const fieldContent = within(fieldCard).getByLabelText("字段写入内容");
   const reviewArea = within(fieldCard).getByLabelText("字段复核区");
+  const replayRoot = fieldCard.closest(".replay-review-root");
   expect(within(fieldContent).getByText(/论文题目 36/)).toBeInTheDocument();
   expect(within(reviewArea).getByLabelText("文明寝室房间号 复核值")).toBeInTheDocument();
   expect(within(reviewArea).getByRole("button", { name: "提交修正并通过" })).toBeInTheDocument();
   expect(within(fieldContent).queryByRole("button", { name: "提交修正并通过" })).not.toBeInTheDocument();
+  expect(replayRoot).toHaveClass("has-field-write");
 });
 
 it("reject 字段只显示拒绝路由，不提供人工修改入口", async () => {

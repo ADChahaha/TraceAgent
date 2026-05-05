@@ -90,12 +90,17 @@ samp,
 .replay-review-root {
   --replay-header-h: 4.5rem;
   --replay-dialogue-h: 16rem;
+  --replay-field-dialogue-h: min(28rem, calc(100svh - var(--replay-header-h) - 5rem));
   position: relative;
 }
 
 .replay-review-root:fullscreen {
   padding: 12px;
   background: var(--background);
+}
+
+.replay-review-root:fullscreen.has-field-write {
+  --replay-dialogue-h: var(--replay-field-dialogue-h);
 }
 
 .replay-outline-panel,
@@ -376,6 +381,7 @@ samp,
 }
 
 .replay-field-write-body {
+  flex: 1 1 auto;
   margin-top: 6px;
   min-height: 0;
   overflow: auto;
@@ -459,7 +465,7 @@ samp,
 }
 
 .replay-review-root:fullscreen .replay-field-write {
-  max-height: min(28rem, calc(100svh - var(--replay-header-h) - 7rem));
+  max-height: calc(var(--replay-dialogue-h) - 3rem);
 }
 
 @media (max-width: 1024px) {
