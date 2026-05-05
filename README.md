@@ -1,11 +1,8 @@
-
-
-
 # TraceAgent
 
-> 面向可信 AI 文档抽取的字段级 trace 与 review 工作台。
+> 🔎 面向可信 AI 文档抽取的字段级 trace 与 review 工作台。
 
-[日本語版](README.ja.md)
+[日本語版](README.ja.md) · `field trace` · `replay` · `human review`
 
 TraceAgent 把 AI 文档抽取从一次性黑盒 JSON，变成字段级可追踪、可回放、可治理、可审计的工作流。
 
@@ -19,11 +16,11 @@ black-box JSON  ->  字段证据  ->  可回放动作  ->  route 决策  ->  可
 | --- | --- | --- | --- | --- |
 | 字段级证据 | 工具调用时间线 | accept / review / reject | 人工复核 | FastAPI · React · SQLite |
 
-## 演示
+## 🎬 演示
 
 https://github.com/user-attachments/assets/54dc78da-bd68-4edf-8500-9dbf55f8239d
 
-## 为什么做 TraceAgent
+## ✨ 为什么做 TraceAgent
 
 传统文档抽取系统通常只展示最终 JSON。字段值对不对、证据在哪里、模型为什么这么填、哪些字段需要人工介入，都容易变成黑盒。
 
@@ -40,15 +37,15 @@ PDF + task_spec
 
 TraceAgent 关注的不是“模型答了什么”，而是“这个答案凭什么可以被相信”。
 
-## 核心亮点
+## 🚀 核心亮点
 
-- 字段级追踪：每个字段都能回到原文 evidence、工具动作和写入理由。
-- 可回放抽取：前端可以按 `plan -> read -> table query -> set_field -> finish` 回放抽取过程。
-- 写库前治理：AI 输出必须先经过字段级 `accept / review / reject`，不会直接进入最终结果。
-- 人工只处理不确定项：可信字段自动通过，复核精力集中在有疑点的字段。
-- 可审计结果：最终结果保留 evidence、route 决策和人工复核记录。
+- 🔎 字段级追踪：每个字段都能回到原文 evidence、工具动作和写入理由。
+- 🎬 可回放抽取：前端可以按 `plan -> read -> table query -> set_field -> finish` 回放抽取过程。
+- 🛡️ 写库前治理：AI 输出必须先经过字段级 `accept / review / reject`，不会直接进入最终结果。
+- 🧑‍⚖️ 人工只处理不确定项：可信字段自动通过，复核精力集中在有疑点的字段。
+- 🧾 可审计结果：最终结果保留 evidence、route 决策和人工复核记录。
 
-## 核心思路
+## 🧠 核心思路
 
 TraceAgent 的核心不是“自动填表”，而是“字段级可追踪的 AI 抽取治理”。
 
@@ -78,7 +75,7 @@ flowchart TD
     Gate --> Reject
 ```
 
-## 细粒度 Trace 工具
+## 🧰 细粒度 Trace 工具
 
 TraceAgent 的字段级 replay 不是事后编出来的日志，而是抽取 agent 每一步工具调用留下的 `actions`。
 
@@ -101,7 +98,7 @@ PDF
 | `set_field` | 字段写入级 | 字段值、证据 id、写入理由、状态或失败原因。 |
 | `finish` | 运行校验级 | 抽取是否完成，是否还有缺失字段或证据错误。 |
 
-## 本地运行
+## ⚡ 本地运行
 
 TraceAgent 由三个本地服务组成：
 
@@ -164,7 +161,7 @@ pnpm --dir frontend dev --port 3000
 http://127.0.0.1:3000/
 ```
 
-## 目录结构
+## 🗺️ 目录结构
 
 ```text
 frontend/  用户工作台：上传、replay、字段复核和审计查看

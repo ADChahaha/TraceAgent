@@ -1,8 +1,8 @@
 # TraceAgent
 
-> 信頼できる AI 文書抽出のための、フィールド単位の trace / review ワークベンチ。
+> 🔎 信頼できる AI 文書抽出のための、フィールド単位の trace / review ワークベンチ。
 
-[中文](README.md)
+[中文](README.md) · `field trace` · `replay` · `human-in-the-loop`
 
 TraceAgent は、AI による文書抽出をブラックボックスな JSON 出力で終わらせず、各フィールドごとに根拠・処理過程・判断・監査記録を追跡できるワークフローとして扱います。
 
@@ -16,11 +16,11 @@ black-box JSON  ->  フィールド単位の根拠  ->  再生可能な処理過
 | --- | --- | --- | --- | --- |
 | フィールド単位の根拠 | tool-call timeline | accept / review / reject | human-in-the-loop | FastAPI · React · SQLite |
 
-## Demo
+## 🎬 デモ
 
 https://github.com/user-attachments/assets/54dc78da-bd68-4edf-8500-9dbf55f8239d
 
-## なぜ TraceAgent なのか
+## ✨ なぜ TraceAgent なのか
 
 一般的な文書抽出システムは、最終的な JSON だけを表示しがちです。その場合、フィールド値が正しいのか、根拠がどこにあるのか、なぜモデルがその値を選んだのか、どのフィールドを人間が確認すべきかが見えにくくなります。
 
@@ -37,15 +37,15 @@ PDF + task_spec
 
 TraceAgent が重視するのは「モデルが何を答えたか」だけではなく、「その答えをなぜ信頼できるのか」です。
 
-## 主な特徴
+## 🚀 主な特徴
 
-- フィールド単位の trace: 各フィールドを原文 evidence、tool action、書き込み理由まで追跡できます。
-- 抽出過程の replay: UI で `plan -> read -> table query -> set_field -> finish` の流れを再生できます。
-- 最終結果に入れる前の判断: AI 出力は最終結果になる前に `accept / review / reject` の route を通ります。
-- 必要な箇所だけ human-in-the-loop: 信頼できるフィールドは自動通過し、不確実なフィールドだけを人間が確認します。
-- 監査可能な出力: 最終結果には evidence、route decision、review record が残ります。
+- 🔎 フィールド単位の trace: 各フィールドを原文 evidence、tool action、書き込み理由まで追跡できます。
+- 🎬 抽出過程の replay: UI で `plan -> read -> table query -> set_field -> finish` の流れを再生できます。
+- 🛡️ 最終結果に入れる前の判断: AI 出力は最終結果になる前に `accept / review / reject` の route を通ります。
+- 🧑‍⚖️ 必要な箇所だけ human-in-the-loop: 信頼できるフィールドは自動通過し、不確実なフィールドだけを人間が確認します。
+- 🧾 監査可能な出力: 最終結果には evidence、route decision、review record が残ります。
 
-## 基本的な考え方
+## 🧠 基本的な考え方
 
 TraceAgent は単なる自動入力ツールではありません。AI 文書抽出のための、フィールド単位の governance layer です。
 
@@ -75,7 +75,7 @@ flowchart TD
     Gate --> Reject
 ```
 
-## 細粒度の Trace Tools
+## 🧰 細粒度の Trace Tools
 
 TraceAgent の replay は後から作ったログではありません。抽出 agent の tool action そのものから構成されます。
 
@@ -98,7 +98,7 @@ PDF
 | `set_field` | フィールド書き込み | field value、evidence ids、書き込み理由、status、failure reason。 |
 | `finish` | 実行結果の検証 | 抽出が完了したか、欠落フィールドや evidence エラーがあるか。 |
 
-## ローカルでの実行
+## ⚡ ローカルでの実行
 
 TraceAgent は 3 つのローカルサービスで構成されます。
 
@@ -159,7 +159,7 @@ pnpm --dir frontend dev --port 3000
 http://127.0.0.1:3000/
 ```
 
-## ディレクトリ構成
+## 🗺️ ディレクトリ構成
 
 ```text
 frontend/  ユーザー画面：upload、replay、field review、audit view
