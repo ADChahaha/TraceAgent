@@ -166,3 +166,7 @@ frontend/  ユーザー画面：upload、replay、field review、audit view
 backend/   管理サービス：task state、result、review、audit、SQLite
 agent/     AI レイヤー：PDF standardization、field extraction、route policy
 ```
+
+## 📄 ライセンス
+
+このプロジェクトは [MIT License](LICENSE) のもとで公開されています。

@@ -168,3 +168,7 @@ frontend/  用户工作台：上传、replay、字段复核和审计查看
 backend/   任务治理：状态、结果、review、audit 和 SQLite
 agent/     AI 能力：PDF 标准化、字段抽取和 route policy
 ```
+
+## 📄 许可证
+
+本项目使用 [MIT License](LICENSE)。
