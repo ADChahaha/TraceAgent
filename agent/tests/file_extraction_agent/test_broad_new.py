@@ -19,25 +19,34 @@ def test_build_broad_messages_includes_task_and_tree():
     assert "dp-h2-1" in content
     assert '<p id="dp-p-1">全文正文</p>' in content
     assert "resolution agent" in content
-    assert "Resolution 后续可用工具" in content
+    assert "Tools available to the resolution agent" in content
+    assert "search_elements(query, reason, limit)" in content
     assert "read_element(element_id, reason)" in content
     assert "table_extraction(table_id, sql, reason)" in content
     assert "set_field(name, value, evidence_ids, reason" in content
-    assert "你现在不能调用这些工具" in content
-    assert "大表不要规划裸 SELECT *" in content
-    assert "小表可以 SELECT *" in content
+    assert "You must not call these tools in the broad stage" in content
+    assert "Do not plan an unbounded SELECT * for large tables" in content
+    assert "Small tables may use SELECT *" in content
     assert "SELECT * FROM data LIMIT 50 OFFSET 0" in content
-    assert "只能 return_broad_plan" in content
-    assert "不能直接抽取最终字段值" in content
+    assert "only call return_broad_plan" in content
+    assert "must not extract final field values directly" in content
     assert "field=value" in content
-    assert "用 update_plan 标记" in content
-    assert "读取 p004_b002 表格" in content
-    assert "不能预先填答案" in content
-    assert "规划 set_field reason 要解释 query_audit.summary" in content
-    assert "不要把空白筛选列直接规划成风险结论" in content
+    assert "The plan is a navigation plan, not an answer draft" in content
+    assert "Do not include concrete extracted values" in content
+    assert "Do not write concrete extracted values or normalized field values" in content
+    assert "Use the field names and descriptions from task_spec as categories" in content
+    assert "effective_date" not in content
+    assert "jurisdiction" not in content
+    assert "term/survival/confidentiality" not in content
+    assert "marked with update_plan" in content
+    assert "Read table p004_b002" in content
+    assert "Do not prefill answers" in content
+    assert "set_field reason should explain query_audit.summary" in content
+    assert "Do not turn blank filter columns directly into a risk conclusion" in content
+    assert "Write plan text in the same language as the document whenever possible" in content
 
 
-def test_run_broad_planner_binds_only_plan_output_function():
+def test_run_broad_planner_skips_model_and_returns_empty_plan():
     captured = {}
 
     class FakeBroadModel:
@@ -47,24 +56,20 @@ def test_run_broad_planner_binds_only_plan_output_function():
             return self
 
         def invoke(self, messages):
-            return SimpleNamespace(
-                tool_calls=[
-                    {
-                        "name": "return_broad_plan",
-                        "args": {"summary": "s", "plan": ["p"], "risks": []},
-                    }
-                ]
-            )
+            raise AssertionError("broad model should not be invoked in no-plan mode")
 
     state = SimpleNamespace(
         task_spec=SimpleNamespace(fields=[SimpleNamespace(name="student_name", type="string")]),
         document=SimpleNamespace(tree=[]),
     )
 
-    run_broad_planner(state, FakeBroadModel())
+    plan = run_broad_planner(state, FakeBroadModel())
 
-    assert captured["tool_names"] == ["return_broad_plan"]
-    assert captured["tool_choice"] == "return_broad_plan"
+    assert captured == {}
+    assert plan.summary == "No broad plan"
+    assert plan.plan == []
+    assert plan.risks == []
+    assert state.broad_plan == plan
 
 
 def test_parse_broad_plan_tool_call_reads_function_arguments():

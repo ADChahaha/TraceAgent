@@ -10,56 +10,67 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import MessagesState
 from langgraph.prebuilt import ToolNode
 
-from service.file_extraction_agent.impl.broad_new import format_broad_plan
 from service.file_extraction_agent.impl.html_tools import build_tools
 
 
 def build_resolution_messages(state: Any) -> list[Any]:
     system = SystemMessage(
         content=(
-            "你是 HTML 文档抽取流程里的 resolution agent。你的输出会被前端做成“人类查找文档”的动画，"
-            "所以每一次工具调用都必须像一个清晰、可信、可展示的动作。"
-            "你不是聊天助手，也不是研究助手；你是字段写入 agent。目标是把 Task fields 里的每个字段写完。"
-            "每个字段最终必须且只能调用一次 set_field，status 为 resolved 或 failed。"
-            "一次只处理一个字段或 broad plan 中强相关的一组字段；不要一边浏览多个区域一边最后统一写字段。"
-            "除 finish 外，每个工具调用都有必填 reason。reason 是展示给用户看的中文旁白，"
-            "要短、具体、像人在解释自己为什么现在看这里；不要写内部术语、不要写泛泛的'继续抽取'。"
-            "调用轨迹必须适合前端 replay："
-            "1. 开始执行某条 broad plan 前，先调用 update_plan(plan_index, 'in_progress', reason)。"
-            "只能推进最早一个未完成的 broad plan，不能跳过前面的 plan_index，"
-            "也不能在前一项未 completed 时直接 update 后面的 plan。"
-            "2. 然后只读取完成这条 plan 所需的证据。"
-            "3. 一旦某个字段证据足够，下一次相关工具调用必须是 set_field，不要继续乱看。"
-            "4. 与该 plan 相关的字段写入或失败决策完成后，立刻调用 update_plan(plan_index, 'completed', reason)，"
-            "让右侧 plan 可以画线标记完成。没有 set_field 或明确失败决策前，不要 completed。"
-            "5. 所有字段完成后再调用 finish。"
-            "使用内置 document outline 选择 element id。优先先看目录/contents/index 相关页面来定位章节；"
-            "除非当前字段需要文档标题，不要在封面和无关标题上游荡。"
-            "如果候选是章节标题，优先使用 read_section，并使用最小够用 depth："
-            "depth=1 看窄章节，depth=2 看相邻子章节，depth=3 只用于完整大章。"
-            "如果同一字段已经在同一章节 read_element 了 3 次以上，停止零散 read_element，改用父章节 read_section 加大 depth。"
-            "表格先 read_element(table_id) 看字段行，再 table_extraction 查询；SQL 里所有列名必须用双引号包住。"
-            "table_extraction 会返回 query_audit.summary，它是查表事实，不是风险结论。"
-            "写 set_field reason 时必须解释 query_audit.summary 对当前字段的影响，特别是筛选列空白、near_match_rows、输出列空值和结构错位观察。"
-            "query_audit few-shot："
-            "例 1：你查询 WHERE “类别列”='目标类别'，summary 显示筛选列有空白。"
-            "如果表头、表注、分组标题或相邻列明确说明空白行属于非目标类别，且选中行输出列完整，"
-            "set_field reason 可以说明这个表格上下文，并写 resolved。"
-            "例 2：你查询 WHERE “类别列”='目标类别'，summary 显示筛选列有空白、near_match_rows 或输出列空值。"
-            "如果空白行的相邻列、表注或表头不能证明它是非目标类别，不能只因为空白行未被 WHERE 选中就说正常；"
-            "必须继续查表、改用更稳妥的查询，或 set_field(status='failed') 说明需要人工检查。"
-            "空白筛选列必须结合表格上下文判断，不能把 query_audit.summary 直接改写成风险或正常结论。"
-            "文本用 paragraph_extraction；普通 HTML 片段用 read_element/read_section。"
-            "工具返回 ok=false 或 error 时，不要退出，读错误并修正参数重试。"
-            "set_field 的 evidence_ids 必须来自本轮 read_element/read_section/table_extraction/paragraph_extraction 的结果，"
-            "不能只凭 overview 或 broad plan 写字段。"
+            "You are the resolution agent in an HTML document extraction workflow. "
+            "Your actions will be replayed in the frontend as a human-like document search animation, "
+            "so every tool call must be clear, credible, and displayable. "
+            "You are not a chat assistant or a research assistant. You are the field-writing agent. "
+            "Your goal is to finish every field in Task fields. "
+            "Each field must be finalized exactly once with set_field, with status resolved or failed. "
+            "Handle one field at a time, or one tightly related group of fields. "
+            "Do not browse many unrelated areas and then write all fields at the end. "
+            "Every tool call except finish requires a reason. Write reasons in the same language as the document whenever possible. "
+            "Reasons must be short, specific, and understandable to users; avoid internal jargon and vague phrases like 'continue extraction'. "
+            "The action trace must support frontend replay: "
+            "There is no broad plan. Use the task field descriptions and document outline as the primary guide. "
+            "Do not wait for or call update_plan; choose search and read tools directly from the outline and field semantics. "
+            "1. Pick the next unresolved field, inspect the outline, and choose the narrowest useful search/read action. "
+            "2. Read only the evidence needed to complete that step. "
+            "3. Once evidence for a field is sufficient, the next related tool call must be set_field; do not keep browsing. "
+            "4. After all fields are done, call finish. "
+            "Use the built-in document outline to choose element ids. Prefer checking contents/index pages first to locate sections. "
+            "Use search_elements when the outline is too coarse or when you need to locate a keyword before writing a field. "
+            "Search results include readable HTML and observed evidence ids; when the returned HTML is sufficient for the field, use those evidence_ids directly in set_field. "
+            "Only call read_element when the search match is ambiguous, incomplete, or needs more local context. "
+            "Use scan_document(scope_id, query, reason, limit) only after choosing a scope id from the outline or search_elements. "
+            "scan_document is an isolated no-tool reader; it scans all content under that one scope id and cannot call tools or subagents. "
+            "If read_section hits the section size limit, it automatically uses the isolated reader on that same section id; "
+            "use the returned read_section candidates directly when they are sufficient, or make one precise follow-up read only when more local context is needed. "
+            "It returns candidate block evidence only, not final field values, normalized values, or plans. "
+            "Do not wander around cover pages or unrelated headings unless the current field needs the document title. "
+            "If a candidate is a section heading, prefer read_section with the smallest sufficient depth: "
+            "depth=1 reads a narrow section, depth=2 reads nearby subsections, and depth=3 is only for a full large section. "
+            "If you have used read_element more than 3 times in the same section for one field, stop scattered reads and use "
+            "read_section on the parent section with a larger depth. "
+            "For tables, first read_element(table_id) to inspect columns, then use table_extraction. "
+            "All SQL column names must be wrapped in double quotes. "
+            "table_extraction returns query_audit.summary; it is a table-query observation, not a risk conclusion. "
+            "When writing set_field reason, explain how query_audit.summary affects the current field, especially blank filter columns, "
+            "near_match_rows, empty output columns, and structural misalignment. "
+            "query_audit few-shot: "
+            "Example 1: You query WHERE \"category\"='target', and summary says the filter column has blank cells. "
+            "If neighboring columns, captions, headers, or group titles clearly show those blank rows are not target rows, "
+            "and selected output columns are complete, the set_field reason may explain that table context and resolve the field. "
+            "Example 2: You query WHERE \"category\"='target', and summary says the filter column has blanks, near_match_rows, "
+            "or selected output columns are empty. If neighboring columns, captions, or headers cannot prove the blank rows are non-target rows, "
+            "Do not claim blank rows are normal merely because WHERE did not select them. "
+            "Continue querying, use a safer query, or set_field(status='failed') to request human review. "
+            "Blank filter columns must be interpreted with table context; do not rewrite query_audit.summary directly into a risk or normal conclusion. "
+            "Use paragraph_extraction for text patterns; use read_element/read_section for ordinary HTML fragments. "
+            "If a tool returns ok=false or error, do not quit. Read the error, fix parameters, and retry. "
+            "set_field evidence_ids must come from this run's search_elements/scan_document/read_element/read_section/table_extraction/paragraph_extraction results. "
+            "Do not write fields using only the overview or broad plan."
         )
     )
     human = HumanMessage(
         content="\n\n".join(
             [
-                "Broad plan（右侧 plan 会根据 update_plan 动作逐项划线完成）:\n" + format_broad_plan(state.broad_plan),
-                "Task fields（必须逐个 set_field）:\n" + _task_fields_text(state.task_spec),
+                "Task fields (each field must be set_field):\n" + _task_fields_text(state.task_spec),
                 "Document outline（用于选择 read_section/read_element/table_extraction 的 id）:\n"
                 + format_document_outline(state.document.tree),
             ]
@@ -164,12 +175,11 @@ def _continue_instruction(state: Any) -> str:
     field_states = getattr(state, "field_states", {}) or {}
     if _should_force_set_field_nudge(state):
         return (
-            "你已经读取了多个证据但还没有写字段。停止继续浏览。"
-            "如果当前字段证据已经足够，下一次工具调用必须是 set_field。"
-            "如果证据还不够，只能再做一次针对同一字段的精确工具调用，然后 set_field。"
-            "不要切换到别的字段。相关 plan 完成后调用 update_plan，status=completed。"
-            "继续时只能推进最早未完成的 broad plan，不要跳到后面的 plan_index。"
-            "不要用普通文本回答。"
+            "You have read several pieces of evidence but have not written a field. Stop browsing broadly. "
+            "If evidence for the current field is sufficient, the next tool call must be set_field. "
+            "If evidence is still insufficient, make only one more precise tool call for the same field, then set_field. "
+            "Do not switch to another field. "
+            "Do not answer in plain text."
         )
     missing = [
         field.name
@@ -178,16 +188,15 @@ def _continue_instruction(state: Any) -> str:
     ]
     if missing:
         return (
-            "抽取还没有完成。缺失字段: "
+            "Extraction is not complete. Missing fields: "
             + ", ".join(missing)
-            + "。继续使用工具。每个缺失字段只读取必要证据，证据足够后立刻 set_field，"
-            "然后再处理下一个字段。开始和完成相关 broad plan 时都要调用 update_plan。"
-            "update_plan 只能按最早未完成的 broad plan 顺序推进，不能跳过前面的 plan_index。"
-            "不要先收集多个字段的证据再统一写入。不要用普通文本回答。"
+            + ". Continue using tools. For each missing field, read only necessary evidence, call set_field as soon as evidence is sufficient, "
+            "then move to the next field. "
+            "Do not collect evidence for many fields and write them all later. Do not answer in plain text."
         )
     return (
-        "所有字段都已经 set_field，但 finish 还没有成功。现在调用 finish。"
-        "如果 finish 返回错误，用 set_field 修正后再次调用 finish。不要用普通文本回答。"
+        "All fields have been set_field, but finish has not succeeded yet. Call finish now. "
+        "If finish returns errors, fix them with set_field and call finish again. Do not answer in plain text."
     )
 
 
@@ -289,7 +298,7 @@ def _should_force_set_field_nudge(state: Any) -> bool:
     recent = actions[-4:]
     if any(action.get("tool_name") == "set_field" for action in recent):
         return False
-    read_like = {"read_element", "read_section", "table_extraction", "paragraph_extraction"}
+    read_like = {"search_elements", "scan_document", "read_element", "read_section", "table_extraction", "paragraph_extraction"}
     return sum(1 for action in recent if action.get("tool_name") in read_like) >= 4
 
 

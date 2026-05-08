@@ -4,16 +4,17 @@
 
 ## 基本实现思路
 
-当前实现是“HTML 索引 + broad 规划 + resolution 工具执行”：
+当前 no-plan 实验实现是“HTML 索引 + 空 broad 占位 + resolution 直接工具执行”：
 
 ```text
 调用方传入 html、task_spec、run_options、model_config
   -> input_adapter 校验 html 非空、task_spec.fields 非空、max_tool_calls > 0
   -> html_index 解析 HTML，基于已有 id 构建 document.tree、elements_by_id、tables_by_id、row_index
-  -> model_factory 从显式 model_config 或环境变量构造 broad / resolution 两个 ChatOpenAI
-  -> broad_new 读取 task_spec、document.tree 和完整 HTML，只用 return_broad_plan 产出摘要、计划和风险
-  -> resolution_new 把 broad plan 和 document outline 交给 LangGraph tool-calling loop
-  -> html_tools 提供 update_plan / read_element / read_section / table_extraction / paragraph_extraction / set_field / finish
+  -> model_factory 从显式 model_config 或环境变量构造 broad / resolution 两个 ChatOpenAI，并注入重试和超时配置
+  -> broad_new 不调用模型，直接写入空 BroadPlan 作为 trace 兼容占位
+  -> graph 把 broad_model 挂到 state.document_scan_model，作为可选隔离全文扫描模型
+  -> resolution_new 把 task fields 和 document outline 交给 LangGraph tool-calling loop
+  -> html_tools 提供 search_elements / scan_document / read_element / read_section / table_extraction / paragraph_extraction / set_field / finish
   -> 每个字段通过 set_field 写入 resolved 或 failed，并记录 evidence_ids 与 actions
   -> finish 校验字段完成度和证据一致性
   -> graph 映射成 ExtractionResult(status, result, failure_reason, trace)
@@ -21,7 +22,7 @@
 
 `trace` 是前端 replay 和 backend route policy 的共同来源。它包含：
 
-- `broad_plan`：broad 阶段返回的摘要、计划和风险。
+- `broad_plan`：no-plan 实验中的兼容占位，默认是 `summary="No broad plan"`、空 `plan` 和空 `risks`。
 - `plan_statuses`：resolution 执行计划时的 in_progress / completed 状态。
 - `document_tree`：从 HTML 推出的目录和表格概览。
 - `field_states`：每个字段的值、状态、证据 id、原因或失败原因。
@@ -97,6 +98,20 @@ string / number / boolean / list[string] / list[number]
 
 `FieldDefinition` 兼容旧入参里的 `field_name`，但规范化后统一使用 `name`。
 
+## 模型连接配置
+
+`model_factory.py` 负责把显式 `model_config` 或环境变量归一化成 broad / resolution 两个 `ChatOpenAI`：
+
+```text
+显式 model_config 或 .env / 进程环境
+  -> 读取 BASE_URL / OPENAI_API_KEY / BROAD_MODEL / RESOLUTION_MODEL / MODEL
+  -> 读取 TEMPERATURE / TOP_P / TOP_K
+  -> 读取 MODEL_MAX_RETRIES / MODEL_REQUEST_TIMEOUT
+  -> 分别创建 broad_model 和 resolution_model
+```
+
+`MODEL_MAX_RETRIES` 未设置时默认是 `6`，用于减少模型服务短暂连接错误导致的整份文档失败。`MODEL_REQUEST_TIMEOUT` 未设置时不显式传入超时，保持底层客户端默认行为。
+
 ## HTML 索引
 
 `html_index.py` 只索引已有 HTML id，不生成或修复 id。它会构建：
@@ -126,30 +141,27 @@ string / number / boolean / list[string] / list[number]
 
 ## Broad 阶段
 
-`broad_new.py` 是规划器，不是抽取器。它读取 task spec、document tree 和完整 HTML，只允许通过 `return_broad_plan(summary, plan, risks)` 返回结构化计划。
+`broad_new.py` 在 no-plan 实验中不再调用模型，也不再生成路线计划。它只写入空 `BroadPlan`，让下游 trace 结构保持兼容。
 
 ```text
 GraphState
-  -> build_broad_messages(...)
-  -> broad_model.bind_tools([return_broad_plan], tool_choice="return_broad_plan")
-  -> parse_broad_plan_tool_call(...)
-  -> state.broad_plan = BroadPlan(summary, plan, risks)
+  -> run_broad_planner(...)
+  -> state.broad_plan = BroadPlan(summary="No broad plan", plan=[], risks=[])
 ```
 
 约束：
 
-- broad 不能调用文档读取工具。
-- broad 不能写最终字段值。
-- plan 要写清楚 resolution 后续应读哪个章节、哪个元素或哪张表，以及应该使用什么工具。
-- 表格计划应先读取表格结构，再规划 SQL 查询。
-- 表格质量问题只写成后续需要检查的事实，不在 broad 阶段提前下风险结论。
+- broad 不调用模型，不读取完整 HTML 来制定路线。
+- broad 不写最终字段值，也不写候选章节、元素、关键词或风险。
+- broad_model 只会在 resolution 主 agent 显式调用 `scan_document`，或 `read_section` 因章节过长自动触发 scoped scan 时，作为隔离 reader 被调用；它不会获得工具，也不能递归调用其他 agent。
+- `build_broad_messages`、`return_broad_plan` 和解析函数暂时保留，方便和旧 plan 模式对比或回滚。
 
 ## Resolution 阶段
 
 `resolution_new.py` 使用 LangGraph 编排模型和工具：
 
 ```text
-broad_plan + task_spec + document outline
+task_spec + document outline
   -> resolution_model.bind_tools(html_tools.build_tools(state))
   -> agent 选择工具
   -> ToolNode 执行工具并把结果返回给模型
@@ -163,6 +175,18 @@ resolution 的目标是让每个字段恰好通过一次 `set_field` 进入最�
 - `resolved`：字段值已找到，并且 evidence ids 来自本轮读取或查表结果。
 - `failed`：字段无法可靠抽取，需要给出 `failure_reason`。
 
+resolution 不接收 broad plan，也不调用 `update_plan`。它直接从字段语义和文档 outline 选择工具：
+
+```text
+Task fields + document outline
+  -> 选择下一个未完成字段
+  -> 用 search_elements / scan_document / read_element / read_section / table_extraction / paragraph_extraction 定位和读取证据
+  -> 证据足够就立即 set_field
+  -> 所有字段完成后 finish
+```
+
+resolution system prompt 使用英文表达工具调用、replay、表格查询和证据校验约束。除 `finish` 外，每个工具调用都需要 `reason`，并要求 reason 尽量使用文档语言；字段值本身也应跟随任务定义和文档语言输出。
+
 ## 工具边界
 
 `html_tools.py` 通过 `build_tools(state)` 暴露模型可调用工具，`state` 只通过闭包绑定，不出现在模型参数里。
@@ -170,8 +194,20 @@ resolution 的目标是让每个字段恰好通过一次 `set_field` 进入最�
 工具链路：
 
 ```text
-update_plan(plan_index, status, reason)
-  -> 只能按 broad plan 顺序推进 in_progress / completed
+search_elements(query, reason, limit)
+  -> 在段落、标题、列表项和 caption 等 block 级文本元素中按关键词定位匹配内容
+  -> 跳过 `page_001` 这类整页聚合文本，避免把大块页面正文当作字段证据
+  -> 直接返回可读 HTML 和 evidence_ids，并把这些 evidence_ids 标记为已观察
+  -> 如果需要更多局部上下文，再继续 read_element / read_section
+
+scan_document(scope_id, query, reason, limit)
+  -> 主 resolution agent 先从 outline 或 search_elements 里选出一个已有 scope_id；也可能由 read_section 过长分支在工具内部用同一个 section_id 自动触发
+  -> 如果 scope_id 是标题，构造该标题下直到下一个同级或更高级标题前的完整 scope HTML；如果是普通元素，构造该元素及其 DOM 子元素的 scope HTML
+  -> 发起一个隔离模型调用，输入 task fields、scope_id、query/reason、limit 和这个 scope HTML
+  -> 隔离 reader 不绑定任何工具，不允许调用工具、agent 或 subagent，也不返回 plan 或最终字段值
+  -> 只接收 reader 返回的 scope 内已有 block 级 element id，过滤 scope 外 id、未知 id、`page_001` 聚合 id 和非 block/table 元素
+  -> 把候选 id 转成可读 HTML、snippet、evidence_ids 和 reader reason，并标记为已观察证据
+  -> 如果候选证据足够，主 agent 可以直接用这些 evidence_ids 调用 set_field
 
 read_element(element_id, reason)
   -> 读取单个已有 HTML 元素
@@ -180,6 +216,10 @@ read_element(element_id, reason)
 read_section(section_id, reason, depth)
   -> 读取某个标题下的章节内容
   -> depth 控制包含的子章节层级
+  -> 如果生成的 section HTML 超过 12,000 字符，不返回整段 HTML，而是在工具内部直接用同一个 section_id 调用隔离 scoped reader
+  -> scoped reader 只返回章节内候选 block 证据；这些候选 evidence_ids 会被标记为已观察，可直接用于 set_field
+  -> 如果没有配置 document_scan_model 或隔离扫描失败，read_section 返回 ok=false，并带上 scan_error
+  -> 合理大小内，非表格正文和列表项完整返回；表格仍只返回 table-ref，不返回数据行
 
 table_extraction(table_id, sql, reason)
   -> 对单张 HTML 表格建立内存 SQLite data 表

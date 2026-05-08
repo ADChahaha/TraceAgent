@@ -22,6 +22,7 @@ def run_extraction_graph(
         resolution_model if resolution_model is not None else legacy_kwargs.get("resolution_client")
     )
     state = build_graph_state(extraction_input)
+    state.document_scan_model = broad_model
     try:
         run_broad_planner(state, broad_model)
     except Exception as exc:

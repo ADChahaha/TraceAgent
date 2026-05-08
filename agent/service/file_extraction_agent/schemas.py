@@ -59,6 +59,8 @@ class ModelConfig:
     temperature: float = 0.0
     top_p: float | None = None
     top_k: int | None = None
+    max_retries: int = 6
+    request_timeout: float | None = None
 
 
 @dataclass

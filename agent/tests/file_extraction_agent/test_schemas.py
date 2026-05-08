@@ -40,6 +40,8 @@ def test_model_config_keeps_stage_model_names_and_sampling_options():
         temperature=0.2,
         top_p=0.9,
         top_k=40,
+        max_retries=7,
+        request_timeout=90.0,
     )
 
     assert config.broad_model_name == "broad"
@@ -47,6 +49,8 @@ def test_model_config_keeps_stage_model_names_and_sampling_options():
     assert config.temperature == 0.2
     assert config.top_p == 0.9
     assert config.top_k == 40
+    assert config.max_retries == 7
+    assert config.request_timeout == 90.0
 
 
 def test_run_options_defaults_to_tool_budget_only():

@@ -8,14 +8,19 @@ they remain straightforward to unit test.
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from html import escape
 from typing import Any
 
+from langchain_core.messages import HumanMessage, SystemMessage
+
 LARGE_TABLE_SELECT_STAR_ROW_LIMIT = 30
 LARGE_TABLE_SELECT_STAR_CELL_LIMIT = 300
 MAX_LARGE_TABLE_SELECT_STAR_LIMIT = 50
+MAX_READ_SECTION_HTML_CHARS = 12_000
+SCAN_DOCUMENT_ALLOWED_TYPES = {"TITLE", "SECTION_HEADER", "TEXT", "LIST_ITEM", "CAPTION", "TABLE"}
 
 try:
     from langchain_core.tools import tool
@@ -55,6 +60,52 @@ def build_tools(state: Any) -> list[Any]:
         """
 
         return _update_plan(state, plan_index, status, reason=reason)
+
+    @tool
+    def search_elements(query: str, reason: str, limit: int = 10) -> dict[str, Any]:
+        """
+        Search text-like HTML elements by keyword and return readable paragraphs.
+
+        Use this when the document outline is too coarse, read_section is too
+        large, or you need to locate likely paragraphs for a field. This returns directly readable paragraph HTML
+        with evidence_ids, and those evidence ids may be used directly in set_field.
+
+        Args:
+            query: Keyword or short phrase to search for.
+            reason: Why this search is needed for the current field.
+            limit: Maximum number of candidate elements to return.
+
+        Returns:
+            Matching element ids, element types, readable HTML, evidence ids that may be used directly in set_field, and text lengths.
+        """
+
+        return _search_elements(state, query, limit=limit, reason=reason)
+
+    @tool
+    def scan_document(scope_id: str, query: str, reason: str, limit: int = 10) -> dict[str, Any]:
+        """
+        Ask an isolated no-tool document reader to scan one HTML scope for evidence.
+
+        Use this after the outline, search_elements, or a too-long read_section
+        result has identified one existing scope id. The isolated reader scans
+        all content under one existing scope id, but has no tools and cannot
+        call other agents. It returns only candidate block evidence and does not return final field values,
+        normalized values, or a plan. Returned evidence_ids may be used directly in set_field.
+
+        Args:
+            scope_id: Existing id whose full covered content should be scanned.
+                If this is a heading id, the scope is that heading's section up
+                to the next same-level or higher heading.
+            query: Keyword, phrase, or short field-focused search request.
+            reason: Why isolated scanning is needed for the current field.
+            limit: Maximum number of candidate block elements to return.
+
+        Returns:
+            Candidate block elements with readable HTML, evidence ids, snippets,
+            and the reader's short relevance reason.
+        """
+
+        return _scan_document(state, scope_id, query, limit=limit, reason=reason)
 
     @tool
     def read_element(element_id: str, reason: str) -> dict[str, Any]:
@@ -106,9 +157,11 @@ def build_tools(state: Any) -> list[Any]:
                 section.
 
         Returns:
-            HTML-like section map and evidence ids. Large lists are summarized
-            as list references with a few item previews. Table rows are not
-            returned; use ``table_extraction`` for row data.
+            HTML-like section map and evidence ids. Text and list items are
+            returned in full when the section is reasonably sized. If the
+            section is too large, this tool automatically invokes the isolated scoped reader
+            on the same section id and returns candidate block evidence instead of returning the full section HTML.
+            Table rows are not returned; use ``table_extraction`` for row data.
         """
 
         return _read_section(state, section_id, depth, reason=reason)
@@ -200,8 +253,9 @@ def build_tools(state: Any) -> list[Any]:
         not keep reading unrelated elements first.
 
         Use this only after this same run has observed the supporting evidence
-        through ``read_element``, ``table_extraction``, or
-        ``paragraph_extraction``. Do not call this from document overview alone.
+        through ``search_elements``, ``scan_document``, ``read_element``,
+        ``read_section``, ``table_extraction``, or ``paragraph_extraction``. Do not call this
+        from document overview alone.
 
         Args:
             name: Field name declared in task_spec.
@@ -237,7 +291,8 @@ def build_tools(state: Any) -> list[Any]:
         return _finish(state)
 
     return [
-        update_plan,
+        search_elements,
+        scan_document,
         read_element,
         read_section,
         table_extraction,
@@ -393,6 +448,371 @@ def _read_element(state: Any, element_id: str, *, reason: str | None = None) -> 
     return result
 
 
+def _search_elements(state: Any, query: str, limit: int = 10, *, reason: str | None = None) -> dict[str, Any]:
+    document = _read(state, "document")
+    normalized_query = " ".join(str(query or "").split())
+    try:
+        max_results = max(1, min(int(limit), 50))
+    except (TypeError, ValueError):
+        max_results = 10
+    if not normalized_query:
+        result = {"ok": False, "error": "query must be a non-empty string"}
+        _record_action(state, "search_elements", _args_with_reason({"query": query, "limit": limit}, reason), result)
+        return result
+
+    query_folded = normalized_query.casefold()
+    matches: list[dict[str, Any]] = []
+    for element in document.elements_by_id.values():
+        if element.type not in {"TITLE", "SECTION_HEADER", "TEXT", "LIST_ITEM", "CAPTION"}:
+            continue
+        if _is_page_level_aggregate_id(element.id):
+            continue
+        text = str(element.text or "")
+        index = text.casefold().find(query_folded)
+        if index < 0:
+            continue
+        matches.append(
+            {
+                "element_id": element.id,
+                "type": element.type,
+                "html": _element_html(document, element),
+                "evidence_ids": [element.id],
+                "snippet": _snippet(text, index, len(normalized_query)),
+                "text_chars": len(text),
+            }
+        )
+        if len(matches) >= max_results:
+            break
+
+    _mark_observed(state, [evidence_id for match in matches for evidence_id in match["evidence_ids"]])
+    result = {
+        "query": normalized_query,
+        "limit": max_results,
+        "matches": matches,
+        "match_count": len(matches),
+        "truncated": len(matches) >= max_results,
+        "note": "Search results include readable HTML and observed evidence_ids; call read_element only if more local context is needed.",
+    }
+    _record_action(state, "search_elements", _args_with_reason({"query": normalized_query, "limit": max_results}, reason), result)
+    return result
+
+
+def _scan_document(state: Any, scope_id: str, query: str, limit: int = 10, *, reason: str | None = None) -> dict[str, Any]:
+    document = _read(state, "document")
+    normalized_scope_id = str(scope_id or "").strip()
+    normalized_query = " ".join(str(query or "").split())
+    try:
+        max_results = max(1, min(int(limit), 50))
+    except (TypeError, ValueError):
+        max_results = 10
+    if not normalized_scope_id:
+        result = {"ok": False, "error": "scope_id must be a non-empty string"}
+        _record_action(
+            state,
+            "scan_document",
+            _args_with_reason({"scope_id": scope_id, "query": query, "limit": limit}, reason),
+            result,
+        )
+        return result
+    scan_scope = _scan_scope(document, normalized_scope_id)
+    if scan_scope.get("ok") is False:
+        result = {"ok": False, "error": scan_scope["error"], "scope_id": normalized_scope_id}
+        _record_action(
+            state,
+            "scan_document",
+            _args_with_reason({"scope_id": normalized_scope_id, "query": query, "limit": limit}, reason),
+            result,
+        )
+        return result
+    if not normalized_query:
+        result = {"ok": False, "error": "query must be a non-empty string"}
+        _record_action(
+            state,
+            "scan_document",
+            _args_with_reason({"scope_id": normalized_scope_id, "query": query, "limit": limit}, reason),
+            result,
+        )
+        return result
+
+    scan_model = _read(state, "document_scan_model", None)
+    if scan_model is None:
+        result = {"ok": False, "error": "document_scan_model is not configured"}
+        _record_action(
+            state,
+            "scan_document",
+            _args_with_reason({"scope_id": normalized_scope_id, "query": normalized_query, "limit": max_results}, reason),
+            result,
+        )
+        return result
+
+    messages = _build_scan_document_messages(
+        state,
+        normalized_scope_id,
+        str(scan_scope["scope_type"]),
+        normalized_query,
+        reason,
+        max_results,
+        str(scan_scope["html"]),
+    )
+    try:
+        message = scan_model.invoke(messages)
+    except Exception as exc:
+        result = {"ok": False, "error": f"document scan model failed: {exc}"}
+        _record_action(
+            state,
+            "scan_document",
+            _args_with_reason({"scope_id": normalized_scope_id, "query": normalized_query, "limit": max_results}, reason),
+            result,
+        )
+        return result
+
+    raw_candidates = _parse_scan_document_candidates(message)
+    candidates = _normalize_scan_document_candidates(
+        document,
+        raw_candidates,
+        normalized_query,
+        max_results,
+        allowed_ids=set(scan_scope["element_ids"]),
+    )
+    _mark_observed(state, [evidence_id for candidate in candidates for evidence_id in candidate["evidence_ids"]])
+    result = {
+        "scope_id": normalized_scope_id,
+        "scope_type": scan_scope["scope_type"],
+        "query": normalized_query,
+        "limit": max_results,
+        "candidates": candidates,
+        "candidate_count": len(candidates),
+        "note": (
+            "Candidates are observed block evidence from an isolated scoped scan. "
+            "Use read_element/read_section/table_extraction only if more context is needed."
+        ),
+    }
+    _record_action(
+        state,
+        "scan_document",
+        _args_with_reason({"scope_id": normalized_scope_id, "query": normalized_query, "limit": max_results}, reason),
+        result,
+    )
+    return result
+
+
+def _is_page_level_aggregate_id(element_id: str) -> bool:
+    return re.fullmatch(r"page_\d+", str(element_id or "")) is not None
+
+
+def _scan_scope(document: Any, scope_id: str) -> dict[str, Any]:
+    scope = document.elements_by_id.get(scope_id)
+    if scope is None:
+        return {"ok": False, "error": f"unknown scope id: {scope_id}"}
+    if _heading_level(scope.tag) is not None:
+        return _heading_scan_scope(document, scope)
+    return _element_scan_scope(document, scope)
+
+
+def _heading_scan_scope(document: Any, scope: Any) -> dict[str, Any]:
+    ordered = list(document.elements_by_id.values())
+    start_index = next((index for index, element in enumerate(ordered) if element.id == scope.id), None)
+    if start_index is None:
+        return {"ok": False, "error": f"scope id not found in document order: {scope.id}"}
+    start_level = _heading_level(scope.tag)
+    items: list[dict[str, Any]] = []
+    element_ids = [scope.id]
+    for element in ordered[start_index + 1 :]:
+        element_level = _heading_level(element.tag)
+        if element_level is not None and element_level <= start_level:
+            break
+        element_ids.append(element.id)
+        if element.tag in {"tr", "caption"} or _is_list_child(document, element):
+            continue
+        items.append(_section_item(document, element))
+    return {
+        "ok": True,
+        "scope_type": "SECTION",
+        "html": _section_html(document, scope, items, "all"),
+        "element_ids": element_ids,
+    }
+
+
+def _element_scan_scope(document: Any, scope: Any) -> dict[str, Any]:
+    ordered = list(document.elements_by_id.values())
+    element_ids = [
+        element.id
+        for element in ordered
+        if element.id == scope.id or _has_ancestor(document, element, scope.id)
+    ]
+    lines = [f'<scope id="{_attr(scope.id)}" type="{_attr(scope.type)}">']
+    if scope.type == "TABLE":
+        lines.append("  " + _element_html(document, scope))
+    elif scope.tag in {"ul", "ol"}:
+        lines.extend(_section_item_html_lines(document, {"id": scope.id, "type": scope.type}, indent="  "))
+    else:
+        for element_id in element_ids:
+            element = document.elements_by_id[element_id]
+            if element.tag in {"tr", "caption"}:
+                continue
+            lines.append("  " + _element_html(document, element))
+    lines.append("</scope>")
+    return {
+        "ok": True,
+        "scope_type": scope.type,
+        "html": "\n".join(lines),
+        "element_ids": element_ids,
+    }
+
+
+def _has_ancestor(document: Any, element: Any, ancestor_id: str) -> bool:
+    parent_id = getattr(element, "parent_id", None)
+    while parent_id:
+        if parent_id == ancestor_id:
+            return True
+        parent = document.elements_by_id.get(parent_id)
+        if parent is None:
+            return False
+        parent_id = getattr(parent, "parent_id", None)
+    return False
+
+
+def _build_scan_document_messages(
+    state: Any,
+    scope_id: str,
+    scope_type: str,
+    query: str,
+    reason: str | None,
+    limit: int,
+    scope_html: str,
+) -> list[Any]:
+    system = SystemMessage(
+        content=(
+            "You are an isolated document-reading subagent for an extraction workflow. "
+            "You have no tools. You must not request tools, call agents, call subagents, "
+            "or create a plan for the main agent. "
+            "Read only the provided HTML scope and return JSON only. "
+            "Return only candidate block evidence under that scope: existing element ids for titles, "
+            "headings, paragraphs, list items, captions, or table elements. "
+            "Do not return page-level aggregate ids such as page_001. "
+            "Do not return table row values, final field values, normalized values, or answers. "
+            "The main resolution agent will decide whether the candidates are sufficient."
+        )
+    )
+    human = HumanMessage(
+        content="\n\n".join(
+            [
+                "Task fields:\n" + _task_fields_for_scan(state),
+                f"Scope id: {scope_id}",
+                f"Scope type: {scope_type}",
+                f"Scan request: {query}",
+                f"Reason: {reason or ''}",
+                f"Maximum candidates: {limit}",
+                (
+                    "Return JSON in this exact shape: "
+                    '{"candidates":[{"element_id":"existing-id","reason":"short relevance reason"}]}'
+                ),
+                "Scope HTML:\n" + scope_html,
+            ]
+        )
+    )
+    return [system, human]
+
+
+def _task_fields_for_scan(state: Any) -> str:
+    lines = []
+    task_spec = _read(state, "task_spec")
+    for field in _read(task_spec, "fields", []) or []:
+        lines.append(
+            f"- {_read(field, 'name')}: type={_read(field, 'type', 'string')}, "
+            f"required={_read(field, 'required', False)}, description={_read(field, 'description', '') or ''}"
+        )
+    instructions = _read(task_spec, "instructions", None)
+    if instructions:
+        lines.append("Instructions: " + str(instructions))
+    return "\n".join(lines)
+
+
+def _parse_scan_document_candidates(message: Any) -> list[dict[str, Any]]:
+    content = _message_content(message)
+    if isinstance(content, list):
+        content = "\n".join(str(item) for item in content)
+    if not isinstance(content, str):
+        return []
+    parsed = _loads_json_object(content)
+    if isinstance(parsed, list):
+        return [item for item in parsed if isinstance(item, dict)]
+    if not isinstance(parsed, dict):
+        return []
+    candidates = parsed.get("candidates", parsed.get("matches", []))
+    if not isinstance(candidates, list):
+        return []
+    return [item for item in candidates if isinstance(item, dict)]
+
+
+def _message_content(message: Any) -> Any:
+    if isinstance(message, dict):
+        return message.get("content", "")
+    return getattr(message, "content", "")
+
+
+def _loads_json_object(content: str) -> Any:
+    stripped = content.strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```(?:json)?\s*", "", stripped, flags=re.IGNORECASE)
+        stripped = re.sub(r"\s*```$", "", stripped)
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        start = stripped.find("{")
+        end = stripped.rfind("}")
+        if start < 0 or end <= start:
+            return None
+        try:
+            return json.loads(stripped[start : end + 1])
+        except json.JSONDecodeError:
+            return None
+
+
+def _normalize_scan_document_candidates(
+    document: Any,
+    raw_candidates: list[dict[str, Any]],
+    query: str,
+    limit: int,
+    *,
+    allowed_ids: set[str],
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in raw_candidates:
+        element_id = str(raw.get("element_id") or raw.get("id") or "").strip()
+        if not element_id or element_id in seen or _is_page_level_aggregate_id(element_id):
+            continue
+        if element_id not in allowed_ids:
+            continue
+        element = document.elements_by_id.get(element_id)
+        if element is None or element.type not in SCAN_DOCUMENT_ALLOWED_TYPES:
+            continue
+        text = str(element.text or "")
+        candidates.append(
+            {
+                "element_id": element.id,
+                "type": element.type,
+                "html": _element_html(document, element),
+                "evidence_ids": [element.id],
+                "snippet": _scan_candidate_snippet(text, query),
+                "subagent_reason": str(raw.get("reason") or raw.get("relevance") or ""),
+                "text_chars": len(text),
+            }
+        )
+        seen.add(element_id)
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+def _scan_candidate_snippet(text: str, query: str) -> str:
+    index = text.casefold().find(query.casefold())
+    if index >= 0:
+        return _snippet(text, index, len(query))
+    return _snippet(text, 0, min(len(text), 1)) if text else ""
+
+
 def _read_section(state: Any, section_id: str, depth: int = 1, *, reason: str | None = None) -> dict[str, Any]:
     document = _read(state, "document")
     section = document.elements_by_id.get(section_id)
@@ -441,15 +861,81 @@ def _read_section(state: Any, section_id: str, depth: int = 1, *, reason: str | 
             items.append(_section_item(document, element))
             evidence_ids.append(element.id)
 
+    html = _section_html(document, section, items, depth)
+    if len(html) > MAX_READ_SECTION_HTML_CHARS:
+        scan_query = _read_section_auto_scan_query(section, reason, section_id)
+        scan_reason = (
+            "Automatic scoped scan because read_section content exceeded size limit. "
+            + (reason or "")
+        ).strip()
+        scan_result = _scan_document(state, section_id, scan_query, limit=10, reason=scan_reason)
+        base_result = {
+            "section_id": section_id,
+            "depth": depth,
+            "html_chars": len(html),
+            "max_html_chars": MAX_READ_SECTION_HTML_CHARS,
+            "evidence_count": len(evidence_ids),
+        }
+        if scan_result.get("ok") is False:
+            result = {
+                "ok": False,
+                "error": "section content is too long and automatic scan failed",
+                **base_result,
+                "scan_error": scan_result.get("error"),
+            }
+            _record_action(
+                state,
+                "read_section",
+                _args_with_reason({"section_id": section_id, "depth": depth}, reason),
+                result,
+            )
+            return result
+
+        candidate_evidence_ids = [
+            evidence_id
+            for candidate in scan_result.get("candidates", []) or []
+            for evidence_id in candidate.get("evidence_ids", []) or []
+        ]
+        result = {
+            **base_result,
+            "mode": "auto_scanned_oversized_section",
+            "scope_id": scan_result.get("scope_id", section_id),
+            "scope_type": scan_result.get("scope_type"),
+            "query": scan_result.get("query", scan_query),
+            "candidates": scan_result.get("candidates", []),
+            "candidate_count": scan_result.get("candidate_count", 0),
+            "evidence_ids": candidate_evidence_ids,
+            "auto_scan_note": (
+                "Section exceeded read_section size limit; the tool automatically used "
+                "the isolated scoped reader and returned candidate evidence instead of full HTML."
+            ),
+        }
+        _record_action(
+            state,
+            "read_section",
+            _args_with_reason({"section_id": section_id, "depth": depth}, reason),
+            _summarize_tool_result(result),
+        )
+        return result
+
     _mark_observed(state, evidence_ids)
     result = {
         "section_id": section_id,
         "depth": depth,
-        "html": _section_html(document, section, items, depth),
+        "html": html,
         "evidence_ids": evidence_ids,
     }
     _record_action(state, "read_section", _args_with_reason({"section_id": section_id, "depth": depth}, reason), _summarize_tool_result(result))
     return result
+
+
+def _read_section_auto_scan_query(section: Any, reason: str | None, section_id: str) -> str:
+    parts = [
+        str(reason or "").strip(),
+        str(getattr(section, "text", "") or "").strip(),
+    ]
+    query = " ".join(part for part in parts if part)
+    return query or section_id
 
 
 def _table_extraction(state: Any, table_id: str, sql: str, *, reason: str | None = None) -> dict[str, Any]:
@@ -1046,7 +1532,7 @@ def _section_item_html_lines(document: Any, item: dict[str, Any], indent: str) -
     if item_type == "TEXT" and _element_tag(document, item_id) in {"ul", "ol"}:
         return _list_ref_html_lines(document, item_id, indent)
     tag = _html_like_tag(item)
-    text = _preview(str(item.get("text", "")))
+    text = str(item.get("text", ""))
     return [f'{indent}<{tag} id="{_attr(item_id)}">{_text(text)}</{tag}>']
 
 
@@ -1057,14 +1543,11 @@ def _list_ref_html_lines(document: Any, list_id: str, indent: str) -> list[str]:
         if element.parent_id == list_id and element.tag == "li"
     ]
     lines = [f'{indent}<list-ref id="{_attr(list_id)}" items="{_attr(len(item_ids))}">']
-    for item_id in item_ids[:3]:
+    for item_id in item_ids:
         element = document.elements_by_id[item_id]
         lines.append(
-            f'{indent}  <item-ref id="{_attr(item_id)}">{_text(_preview(element.text))}</item-ref>'
+            f'{indent}  <item-ref id="{_attr(item_id)}">{_text(element.text)}</item-ref>'
         )
-    remaining = len(item_ids) - 3
-    if remaining > 0:
-        lines.append(f'{indent}  <truncated remaining="{_attr(remaining)}" />')
     lines.append(f"{indent}</list-ref>")
     return lines
 
@@ -1093,11 +1576,12 @@ def _html_like_tag(element: Any) -> str:
     return "text"
 
 
-def _preview(text: str, limit: int = 160) -> str:
-    normalized = " ".join(text.split())
-    if len(normalized) <= limit:
-        return normalized
-    return normalized[:limit].rstrip() + "..."
+def _snippet(text: str, index: int, match_length: int, *, context_chars: int = 80) -> str:
+    start = max(0, index - context_chars)
+    end = min(len(text), index + match_length + context_chars)
+    prefix = "..." if start > 0 else ""
+    suffix = "..." if end < len(text) else ""
+    return prefix + text[start:end].strip() + suffix
 
 
 def _attr(value: Any) -> str:
@@ -1132,7 +1616,10 @@ __all__ = [
     "build_tools",
     "_overview",
     "_update_plan",
+    "_search_elements",
+    "_scan_document",
     "_read_element",
+    "_read_section",
     "_table_extraction",
     "_paragraph_extraction",
     "_set_field",

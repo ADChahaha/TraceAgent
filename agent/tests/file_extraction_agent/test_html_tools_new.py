@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+import json
 
 from service.file_extraction_agent.impl.html_index import build_html_document
 from service.file_extraction_agent.impl.html_tools import (
@@ -10,6 +11,8 @@ from service.file_extraction_agent.impl.html_tools import (
     _paragraph_extraction,
     _read_element,
     _read_section,
+    _scan_document,
+    _search_elements,
     _set_field,
     _table_extraction,
     _update_plan,
@@ -17,9 +20,11 @@ from service.file_extraction_agent.impl.html_tools import (
 
 
 def _state():
+    long_notice = "这是完整通知正文，" + "需要保留全部文字用于模型判断。" * 12
     html = """
     <h2 id="dp-h2-1">通知</h2>
     <p id="dp-p-1">联系人：李老师 电话：12345</p>
+    <p id="dp-p-long">{long_notice}</p>
     <h3 id="dp-h3-1">名单</h3>
     <p id="dp-p-2">名单如下。</p>
     <ul id="dp-ul-1">
@@ -34,7 +39,7 @@ def _state():
       <tr id="dp-tr-2"><td>张三</td><td>计算机学院</td></tr>
       <tr id="dp-tr-3"><td>李四</td><td>自动化学院</td></tr>
     </table>
-    """
+    """.format(long_notice=long_notice)
     return SimpleNamespace(
         document=build_html_document(html),
         task_spec=SimpleNamespace(
@@ -79,6 +84,20 @@ def _large_table_state(row_count: int = 40):
       <tr id="dp-big-tr-0"><th>姓名</th><th>学院</th></tr>
       {rows}
     </table>
+    """
+    state = _state()
+    state.document = build_html_document(html)
+    return state
+
+
+def _long_section_state():
+    paragraphs = "\n".join(
+        f'<p id="dp-long-p-{index}">{"超长章节正文" * 120}</p>'
+        for index in range(1, 90)
+    )
+    html = f"""
+    <h2 id="dp-long-h2-1">超长章节</h2>
+    {paragraphs}
     """
     state = _state()
     state.document = build_html_document(html)
@@ -163,16 +182,239 @@ def test_read_section_returns_section_content_and_table_refs_by_depth():
     assert result["section_id"] == "dp-h2-1"
     assert result["html"].startswith('<section id="dp-h2-1" title="通知" depth="1">')
     assert '<text id="dp-p-1">联系人：李老师 电话：12345</text>' in result["html"]
+    assert "需要保留全部文字用于模型判断。" * 12 in result["html"]
+    assert '<text id="dp-p-long">' in result["html"]
     assert '<heading id="dp-h3-1">名单</heading>' in result["html"]
     assert '<list-ref id="dp-ul-1" items="4">' in result["html"]
     assert '<item-ref id="dp-li-1">' in result["html"]
-    assert '<truncated remaining="1" />' in result["html"]
+    assert '<item-ref id="dp-li-4">第四条</item-ref>' in result["html"]
+    assert "<truncated" not in result["html"]
+    assert "..." not in result["html"]
     assert (
         '<table-ref id="dp-table-1" label="学生名单" rows="2" header-row-id="dp-tr-1" columns="姓名 | 学院" />'
         in result["html"]
     )
     assert "dp-table-1" in result["evidence_ids"]
     assert "第一条很长很长很长很长很长很长很长很长很长很长很长很长" in result["html"]
+
+
+def test_read_section_auto_scans_too_long_content_with_isolated_reader():
+    state = _long_section_state()
+
+    class FakeScanModel:
+        def __init__(self):
+            self.messages = None
+
+        def bind_tools(self, tools, tool_choice=None):
+            raise AssertionError("automatic read_section scan must not bind tools")
+
+        def invoke(self, messages):
+            self.messages = messages
+            return SimpleNamespace(
+                content=json.dumps(
+                    {
+                        "candidates": [
+                            {"element_id": "missing", "reason": "不存在的 id"},
+                            {"element_id": "dp-long-p-3", "reason": "超长章节中的相关正文"},
+                        ]
+                    },
+                    ensure_ascii=False,
+                )
+            )
+
+    scan_model = FakeScanModel()
+    state.document_scan_model = scan_model
+
+    result = _read_section(state, "dp-long-h2-1", depth=1, reason="定位联系人字段")
+
+    assert result["section_id"] == "dp-long-h2-1"
+    assert result["mode"] == "auto_scanned_oversized_section"
+    assert result["html_chars"] > result["max_html_chars"]
+    assert result["evidence_count"] == 90
+    assert result["scope_id"] == "dp-long-h2-1"
+    assert result["candidate_count"] == 1
+    assert result["candidates"][0]["element_id"] == "dp-long-p-3"
+    assert result["evidence_ids"] == ["dp-long-p-3"]
+    assert result["auto_scan_note"].startswith("Section exceeded read_section size limit")
+    assert "html" not in result
+    assert state.observed_evidence_ids == {"dp-long-p-3"}
+    assert "You have no tools" in scan_model.messages[0].content
+    assert "Scope id: dp-long-h2-1" in scan_model.messages[-1].content
+    assert "定位联系人字段" in scan_model.messages[-1].content
+    assert state.actions[-2]["tool_name"] == "scan_document"
+    assert state.actions[-2]["args"]["scope_id"] == "dp-long-h2-1"
+    assert state.actions[-1]["tool_name"] == "read_section"
+
+
+def test_read_section_too_long_returns_error_when_auto_scan_unavailable():
+    state = _long_section_state()
+
+    result = _read_section(state, "dp-long-h2-1", depth=1, reason="定位联系人字段")
+
+    assert result["ok"] is False
+    assert result["error"] == "section content is too long and automatic scan failed"
+    assert result["scan_error"] == "document_scan_model is not configured"
+    assert result["section_id"] == "dp-long-h2-1"
+    assert "html" not in result
+    assert state.observed_evidence_ids == set()
+
+
+def test_search_elements_returns_paragraphs_and_observes_evidence():
+    state = _state()
+
+    result = _search_elements(state, "联系人", limit=5, reason="定位联系人字段")
+
+    assert result["query"] == "联系人"
+    assert result["match_count"] == 1
+    assert result["matches"][0]["element_id"] == "dp-p-1"
+    assert result["matches"][0]["type"] == "TEXT"
+    assert result["matches"][0]["html"] == '<text id="dp-p-1">联系人：李老师 电话：12345</text>'
+    assert result["matches"][0]["evidence_ids"] == ["dp-p-1"]
+    assert result["matches"][0]["text_chars"] == len("联系人：李老师 电话：12345")
+    assert state.observed_evidence_ids == {"dp-p-1"}
+    assert state.actions[-1]["tool_name"] == "search_elements"
+
+
+def test_search_elements_excludes_page_level_aggregate_text():
+    state = _state()
+    state.document = build_html_document(
+        """
+        <p id="page_001">Page 1 联系人：整页聚合文本，不应被 search_elements 返回。</p>
+        <p id="p001_b001">联系人：李老师 电话：12345</p>
+        <h2 id="p001_h001">联系人安排</h2>
+        """
+    )
+
+    result = _search_elements(state, "联系人", limit=10, reason="定位联系人字段")
+
+    element_ids = [match["element_id"] for match in result["matches"]]
+    assert "page_001" not in element_ids
+    assert element_ids == ["p001_b001", "p001_h001"]
+    assert state.observed_evidence_ids == {"p001_b001", "p001_h001"}
+
+
+def test_search_elements_result_can_be_used_as_evidence():
+    state = _state()
+    _search_elements(state, "联系人", limit=5, reason="定位联系人字段")
+
+    result = _set_field(
+        state,
+        "contact_phone",
+        "12345",
+        ["dp-p-1"],
+        "resolved",
+        None,
+    )
+
+    assert result["ok"] is True
+    assert state.field_states["contact_phone"]["evidence_ids"] == ["dp-p-1"]
+
+
+def test_scan_document_uses_isolated_model_on_scope_without_tools_and_observes_blocks():
+    state = _state()
+    html = """
+        <p id="page_001">Page 1 联系人：整页聚合文本，不应作为证据。</p>
+        <h2 id="p001_h001">联系方式</h2>
+        <p id="p001_b001">联系人：李老师 电话：12345</p>
+        <h3 id="p001_h002">补充联系方式</h3>
+        <p id="p001_b002">邮箱：teacher@example.com</p>
+        <h2 id="p002_h001">其他安排</h2>
+        <p id="p002_b001">联系人：王老师 电话：67890</p>
+        """
+    state.document = build_html_document(html)
+    state.extraction_input = SimpleNamespace(html=html)
+
+    class FakeScanModel:
+        def __init__(self):
+            self.messages = None
+
+        def bind_tools(self, tools, tool_choice=None):
+            raise AssertionError("isolated document scan must not bind tools")
+
+        def invoke(self, messages):
+            self.messages = messages
+            return SimpleNamespace(
+                content=json.dumps(
+                    {
+                        "candidates": [
+                            {"element_id": "page_001", "reason": "整页聚合命中"},
+                            {"element_id": "missing", "reason": "不存在的 id"},
+                            {"element_id": "p002_b001", "reason": "scope 外命中"},
+                            {"element_id": "p001_b001", "reason": "联系人和电话在同一段"},
+                            {"id": "p001_h002", "reason": "scope 内子标题"},
+                        ]
+                    },
+                    ensure_ascii=False,
+                )
+            )
+
+    scan_model = FakeScanModel()
+    state.document_scan_model = scan_model
+
+    result = _scan_document(state, "p001_h001", "联系人", limit=5, reason="搜索联系人字段")
+
+    assert result["scope_id"] == "p001_h001"
+    assert result["query"] == "联系人"
+    assert result["candidate_count"] == 2
+    assert [candidate["element_id"] for candidate in result["candidates"]] == [
+        "p001_b001",
+        "p001_h002",
+    ]
+    assert result["candidates"][0]["html"] == '<text id="p001_b001">联系人：李老师 电话：12345</text>'
+    assert result["candidates"][0]["evidence_ids"] == ["p001_b001"]
+    assert state.observed_evidence_ids == {"p001_b001", "p001_h002"}
+    assert "scan_document" not in scan_model.messages[0].content
+    assert "You have no tools" in scan_model.messages[0].content
+    assert "Scope id: p001_h001" in scan_model.messages[-1].content
+    assert "Scope HTML" in scan_model.messages[-1].content
+    assert "联系人：李老师 电话：12345" in scan_model.messages[-1].content
+    assert "联系人：王老师 电话：67890" not in scan_model.messages[-1].content
+    assert state.actions[-1]["tool_name"] == "scan_document"
+
+
+def test_scan_document_result_can_be_used_as_evidence():
+    state = _state()
+
+    class FakeScanModel:
+        def invoke(self, messages):
+            return SimpleNamespace(
+                content=json.dumps(
+                    {"candidates": [{"element_id": "dp-p-1", "reason": "联系人段落"}]},
+                    ensure_ascii=False,
+                )
+            )
+
+    state.document_scan_model = FakeScanModel()
+    _scan_document(state, "dp-h2-1", "联系人", limit=3, reason="搜索联系人字段")
+
+    result = _set_field(
+        state,
+        "contact_phone",
+        "12345",
+        ["dp-p-1"],
+        "resolved",
+        None,
+    )
+
+    assert result["ok"] is True
+    assert state.field_states["contact_phone"]["evidence_ids"] == ["dp-p-1"]
+
+
+def test_scan_document_returns_error_without_scan_model():
+    result = _scan_document(_state(), "dp-h2-1", "联系人", limit=3, reason="搜索联系人字段")
+
+    assert result["ok"] is False
+    assert result["error"] == "document_scan_model is not configured"
+
+
+def test_scan_document_returns_error_for_unknown_scope_id():
+    state = _state()
+    state.document_scan_model = SimpleNamespace(invoke=lambda messages: SimpleNamespace(content="{}"))
+
+    result = _scan_document(state, "missing", "联系人", limit=3, reason="搜索联系人字段")
+
+    assert result["ok"] is False
+    assert result["error"] == "unknown scope id: missing"
 
 
 def test_table_extraction_selects_rows_with_evidence_ids():
@@ -475,7 +717,8 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
     names = [_tool_name(tool) for tool in tools]
 
     assert names == [
-        "update_plan",
+        "search_elements",
+        "scan_document",
         "read_element",
         "read_section",
         "table_extraction",
@@ -483,13 +726,28 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
         "set_field",
         "finish",
     ]
-    update_plan = tools[names.index("update_plan")]
-    update_plan_schema = getattr(update_plan, "args_schema", None)
-    update_plan_fields = getattr(update_plan_schema, "model_fields", None) or getattr(update_plan_schema, "__fields__", {})
-    assert "state" not in update_plan_fields
-    assert "plan_index" in update_plan_fields
-    assert "status" in update_plan_fields
-    assert "Mark one broad-plan step" in _tool_description(update_plan)
+    search_elements = tools[names.index("search_elements")]
+    search_schema = getattr(search_elements, "args_schema", None)
+    search_fields = getattr(search_schema, "model_fields", None) or getattr(search_schema, "__fields__", {})
+    assert "state" not in search_fields
+    assert "query" in search_fields
+    assert "limit" in search_fields
+    assert "reason" in search_fields
+    assert "Search text-like HTML elements" in _tool_description(search_elements)
+    assert "returns directly readable paragraph HTML" in _tool_description(search_elements)
+    assert "may be used directly in set_field" in _tool_description(search_elements)
+    scan_document = tools[names.index("scan_document")]
+    scan_schema = getattr(scan_document, "args_schema", None)
+    scan_fields = getattr(scan_schema, "model_fields", None) or getattr(scan_schema, "__fields__", {})
+    assert "state" not in scan_fields
+    assert "scope_id" in scan_fields
+    assert "query" in scan_fields
+    assert "limit" in scan_fields
+    assert "reason" in scan_fields
+    assert "isolated no-tool document reader" in _tool_description(scan_document)
+    assert "under one existing scope id" in _tool_description(scan_document)
+    assert "returns only candidate block evidence" in _tool_description(scan_document)
+    assert "does not return final field values" in _tool_description(scan_document)
     read_element = tools[names.index("read_element")]
     schema = getattr(read_element, "args_schema", None)
     schema_fields = getattr(schema, "model_fields", None) or getattr(schema, "__fields__", {})
@@ -506,6 +764,7 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
     assert "Read a heading section" in _tool_description(read_section)
     assert "Prefer increasing depth" in _tool_description(read_section)
     assert "many read_element calls" in _tool_description(read_section)
+    assert "automatically invokes the isolated scoped reader" in _tool_description(read_section)
     table_extraction = tools[names.index("table_extraction")]
     table_schema = getattr(table_extraction, "args_schema", None)
     table_fields = getattr(table_schema, "model_fields", None) or getattr(table_schema, "__fields__", {})
@@ -521,6 +780,8 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
     set_field_description = " ".join(_tool_description(set_field).split())
     assert "for each task field exactly once" in set_field_description
     assert "unrelated elements" in set_field_description
+    assert "search_elements" in set_field_description
+    assert "scan_document" in set_field_description
 
 
 def _tool_name(tool):

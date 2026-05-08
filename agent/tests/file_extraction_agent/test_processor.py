@@ -46,6 +46,8 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
                 'TEMPERATURE="0.1"',
                 'TOP_P="0.9"',
                 'TOP_K="40"',
+                'MODEL_MAX_RETRIES="8"',
+                'MODEL_REQUEST_TIMEOUT="120"',
             ]
         ),
         encoding="utf-8",
@@ -64,6 +66,8 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
         "TEMPERATURE",
         "TOP_P",
         "TOP_K",
+        "MODEL_MAX_RETRIES",
+        "MODEL_REQUEST_TIMEOUT",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -76,6 +80,8 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
     assert config.temperature == 0.1
     assert config.top_p == 0.9
     assert config.top_k == 40
+    assert config.max_retries == 8
+    assert config.request_timeout == 120.0
 
 
 def test_normalize_model_config_ignores_generic_api_key_env(monkeypatch, tmp_path):
@@ -101,6 +107,8 @@ def test_normalize_model_config_ignores_generic_api_key_env(monkeypatch, tmp_pat
         "TEMPERATURE",
         "TOP_P",
         "TOP_K",
+        "MODEL_MAX_RETRIES",
+        "MODEL_REQUEST_TIMEOUT",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -110,3 +118,53 @@ def test_normalize_model_config_ignores_generic_api_key_env(monkeypatch, tmp_pat
     assert config.api_key is None
     assert config.broad_model_name == "model"
     assert config.resolution_model_name == "model"
+    assert config.max_retries == 6
+    assert config.request_timeout is None
+
+
+def test_build_chat_model_passes_retry_and_timeout(monkeypatch):
+    captured = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(model_factory_module, "ChatOpenAI", FakeChatOpenAI)
+
+    model_factory_module.build_chat_model(
+        ModelConfig(
+            base_url="https://example.com/v1",
+            api_key="key",
+            temperature=0.0,
+            max_retries=9,
+            request_timeout=180.0,
+        ),
+        "resolution",
+    )
+
+    assert captured["model"] == "resolution"
+    assert captured["max_retries"] == 9
+    assert captured["request_timeout"] == 180.0
+
+
+def test_build_chat_model_passes_sampling_parameters_without_model_kwargs(monkeypatch):
+    captured = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(model_factory_module, "ChatOpenAI", FakeChatOpenAI)
+
+    model_factory_module.build_chat_model(
+        ModelConfig(
+            temperature=0.0,
+            top_p=1.0,
+            top_k=1,
+        ),
+        "resolution",
+    )
+
+    assert captured["top_p"] == 1.0
+    assert captured["extra_body"] == {"top_k": 1}
+    assert "model_kwargs" not in captured

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from service.file_extraction_agent.impl.broad_new import BroadPlan
 from service.file_extraction_agent.impl.html_state import build_graph_state
 from service.file_extraction_agent.impl.html_tools import build_tools
 from service.file_extraction_agent.impl.resolution_new import (
@@ -8,6 +7,7 @@ from service.file_extraction_agent.impl.resolution_new import (
     build_resolution_graph,
     format_document_outline,
     select_index_outline_nodes,
+    _continue_instruction,
 )
 from service.file_extraction_agent.input_adapter import build_graph_input
 from langchain_core.messages import AIMessage
@@ -28,7 +28,6 @@ def _state():
             task_spec={"fields": [{"name": "student_name", "type": "string", "required": True}]},
         )
     )
-    state.broad_plan = BroadPlan(summary="名单", plan=["读取表格"], risks=[])
     return state
 
 
@@ -54,23 +53,35 @@ def test_resolution_messages_embed_compact_document_outline():
     assert '<table-ref id="dp-table-1" label="通知" rows="1" columns="姓名 | 学院" />' in content
     assert "Document overview:" not in content
     assert "{'tree':" not in content
-    assert "你是字段写入 agent" in content
-    assert "每个字段最终必须且只能调用一次 set_field" in content
-    assert "reason 是展示给用户看的中文旁白" in content
-    assert "先调用 update_plan(plan_index, 'in_progress', reason)" in content
-    assert "只能推进最早一个未完成的 broad plan" in content
-    assert "不能跳过前面的 plan_index" in content
-    assert "立刻调用 update_plan(plan_index, 'completed', reason)" in content
-    assert "右侧 plan 可以画线标记完成" in content
-    assert "一旦某个字段证据足够，下一次相关工具调用必须是 set_field" in content
-    assert "优先先看目录/contents/index" in content
-    assert "depth=2 看相邻子章节" in content
-    assert "同一字段已经在同一章节 read_element 了 3 次以上" in content
-    assert "所有列名必须用双引号包住" in content
+    assert "You are the field-writing agent" in content
+    assert "Each field must be finalized exactly once with set_field" in content
+    assert "Write reasons in the same language as the document whenever possible" in content
+    assert "There is no broad plan" in content
+    assert "Use the task field descriptions and document outline as the primary guide" in content
+    assert "Do not wait for or call update_plan" in content
+    assert "Broad plan" not in content
+    assert "update_plan(plan_index" not in content
+    assert "Once evidence for a field is sufficient, the next related tool call must be set_field" in content
+    assert "Prefer checking contents/index pages first" in content
+    assert "Use search_elements" in content
+    assert "Search results include readable HTML and observed evidence ids" in content
+    assert "use those evidence_ids directly in set_field" in content
+    assert "Only call read_element when the search match is ambiguous" in content
+    assert "Use scan_document(scope_id, query, reason, limit) only after choosing a scope id" in content
+    assert "scan_document is an isolated no-tool reader" in content
+    assert "scans all content under that one scope id" in content
+    assert "If read_section hits the section size limit, it automatically uses the isolated reader on that same section id" in content
+    assert "use the returned read_section candidates directly when they are sufficient" in content
+    assert "It returns candidate block evidence only" in content
+    assert "Search results are candidates only" not in content
+    assert "depth=2 reads nearby subsections" in content
+    assert "If you have used read_element more than 3 times in the same section for one field" in content
+    assert "All SQL column names must be wrapped in double quotes" in content
     assert "query_audit few-shot" in content
-    assert "空白筛选列必须结合表格上下文判断" in content
-    assert "不能只因为空白行未被 WHERE 选中就说正常" in content
-    assert "相邻列、表注或表头" in content
+    assert "Blank filter columns must be interpreted with table context" in content
+    assert "Do not claim blank rows are normal merely because WHERE did not select them" in content
+    assert "neighboring columns, captions, headers, or group titles" in content
+    assert "set_field evidence_ids must come from this run's search_elements/scan_document/read_element/read_section/table_extraction/paragraph_extraction results" in content
     assert "非空分布" not in content
 
 
@@ -137,13 +148,30 @@ def test_resolution_graph_nudges_model_when_it_stops_before_finish():
     graph.invoke({"messages": build_resolution_messages(state)}, config={"recursion_limit": 8})
 
     assert len(calls) >= 2
-    assert "所有字段都已经 set_field" in calls[1][-1].content
+    assert "All fields have been set_field" in calls[1][-1].content
     assert state.actions[-1]["tool_name"] == "finish"
 
 
-def test_resolution_graph_exposes_update_plan_tool():
+def test_resolution_nudge_counts_search_results_as_observed_evidence():
+    state = _state()
+    state.actions = [
+        {"tool_name": "search_elements"},
+        {"tool_name": "search_elements"},
+        {"tool_name": "read_element"},
+        {"tool_name": "search_elements"},
+    ]
+
+    instruction = _continue_instruction(state)
+
+    assert "Stop browsing broadly" in instruction
+    assert "the next tool call must be set_field" in instruction
+
+
+def test_resolution_graph_does_not_expose_update_plan_tool():
     state = _state()
     tools = build_tools(state)
     tool_names = [getattr(tool, "name", getattr(tool, "__name__", "")) for tool in tools]
 
-    assert tool_names[0] == "update_plan"
+    assert "update_plan" not in tool_names
+    assert tool_names[0] == "search_elements"
+    assert "scan_document" in tool_names

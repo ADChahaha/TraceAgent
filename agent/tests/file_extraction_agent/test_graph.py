@@ -10,34 +10,15 @@ from service.file_extraction_agent.input_adapter import build_graph_input
 
 class FakeBroadModel:
     def bind_tools(self, tools, tool_choice=None):
-        return self
+        raise AssertionError("broad model should not be bound in no-plan mode")
 
     def invoke(self, messages):
-        return SimpleNamespace(
-            tool_calls=[
-                {
-                    "name": "return_broad_plan",
-                    "args": {
-                        "summary": "名单",
-                        "plan": ["query table", "set field"],
-                        "risks": [],
-                    },
-                }
-            ]
-        )
+        raise AssertionError("broad model should not be invoked in no-plan mode")
 
 
 class FakeResolutionModel:
     def __init__(self):
         self.calls = [
-            {
-                "tool_name": "update_plan",
-                "arguments": {
-                    "plan_index": 1,
-                    "status": "in_progress",
-                    "reason": "开始查询名单表",
-                },
-            },
             {
                 "tool_name": "read_element",
                 "arguments": {
@@ -54,36 +35,12 @@ class FakeResolutionModel:
                 },
             },
             {
-                "tool_name": "update_plan",
-                "arguments": {
-                    "plan_index": 1,
-                    "status": "completed",
-                    "reason": "表格查询已经得到字段证据",
-                },
-            },
-            {
-                "tool_name": "update_plan",
-                "arguments": {
-                    "plan_index": 2,
-                    "status": "in_progress",
-                    "reason": "开始写入学生姓名字段",
-                },
-            },
-            {
                 "tool_name": "set_field",
                 "arguments": {
                     "name": "student_name",
                     "value": "张三",
                     "evidence_ids": ["dp-table-1", "dp-tr-2"],
                     "reason": "dp-table-1 和 dp-tr-2 支持学生姓名为张三",
-                },
-            },
-            {
-                "tool_name": "update_plan",
-                "arguments": {
-                    "plan_index": 2,
-                    "status": "completed",
-                    "reason": "学生姓名字段已写入",
                 },
             },
             {"tool_name": "finish", "arguments": {}},
@@ -93,9 +50,52 @@ class FakeResolutionModel:
         return self.calls.pop(0)
 
 
+class FakeResolutionModelWithScan:
+    def __init__(self):
+        self.calls = [
+            {
+                "tool_name": "scan_document",
+                "arguments": {
+                    "scope_id": "dp-h2-1",
+                    "query": "学生姓名",
+                    "reason": "隔离扫描姓名字段候选证据",
+                    "limit": 3,
+                },
+            },
+            {
+                "tool_name": "set_field",
+                "arguments": {
+                    "name": "student_name",
+                    "value": "张三",
+                    "evidence_ids": ["dp-p-1"],
+                    "reason": "dp-p-1 支持学生姓名为张三",
+                },
+            },
+            {"tool_name": "finish", "arguments": {}},
+        ]
+
+    def invoke(self, messages):
+        return self.calls.pop(0)
+
+
+class FakeDocumentScanModel:
+    def __init__(self):
+        self.invoked = False
+
+    def bind_tools(self, tools, tool_choice=None):
+        raise AssertionError("document scan model must not receive tools")
+
+    def invoke(self, messages):
+        self.invoked = True
+        return {
+            "content": '{"candidates": [{"element_id": "dp-p-1", "reason": "姓名段落"}]}'
+        }
+
+
 def _input():
     html = """
     <h2 id="dp-h2-1">通知</h2>
+    <p id="dp-p-1">学生姓名：张三</p>
     <table id="dp-table-1">
       <tr id="dp-tr-1"><th>姓名</th><th>学院</th></tr>
       <tr id="dp-tr-2"><td>张三</td><td>计算机学院</td></tr>
@@ -134,7 +134,7 @@ def test_build_failed_result_preserves_trace():
     assert result.trace["failed_stage"] == "broad"
 
 
-def test_run_extraction_graph_executes_broad_then_resolution():
+def test_run_extraction_graph_skips_broad_plan_then_runs_resolution():
     result = run_extraction_graph(
         extraction_input=_input(),
         broad_model=FakeBroadModel(),
@@ -143,4 +143,25 @@ def test_run_extraction_graph_executes_broad_then_resolution():
 
     assert result.status == "completed"
     assert result.result["student_name"] == "张三"
+    assert result.trace["broad_plan"]["summary"] == "No broad plan"
+    assert result.trace["broad_plan"]["plan"] == []
     assert len(result.trace["actions"]) >= 1
+
+
+def test_run_extraction_graph_uses_broad_model_only_as_document_scan_model():
+    scan_model = FakeDocumentScanModel()
+
+    result = run_extraction_graph(
+        extraction_input=_input(),
+        broad_model=scan_model,
+        resolution_model=FakeResolutionModelWithScan(),
+    )
+
+    assert result.status == "completed"
+    assert result.result["student_name"] == "张三"
+    assert scan_model.invoked is True
+    assert [action["tool_name"] for action in result.trace["actions"]] == [
+        "scan_document",
+        "set_field",
+        "finish",
+    ]

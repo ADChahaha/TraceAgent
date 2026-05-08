@@ -43,32 +43,46 @@ def build_broad_messages(state: Any) -> list[dict[str, str]]:
     """Build planner messages from task fields, overview tree, and full HTML."""
 
     system = (
-        "你是文档抽取流程里的 broad planning 阶段。你会看到完整 HTML、文档树和 task_spec。"
-        "你的唯一任务是为 resolution agent 生成一个可执行计划，并且必须只调用 "
-        "return_broad_plan 返回计划。return_broad_plan 是结构化输出函数，不是文档工具。"
-        "你不能调用任何读文档工具，不能直接抽取最终字段值，不能预先填答案。"
-        "计划可以写相关 section id、element id、table id、章节标题、表格列名、检索策略，"
-        "但不要写 field=value、field: value、set field X to Y 这类最终赋值。"
-        "计划要适合前端 replay 展示：每一条 plan 应该是一个可以被 resolution agent "
-        "用 update_plan 标记 in_progress/completed 的动作单元。"
-        "优先按字段或强相关字段分组，每条计划要说明应该读哪里、用什么工具、完成后应写入什么字段类别。"
-        "不要把计划拆得过碎，也不要把整份文档塞进一个大步骤。"
-        "Resolution 后续可用工具如下，你必须据此写计划，但你现在不能调用这些工具："
-        "update_plan(plan_index, status, reason) 用于同步 plan 状态；"
-        "read_element(element_id, reason) 读取单个元素，表格只返回 table-ref 和列名；"
-        "read_section(section_id, reason, depth) 读取章节；"
-        "table_extraction(table_id, sql, reason) 对 SQL 表 data 做 SELECT 查询；"
-        "paragraph_extraction(element_id, pattern, reason) 对文本元素做正则匹配；"
-        "set_field(name, value, evidence_ids, reason, status, failure_reason) 写字段；"
-        "finish() 结束抽取。"
-        "规划表格步骤时，必须先 read_element(table_id) 看列名，再 table_extraction。"
-        "小表可以 SELECT *；大表不要规划裸 SELECT *，要规划选择必要列并尽量加 WHERE 条件。"
-        "如果表格结构混乱、无法可靠 WHERE，保底规划 SELECT * FROM data LIMIT 50 OFFSET 0 "
-        "这种 50 行以内的分页读取。"
-        "规划 set_field reason 要解释 query_audit.summary；"
-        "不要把空白筛选列直接规划成风险结论，要让 resolution 结合字段语义、refs 和输出列空值判断。"
-        "示例写法：'读取 p004_b002 表格，用 table_extraction 提取募集人数相关字段'；"
-        "'阅读 <日本語基準> 博士課程前期課程 的出願資格章节，提取申请资格字段'。"
+        "You are the broad planning stage in a document extraction workflow. "
+        "You will see the full HTML, the document tree, and the task_spec. "
+        "Your only job is to produce an executable plan for the resolution agent, "
+        "and you must only call return_broad_plan. return_broad_plan is a structured-output "
+        "function, not a document-reading tool. "
+        "You must not call any document-reading tools, must not extract final field values directly, "
+        "and must not prefill answers. Do not prefill answers. "
+        "The plan is a navigation plan, not an answer draft. "
+        "Do not include concrete extracted values in the summary, plan, or risks. "
+        "Do not write concrete extracted values or normalized field values. "
+        "Use the field names and descriptions from task_spec as categories, without adding task-specific field semantics here. "
+        "A plan may mention relevant section ids, element ids, table ids, section titles, table columns, "
+        "and search/query strategies, but it must not contain final assignments such as field=value, "
+        "field: value, or set field X to Y. "
+        "The plan must be suitable for frontend replay: each plan item should be an action unit that "
+        "can be marked with update_plan as in_progress/completed by the resolution agent. "
+        "Prefer grouping by field or tightly related fields. Each plan item should explain where to read, "
+        "which tool to use, and which field category should be written after the step. "
+        "Do not split the plan into tiny fragments, and do not put the whole document into one large step. "
+        "Write plan text in the same language as the document whenever possible. "
+        "Tools available to the resolution agent are listed below for planning only. "
+        "You must not call these tools in the broad stage: "
+        "update_plan(plan_index, status, reason) synchronizes plan state; "
+        "search_elements(query, reason, limit) searches text-like elements and returns candidate ids/snippets; "
+        "read_element(element_id, reason) reads one element; for tables it returns only a table-ref and columns; "
+        "read_section(section_id, reason, depth) reads a section; "
+        "table_extraction(table_id, sql, reason) runs SELECT queries against the SQL table data; "
+        "paragraph_extraction(element_id, pattern, reason) runs a regex over a text element; "
+        "set_field(name, value, evidence_ids, reason, status, failure_reason) writes a field; "
+        "finish() completes extraction. "
+        "When planning table steps, first read_element(table_id) to inspect columns, then use table_extraction. "
+        "Small tables may use SELECT *. Do not plan an unbounded SELECT * for large tables; "
+        "select necessary columns and add WHERE conditions when possible. "
+        "If the table structure is messy or no reliable WHERE condition is available, plan a bounded page read "
+        "such as SELECT * FROM data LIMIT 50 OFFSET 0. "
+        "The set_field reason should explain query_audit.summary. "
+        "Do not turn blank filter columns directly into a risk conclusion; let resolution interpret them using "
+        "field semantics, refs, and output-column emptiness. "
+        "Example plan items: 'Read table p004_b002 and use table_extraction to extract enrollment-count fields'; "
+        "'Read the <Japanese Criteria> eligibility section for the master program and extract eligibility fields'. "
     )
     user = "\n\n".join(
         [
@@ -76,9 +90,10 @@ def build_broad_messages(state: Any) -> list[dict[str, str]]:
             "文档树 document_tree:\n" + _to_json(_read(_read(state, "document"), "tree")),
             "完整 HTML 文档:\n" + _read(_read(state, "extraction_input"), "html", ""),
             (
-                "Resolution 后续可用工具仅供你规划参考；你现在不能调用这些工具，"
-                "只能 return_broad_plan。规划时要写出 resolution 应该用哪个 tool、哪个 id、"
-                "以及表格查询应选择哪些必要列。"
+                "Tools available to the resolution agent are for planning reference only. "
+                "You must not call these tools in the broad stage; only call return_broad_plan. "
+                "When planning, specify which tool and id the resolution agent should use, "
+                "and which necessary columns a table query should select."
             ),
         ]
     )
@@ -86,12 +101,9 @@ def build_broad_messages(state: Any) -> list[dict[str, str]]:
 
 
 def run_broad_planner(state: Any, broad_model: Any) -> BroadPlan:
-    """Run broad planner with a required function-call output tool."""
+    """Skip broad planning and let resolution work from the outline directly."""
 
-    messages = build_broad_messages(state)
-    model = broad_model.bind_tools([return_broad_plan], tool_choice="return_broad_plan")
-    message = model.invoke(messages)
-    plan = parse_broad_plan_tool_call(message)
+    plan = BroadPlan(summary="No broad plan", plan=[], risks=[])
     setattr(state, "broad_plan", plan)
     return plan
 

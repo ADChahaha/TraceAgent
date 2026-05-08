@@ -35,15 +35,18 @@ def build_chat_model(config: ModelConfig, model_name: str) -> Any:
     kwargs: dict[str, Any] = {
         "model": model_name,
         "temperature": config.temperature,
+        "max_retries": config.max_retries,
     }
+    if config.request_timeout is not None:
+        kwargs["request_timeout"] = config.request_timeout
     if config.base_url:
         kwargs["base_url"] = config.base_url
     if config.api_key:
         kwargs["api_key"] = config.api_key
     if config.top_p is not None:
-        kwargs["model_kwargs"] = {"top_p": config.top_p}
+        kwargs["top_p"] = config.top_p
     if config.top_k is not None:
-        kwargs.setdefault("model_kwargs", {})["top_k"] = config.top_k
+        kwargs["extra_body"] = {"top_k": config.top_k}
 
     return ChatOpenAI(**kwargs)
 
@@ -63,6 +66,8 @@ def _model_config_from_env() -> ModelConfig:
         temperature=_float_env(values.get("TEMPERATURE"), 0.0),
         top_p=_optional_float_env(values.get("TOP_P")),
         top_k=_optional_int_env(values.get("TOP_K")),
+        max_retries=_int_env(values.get("MODEL_MAX_RETRIES"), 6),
+        request_timeout=_optional_float_env(values.get("MODEL_REQUEST_TIMEOUT")),
     )
 
 
@@ -102,6 +107,12 @@ def _optional_float_env(value: str | None) -> float | None:
 def _optional_int_env(value: str | None) -> int | None:
     if value in {None, ""}:
         return None
+    return int(value)
+
+
+def _int_env(value: str | None, default: int) -> int:
+    if value in {None, ""}:
+        return default
     return int(value)
 
 
