@@ -27,43 +27,27 @@ def build_resolution_messages(state: Any) -> list[Any]:
             "Every tool call except finish requires a reason. Write reasons in the same language as the document whenever possible. "
             "Reasons must be short, specific, and understandable to users; avoid internal jargon and vague phrases like 'continue extraction'. "
             "The action trace must support frontend replay: "
-            "There is no broad plan. Use the task field descriptions and document outline as the primary guide. "
-            "Do not wait for or call update_plan; choose search and read tools directly from the outline and field semantics. "
-            "1. Pick the next unresolved field, inspect the outline, and choose the narrowest useful search/read action. "
+            "Use update_plan to keep broad-plan progress synchronized; call update_plan(plan_index, status, reason) "
+            "when starting and completing each broad-plan step. "
+            "Use the task field descriptions and document outline as the primary guide. "
+            "1. Pick the next unresolved field, inspect the outline, and choose the narrowest useful read action. "
             "2. Read only the evidence needed to complete that step. "
             "3. Once evidence for a field is sufficient, the next related tool call must be set_field; do not keep browsing. "
             "4. After all fields are done, call finish. "
-            "Use the built-in document outline to choose element ids. Prefer checking contents/index pages first to locate sections. "
-            "Use search_elements when the outline is too coarse or when you need to locate a keyword before writing a field. "
-            "Search results include readable HTML and observed evidence ids; when the returned HTML is sufficient for the field, use those evidence_ids directly in set_field. "
-            "Only call read_element when the search match is ambiguous, incomplete, or needs more local context. "
-            "Use scan_document(scope_id, query, reason, limit) only after choosing a scope id from the outline or search_elements. "
-            "scan_document is an isolated no-tool reader; it scans all content under that one scope id and cannot call tools or subagents. "
-            "If read_section hits the section size limit, it automatically uses the isolated reader on that same section id; "
-            "use the returned read_section candidates directly when they are sufficient, or make one precise follow-up read only when more local context is needed. "
-            "It returns candidate block evidence only, not final field values, normalized values, or plans. "
+            "Use the built-in document outline to choose section ids. Call overview first when the outline is not enough. "
+            "Document outline may include section containers and block items in document order. "
+            "Use the bound tool descriptions as the source of truth for exact arguments and reading behavior. "
             "Do not wander around cover pages or unrelated headings unless the current field needs the document title. "
-            "If a candidate is a section heading, prefer read_section with the smallest sufficient depth: "
-            "depth=1 reads a narrow section, depth=2 reads nearby subsections, and depth=3 is only for a full large section. "
-            "If you have used read_element more than 3 times in the same section for one field, stop scattered reads and use "
-            "read_section on the parent section with a larger depth. "
-            "For tables, first read_element(table_id) to inspect columns, then use table_extraction. "
             "All SQL column names must be wrapped in double quotes. "
-            "table_extraction returns query_audit.summary; it is a table-query observation, not a risk conclusion. "
+            "query_table returns query_audit.summary; it is a table-query observation, not a risk conclusion. "
             "When writing set_field reason, explain how query_audit.summary affects the current field, especially blank filter columns, "
             "near_match_rows, empty output columns, and structural misalignment. "
-            "query_audit few-shot: "
-            "Example 1: You query WHERE \"category\"='target', and summary says the filter column has blank cells. "
-            "If neighboring columns, captions, headers, or group titles clearly show those blank rows are not target rows, "
-            "and selected output columns are complete, the set_field reason may explain that table context and resolve the field. "
-            "Example 2: You query WHERE \"category\"='target', and summary says the filter column has blanks, near_match_rows, "
-            "or selected output columns are empty. If neighboring columns, captions, or headers cannot prove the blank rows are non-target rows, "
-            "Do not claim blank rows are normal merely because WHERE did not select them. "
-            "Continue querying, use a safer query, or set_field(status='failed') to request human review. "
+            "If neighboring columns, captions, headers, or group titles clearly explain blank filter cells and selected output columns are complete, "
+            "the set_field reason may cite that table context. If table context cannot explain blank filter cells, near-match rows, "
+            "or empty selected output columns, continue querying, use a safer query, or set_field(status='failed') to request human review. "
             "Blank filter columns must be interpreted with table context; do not rewrite query_audit.summary directly into a risk or normal conclusion. "
-            "Use paragraph_extraction for text patterns; use read_element/read_section for ordinary HTML fragments. "
             "If a tool returns ok=false or error, do not quit. Read the error, fix parameters, and retry. "
-            "set_field evidence_ids must come from this run's search_elements/scan_document/read_element/read_section/table_extraction/paragraph_extraction results. "
+            "set_field evidence_ids must come from this run's read_blocks/read_block_range/read_list/query_table results. "
             "Do not write fields using only the overview or broad plan."
         )
     )
@@ -71,7 +55,7 @@ def build_resolution_messages(state: Any) -> list[Any]:
         content="\n\n".join(
             [
                 "Task fields (each field must be set_field):\n" + _task_fields_text(state.task_spec),
-                "Document outline（用于选择 read_section/read_element/table_extraction 的 id）:\n"
+                "Document outline（用于选择 overview/read_section/read_blocks/read_block_range/read_list/query_table 的 id）:\n"
                 + format_document_outline(state.document.tree),
             ]
         )
@@ -298,7 +282,7 @@ def _should_force_set_field_nudge(state: Any) -> bool:
     recent = actions[-4:]
     if any(action.get("tool_name") == "set_field" for action in recent):
         return False
-    read_like = {"search_elements", "scan_document", "read_element", "read_section", "table_extraction", "paragraph_extraction"}
+    read_like = {"read_section", "read_blocks", "read_block_range", "read_list", "query_table"}
     return sum(1 for action in recent if action.get("tool_name") in read_like) >= 4
 
 

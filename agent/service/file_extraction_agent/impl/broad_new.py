@@ -64,16 +64,10 @@ def build_broad_messages(state: Any) -> list[dict[str, str]]:
         "Do not split the plan into tiny fragments, and do not put the whole document into one large step. "
         "Write plan text in the same language as the document whenever possible. "
         "Tools available to the resolution agent are listed below for planning only. "
+        "Exact tool arguments and reading behavior come from the resolution agent's bound tool docstrings. "
         "You must not call these tools in the broad stage: "
-        "update_plan(plan_index, status, reason) synchronizes plan state; "
-        "search_elements(query, reason, limit) searches text-like elements and returns candidate ids/snippets; "
-        "read_element(element_id, reason) reads one element; for tables it returns only a table-ref and columns; "
-        "read_section(section_id, reason, depth) reads a section; "
-        "table_extraction(table_id, sql, reason) runs SELECT queries against the SQL table data; "
-        "paragraph_extraction(element_id, pattern, reason) runs a regex over a text element; "
-        "set_field(name, value, evidence_ids, reason, status, failure_reason) writes a field; "
-        "finish() completes extraction. "
-        "When planning table steps, first read_element(table_id) to inspect columns, then use table_extraction. "
+        "update_plan, overview, read_section, read_blocks, read_block_range, read_list, query_table, set_field, finish. "
+        "When planning table steps, use overview table ids directly with query_table when available; otherwise use read_section/read_blocks/read_block_range to identify the table block index or ref. "
         "Small tables may use SELECT *. Do not plan an unbounded SELECT * for large tables; "
         "select necessary columns and add WHERE conditions when possible. "
         "If the table structure is messy or no reliable WHERE condition is available, plan a bounded page read "
@@ -81,8 +75,7 @@ def build_broad_messages(state: Any) -> list[dict[str, str]]:
         "The set_field reason should explain query_audit.summary. "
         "Do not turn blank filter columns directly into a risk conclusion; let resolution interpret them using "
         "field semantics, refs, and output-column emptiness. "
-        "Example plan items: 'Read table p004_b002 and use table_extraction to extract enrollment-count fields'; "
-        "'Read the <Japanese Criteria> eligibility section for the master program and extract eligibility fields'. "
+        "Plan items should cite actual ids, section titles, or table columns from the provided document tree, not invented examples. "
     )
     user = "\n\n".join(
         [
@@ -103,7 +96,15 @@ def build_broad_messages(state: Any) -> list[dict[str, str]]:
 def run_broad_planner(state: Any, broad_model: Any) -> BroadPlan:
     """Skip broad planning and let resolution work from the outline directly."""
 
-    plan = BroadPlan(summary="No broad plan", plan=[], risks=[])
+    plan = BroadPlan(
+        summary="Default document navigation plan",
+        plan=[
+            "Review the document overview and identify relevant sections.",
+            "Read needed section block previews and then read exact blocks, lists, or tables.",
+            "Write each field with observed evidence and finish the run.",
+        ],
+        risks=[],
+    )
     setattr(state, "broad_plan", plan)
     return plan
 

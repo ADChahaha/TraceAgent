@@ -20,16 +20,26 @@ class FakeResolutionModel:
     def __init__(self):
         self.calls = [
             {
-                "tool_name": "read_element",
+                "tool_name": "update_plan",
                 "arguments": {
-                    "element_id": "dp-table-1",
+                    "plan_index": 1,
+                    "status": "in_progress",
+                    "reason": "开始读取名单表",
+                },
+            },
+            {
+                "tool_name": "read_blocks",
+                "arguments": {
+                    "section_id": "dp-table-1",
+                    "indexes": [0],
                     "reason": "先确认名单表的列名",
                 },
             },
             {
-                "tool_name": "table_extraction",
+                "tool_name": "query_table",
                 "arguments": {
-                    "table_id": "dp-table-1",
+                    "section_id": "dp-table-1",
+                    "block_offset": 0,
                     "sql": "SELECT \"姓名\" FROM data WHERE \"学院\" = '计算机学院'",
                     "reason": "查询计算机学院对应的姓名行",
                 },
@@ -54,12 +64,11 @@ class FakeResolutionModelWithScan:
     def __init__(self):
         self.calls = [
             {
-                "tool_name": "scan_document",
+                "tool_name": "read_blocks",
                 "arguments": {
-                    "scope_id": "dp-h2-1",
-                    "query": "学生姓名",
-                    "reason": "隔离扫描姓名字段候选证据",
-                    "limit": 3,
+                    "section_id": "dp-p-1",
+                    "indexes": [0],
+                    "reason": "读取姓名字段候选证据",
                 },
             },
             {
@@ -143,12 +152,12 @@ def test_run_extraction_graph_skips_broad_plan_then_runs_resolution():
 
     assert result.status == "completed"
     assert result.result["student_name"] == "张三"
-    assert result.trace["broad_plan"]["summary"] == "No broad plan"
-    assert result.trace["broad_plan"]["plan"] == []
+    assert result.trace["broad_plan"]["summary"] == "Default document navigation plan"
+    assert result.trace["broad_plan"]["plan"]
     assert len(result.trace["actions"]) >= 1
 
 
-def test_run_extraction_graph_uses_broad_model_only_as_document_scan_model():
+def test_run_extraction_graph_runs_new_read_tools_without_document_scan_model():
     scan_model = FakeDocumentScanModel()
 
     result = run_extraction_graph(
@@ -159,9 +168,9 @@ def test_run_extraction_graph_uses_broad_model_only_as_document_scan_model():
 
     assert result.status == "completed"
     assert result.result["student_name"] == "张三"
-    assert scan_model.invoked is True
+    assert scan_model.invoked is False
     assert [action["tool_name"] for action in result.trace["actions"]] == [
-        "scan_document",
+        "read_blocks",
         "set_field",
         "finish",
     ]

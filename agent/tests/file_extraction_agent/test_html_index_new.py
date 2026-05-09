@@ -20,10 +20,12 @@ def test_build_html_document_indexes_existing_ids_and_tree():
 
     assert "dp-p-1" in document.elements_by_id
     assert document.elements_by_id["dp-h2-1"].type == "SECTION_HEADER"
-    assert document.tree[0]["id"] == "dp-h2-1"
-    assert [child["id"] for child in document.tree[0]["children"]] == ["dp-table-1"]
-    assert document.tree[0]["children"][0]["label"] == "学生名单"
-    assert "text" not in document.tree[0]["children"][0]
+    assert [node["id"] for node in document.tree] == ["dp-h2-1", "dp-p-1", "dp-table-1"]
+    assert document.tree[0]["children"] == []
+    assert document.tree[1]["type"] == "TEXT"
+    assert document.tree[1]["preview"] == "正文"
+    assert document.tree[2]["label"] == "学生名单"
+    assert "text" not in document.tree[2]
     assert document.tables_by_id["dp-table-1"].columns == ["姓名", "学院"]
     assert document.tables_by_id["dp-table-1"].rows == [{"姓名": "张三", "学院": "计算机学院"}]
     assert document.tables_by_id["dp-table-1"].row_ids == ["dp-tr-2"]
@@ -94,7 +96,7 @@ def test_build_html_document_rejects_duplicate_id():
         build_html_document(html)
 
 
-def test_heading_levels_create_nested_sections():
+def test_heading_levels_do_not_create_implicit_nested_sections():
     html = """
     <h2 id="h2">一级</h2>
     <h3 id="h3">二级</h3>
@@ -103,8 +105,30 @@ def test_heading_levels_create_nested_sections():
 
     document = build_html_document(html)
 
-    assert document.tree[0]["id"] == "h2"
+    assert [node["id"] for node in document.tree] == ["h2", "h3", "p1"]
     assert document.tree[0]["text"] == "一级"
-    assert document.tree[0]["children"][0]["id"] == "h3"
-    assert document.tree[0]["children"][0]["text"] == "二级"
-    assert document.tree[0]["children"][0]["children"] == []
+    assert document.tree[1]["text"] == "二级"
+    assert document.tree[2] == {"id": "p1", "type": "TEXT", "children": [], "preview": "正文"}
+
+
+def test_section_container_keeps_its_dom_children():
+    html = """
+    <section id="sec">
+      <h2 id="h2">一级</h2>
+      <p id="p1">正文</p>
+    </section>
+    """
+
+    document = build_html_document(html)
+
+    assert document.tree == [
+        {
+            "id": "sec",
+            "type": "SECTION",
+            "children": [
+                {"id": "h2", "type": "SECTION_HEADER", "children": [], "text": "一级"},
+                {"id": "p1", "type": "TEXT", "children": [], "preview": "正文"},
+            ],
+            "preview": "一级 正文",
+        }
+    ]

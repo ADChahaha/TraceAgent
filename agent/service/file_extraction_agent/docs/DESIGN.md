@@ -9,12 +9,12 @@
 ```text
 调用方传入 html、task_spec、run_options、model_config
   -> input_adapter 校验 html 非空、task_spec.fields 非空、max_tool_calls > 0
-  -> html_index 解析 HTML，基于已有 id 构建 document.tree、elements_by_id、tables_by_id、row_index
+  -> html_index 解析 HTML，基于已有 id 构建 document.tree、elements_by_id、tables_by_id、row_index；tree 按 DOM/section 容器语义保留 section、heading 和同层 block items 的顺序与预览
   -> model_factory 从显式 model_config 或环境变量构造 broad / resolution 两个 ChatOpenAI，并注入重试和超时配置
   -> broad_new 不调用模型，直接写入空 BroadPlan 作为 trace 兼容占位
   -> graph 把 broad_model 挂到 state.document_scan_model，作为可选隔离全文扫描模型
   -> resolution_new 把 task fields 和 document outline 交给 LangGraph tool-calling loop
-  -> html_tools 提供 search_elements / scan_document / read_element / read_section / table_extraction / paragraph_extraction / set_field / finish
+  -> html_tools 提供 overview / read_section / read_blocks / read_block_range / read_list / query_table / set_field / finish
   -> 每个字段通过 set_field 写入 resolved 或 failed，并记录 evidence_ids 与 actions
   -> finish 校验字段完成度和证据一致性
   -> graph 映射成 ExtractionResult(status, result, failure_reason, trace)
@@ -24,7 +24,7 @@
 
 - `broad_plan`：no-plan 实验中的兼容占位，默认是 `summary="No broad plan"`、空 `plan` 和空 `risks`。
 - `plan_statuses`：resolution 执行计划时的 in_progress / completed 状态。
-- `document_tree`：从 HTML 推出的目录和表格概览。
+- `document_tree`：从 HTML 推出的混排 outline，包含 section container、heading 和同层 block items 的摘要。
 - `field_states`：每个字段的值、状态、证据 id、原因或失败原因。
 - `actions`：resolution 工具调用轨迹，包含读取、查表、写字段、完成等动作。
 
@@ -126,7 +126,7 @@ string / number / boolean / list[string] / list[number]
 - 标题、`p`、`li`、`table`、`tr`、`caption`、`ul`、`ol` 等可追踪元素必须有 id。
 - id 必须唯一。
 - 表格行作为证据时必须能定位到已有行 id。
-- outline 只保留标题层级和表格概览，不把整张表或完整 DOM 噪声塞给模型。
+- outline 按 DOM/section 容器语义组织：`section` 拥有真实子节点，heading 不会默认吞掉后续平级段落、列表或表格；同层 block 保持同层顺序和预览，不把整张表或完整 DOM 噪声塞给模型。
 
 语义类型从 HTML tag 推断：
 
@@ -134,8 +134,9 @@ string / number / boolean / list[string] / list[number]
 | --- | --- |
 | `h1` | `TITLE` |
 | `h2`-`h6` | `SECTION_HEADER` |
+| `section` | `SECTION` |
 | `p` | `TEXT` |
-| `li` | `LIST_ITEM` |
+| `ul` / `ol` | `LIST` |
 | `table` | `TABLE` |
 | `caption` | `CAPTION` |
 
@@ -180,12 +181,12 @@ resolution 不接收 broad plan，也不调用 `update_plan`。它直接从字�
 ```text
 Task fields + document outline
   -> 选择下一个未完成字段
-  -> 用 search_elements / scan_document / read_element / read_section / table_extraction / paragraph_extraction 定位和读取证据
+  -> 用 overview / read_section / read_blocks / read_block_range / read_list / query_table 定位和读取证据
   -> 证据足够就立即 set_field
   -> 所有字段完成后 finish
 ```
 
-resolution system prompt 使用英文表达工具调用、replay、表格查询和证据校验约束。除 `finish` 外，每个工具调用都需要 `reason`，并要求 reason 尽量使用文档语言；字段值本身也应跟随任务定义和文档语言输出。
+resolution system prompt 使用英文表达 replay、表格查询和证据校验等通用约束；精确工具参数和读取行为只写在 `html_tools.py` 的工具函数 docstring 里，并由 LangGraph 绑定工具时注入模型上下文，避免系统 prompt 和工具 schema 漂移。除 `finish` 外，每个工具调用都需要 `reason`，并要求 reason 尽量使用文档语言；字段值本身也应跟随任务定义和文档语言输出。
 
 ## 工具边界
 
@@ -194,42 +195,37 @@ resolution system prompt 使用英文表达工具调用、replay、表格查询�
 工具链路：
 
 ```text
-search_elements(query, reason, limit)
-  -> 在段落、标题、列表项和 caption 等 block 级文本元素中按关键词定位匹配内容
-  -> 跳过 `page_001` 这类整页聚合文本，避免把大块页面正文当作字段证据
-  -> 直接返回可读 HTML 和 evidence_ids，并把这些 evidence_ids 标记为已观察
-  -> 如果需要更多局部上下文，再继续 read_element / read_section
+overview()
+  -> 返回 section container、heading 和同层 block items 的混排 outline
+  -> 只给模型看摘要和读法，不给表格数据行
+  -> list item 直接标记为 read_list，并带 block_offset=0
+  -> table item 直接标记为 query_table，并带 block_offset=0
 
-scan_document(scope_id, query, reason, limit)
-  -> 主 resolution agent 先从 outline 或 search_elements 里选出一个已有 scope_id；也可能由 read_section 过长分支在工具内部用同一个 section_id 自动触发
-  -> 如果 scope_id 是标题，构造该标题下直到下一个同级或更高级标题前的完整 scope HTML；如果是普通元素，构造该元素及其 DOM 子元素的 scope HTML
-  -> 发起一个隔离模型调用，输入 task fields、scope_id、query/reason、limit 和这个 scope HTML
-  -> 隔离 reader 不绑定任何工具，不允许调用工具、agent 或 subagent，也不返回 plan 或最终字段值
-  -> 只接收 reader 返回的 scope 内已有 block 级 element id，过滤 scope 外 id、未知 id、`page_001` 聚合 id 和非 block/table 元素
-  -> 把候选 id 转成可读 HTML、snippet、evidence_ids 和 reader reason，并标记为已观察证据
-  -> 如果候选证据足够，主 agent 可以直接用这些 evidence_ids 调用 set_field
+read_section(section_id, reason)
+  -> 只读取 heading
+  -> 只返回该 heading 元素真实后代的 block offsets 和 first-sentence preview
+  -> 不把后续平级 p/list/table 隐式算进前一个 heading；这些平级块由 overview 直接暴露
+  -> 章节过长时在工具内部触发隔离 scoped reader
 
-read_element(element_id, reason)
-  -> 读取单个已有 HTML 元素
-  -> 如果是 table，只返回 table-ref 元信息和列名，不返回表格数据行
+read_blocks(section_id, indexes, reason)
+  -> 对 section container、heading 真实后代 scope 或 leaf block scope 做 index 列表查询
+  -> indexes 来自 overview/read_section 暴露的 block index，由模型挑选需要读取的一个或多个离散块
+  -> 返回选中 block 的完整 HTML 或 ref；leaf block scope 使用 indexes=[0]
+  -> list 只返回 ref，由 read_list 展开；table 可返回 ref，但也可以直接由 query_table 读取
 
-read_section(section_id, reason, depth)
-  -> 读取某个标题下的章节内容
-  -> depth 控制包含的子章节层级
-  -> 如果生成的 section HTML 超过 12,000 字符，不返回整段 HTML，而是在工具内部直接用同一个 section_id 调用隔离 scoped reader
-  -> scoped reader 只返回章节内候选 block 证据；这些候选 evidence_ids 会被标记为已观察，可直接用于 set_field
-  -> 如果没有配置 document_scan_model 或隔离扫描失败，read_section 返回 ok=false，并带上 scan_error
-  -> 合理大小内，非表格正文和列表项完整返回；表格仍只返回 table-ref，不返回数据行
+read_block_range(section_id, start_index, count, reason)
+  -> 对和 read_blocks 相同的 scope 做连续窗口读取
+  -> start_index 和 count 表示模型要顺序扫的一段上下文，工具最多返回 20 个块
+  -> 返回实际读取到的 indexes、blocks 和 evidence_ids；非连续证据仍应使用 read_blocks
 
-table_extraction(table_id, sql, reason)
-  -> 对单张 HTML 表格建立内存 SQLite data 表
-  -> 只允许单条 SELECT
-  -> 大表拒绝无边界 SELECT *
+read_list(section_id, block_offset, item_offset, number, reason)
+  -> 如果 section_id 已经是 overview 给出的 list id，使用 block_offset=0 直接读取
+  -> 否则按 section_id + block_offset 找到 list block，再分页返回 list item
+
+query_table(section_id, block_offset, sql, reason)
+  -> 如果 section_id 已经是 overview 给出的 table id，使用 block_offset=0 直接查询
+  -> 否则按 section_id + block_offset 找到 table block，再执行单条安全 SELECT
   -> 返回 rows、evidence_ids、table_audit 和 query_audit
-
-paragraph_extraction(element_id, pattern, reason)
-  -> 对文本类元素执行 Python 正则
-  -> 返回匹配文本、span 和 evidence ids
 
 set_field(name, value, evidence_ids, reason, status, failure_reason)
   -> 校验字段存在、状态合法、值类型匹配
@@ -246,7 +242,7 @@ finish()
 
 ## 表格观察
 
-`table_extraction` 是当前抽取链路里的表格能力。它不做业务硬编码，只根据 HTML 表格结构和模型给出的 SQL 返回事实。
+`query_table` 是当前抽取链路里的表格能力。它不做业务硬编码，只根据 HTML 表格结构和模型给出的 SQL 返回事实。
 
 ```text
 table_id + SQL

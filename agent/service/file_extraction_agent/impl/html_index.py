@@ -22,6 +22,7 @@ TRACKED_TAGS = {
     "caption",
     "ul",
     "ol",
+    "section",
 }
 HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 TABLE_EVIDENCE_ID_TAGS = {"table", "tr"}
@@ -197,16 +198,26 @@ def build_document_tree(
     root: HtmlNode,
     tables_by_id: dict[str, HtmlTable],
 ) -> list[dict[str, Any]]:
-    tree: list[dict[str, Any]] = []
-    heading_stack: list[tuple[int, dict[str, Any]]] = []
+    return build_outline_children(root, tables_by_id)
 
-    for node in walk(root):
-        if node.tag is None or node.tag not in TRACKED_TAGS:
+
+def build_outline_children(
+    parent: HtmlNode,
+    tables_by_id: dict[str, HtmlTable],
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for node in parent.children:
+        if node.tag is None:
             continue
-        if node.tag in {"tr", "ul", "ol", "p", "li", "caption"}:
+        if node.tag in {"tr", "li", "caption"}:
             continue
         if node.tag == "table" and table_owner_node(node) is not None:
             continue
+
+        if node.tag not in TRACKED_TAGS:
+            items.extend(build_outline_children(node, tables_by_id))
+            continue
+
         element_id = node.attrs.get("id")
         if not element_id:
             continue
@@ -214,35 +225,27 @@ def build_document_tree(
             continue
 
         item = tree_node(node, tables_by_id)
-        if node.tag in HEADING_TAGS:
-            level = heading_level(node.tag)
-            while heading_stack and heading_stack[-1][0] >= level:
-                heading_stack.pop()
-            if heading_stack:
-                heading_stack[-1][1]["children"].append(item)
-            else:
-                tree.append(item)
-            heading_stack.append((level, item))
-            continue
-
-        if heading_stack:
-            heading_stack[-1][1]["children"].append(item)
-        else:
-            tree.append(item)
-
-    return tree
+        if item["type"] not in {"TABLE", "LIST"}:
+            item["children"] = build_outline_children(node, tables_by_id)
+        items.append(item)
+    return items
 
 
 def tree_node(node: HtmlNode, tables_by_id: dict[str, HtmlTable]) -> dict[str, Any]:
     element_id = node.attrs["id"]
     item: dict[str, Any] = {
         "id": element_id,
-        "type": infer_node_type(node),
+        "type": outline_node_type(node),
         "children": [],
     }
-    if node.tag in HEADING_TAGS:
+    if item["type"] in {"TITLE", "SECTION_HEADER"}:
         item["text"] = node_text(node)
-    if is_table_overview_node(node) and element_id in tables_by_id:
+    elif item["type"] in {"SECTION", "TEXT"}:
+        item["preview"] = first_sentence(node_text(node))
+    if item["type"] == "LIST":
+        item["item_count"] = len(_list_item_nodes(node))
+        item["preview"] = [first_sentence(node_text(child)) for child in _list_item_nodes(node)[:3]]
+    if item["type"] == "TABLE" and element_id in tables_by_id:
         table = tables_by_id[element_id]
         item["label"] = table.label
         item["columns"] = table.columns
@@ -365,9 +368,23 @@ def infer_element_type(tag: str) -> str:
 
 
 def infer_node_type(node: HtmlNode) -> str:
+    if node.tag == "section":
+        return "SECTION"
     if node.tag == "figure" and node.attrs.get("data-type", "").lower() == "table":
         return "TABLE"
     return infer_element_type(node.tag or "")
+
+
+def outline_node_type(node: HtmlNode) -> str:
+    if node.tag == "section":
+        return "SECTION"
+    if node.tag in {"ul", "ol"}:
+        return "LIST"
+    if node.tag == "table" or (
+        node.tag == "figure" and node.attrs.get("data-type", "").lower() == "table"
+    ):
+        return "TABLE"
+    return infer_node_type(node)
 
 
 def heading_level(tag: str) -> int:
@@ -378,6 +395,22 @@ def node_text(node: HtmlNode) -> str:
     parts: list[str] = []
     collect_text(node, parts)
     return " ".join("".join(parts).split())
+
+
+def first_sentence(text: str) -> str:
+    normalized = " ".join(str(text or "").split())
+    if not normalized:
+        return ""
+    import re
+
+    match = re.search(r".*?[。！？.!?](?=\s|$|[^0-9])", normalized)
+    if match:
+        return match.group(0)
+    return normalized
+
+
+def _list_item_nodes(node: HtmlNode) -> list[HtmlNode]:
+    return [child for child in walk(node) if child.tag == "li"]
 
 
 def collect_text(node: HtmlNode, parts: list[str]) -> None:

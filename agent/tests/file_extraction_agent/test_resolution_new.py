@@ -36,10 +36,7 @@ def test_format_document_outline_returns_compact_text_not_raw_json():
 
     assert outline.startswith("<outline>\n")
     assert '<section id="dp-h2-1" level="1" title="通知">' in outline
-    assert (
-        '<table-ref id="dp-table-1" label="通知" rows="1" columns="姓名 | 学院" />'
-        in outline
-    )
+    assert '<table-ref id="dp-table-1" rows="1" columns="姓名 | 学院" />' in outline
     assert outline.endswith("\n</outline>")
     assert "正文不应出现在 overview" not in outline
     assert "{'id':" not in outline
@@ -50,38 +47,28 @@ def test_resolution_messages_embed_compact_document_outline():
     content = "\n\n".join(message.content for message in messages)
 
     assert "Document outline" in content
-    assert '<table-ref id="dp-table-1" label="通知" rows="1" columns="姓名 | 学院" />' in content
+    assert '<table-ref id="dp-table-1" rows="1" columns="姓名 | 学院" />' in content
     assert "Document overview:" not in content
     assert "{'tree':" not in content
     assert "You are the field-writing agent" in content
     assert "Each field must be finalized exactly once with set_field" in content
     assert "Write reasons in the same language as the document whenever possible" in content
-    assert "There is no broad plan" in content
+    assert "Use update_plan to keep broad-plan progress synchronized" in content
     assert "Use the task field descriptions and document outline as the primary guide" in content
-    assert "Do not wait for or call update_plan" in content
-    assert "Broad plan" not in content
-    assert "update_plan(plan_index" not in content
+    assert "update_plan(plan_index" in content
     assert "Once evidence for a field is sufficient, the next related tool call must be set_field" in content
-    assert "Prefer checking contents/index pages first" in content
-    assert "Use search_elements" in content
-    assert "Search results include readable HTML and observed evidence ids" in content
-    assert "use those evidence_ids directly in set_field" in content
-    assert "Only call read_element when the search match is ambiguous" in content
-    assert "Use scan_document(scope_id, query, reason, limit) only after choosing a scope id" in content
-    assert "scan_document is an isolated no-tool reader" in content
-    assert "scans all content under that one scope id" in content
-    assert "If read_section hits the section size limit, it automatically uses the isolated reader on that same section id" in content
-    assert "use the returned read_section candidates directly when they are sufficient" in content
-    assert "It returns candidate block evidence only" in content
-    assert "Search results are candidates only" not in content
-    assert "depth=2 reads nearby subsections" in content
-    assert "If you have used read_element more than 3 times in the same section for one field" in content
+    assert "Call overview first when the outline is not enough" in content
+    assert "Document outline may include section containers and block items in document order" in content
+    assert "Use the bound tool descriptions as the source of truth for exact arguments and reading behavior" in content
     assert "All SQL column names must be wrapped in double quotes" in content
-    assert "query_audit few-shot" in content
+    assert "query_audit few-shot" not in content
+    assert "Example 1" not in content
+    assert "Example 2" not in content
+    assert "\"category\"='target'" not in content
     assert "Blank filter columns must be interpreted with table context" in content
-    assert "Do not claim blank rows are normal merely because WHERE did not select them" in content
+    assert "If table context cannot explain blank filter cells" in content
     assert "neighboring columns, captions, headers, or group titles" in content
-    assert "set_field evidence_ids must come from this run's search_elements/scan_document/read_element/read_section/table_extraction/paragraph_extraction results" in content
+    assert "set_field evidence_ids must come from this run's read_blocks/read_block_range/read_list/query_table results" in content
     assert "非空分布" not in content
 
 
@@ -152,13 +139,14 @@ def test_resolution_graph_nudges_model_when_it_stops_before_finish():
     assert state.actions[-1]["tool_name"] == "finish"
 
 
-def test_resolution_nudge_counts_search_results_as_observed_evidence():
+def test_resolution_nudge_counts_new_read_tools_as_observed_evidence():
     state = _state()
     state.actions = [
-        {"tool_name": "search_elements"},
-        {"tool_name": "search_elements"},
-        {"tool_name": "read_element"},
-        {"tool_name": "search_elements"},
+        {"tool_name": "read_section"},
+        {"tool_name": "read_blocks"},
+        {"tool_name": "read_block_range"},
+        {"tool_name": "read_list"},
+        {"tool_name": "query_table"},
     ]
 
     instruction = _continue_instruction(state)
@@ -167,11 +155,19 @@ def test_resolution_nudge_counts_search_results_as_observed_evidence():
     assert "the next tool call must be set_field" in instruction
 
 
-def test_resolution_graph_does_not_expose_update_plan_tool():
+def test_resolution_graph_exposes_plan_and_new_read_tools():
     state = _state()
     tools = build_tools(state)
     tool_names = [getattr(tool, "name", getattr(tool, "__name__", "")) for tool in tools]
 
-    assert "update_plan" not in tool_names
-    assert tool_names[0] == "search_elements"
-    assert "scan_document" in tool_names
+    assert tool_names == [
+        "update_plan",
+        "overview",
+        "read_section",
+        "read_blocks",
+        "read_block_range",
+        "read_list",
+        "query_table",
+        "set_field",
+        "finish",
+    ]

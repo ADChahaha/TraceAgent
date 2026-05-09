@@ -9,7 +9,11 @@ from service.file_extraction_agent.impl.html_tools import (
     _finish,
     _overview,
     _paragraph_extraction,
+    _read_block_range,
+    _query_table,
+    _read_blocks,
     _read_element,
+    _read_list,
     _read_section,
     _scan_document,
     _search_elements,
@@ -52,6 +56,39 @@ def _state():
         actions=[],
         observed_evidence_ids=set(),
         broad_plan=SimpleNamespace(summary="测试", plan=["读取名单表", "写入字段"], risks=[]),
+        plan_statuses={},
+    )
+
+
+def _mixed_outline_state():
+    html = """
+    <section id="dp-page-1">
+      <h1 id="dp-h1-1">合同总则</h1>
+      <p id="dp-p-1">前言段落，说明合同背景。</p>
+      <table id="dp-table-1">
+        <caption id="dp-caption-1">学生名单</caption>
+        <tr id="dp-tr-1"><th>姓名</th><th>学院</th></tr>
+        <tr id="dp-tr-2"><td>张三</td><td>计算机学院</td></tr>
+      </table>
+      <p id="dp-p-2">第二段正文，继续说明条款。</p>
+      <ul id="dp-ul-1">
+        <li id="dp-li-1">第一项</li>
+        <li id="dp-li-2">第二项</li>
+        <li id="dp-li-3">第三项</li>
+      </ul>
+      <h2 id="dp-h2-1">1. 定义</h2>
+      <p id="dp-p-3">定义条款正文。</p>
+    </section>
+    """
+    return SimpleNamespace(
+        document=build_html_document(html),
+        task_spec=SimpleNamespace(
+            fields=[SimpleNamespace(name="student_name", type="string", required=True)]
+        ),
+        field_states={},
+        actions=[],
+        observed_evidence_ids=set(),
+        broad_plan=SimpleNamespace(summary="测试", plan=["读取正文"], risks=[]),
         plan_statuses={},
     )
 
@@ -140,18 +177,67 @@ def _sparse_label_table_state():
 
 
 def test_overview_returns_document_tree():
-    result = _overview(_state())
+    state = _state()
+    result = _overview(state)
 
-    assert result["tree"][0]["id"] == "dp-h2-1"
-    assert result["tree"][0]["text"] == "通知"
-    table_node = _find_tree_node(result["tree"], "dp-table-1")
-    assert table_node is not None
-    assert table_node["id"] == "dp-table-1"
-    assert table_node["type"] == "TABLE"
-    assert table_node["label"] == "学生名单"
-    assert table_node["columns"] == ["姓名", "学院"]
-    assert table_node["row_count"] == 2
-    assert "text" not in table_node
+    assert result["sections"] == [
+        {
+            "section_id": "dp-h2-1",
+            "title": "通知",
+            "level": 2,
+            "block_count": 0,
+            "subsections": [],
+        },
+        {
+            "section_id": "dp-h3-1",
+            "title": "名单",
+            "level": 3,
+            "block_count": 0,
+            "subsections": [],
+        },
+    ]
+    assert "tree" not in result
+    assert state.actions[-1]["tool_name"] == "overview"
+
+
+def test_overview_exposes_mixed_dom_items_in_dom_order():
+    state = _mixed_outline_state()
+    result = _overview(state)
+
+    items = result["items"]
+    assert [item["item_id"] for item in items] == [
+        "dp-page-1",
+        "dp-h1-1",
+        "dp-p-1",
+        "dp-table-1",
+        "dp-p-2",
+        "dp-ul-1",
+        "dp-h2-1",
+        "dp-p-3",
+    ]
+    assert items[0]["type"] == "SECTION"
+    assert items[0]["tag"] == "section"
+    assert items[0]["read_with"] == "read_blocks"
+    assert items[0]["parent_section_id"] == ""
+    assert items[1]["type"] == "TITLE"
+    assert items[1]["read_with"] == "read_section"
+    assert items[2]["type"] == "TEXT"
+    assert items[2]["read_with"] == "read_blocks"
+    assert items[2]["parent_section_id"] == ""
+    assert items[2]["preview"] == "前言段落，说明合同背景。"
+    assert items[3]["type"] == "TABLE"
+    assert items[3]["read_with"] == "query_table"
+    assert items[3]["block_offset"] == 0
+    assert items[3]["columns"] == ["姓名", "学院"]
+    assert items[3]["row_count"] == 1
+    assert items[5]["type"] == "LIST"
+    assert items[5]["read_with"] == "read_list"
+    assert items[5]["block_offset"] == 0
+    assert items[5]["item_count"] == 3
+    assert items[5]["preview"] == ["第一项", "第二项", "第三项"]
+    assert items[6]["type"] == "SECTION_HEADER"
+    assert items[6]["read_with"] == "read_section"
+    assert items[7]["preview"] == "定义条款正文。"
 
 
 def test_read_element_returns_text_element():
@@ -172,91 +258,173 @@ def test_read_element_table_returns_header_only():
         '<table-ref id="dp-table-1" label="学生名单" rows="2" header-row-id="dp-tr-1" '
         'columns="姓名 | 学院" />'
     )
+    assert "double quotes" in result["sql_hint"]
+    assert "论文题目" not in result["sql_hint"]
+    assert "作品类型" not in result["sql_hint"]
+    assert "学术论文" not in result["sql_hint"]
     assert result["evidence_ids"] == ["dp-table-1"]
     assert "rows" not in result
 
 
-def test_read_section_returns_section_content_and_table_refs_by_depth():
-    result = _read_section(_state(), "dp-h2-1", depth=1)
+def test_read_section_does_not_read_sibling_blocks():
+    result = _read_section(_state(), "dp-h2-1")
 
     assert result["section_id"] == "dp-h2-1"
-    assert result["html"].startswith('<section id="dp-h2-1" title="通知" depth="1">')
-    assert '<text id="dp-p-1">联系人：李老师 电话：12345</text>' in result["html"]
-    assert "需要保留全部文字用于模型判断。" * 12 in result["html"]
-    assert '<text id="dp-p-long">' in result["html"]
-    assert '<heading id="dp-h3-1">名单</heading>' in result["html"]
-    assert '<list-ref id="dp-ul-1" items="4">' in result["html"]
-    assert '<item-ref id="dp-li-1">' in result["html"]
-    assert '<item-ref id="dp-li-4">第四条</item-ref>' in result["html"]
-    assert "<truncated" not in result["html"]
-    assert "..." not in result["html"]
-    assert (
-        '<table-ref id="dp-table-1" label="学生名单" rows="2" header-row-id="dp-tr-1" columns="姓名 | 学院" />'
-        in result["html"]
+    assert result["title"] == "通知"
+    assert result["blocks"] == []
+    assert result["evidence_ids"] == []
+
+
+def test_read_blocks_reads_leaf_block_by_selected_index():
+    state = _state()
+
+    result = _read_blocks(state, "dp-p-1", indexes=[0], reason="读取联系人段落")
+
+    assert result["section_id"] == "dp-p-1"
+    assert result["indexes"] == [0]
+    assert [block["offset"] for block in result["blocks"]] == [0]
+    assert result["blocks"][0]["html"] == '<text id="dp-p-1">联系人：李老师 电话：12345</text>'
+    assert result["evidence_ids"] == ["dp-p-1"]
+    assert state.observed_evidence_ids == {"dp-p-1"}
+    assert state.actions[-1]["args"]["indexes"] == [0]
+
+
+def test_read_blocks_returns_list_and_table_refs_without_expanding_rows():
+    state = _mixed_outline_state()
+
+    result = _read_blocks(state, "dp-page-1", indexes=[2, 4], reason="查看名单结构")
+
+    assert result["blocks"][0]["html"] == (
+        '<table-ref id="dp-table-1" label="学生名单" rows="1" header-row-id="dp-tr-1" columns="姓名 | 学院" />'
     )
-    assert "dp-table-1" in result["evidence_ids"]
-    assert "第一条很长很长很长很长很长很长很长很长很长很长很长很长" in result["html"]
+    assert result["blocks"][1]["html"].startswith('<list-ref id="dp-ul-1" items="3">')
+    assert '<item-ref id="dp-li-1">' in result["blocks"][1]["html"]
+    assert result["evidence_ids"] == ["dp-table-1", "dp-ul-1"]
 
 
-def test_read_section_auto_scans_too_long_content_with_isolated_reader():
-    state = _long_section_state()
+def test_read_blocks_supports_section_scopes_and_leaf_block_ids():
+    state = _mixed_outline_state()
 
-    class FakeScanModel:
-        def __init__(self):
-            self.messages = None
+    section_scope = _read_blocks(state, "dp-page-1", indexes=[1, 2, 3], reason="读取页面正文")
+    assert [block["block_id"] for block in section_scope["blocks"]] == ["dp-p-1", "dp-table-1", "dp-p-2"]
+    assert section_scope["blocks"][0]["html"] == '<text id="dp-p-1">前言段落，说明合同背景。</text>'
+    assert section_scope["blocks"][1]["html"].startswith('<table-ref id="dp-table-1"')
+    assert section_scope["blocks"][2]["html"] == '<text id="dp-p-2">第二段正文，继续说明条款。</text>'
+    assert section_scope["evidence_ids"] == ["dp-p-1", "dp-table-1", "dp-p-2"]
 
-        def bind_tools(self, tools, tool_choice=None):
-            raise AssertionError("automatic read_section scan must not bind tools")
-
-        def invoke(self, messages):
-            self.messages = messages
-            return SimpleNamespace(
-                content=json.dumps(
-                    {
-                        "candidates": [
-                            {"element_id": "missing", "reason": "不存在的 id"},
-                            {"element_id": "dp-long-p-3", "reason": "超长章节中的相关正文"},
-                        ]
-                    },
-                    ensure_ascii=False,
-                )
-            )
-
-    scan_model = FakeScanModel()
-    state.document_scan_model = scan_model
-
-    result = _read_section(state, "dp-long-h2-1", depth=1, reason="定位联系人字段")
-
-    assert result["section_id"] == "dp-long-h2-1"
-    assert result["mode"] == "auto_scanned_oversized_section"
-    assert result["html_chars"] > result["max_html_chars"]
-    assert result["evidence_count"] == 90
-    assert result["scope_id"] == "dp-long-h2-1"
-    assert result["candidate_count"] == 1
-    assert result["candidates"][0]["element_id"] == "dp-long-p-3"
-    assert result["evidence_ids"] == ["dp-long-p-3"]
-    assert result["auto_scan_note"].startswith("Section exceeded read_section size limit")
-    assert "html" not in result
-    assert state.observed_evidence_ids == {"dp-long-p-3"}
-    assert "You have no tools" in scan_model.messages[0].content
-    assert "Scope id: dp-long-h2-1" in scan_model.messages[-1].content
-    assert "定位联系人字段" in scan_model.messages[-1].content
-    assert state.actions[-2]["tool_name"] == "scan_document"
-    assert state.actions[-2]["args"]["scope_id"] == "dp-long-h2-1"
-    assert state.actions[-1]["tool_name"] == "read_section"
+    leaf_scope = _read_blocks(state, "dp-p-3", indexes=[0], reason="读取单段正文")
+    assert leaf_scope["section_id"] == "dp-p-3"
+    assert leaf_scope["indexes"] == [0]
+    assert [block["block_id"] for block in leaf_scope["blocks"]] == ["dp-p-3"]
+    assert leaf_scope["blocks"][0]["html"] == '<text id="dp-p-3">定义条款正文。</text>'
+    assert leaf_scope["evidence_ids"] == ["dp-p-3"]
 
 
-def test_read_section_too_long_returns_error_when_auto_scan_unavailable():
-    state = _long_section_state()
+def test_read_blocks_reads_non_contiguous_selected_indexes():
+    state = _mixed_outline_state()
 
-    result = _read_section(state, "dp-long-h2-1", depth=1, reason="定位联系人字段")
+    result = _read_blocks(state, "dp-page-1", indexes=[1, 3], reason="只读取两个非连续正文块")
 
-    assert result["ok"] is False
-    assert result["error"] == "section content is too long and automatic scan failed"
-    assert result["scan_error"] == "document_scan_model is not configured"
-    assert result["section_id"] == "dp-long-h2-1"
-    assert "html" not in result
-    assert state.observed_evidence_ids == set()
+    assert result["section_id"] == "dp-page-1"
+    assert result["indexes"] == [1, 3]
+    assert [block["block_id"] for block in result["blocks"]] == ["dp-p-1", "dp-p-2"]
+    assert result["evidence_ids"] == ["dp-p-1", "dp-p-2"]
+    assert state.actions[-1]["tool_name"] == "read_blocks"
+    assert state.actions[-1]["args"]["indexes"] == [1, 3]
+
+
+def test_read_block_range_reads_contiguous_window():
+    state = _mixed_outline_state()
+
+    result = _read_block_range(
+        state,
+        "dp-page-1",
+        start_index=1,
+        count=3,
+        reason="连续阅读前言、表格和第二段",
+    )
+
+    assert result["section_id"] == "dp-page-1"
+    assert result["start_index"] == 1
+    assert result["count"] == 3
+    assert result["indexes"] == [1, 2, 3]
+    assert [block["block_id"] for block in result["blocks"]] == ["dp-p-1", "dp-table-1", "dp-p-2"]
+    assert result["blocks"][1]["html"].startswith('<table-ref id="dp-table-1"')
+    assert result["evidence_ids"] == ["dp-p-1", "dp-table-1", "dp-p-2"]
+    assert state.observed_evidence_ids == {"dp-p-1", "dp-table-1", "dp-p-2"}
+    assert state.actions[-1]["tool_name"] == "read_block_range"
+    assert state.actions[-1]["args"] == {
+        "section_id": "dp-page-1",
+        "start_index": 1,
+        "count": 3,
+        "reason": "连续阅读前言、表格和第二段",
+    }
+
+
+def test_read_block_range_rejects_invalid_range_arguments():
+    state = _mixed_outline_state()
+
+    bad_start = _read_block_range(state, "dp-page-1", start_index=-1, count=2, reason="负 start")
+    bad_count = _read_block_range(state, "dp-page-1", start_index=1, count=0, reason="零 count")
+    out_of_range = _read_block_range(state, "dp-page-1", start_index=99, count=2, reason="越界 start")
+
+    assert bad_start == {"ok": False, "error": "start_index must be a non-negative integer"}
+    assert bad_count == {"ok": False, "error": "count must be a positive integer"}
+    assert out_of_range == {"ok": False, "error": "start_index outside scope: 99", "block_count": 7}
+    assert state.actions[-3]["tool_name"] == "read_block_range"
+    assert state.actions[-3]["args"]["start_index"] == -1
+    assert state.actions[-1]["args"]["start_index"] == 99
+
+
+def test_read_blocks_rejects_invalid_indexes():
+    state = _state()
+
+    empty = _read_blocks(state, "dp-h2-1", indexes=[], reason="空 index")
+    negative = _read_blocks(state, "dp-h2-1", indexes=[-1], reason="负 index")
+    out_of_range = _read_blocks(state, "dp-h2-1", indexes=[99], reason="越界 index")
+    non_integer = _read_blocks(state, "dp-h2-1", indexes=["abc"], reason="非整数 index")
+
+    assert empty == {"ok": False, "error": "indexes must be a non-empty list"}
+    assert negative == {"ok": False, "error": "index outside scope: -1", "block_count": 0}
+    assert out_of_range == {"ok": False, "error": "index outside scope: 99", "block_count": 0}
+    assert non_integer == {"ok": False, "error": "indexes must contain integers"}
+    assert state.actions[-4]["args"]["indexes"] == []
+    assert state.actions[-1]["args"]["indexes"] == ["abc"]
+
+
+def test_read_list_paginates_list_items():
+    state = _mixed_outline_state()
+
+    result = _read_list(state, "dp-page-1", block_offset=4, item_offset=1, number=2, reason="读取名单列表")
+
+    assert result["section_id"] == "dp-page-1"
+    assert result["block_offset"] == 4
+    assert result["list_id"] == "dp-ul-1"
+    assert [item["item_offset"] for item in result["items"]] == [1, 2]
+    assert result["items"][0]["item_id"] == "dp-li-2"
+    assert result["items"][0]["html"] == '<item id="dp-li-2">第二项</item>'
+    assert result["evidence_ids"] == ["dp-ul-1", "dp-li-2", "dp-li-3"]
+    assert state.observed_evidence_ids == {"dp-ul-1", "dp-li-2", "dp-li-3"}
+
+
+def test_read_list_uses_leaf_list_id_with_zero_offset():
+    state = _mixed_outline_state()
+
+    result = _read_list(
+        state,
+        "dp-ul-1",
+        block_offset=0,
+        item_offset=1,
+        number=2,
+        reason="直接读取 overview 暴露的顶层列表 id",
+    )
+
+    assert result["section_id"] == "dp-ul-1"
+    assert result["block_offset"] == 0
+    assert result["list_id"] == "dp-ul-1"
+    assert [item["item_id"] for item in result["items"]] == ["dp-li-2", "dp-li-3"]
+    assert result["evidence_ids"] == ["dp-ul-1", "dp-li-2", "dp-li-3"]
+    assert state.observed_evidence_ids == {"dp-ul-1", "dp-li-2", "dp-li-3"}
 
 
 def test_search_elements_returns_paragraphs_and_observes_evidence():
@@ -314,10 +482,12 @@ def test_scan_document_uses_isolated_model_on_scope_without_tools_and_observes_b
     state = _state()
     html = """
         <p id="page_001">Page 1 联系人：整页聚合文本，不应作为证据。</p>
-        <h2 id="p001_h001">联系方式</h2>
-        <p id="p001_b001">联系人：李老师 电话：12345</p>
-        <h3 id="p001_h002">补充联系方式</h3>
-        <p id="p001_b002">邮箱：teacher@example.com</p>
+        <section id="p001_sec">
+          <h2 id="p001_h001">联系方式</h2>
+          <p id="p001_b001">联系人：李老师 电话：12345</p>
+          <h3 id="p001_h002">补充联系方式</h3>
+          <p id="p001_b002">邮箱：teacher@example.com</p>
+        </section>
         <h2 id="p002_h001">其他安排</h2>
         <p id="p002_b001">联系人：王老师 电话：67890</p>
         """
@@ -351,9 +521,9 @@ def test_scan_document_uses_isolated_model_on_scope_without_tools_and_observes_b
     scan_model = FakeScanModel()
     state.document_scan_model = scan_model
 
-    result = _scan_document(state, "p001_h001", "联系人", limit=5, reason="搜索联系人字段")
+    result = _scan_document(state, "p001_sec", "联系人", limit=5, reason="搜索联系人字段")
 
-    assert result["scope_id"] == "p001_h001"
+    assert result["scope_id"] == "p001_sec"
     assert result["query"] == "联系人"
     assert result["candidate_count"] == 2
     assert [candidate["element_id"] for candidate in result["candidates"]] == [
@@ -362,11 +532,16 @@ def test_scan_document_uses_isolated_model_on_scope_without_tools_and_observes_b
     ]
     assert result["candidates"][0]["html"] == '<text id="p001_b001">联系人：李老师 电话：12345</text>'
     assert result["candidates"][0]["evidence_ids"] == ["p001_b001"]
+    assert result["candidates"][0]["selection_basis"] == "联系人和电话在同一段"
+    assert "subagent_reason" not in result["candidates"][0]
     assert state.observed_evidence_ids == {"p001_b001", "p001_h002"}
     assert "scan_document" not in scan_model.messages[0].content
     assert "You have no tools" in scan_model.messages[0].content
-    assert "Scope id: p001_h001" in scan_model.messages[-1].content
+    assert "Do not judge which candidate supports an answer choice" in scan_model.messages[0].content
+    assert "Scope id: p001_sec" in scan_model.messages[-1].content
     assert "Scope HTML" in scan_model.messages[-1].content
+    assert '"selection_basis"' in scan_model.messages[-1].content
+    assert '"reason"' not in scan_model.messages[-1].content
     assert "联系人：李老师 电话：12345" in scan_model.messages[-1].content
     assert "联系人：王老师 电话：67890" not in scan_model.messages[-1].content
     assert state.actions[-1]["tool_name"] == "scan_document"
@@ -385,7 +560,7 @@ def test_scan_document_result_can_be_used_as_evidence():
             )
 
     state.document_scan_model = FakeScanModel()
-    _scan_document(state, "dp-h2-1", "联系人", limit=3, reason="搜索联系人字段")
+    _scan_document(state, "dp-p-1", "联系人", limit=3, reason="搜索联系人字段")
 
     result = _set_field(
         state,
@@ -431,6 +606,48 @@ def test_table_extraction_selects_rows_with_evidence_ids():
             "evidence_ids": ["dp-table-1", "dp-tr-2"],
         }
     ]
+
+
+def test_query_table_uses_section_block_offset_for_sql():
+    state = _mixed_outline_state()
+
+    result = _query_table(
+        state,
+        "dp-page-1",
+        block_offset=2,
+        sql="SELECT 姓名 FROM data WHERE 学院 = '计算机学院'",
+        reason="查询表格 block 中的计算机学院学生",
+    )
+
+    assert result["section_id"] == "dp-page-1"
+    assert result["block_offset"] == 2
+    assert result["table_id"] == "dp-table-1"
+    assert result["rows"][0]["row_id"] == "dp-tr-2"
+    assert result["rows"][0]["values"] == {"姓名": "张三"}
+    assert state.actions[-1]["tool_name"] == "query_table"
+    assert state.actions[-1]["args"]["section_id"] == "dp-page-1"
+    assert state.actions[-1]["args"]["block_offset"] == 2
+
+
+def test_query_table_uses_leaf_table_id_with_zero_offset():
+    state = _mixed_outline_state()
+
+    result = _query_table(
+        state,
+        "dp-table-1",
+        block_offset=0,
+        sql="SELECT 姓名 FROM data WHERE 学院 = '计算机学院'",
+        reason="直接查询 overview 暴露的顶层表格 id",
+    )
+
+    assert result["section_id"] == "dp-table-1"
+    assert result["block_offset"] == 0
+    assert result["table_id"] == "dp-table-1"
+    assert result["rows"][0]["row_id"] == "dp-tr-2"
+    assert result["rows"][0]["values"] == {"姓名": "张三"}
+    assert state.actions[-1]["tool_name"] == "query_table"
+    assert state.actions[-1]["args"]["section_id"] == "dp-table-1"
+    assert state.actions[-1]["args"]["block_offset"] == 0
 
 
 def test_table_extraction_all_columns_allowed_for_small_tables():
@@ -580,6 +797,9 @@ def test_table_extraction_returns_sql_errors_for_model_retry():
     assert "no such column" in result["error"]
     assert result["columns"] == ["姓名", "学院"]
     assert "double quotes" in result["sql_hint"]
+    assert "论文题目" not in result["sql_hint"]
+    assert "作品类型" not in result["sql_hint"]
+    assert "学术论文" not in result["sql_hint"]
 
 
 def test_paragraph_extraction_returns_all_regex_matches():
@@ -717,62 +937,70 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
     names = [_tool_name(tool) for tool in tools]
 
     assert names == [
-        "search_elements",
-        "scan_document",
-        "read_element",
+        "update_plan",
+        "overview",
         "read_section",
-        "table_extraction",
-        "paragraph_extraction",
+        "read_blocks",
+        "read_block_range",
+        "read_list",
+        "query_table",
         "set_field",
         "finish",
     ]
-    search_elements = tools[names.index("search_elements")]
-    search_schema = getattr(search_elements, "args_schema", None)
-    search_fields = getattr(search_schema, "model_fields", None) or getattr(search_schema, "__fields__", {})
-    assert "state" not in search_fields
-    assert "query" in search_fields
-    assert "limit" in search_fields
-    assert "reason" in search_fields
-    assert "Search text-like HTML elements" in _tool_description(search_elements)
-    assert "returns directly readable paragraph HTML" in _tool_description(search_elements)
-    assert "may be used directly in set_field" in _tool_description(search_elements)
-    scan_document = tools[names.index("scan_document")]
-    scan_schema = getattr(scan_document, "args_schema", None)
-    scan_fields = getattr(scan_schema, "model_fields", None) or getattr(scan_schema, "__fields__", {})
-    assert "state" not in scan_fields
-    assert "scope_id" in scan_fields
-    assert "query" in scan_fields
-    assert "limit" in scan_fields
-    assert "reason" in scan_fields
-    assert "isolated no-tool document reader" in _tool_description(scan_document)
-    assert "under one existing scope id" in _tool_description(scan_document)
-    assert "returns only candidate block evidence" in _tool_description(scan_document)
-    assert "does not return final field values" in _tool_description(scan_document)
-    read_element = tools[names.index("read_element")]
-    schema = getattr(read_element, "args_schema", None)
-    schema_fields = getattr(schema, "model_fields", None) or getattr(schema, "__fields__", {})
-    assert "state" not in schema_fields
-    assert "element_id" in schema_fields
-    assert "reason" in schema_fields
-    assert "Read one HTML element" in _tool_description(read_element)
+    update_plan = tools[names.index("update_plan")]
+    update_schema = getattr(update_plan, "args_schema", None)
+    update_fields = getattr(update_schema, "model_fields", None) or getattr(update_schema, "__fields__", {})
+    assert "state" not in update_fields
+    assert "plan_index" in update_fields
+    assert "status" in update_fields
+    overview = tools[names.index("overview")]
+    overview_description = _tool_description(overview)
+    assert "section headers" in overview_description
+    assert "same-level block items" in overview_description
     read_section = tools[names.index("read_section")]
     read_section_schema = getattr(read_section, "args_schema", None)
     read_section_fields = getattr(read_section_schema, "model_fields", None) or getattr(read_section_schema, "__fields__", {})
     assert "state" not in read_section_fields
     assert "section_id" in read_section_fields
     assert "reason" in read_section_fields
-    assert "Read a heading section" in _tool_description(read_section)
-    assert "Prefer increasing depth" in _tool_description(read_section)
-    assert "many read_element calls" in _tool_description(read_section)
-    assert "automatically invokes the isolated scoped reader" in _tool_description(read_section)
-    table_extraction = tools[names.index("table_extraction")]
-    table_schema = getattr(table_extraction, "args_schema", None)
+    assert "actual DOM descendants" in _tool_description(read_section)
+    read_blocks = tools[names.index("read_blocks")]
+    blocks_schema = getattr(read_blocks, "args_schema", None)
+    blocks_fields = getattr(blocks_schema, "model_fields", None) or getattr(blocks_schema, "__fields__", {})
+    assert "indexes" in blocks_fields
+    assert "offset" not in blocks_fields
+    assert "number" not in blocks_fields
+    blocks_description = _tool_description(read_blocks)
+    assert "section container, heading, or leaf block id" in blocks_description
+    assert "selected block indexes" in blocks_description
+    assert "not following siblings" in blocks_description
+    assert "leaf block id" in blocks_description
+    read_block_range = tools[names.index("read_block_range")]
+    range_schema = getattr(read_block_range, "args_schema", None)
+    range_fields = getattr(range_schema, "model_fields", None) or getattr(range_schema, "__fields__", {})
+    assert "start_index" in range_fields
+    assert "count" in range_fields
+    assert "indexes" not in range_fields
+    range_description = _tool_description(read_block_range)
+    assert "contiguous range" in range_description
+    assert "Use read_blocks" in range_description
+    read_list = tools[names.index("read_list")]
+    list_schema = getattr(read_list, "args_schema", None)
+    list_fields = getattr(list_schema, "model_fields", None) or getattr(list_schema, "__fields__", {})
+    assert "item_offset" in list_fields
+    list_description = _tool_description(read_list)
+    assert "Read list items" in list_description
+    assert "top-level list id" in list_description
+    assert "block_offset=0" in list_description
+    query_table = tools[names.index("query_table")]
+    table_schema = getattr(query_table, "args_schema", None)
     table_fields = getattr(table_schema, "model_fields", None) or getattr(table_schema, "__fields__", {})
-    assert "reason" in table_fields
-    assert "double quotes" in _tool_description(table_extraction)
-    assert "query_audit few-shot" in _tool_description(table_extraction)
-    assert "judge blank filter cells from table context" in _tool_description(table_extraction)
-    assert "do not say a blank row is normal only because WHERE did not select it" in _tool_description(table_extraction)
+    assert "block_offset" in table_fields
+    assert "sql" in table_fields
+    query_table_description = _tool_description(query_table)
+    assert "top-level table id" in query_table_description
+    assert "block_offset=0" in query_table_description
+    assert "double quotes" in query_table_description
     set_field = tools[names.index("set_field")]
     set_field_schema = getattr(set_field, "args_schema", None)
     set_field_fields = getattr(set_field_schema, "model_fields", None) or getattr(set_field_schema, "__fields__", {})
@@ -780,8 +1008,9 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
     set_field_description = " ".join(_tool_description(set_field).split())
     assert "for each task field exactly once" in set_field_description
     assert "unrelated elements" in set_field_description
-    assert "search_elements" in set_field_description
-    assert "scan_document" in set_field_description
+    assert "read_blocks" in set_field_description
+    assert "read_block_range" in set_field_description
+    assert "query_table" in set_field_description
 
 
 def _tool_name(tool):

@@ -8,7 +8,7 @@
 测试 HTML + task_spec
   -> build_graph_input 归一化输入
   -> run_extraction_graph 写入空 broad plan 占位，把 broad_model 挂到 document_scan_model
-  -> resolution fake model 按 read/table/set_field/finish 或 scan_document(scope_id)/set_field/finish 顺序调用工具
+  -> resolution fake model 按 read_blocks(indexes)/query_table/set_field/finish 或 scan_document(scope_id)/set_field/finish 顺序调用工具
   -> map_state_to_result 把 field_states、broad_plan、actions 写入 ExtractionResult
 ```
 

@@ -62,177 +62,143 @@ def build_tools(state: Any) -> list[Any]:
         return _update_plan(state, plan_index, status, reason=reason)
 
     @tool
-    def search_elements(query: str, reason: str, limit: int = 10) -> dict[str, Any]:
+    def overview() -> dict[str, Any]:
         """
-        Search text-like HTML elements by keyword and return readable paragraphs.
+        Return section headers and same-level block items in document order.
 
-        Use this when the document outline is too coarse, read_section is too
-        large, or you need to locate likely paragraphs for a field. This returns directly readable paragraph HTML
-        with evidence_ids, and those evidence ids may be used directly in set_field.
-
-        Args:
-            query: Keyword or short phrase to search for.
-            reason: Why this search is needed for the current field.
-            limit: Maximum number of candidate elements to return.
+        Use this to choose a section or block scope before reading content. The
+        overview includes section containers, headings, paragraphs, lists, and
+        tables, each with model-friendly metadata. A paragraph, list, or table
+        that is a sibling of a heading is returned as its own item, not as part
+        of the previous heading. It does not return table rows or expanded list
+        items.
 
         Returns:
-            Matching element ids, element types, readable HTML, evidence ids that may be used directly in set_field, and text lengths.
+            A compact list of sections and same-level block items.
         """
 
-        return _search_elements(state, query, limit=limit, reason=reason)
+        return _overview(state)
 
     @tool
-    def scan_document(scope_id: str, query: str, reason: str, limit: int = 10) -> dict[str, Any]:
+    def read_section(section_id: str, reason: str) -> dict[str, Any]:
         """
-        Ask an isolated no-tool document reader to scan one HTML scope for evidence.
+        Read block previews for a heading's real descendants.
 
-        Use this after the outline, search_elements, or a too-long read_section
-        result has identified one existing scope id. The isolated reader scans
-        all content under one existing scope id, but has no tools and cannot
-        call other agents. It returns only candidate block evidence and does not return final field values,
-        normalized values, or a plan. Returned evidence_ids may be used directly in set_field.
+        Use this after overview has identified a heading id. It only reads
+        block previews that are actual DOM descendants of that heading. Sibling
+        paragraphs, lists, and tables are separate overview items; read those
+        by their own id or through a parent section container. Use read_blocks
+        to read full blocks, read_list for paged list items, and query_table
+        for SQL over a table block.
 
         Args:
-            scope_id: Existing id whose full covered content should be scanned.
-                If this is a heading id, the scope is that heading's section up
-                to the next same-level or higher heading.
-            query: Keyword, phrase, or short field-focused search request.
-            reason: Why isolated scanning is needed for the current field.
-            limit: Maximum number of candidate block elements to return.
+            section_id: Existing heading id.
+            reason: Why this section is needed for the current field.
 
         Returns:
-            Candidate block elements with readable HTML, evidence ids, snippets,
-            and the reader's short relevance reason.
+            Section title plus block offsets, block ids, types, and previews.
         """
 
-        return _scan_document(state, scope_id, query, limit=limit, reason=reason)
+        return _read_section(state, section_id, reason=reason)
 
     @tool
-    def read_element(element_id: str, reason: str) -> dict[str, Any]:
+    def read_blocks(section_id: str, indexes: list[int], reason: str) -> dict[str, Any]:
         """
-        Read one HTML element by its existing id.
+        Read selected block indexes from a section container, heading, or leaf block id.
 
-        Use this after the built-in document outline shows a candidate element
-        id and you need the element's detailed content. If the current field
-        depends on several adjacent elements from the same section, call
-        read_section on the parent heading with a larger depth instead of
-        repeatedly calling read_element.
+        Use this after overview or read_section has shown block indexes and
+        previews. Pass the exact zero-based indexes you need as a list. Use this
+        for targeted evidence blocks, especially non-contiguous indexes. For a
+        contiguous range, prefer read_block_range. Section containers are read
+        by index over their DOM-order descendants. Headings only expose actual
+        DOM descendants, not following siblings. Leaf block ids can be used as a
+        one-block scope with indexes=[0]. List and table blocks are returned as
+        refs instead of fully expanded structures; use read_list or query_table
+        for those.
 
         Args:
-            element_id: Existing HTML element id, for example ``dp-p-3`` or
-                ``dp-table-1``.
-            reason: Why this element is needed for the current field. Mention
-                the current field name and what evidence you expect here.
+            section_id: Existing section container, heading, or leaf block id.
+            indexes: Zero-based selected block indexes inside that scope.
+            reason: Why these blocks are needed for the current field.
 
         Returns:
-            HTML-like element content and evidence ids. Table rows are not
-            returned; use ``table_extraction`` for row data.
+            HTML-like block content and observed evidence ids.
         """
 
-        return _read_element(state, element_id, reason=reason)
+        return _read_blocks(state, section_id, indexes, reason=reason)
 
     @tool
-    def read_section(section_id: str, reason: str, depth: int = 1) -> dict[str, Any]:
+    def read_block_range(section_id: str, start_index: int, count: int, reason: str) -> dict[str, Any]:
         """
-        Read a heading section by id, optionally including nested subsections.
+        Read a contiguous range of blocks from a section container, heading, or leaf block id.
 
-        Use this when the document outline points to a section heading and you
-        need the content under that heading. This is better than repeatedly
-        calling read_element on the heading id. Prefer increasing depth over
-        many read_element calls from the same section: use depth=1 for one
-        narrow subsection, depth=2 for several adjacent child subsections, and
-        depth=3 only for a complete major chapter.
+        Use this after overview or read_section has shown block indexes and you
+        need to scan neighboring context in order. It reads ``count`` blocks
+        starting at zero-based ``start_index`` from the same ordered scope.
+        Use read_blocks instead when you already know the exact selected
+        indexes or need non-contiguous evidence blocks. List and table blocks
+        are returned as refs instead of fully expanded structures; use read_list or
+        query_table for those.
 
         Args:
-            section_id: Existing heading id, for example ``dp-h2-56``.
-            reason: Why this section is needed for the current field. Mention
-                the current field name and what evidence you expect here.
-            depth: Number of nested heading levels to include. ``1`` reads the
-                section content and direct child subsection headings/content;
-                larger values include deeper subsections. Use ``depth=1`` for
-                one narrow subsection, ``depth=2`` when the current field needs
-                several adjacent child subsections, and ``depth=3`` only when
-                the current field needs a complete major chapter. Prefer
-                increasing depth over many read_element calls from the same
-                section.
+            section_id: Existing section container, heading, or leaf block id.
+            start_index: Zero-based first block index inside that scope.
+            count: Number of consecutive blocks to read.
+            reason: Why this contiguous range is needed for the current field.
 
         Returns:
-            HTML-like section map and evidence ids. Text and list items are
-            returned in full when the section is reasonably sized. If the
-            section is too large, this tool automatically invokes the isolated scoped reader
-            on the same section id and returns candidate block evidence instead of returning the full section HTML.
-            Table rows are not returned; use ``table_extraction`` for row data.
+            HTML-like block content and observed evidence ids.
         """
 
-        return _read_section(state, section_id, depth, reason=reason)
+        return _read_block_range(state, section_id, start_index, count, reason=reason)
 
     @tool
-    def table_extraction(table_id: str, sql: str, reason: str) -> dict[str, Any]:
+    def read_list(section_id: str, block_offset: int, item_offset: int, number: int, reason: str) -> dict[str, Any]:
         """
-        Query one HTML table using a SQL SELECT statement.
+        Read list items from a list block or top-level list id.
 
-        Use this only after ``read_element(table_id)`` has shown the table
-        columns. The SQL must be a single SELECT statement over table name
-        ``data``. ``SELECT *`` is allowed for small tables. For large tables,
-        prefer explicit columns and WHERE filters. If the table is messy and
-        you truly need all columns, page through it with ``LIMIT 50`` or less.
-
-        Examples:
-        - Small table: ``SELECT * FROM data`` is acceptable.
-        - Large table with clear columns: use
-          ``SELECT "寝室名称", "类别" FROM data WHERE "类别" = '文明寝室'``.
-        - Large messy table where WHERE is not reliable: use
-          ``SELECT * FROM data LIMIT 50 OFFSET 0``, then continue with
-          ``OFFSET 50`` if needed.
-        - Never use unbounded ``SELECT *`` on a large table.
-
-        query_audit few-shot:
-        - Always judge blank filter cells from table context: headers, notes, group
-          titles, adjacent columns, selected output cells, and the field goal.
-          If context proves blank rows are outside the target category, explain
-          that evidence in ``set_field.reason``.
-        - do not say a blank row is normal only because WHERE did not select it.
-          If blank rows, near matches, or empty output cells may change the
-          answer, keep investigating or fail the field for human review.
+        Use this when read_section, read_blocks, or read_block_range shows that
+        a block offset is a list. If overview returns a top-level list id, pass
+        that id as section_id with block_offset=0. Items are paged by item
+        offset so long lists do not flood the context.
 
         Args:
-            table_id: Existing HTML table id, for example ``dp-table-1``.
-            sql: A single SELECT statement over table name ``data``, for
-                example ``SELECT "姓名", "学号" FROM data WHERE "学院" = '计算机学院'``.
-                Always wrap every column name in double quotes, especially
-                Chinese names, names containing spaces, and names containing
-                punctuation.
-            reason: Why this SQL query is needed for the current field. Mention
-                the current field name and what rows/columns you expect.
+            section_id: Existing section, section container, or top-level list id.
+            block_offset: Zero-based block offset of the list inside the section.
+                Use 0 when section_id is already the list id.
+            item_offset: Zero-based list item offset.
+            number: Number of list items to read.
+            reason: Why these list items are needed for the current field.
 
         Returns:
-            On success, matching rows with values, row ids, and evidence ids.
-            Evidence ids include the table id and matching row id. On SQL
-            errors, returns ``{"ok": false, "error": "...", "columns": [...]}``;
-            inspect the error and retry with corrected SQL.
+            Full list item text and observed evidence ids.
         """
 
-        return _table_extraction(state, table_id, sql, reason=reason)
+        return _read_list(state, section_id, block_offset, item_offset, number, reason=reason)
 
     @tool
-    def paragraph_extraction(element_id: str, pattern: str, reason: str) -> dict[str, Any]:
+    def query_table(section_id: str, block_offset: int, sql: str, reason: str) -> dict[str, Any]:
         """
-        Search one text-like HTML element using a regex pattern.
+        Query a table block by scope offset or top-level table id using SQL.
 
-        Use this for extracting values from TITLE, SECTION_HEADER, TEXT,
-        LIST_ITEM, or CAPTION elements.
+        Use this when read_section, read_blocks, or read_block_range shows that
+        a block offset is a table. If overview returns a top-level table id,
+        pass that id as section_id with block_offset=0. The SQL must be a single
+        SELECT statement over table name data. All SQL column names must be
+        wrapped in double quotes.
 
         Args:
-            element_id: Existing HTML element id, for example ``dp-p-4``.
-            pattern: Python regular expression pattern.
-            reason: Why this regex search is needed for the current field.
-                Mention the current field name and expected value.
+            section_id: Existing section, section container, or top-level table id.
+            block_offset: Zero-based block offset of the table inside the scope.
+                Use 0 when section_id is already the table id.
+            sql: A single SELECT statement over table name ``data``.
+            reason: Why this table query is needed for the current field.
 
         Returns:
-            All regex matches with matched text, spans, and evidence ids.
+            Matching table rows, evidence ids, table_audit, and query_audit.
         """
 
-        return _paragraph_extraction(state, element_id, pattern, reason=reason)
+        return _query_table(state, section_id, block_offset, sql, reason=reason)
 
     @tool
     def set_field(
@@ -253,9 +219,8 @@ def build_tools(state: Any) -> list[Any]:
         not keep reading unrelated elements first.
 
         Use this only after this same run has observed the supporting evidence
-        through ``search_elements``, ``scan_document``, ``read_element``,
-        ``read_section``, ``table_extraction``, or ``paragraph_extraction``. Do not call this
-        from document overview alone.
+        through ``read_blocks``, ``read_block_range``, ``read_list``, or
+        ``query_table``. Do not call this from document overview alone.
 
         Args:
             name: Field name declared in task_spec.
@@ -291,19 +256,24 @@ def build_tools(state: Any) -> list[Any]:
         return _finish(state)
 
     return [
-        search_elements,
-        scan_document,
-        read_element,
+        update_plan,
+        overview,
         read_section,
-        table_extraction,
-        paragraph_extraction,
+        read_blocks,
+        read_block_range,
+        read_list,
+        query_table,
         set_field,
         finish,
     ]
 
 
 def _overview(state: Any) -> dict[str, Any]:
-    result = {"tree": _read(state, "document").tree}
+    document = _read(state, "document")
+    result = {
+        "sections": _section_overview(document),
+        "items": _outline_items(document),
+    }
     _record_action(state, "overview", {}, _summarize_tool_result(result))
     return result
 
@@ -430,8 +400,8 @@ def _read_element(state: Any, element_id: str, *, reason: str | None = None) -> 
             "evidence_ids": [table.table_id],
             "sql_hint": (
                 'Use table name data and wrap every column name in double quotes, '
-                'for example SELECT "论文题目" FROM data WHERE "作品类型" = '
-                "'学术论文'."
+                'such as SELECT "column_name" FROM data WHERE "filter_column" = '
+                "'value'."
             ),
         }
         _record_action(state, "read_element", _args_with_reason({"element_id": element_id}, reason), result)
@@ -611,16 +581,14 @@ def _scan_scope(document: Any, scope_id: str) -> dict[str, Any]:
 
 def _heading_scan_scope(document: Any, scope: Any) -> dict[str, Any]:
     ordered = list(document.elements_by_id.values())
-    start_index = next((index for index, element in enumerate(ordered) if element.id == scope.id), None)
-    if start_index is None:
-        return {"ok": False, "error": f"scope id not found in document order: {scope.id}"}
-    start_level = _heading_level(scope.tag)
     items: list[dict[str, Any]] = []
-    element_ids = [scope.id]
-    for element in ordered[start_index + 1 :]:
-        element_level = _heading_level(element.tag)
-        if element_level is not None and element_level <= start_level:
-            break
+    element_ids: list[str] = []
+    for element in ordered:
+        if element.id == scope.id:
+            element_ids.append(element.id)
+            continue
+        if not _has_ancestor(document, element, scope.id):
+            continue
         element_ids.append(element.id)
         if element.tag in {"tr", "caption"} or _is_list_child(document, element):
             continue
@@ -691,6 +659,9 @@ def _build_scan_document_messages(
             "headings, paragraphs, list items, captions, or table elements. "
             "Do not return page-level aggregate ids such as page_001. "
             "Do not return table row values, final field values, normalized values, or answers. "
+            "Do not judge which candidate supports an answer choice or final value. "
+            "For each candidate, write only a neutral selection_basis naming the local text feature, "
+            "such as a mentioned entity, date, topic, plot event, or clause. "
             "The main resolution agent will decide whether the candidates are sufficient."
         )
     )
@@ -705,7 +676,7 @@ def _build_scan_document_messages(
                 f"Maximum candidates: {limit}",
                 (
                     "Return JSON in this exact shape: "
-                    '{"candidates":[{"element_id":"existing-id","reason":"short relevance reason"}]}'
+                    '{"candidates":[{"element_id":"existing-id","selection_basis":"neutral local text feature"}]}'
                 ),
                 "Scope HTML:\n" + scope_html,
             ]
@@ -796,7 +767,13 @@ def _normalize_scan_document_candidates(
                 "html": _element_html(document, element),
                 "evidence_ids": [element.id],
                 "snippet": _scan_candidate_snippet(text, query),
-                "subagent_reason": str(raw.get("reason") or raw.get("relevance") or ""),
+                "selection_basis": str(
+                    raw.get("selection_basis")
+                    or raw.get("basis")
+                    or raw.get("reason")
+                    or raw.get("relevance")
+                    or ""
+                ),
                 "text_chars": len(text),
             }
         )
@@ -813,119 +790,178 @@ def _scan_candidate_snippet(text: str, query: str) -> str:
     return _snippet(text, 0, min(len(text), 1)) if text else ""
 
 
-def _read_section(state: Any, section_id: str, depth: int = 1, *, reason: str | None = None) -> dict[str, Any]:
+def _read_section(state: Any, section_id: str, *, reason: str | None = None) -> dict[str, Any]:
     document = _read(state, "document")
-    section = document.elements_by_id.get(section_id)
-    if section is None:
-        result = {"ok": False, "error": f"unknown section id: {section_id}"}
-        _record_action(state, "read_section", _args_with_reason({"section_id": section_id, "depth": depth}, reason), result)
-        return result
-    if section.tag not in {"h1", "h2", "h3", "h4", "h5", "h6"}:
-        result = {"ok": False, "error": f"element is not a section heading: {section_id}"}
-        _record_action(state, "read_section", _args_with_reason({"section_id": section_id, "depth": depth}, reason), result)
+    section = _section_element(document, section_id)
+    if isinstance(section, dict):
+        result = section
+        _record_action(state, "read_section", _args_with_reason({"section_id": section_id}, reason), result)
         return result
 
-    depth = max(0, int(depth))
-    ordered = list(document.elements_by_id.values())
-    start_index = next(
-        (index for index, element in enumerate(ordered) if element.id == section_id),
-        None,
-    )
-    if start_index is None:
-        result = {"ok": False, "error": f"section id not found in document order: {section_id}"}
-        _record_action(state, "read_section", _args_with_reason({"section_id": section_id, "depth": depth}, reason), result)
+    blocks = [_block_preview(document, block) for block in _section_blocks(document, section)]
+    result = {
+        "section_id": section_id,
+        "title": section.text,
+        "level": _section_heading_level(section.tag),
+        "blocks": blocks,
+        "evidence_ids": [],
+    }
+    _record_action(state, "read_section", _args_with_reason({"section_id": section_id}, reason), _summarize_tool_result(result))
+    return result
+
+
+def _read_blocks(
+    state: Any,
+    section_id: str,
+    indexes: list[int],
+    *,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    document = _read(state, "document")
+    section = _scope_element(document, section_id)
+    if isinstance(section, dict):
+        result = section
+        _record_action(state, "read_blocks", _args_with_reason({"section_id": section_id, "indexes": indexes}, reason), result)
         return result
-
-    start_level = _heading_level(section.tag)
-    max_level = start_level + depth
-    current_level = start_level
-    items: list[dict[str, Any]] = []
-    evidence_ids = [section_id]
-
-    for element in ordered[start_index + 1 :]:
-        element_level = _heading_level(element.tag)
-        if element_level is not None:
-            if element_level <= start_level:
-                break
-            current_level = element_level
-            if element_level <= max_level:
-                items.append(_section_item(document, element))
-                evidence_ids.append(element.id)
-            continue
-
-        if (
-            current_level <= max_level
-            and element.tag not in {"tr", "caption"}
-            and not _is_list_child(document, element)
-        ):
-            items.append(_section_item(document, element))
-            evidence_ids.append(element.id)
-
-    html = _section_html(document, section, items, depth)
-    if len(html) > MAX_READ_SECTION_HTML_CHARS:
-        scan_query = _read_section_auto_scan_query(section, reason, section_id)
-        scan_reason = (
-            "Automatic scoped scan because read_section content exceeded size limit. "
-            + (reason or "")
-        ).strip()
-        scan_result = _scan_document(state, section_id, scan_query, limit=10, reason=scan_reason)
-        base_result = {
-            "section_id": section_id,
-            "depth": depth,
-            "html_chars": len(html),
-            "max_html_chars": MAX_READ_SECTION_HTML_CHARS,
-            "evidence_count": len(evidence_ids),
-        }
-        if scan_result.get("ok") is False:
-            result = {
-                "ok": False,
-                "error": "section content is too long and automatic scan failed",
-                **base_result,
-                "scan_error": scan_result.get("error"),
-            }
-            _record_action(
-                state,
-                "read_section",
-                _args_with_reason({"section_id": section_id, "depth": depth}, reason),
-                result,
-            )
-            return result
-
-        candidate_evidence_ids = [
-            evidence_id
-            for candidate in scan_result.get("candidates", []) or []
-            for evidence_id in candidate.get("evidence_ids", []) or []
-        ]
-        result = {
-            **base_result,
-            "mode": "auto_scanned_oversized_section",
-            "scope_id": scan_result.get("scope_id", section_id),
-            "scope_type": scan_result.get("scope_type"),
-            "query": scan_result.get("query", scan_query),
-            "candidates": scan_result.get("candidates", []),
-            "candidate_count": scan_result.get("candidate_count", 0),
-            "evidence_ids": candidate_evidence_ids,
-            "auto_scan_note": (
-                "Section exceeded read_section size limit; the tool automatically used "
-                "the isolated scoped reader and returned candidate evidence instead of full HTML."
-            ),
-        }
-        _record_action(
-            state,
-            "read_section",
-            _args_with_reason({"section_id": section_id, "depth": depth}, reason),
-            _summarize_tool_result(result),
-        )
+    blocks = _scope_blocks(document, section)
+    normalized_indexes = _normalize_block_indexes(indexes, len(blocks))
+    if isinstance(normalized_indexes, dict):
+        result = normalized_indexes
+        _record_action(state, "read_blocks", _args_with_reason({"section_id": section_id, "indexes": indexes}, reason), result)
         return result
-
+    selected = [blocks[index] for index in normalized_indexes]
+    rendered = [_block_read_result(document, block) for block in selected]
+    evidence_ids = [block["block_id"] for block in rendered]
     _mark_observed(state, evidence_ids)
     result = {
         "section_id": section_id,
-        "depth": depth,
-        "html": html,
+        "indexes": normalized_indexes,
+        "blocks": rendered,
         "evidence_ids": evidence_ids,
     }
-    _record_action(state, "read_section", _args_with_reason({"section_id": section_id, "depth": depth}, reason), _summarize_tool_result(result))
+    _record_action(state, "read_blocks", _args_with_reason({"section_id": section_id, "indexes": normalized_indexes}, reason), _summarize_tool_result(result))
+    return result
+
+
+def _read_block_range(
+    state: Any,
+    section_id: str,
+    start_index: int,
+    count: int,
+    *,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    document = _read(state, "document")
+    section = _scope_element(document, section_id)
+    args = {"section_id": section_id, "start_index": start_index, "count": count}
+    if isinstance(section, dict):
+        result = section
+        _record_action(state, "read_block_range", _args_with_reason(args, reason), result)
+        return result
+    blocks = _scope_blocks(document, section)
+    normalized_range = _normalize_block_range(start_index, count, len(blocks))
+    if isinstance(normalized_range, dict):
+        result = normalized_range
+        _record_action(state, "read_block_range", _args_with_reason(args, reason), result)
+        return result
+    start, bounded_count = normalized_range
+    selected = blocks[start : start + bounded_count]
+    rendered = [_block_read_result(document, block) for block in selected]
+    evidence_ids = [block["block_id"] for block in rendered]
+    indexes = [block["offset"] for block in selected]
+    _mark_observed(state, evidence_ids)
+    result = {
+        "section_id": section_id,
+        "start_index": start,
+        "count": len(selected),
+        "indexes": indexes,
+        "blocks": rendered,
+        "evidence_ids": evidence_ids,
+    }
+    _record_action(
+        state,
+        "read_block_range",
+        _args_with_reason({"section_id": section_id, "start_index": start, "count": len(selected)}, reason),
+        _summarize_tool_result(result),
+    )
+    return result
+
+
+def _read_list(
+    state: Any,
+    section_id: str,
+    block_offset: int,
+    item_offset: int,
+    number: int,
+    *,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    document = _read(state, "document")
+    list_block = _scope_block_at(document, section_id, block_offset)
+    if isinstance(list_block, dict):
+        result = list_block
+        _record_action(state, "read_list", _args_with_reason({"section_id": section_id, "block_offset": block_offset, "item_offset": item_offset, "number": number}, reason), result)
+        return result
+    if list_block.tag not in {"ul", "ol"}:
+        result = {"ok": False, "error": f"block offset is not a list: {block_offset}"}
+        _record_action(state, "read_list", _args_with_reason({"section_id": section_id, "block_offset": block_offset, "item_offset": item_offset, "number": number}, reason), result)
+        return result
+    item_ids = _list_item_ids(document, list_block.id)
+    start = _bounded_offset(item_offset, len(item_ids))
+    count = _bounded_number(number)
+    selected_ids = item_ids[start : start + count]
+    items = []
+    for index, item_id in enumerate(selected_ids, start=start):
+        element = document.elements_by_id[item_id]
+        items.append(
+            {
+                "item_offset": index,
+                "item_id": item_id,
+                "text": element.text,
+                "html": f'<item id="{_attr(item_id)}">{_text(element.text)}</item>',
+            }
+        )
+    evidence_ids = [list_block.id, *selected_ids]
+    _mark_observed(state, evidence_ids)
+    result = {
+        "section_id": section_id,
+        "block_offset": block_offset,
+        "list_id": list_block.id,
+        "item_offset": start,
+        "number": count,
+        "items": items,
+        "evidence_ids": evidence_ids,
+    }
+    _record_action(state, "read_list", _args_with_reason({"section_id": section_id, "block_offset": block_offset, "item_offset": start, "number": count}, reason), _summarize_tool_result(result))
+    return result
+
+
+def _query_table(
+    state: Any,
+    section_id: str,
+    block_offset: int,
+    sql: str,
+    *,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    document = _read(state, "document")
+    table_block = _scope_block_at(document, section_id, block_offset)
+    if isinstance(table_block, dict):
+        result = table_block
+        _record_action(state, "query_table", _args_with_reason({"section_id": section_id, "block_offset": block_offset, "sql": sql}, reason), result)
+        return result
+    if table_block.type != "TABLE":
+        result = {"ok": False, "error": f"block offset is not a table: {block_offset}"}
+        _record_action(state, "query_table", _args_with_reason({"section_id": section_id, "block_offset": block_offset, "sql": sql}, reason), result)
+        return result
+    result = _table_extraction(state, table_block.id, sql, reason=reason)
+    result = {**result, "section_id": section_id, "block_offset": block_offset}
+    if getattr(state, "actions", None) and state.actions[-1].get("tool_name") == "table_extraction":
+        state.actions[-1] = {
+            "tool_name": "query_table",
+            "args": _args_with_reason({"section_id": section_id, "block_offset": block_offset, "sql": sql}, reason),
+            "result": _summarize_tool_result(result),
+        }
     return result
 
 
@@ -990,8 +1026,8 @@ def _table_extraction(state: Any, table_id: str, sql: str, *, reason: str | None
             "table_id": table_id,
             "columns": table.columns,
             "sql_hint": (
-                'Wrap every column name in double quotes. Example: '
-                'SELECT "论文题目" FROM data WHERE "作品类型" = \'学术论文\'.'
+                'Wrap every column name in double quotes, such as '
+                'SELECT "column_name" FROM data WHERE "filter_column" = \'value\'.'
             ),
         }
         _record_action(
@@ -1476,6 +1512,311 @@ def _heading_level(tag: str) -> int | None:
     return None
 
 
+def _section_heading_level(tag: str) -> int | None:
+    if tag in {"h1", "h2", "h3"}:
+        return int(tag[1])
+    return None
+
+
+def _section_element(document: Any, section_id: str) -> Any:
+    section = document.elements_by_id.get(section_id)
+    if section is None:
+        return {"ok": False, "error": f"unknown section id: {section_id}"}
+    if _section_heading_level(section.tag) is None:
+        return {"ok": False, "error": f"element is not a section heading: {section_id}"}
+    return section
+
+
+def _section_overview(document: Any) -> list[dict[str, Any]]:
+    return [
+        {
+            "section_id": element.id,
+            "title": element.text,
+            "level": _section_heading_level(element.tag),
+            "block_count": len(_section_blocks(document, element)),
+            "subsections": [],
+        }
+        for element in document.elements_by_id.values()
+        if _section_heading_level(element.tag) is not None
+    ]
+
+
+def _outline_items(document: Any) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for element in document.elements_by_id.values():
+        if element.tag in {"tr", "caption"} or _is_list_child(document, element):
+            continue
+
+        item_type, read_with = _outline_item_type_and_reader(element)
+        if item_type is None:
+            continue
+
+        item: dict[str, Any] = {
+            "item_id": element.id,
+            "type": item_type,
+            "tag": element.tag,
+            "read_with": read_with,
+            "parent_section_id": "",
+        }
+        if item_type in {"TITLE", "SECTION_HEADER", "TEXT", "SECTION"}:
+            item["preview"] = _first_sentence(element.text)
+        if item_type == "LIST":
+            item_ids = _list_item_ids(document, element.id)
+            item["block_offset"] = 0
+            item["item_count"] = len(item_ids)
+            item["preview"] = [
+                _first_sentence(document.elements_by_id[item_id].text)
+                for item_id in item_ids[:3]
+            ]
+        if item_type == "TABLE":
+            table = document.tables_by_id.get(element.id)
+            item["block_offset"] = 0
+            item["columns"] = table.columns if table else []
+            item["row_count"] = len(table.rows) if table else 0
+            if table and table.label:
+                item["label"] = table.label
+        items.append(item)
+    return items
+
+
+def _outline_item_type_and_reader(element: Any) -> tuple[str | None, str | None]:
+    if element.tag == "section":
+        return "SECTION", "read_blocks"
+    if element.tag == "h1":
+        return "TITLE", "read_section"
+    if element.tag in {"h2", "h3", "h4", "h5", "h6"}:
+        return "SECTION_HEADER", "read_section"
+    if element.tag == "p":
+        return "TEXT", "read_blocks"
+    if element.tag in {"ul", "ol"}:
+        return "LIST", "read_list"
+    if element.tag == "table" or (element.tag == "figure" and element.type == "TABLE"):
+        return "TABLE", "query_table"
+    if element.type == "TABLE":
+        return "TABLE", "query_table"
+    return None, None
+
+
+def _section_blocks(document: Any, section: Any) -> list[dict[str, Any]]:
+    ordered = list(document.elements_by_id.values())
+    blocks: list[dict[str, Any]] = []
+    for element in ordered:
+        if element.id == section.id:
+            continue
+        if not _has_ancestor(document, element, section.id):
+            continue
+        if not _is_section_block(document, element):
+            continue
+        blocks.append({"offset": len(blocks), "element": element})
+    return blocks
+
+
+def _is_section_block(document: Any, element: Any) -> bool:
+    if element.tag in {"tr", "caption"} or _is_list_child(document, element):
+        return False
+    if _section_heading_level(element.tag) is not None:
+        return False
+    return element.tag in {"section", "p", "ul", "ol", "table", "figure", "h4", "h5", "h6"} or element.type in {
+        "SECTION",
+        "TEXT",
+        "TABLE",
+        "TITLE",
+        "SECTION_HEADER",
+    }
+
+
+def _scope_element(document: Any, scope_id: str) -> Any:
+    scope = document.elements_by_id.get(scope_id)
+    if scope is None:
+        return {"ok": False, "error": f"unknown scope id: {scope_id}"}
+    return scope
+
+
+def _scope_blocks(document: Any, scope: Any) -> list[dict[str, Any]]:
+    if scope.tag == "section":
+        ordered = list(document.elements_by_id.values())
+        blocks: list[dict[str, Any]] = []
+        for element in ordered:
+            if element.id == scope.id:
+                continue
+            if not _has_ancestor(document, element, scope.id):
+                continue
+            if not _is_scope_block(document, element):
+                continue
+            blocks.append({"offset": len(blocks), "element": element})
+        return blocks
+    if _section_heading_level(scope.tag) is not None:
+        return _section_blocks(document, scope)
+    if _is_leaf_block_scope(scope):
+        return [{"offset": 0, "element": scope}]
+    return []
+
+
+def _scope_block_at(document: Any, scope_id: str, block_offset: int) -> Any:
+    scope = _scope_element(document, scope_id)
+    if isinstance(scope, dict):
+        return scope
+    blocks = _scope_blocks(document, scope)
+    try:
+        index = int(block_offset)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "block_offset must be an integer"}
+    if index < 0 or index >= len(blocks):
+        return {"ok": False, "error": f"block_offset outside scope: {block_offset}"}
+    return blocks[index]["element"]
+
+
+def _normalize_block_indexes(indexes: Any, block_count: int) -> list[int] | dict[str, Any]:
+    if not isinstance(indexes, list) or not indexes:
+        return {"ok": False, "error": "indexes must be a non-empty list"}
+
+    normalized: list[int] = []
+    for raw_index in indexes:
+        if isinstance(raw_index, bool):
+            return {"ok": False, "error": "indexes must contain integers"}
+        if isinstance(raw_index, int):
+            index = raw_index
+        elif isinstance(raw_index, str) and re.fullmatch(r"[+-]?\d+", raw_index.strip()):
+            index = int(raw_index)
+        else:
+            return {"ok": False, "error": "indexes must contain integers"}
+        if index < 0 or index >= block_count:
+            return {"ok": False, "error": f"index outside scope: {raw_index}", "block_count": block_count}
+        normalized.append(index)
+    return normalized
+
+
+def _normalize_block_range(start_index: Any, count: Any, block_count: int) -> tuple[int, int] | dict[str, Any]:
+    start = _parse_range_integer(start_index)
+    if start is None:
+        return {"ok": False, "error": "start_index must be a non-negative integer"}
+    if start < 0:
+        return {"ok": False, "error": "start_index must be a non-negative integer"}
+    requested_count = _parse_range_integer(count)
+    if requested_count is None:
+        return {"ok": False, "error": "count must be a positive integer"}
+    if requested_count <= 0:
+        return {"ok": False, "error": "count must be a positive integer"}
+    if start >= block_count:
+        return {"ok": False, "error": f"start_index outside scope: {start_index}", "block_count": block_count}
+    bounded_count = min(requested_count, 20, block_count - start)
+    return start, bounded_count
+
+
+def _parse_range_integer(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and re.fullmatch(r"[+-]?\d+", value.strip()):
+        return int(value)
+    return None
+
+
+def _is_scope_block(document: Any, element: Any) -> bool:
+    if element.tag in {"tr", "caption"} or _is_list_child(document, element):
+        return False
+    return element.tag in {"section", "p", "ul", "ol", "table", "figure", "h1", "h2", "h3", "h4", "h5", "h6"} or element.type in {
+        "SECTION",
+        "TEXT",
+        "TABLE",
+        "TITLE",
+        "SECTION_HEADER",
+    }
+
+
+def _is_leaf_block_scope(scope: Any) -> bool:
+    return scope.tag in {"p", "ul", "ol", "table", "figure"} or scope.type in {"TEXT", "TABLE"}
+
+
+def _block_preview(document: Any, block: dict[str, Any]) -> dict[str, Any]:
+    element = block["element"]
+    result: dict[str, Any] = {
+        "offset": block["offset"],
+        "block_id": element.id,
+        "type": _block_type(document, element),
+    }
+    if result["type"] == "TABLE":
+        table = document.tables_by_id.get(element.id)
+        result["columns"] = table.columns if table else []
+        result["row_count"] = len(table.rows) if table else 0
+        if table and table.label:
+            result["label"] = table.label
+    elif result["type"] == "LIST":
+        item_ids = _list_item_ids(document, element.id)
+        result["item_count"] = len(item_ids)
+        result["preview"] = [
+            _first_sentence(document.elements_by_id[item_id].text)
+            for item_id in item_ids[:3]
+        ]
+    else:
+        result["preview"] = _first_sentence(element.text)
+    return result
+
+
+def _block_read_result(document: Any, block: dict[str, Any]) -> dict[str, Any]:
+    element = block["element"]
+    block_type = _block_type(document, element)
+    result: dict[str, Any] = {
+        "offset": block["offset"],
+        "block_id": element.id,
+        "type": block_type,
+    }
+    if block_type == "LIST":
+        result["html"] = _list_ref_html(document, element.id, preview_limit=2)
+    else:
+        result["html"] = _element_html(document, element)
+    return result
+
+
+def _block_type(document: Any, element: Any) -> str:
+    if element.type == "TABLE":
+        return "TABLE"
+    if element.tag in {"ul", "ol"}:
+        return "LIST"
+    return element.type
+
+
+def _section_block_at(document: Any, section_id: str, block_offset: int) -> Any:
+    section = _section_element(document, section_id)
+    if isinstance(section, dict):
+        return section
+    blocks = _section_blocks(document, section)
+    try:
+        index = int(block_offset)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "block_offset must be an integer"}
+    if index < 0 or index >= len(blocks):
+        return {"ok": False, "error": f"block_offset outside section: {block_offset}"}
+    return blocks[index]["element"]
+
+
+def _bounded_offset(value: int, length: int) -> int:
+    try:
+        offset = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(offset, length))
+
+
+def _bounded_number(value: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(number, 20))
+
+
+def _first_sentence(text: str) -> str:
+    normalized = " ".join(str(text or "").split())
+    if not normalized:
+        return ""
+    match = re.search(r".*?[。！？.!?](?=\s|$|[^0-9])", normalized)
+    if match:
+        return match.group(0)
+    return normalized
+
+
 def _section_item(document: Any, element: Any) -> dict[str, Any]:
     item: dict[str, Any] = {
         "id": element.id,
@@ -1537,11 +1878,7 @@ def _section_item_html_lines(document: Any, item: dict[str, Any], indent: str) -
 
 
 def _list_ref_html_lines(document: Any, list_id: str, indent: str) -> list[str]:
-    item_ids = [
-        element.id
-        for element in document.elements_by_id.values()
-        if element.parent_id == list_id and element.tag == "li"
-    ]
+    item_ids = _list_item_ids(document, list_id)
     lines = [f'{indent}<list-ref id="{_attr(list_id)}" items="{_attr(len(item_ids))}">']
     for item_id in item_ids:
         element = document.elements_by_id[item_id]
@@ -1550,6 +1887,28 @@ def _list_ref_html_lines(document: Any, list_id: str, indent: str) -> list[str]:
         )
     lines.append(f"{indent}</list-ref>")
     return lines
+
+
+def _list_ref_html(document: Any, list_id: str, *, preview_limit: int = 2) -> str:
+    item_ids = _list_item_ids(document, list_id)
+    lines = [f'<list-ref id="{_attr(list_id)}" items="{_attr(len(item_ids))}">']
+    for item_id in item_ids[: max(0, preview_limit)]:
+        element = document.elements_by_id[item_id]
+        lines.append(
+            f'  <item-ref id="{_attr(item_id)}">{_text(element.text)}</item-ref>'
+        )
+    if len(item_ids) > preview_limit:
+        lines.append(f'  <more-items remaining="{_attr(len(item_ids) - preview_limit)}" />')
+    lines.append("</list-ref>")
+    return "\n".join(lines)
+
+
+def _list_item_ids(document: Any, list_id: str) -> list[str]:
+    return [
+        element.id
+        for element in document.elements_by_id.values()
+        if element.parent_id == list_id and element.tag == "li"
+    ]
 
 
 def _element_tag(document: Any, element_id: str) -> str:
@@ -1565,6 +1924,8 @@ def _is_list_child(document: Any, element: Any) -> bool:
 
 def _html_like_tag(element: Any) -> str:
     element_type = element["type"] if isinstance(element, dict) else element.type
+    if element_type == "SECTION":
+        return "section"
     if element_type == "TITLE":
         return "title"
     if element_type == "SECTION_HEADER":
@@ -1620,6 +1981,10 @@ __all__ = [
     "_scan_document",
     "_read_element",
     "_read_section",
+    "_read_blocks",
+    "_read_block_range",
+    "_read_list",
+    "_query_table",
     "_table_extraction",
     "_paragraph_extraction",
     "_set_field",
