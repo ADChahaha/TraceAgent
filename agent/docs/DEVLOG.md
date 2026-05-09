@@ -1,4 +1,30 @@
-last updated: 2026-05-05 03:13:09
+last updated: 2026-05-10 04:11:05
+
+## 2026-05-10 04:11:05
+
+### 已完成工作
+
+- `file_extraction_agent` 的 `query_table` 返回结构收口为 `rows`、轻量 `table_audit` 和顶层 `summary`，不再返回详细 `query_audit`。
+- `table_audit.blank_cells.by_column` 按列给出空 cell 数和前 10 个空值行 id，不再额外返回截断标记。
+- `rows[].values` 直接保留 SQL 选中列里的空字符串，`summary` 只描述本次查询返回行数和输出列空值数量。
+- 同步更新 `file_extraction_agent` README、设计文档、prompt 测试和对应测试说明文档。
+
+### 验证
+
+- `PYTHONPATH=. pytest tests/file_extraction_agent -q`，结果 `87 passed`。
+
+## 2026-05-10 01:45:57
+
+### 已完成工作
+
+- `file_extraction_agent` 新增 `preview_inline_evidence` 工具，用于把本轮已读取的文本块细化为 inline 证据 id。
+- `set_field(status="resolved")` 增加证据粒度硬校验：文本必须使用 inline id，表格必须包含 `tr` 行 id，列表必须包含 `li` item id。
+- 更新 resolution prompt，让模型在写文本证据前先调用 `preview_inline_evidence`，并明确 table/list 证据分别走 row/item 粒度。
+- 同步更新 `file_extraction_agent` README、设计文档、工具测试和对应测试说明文档。
+
+### 验证
+
+- `PYTHONPATH=. pytest tests/file_extraction_agent -q`，结果 `85 passed`。
 
 ## 2026-05-05 03:13:09
 

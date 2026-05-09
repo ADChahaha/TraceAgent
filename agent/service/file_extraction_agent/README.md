@@ -14,6 +14,7 @@ html + task_spec + run_options
   -> resolution_new 生成任务提示并挂载工具
   -> overview 先给出混排 outline
   -> read_section / read_blocks / read_block_range / read_list / query_table 读取证据
+  -> preview_inline_evidence 把已读文本块细化成 inline 证据 id
   -> set_field 写入字段值或失败原因
   -> finish 做最终完整性校验
   -> ExtractionResult.result + trace
@@ -31,9 +32,20 @@ html + task_spec + run_options
 | `read_blocks(section_id, indexes, reason)` | 按模型选择的 index 列表读取离散块；scope 可以是 `section` 容器、heading 真实后代，或单个叶子块 id。 |
 | `read_block_range(section_id, start_index, count, reason)` | 从 `start_index` 开始连续读取 `count` 个块，用于顺序补上下文。 |
 | `read_list(section_id, block_offset, item_offset, number, reason)` | 对 list block 分页读取 list item；overview 里的顶层 list id 可直接配 `block_offset=0` 使用。 |
-| `query_table(section_id, block_offset, sql, reason)` | 对 table block 执行安全 SELECT；overview 里的顶层 table id 可直接配 `block_offset=0` 使用。 |
+| `query_table(section_id, block_offset, sql, reason)` | 对 table block 执行安全 SELECT；overview 里的顶层 table id 可直接配 `block_offset=0` 使用；返回 SQL 行、轻量 `table_audit` 和查询 `summary`。 |
+| `preview_inline_evidence(source_id, start_index, count, reason)` | 把已读取的文本块切成 inline 证据候选，返回可用于 `set_field` 的 inline id。 |
 | `set_field(name, value, evidence_ids, reason, status, failure_reason)` | 写字段值或失败状态。 |
 | `finish()` | 校验所有字段是否已完成。 |
+
+工具的证据粒度规则：
+
+| 内容类型 | 定位 / 读取工具 | 最终 `set_field` 证据 |
+| --- | --- | --- |
+| 普通文本、标题、caption | 先用 `read_blocks` / `read_block_range` / scoped scan 读到文本块，再用 `preview_inline_evidence` 预览候选片段。 | 使用 `preview_inline_evidence` 返回的 `inline_id`，例如 `p001_b004::inline-0`。 |
+| 列表 | `read_list` 按 `item_offset` 分页读取 list items；顶层 list id 配 `block_offset=0`。 | 至少包含对应 `li` item id；只给 `ul` / `ol` 容器 id 会被拒绝。 |
+| 表格 | `query_table` 用安全 SELECT 查询 table rows；顶层 table id 配 `block_offset=0`。 | 至少包含对应 `tr` row id；只给 table id 会被拒绝。 |
+
+`preview_inline_evidence` 不负责替模型选择答案，只把已读文本块拆成可引用的 inline 候选。字段写入时由 `set_field` 强制检查证据是否已经被本轮工具观察到，以及粒度是否足够细。
 
 ## 读取规则
 
@@ -55,6 +67,18 @@ html + task_spec + run_options
   -> 用 `start_index + count` 连续读取一段上下文，最多按工具上限返回 20 个块
   -> 返回结构仍包含实际 `indexes`，方便 replay 看清模型读了哪些块
 
+`preview_inline_evidence`
+  -> 只接受已经被本轮读取或扫描观察到的文本类元素 id，例如 `p`、heading 或 caption
+  -> 把文本按句子边界切成 inline 候选；长合同句保持完整，不按固定字符数二次截断
+  -> 返回 `inline_id`、原始 `source_id`、文本和字符范围，并把这些 inline id 标记为已观察
+  -> 只在准备写字段证据时使用；table 证据走 `query_table` 的 row id，list 证据走 `read_list` 的 item id
+
+`set_field`
+  -> `resolved` 字段必须使用足够细的证据粒度
+  -> 文本值使用 `preview_inline_evidence` 返回的 inline id，不能直接用整段 `p` 或 heading id
+  -> 表格值必须包含 `query_table` 返回的 `tr` 行 id，不能只用 table id
+  -> 列表值必须包含 `read_list` 返回的 `li` item id，不能只用 `ul` / `ol` id
+
 最上层 `p` 可以直接这样读：
 
 ```text
@@ -63,6 +87,9 @@ overview()
 
 read_blocks("dp-p-1", [0], reason)
   -> 返回这个 p 的完整内容
+
+preview_inline_evidence("dp-p-1", 0, 20, reason)
+  -> 返回 dp-p-1::inline-0 等 inline 证据 id
 ```
 
 section 下面的 `p` 也一样可以直接按块 id 读取；如果想按父容器顺序读，就先看 overview 里的 section 容器 id，再用 `read_blocks(section_id, [1, 3], reason)` 读取选中的块。和 heading 平级的 `p` 不需要、也不会通过前一个 heading 来读。
@@ -91,7 +118,18 @@ overview()
   -> item_id="dp-table-1", type="TABLE", read_with="query_table", block_offset=0
 
 query_table("dp-table-1", 0, "SELECT ... FROM data", reason)
-  -> 返回匹配 rows 和 evidence_ids
+  -> 返回匹配 rows、evidence_ids、轻量 table_audit 和查询 summary
+```
+
+表格空值读取规则：
+
+```text
+overview()
+  -> 只暴露 table id、行数和列名
+query_table(...)
+  -> rows[].values 只包含 SQL 选中的列；如果选中 cell 为空，值就是 ""
+  -> table_audit.blank_cells 按列返回整表空 cell 数和前 10 个空值行 id
+  -> summary 返回本次 SQL 的返回行数，以及选中输出列在返回行里有多少空值
 ```
 
 ## 追踪

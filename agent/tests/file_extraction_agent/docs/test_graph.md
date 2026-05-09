@@ -8,7 +8,7 @@
 测试 HTML + task_spec
   -> build_graph_input 归一化输入
   -> run_extraction_graph 写入空 broad plan 占位，把 broad_model 挂到 document_scan_model
-  -> resolution fake model 按 read_blocks(indexes)/query_table/set_field/finish 或 scan_document(scope_id)/set_field/finish 顺序调用工具
+  -> resolution fake model 按 read_blocks(indexes)/query_table/set_field/finish 或 read_blocks/preview_inline_evidence/set_field/finish 顺序调用工具
   -> map_state_to_result 把 field_states、broad_plan、actions 写入 ExtractionResult
 ```
 
@@ -17,4 +17,4 @@
 - `test_map_state_to_result_returns_completed_payload`：确认已解析字段会进入 completed 结果，并且 trace 保留 broad plan。
 - `test_build_failed_result_preserves_trace`：确认任一阶段抛异常时会返回 failed 结果，并在 trace 中保留失败阶段。
 - `test_run_extraction_graph_skips_broad_plan_then_runs_resolution`：确认顶层流程不会调用 broad 模型，会写入空 broad plan 占位，然后按 no-plan resolution 工具协议读取表格、写字段并 finish。
-- `test_run_extraction_graph_uses_broad_model_only_as_document_scan_model`：确认 broad_model 不参与 broad plan，但会作为 `scan_document(scope_id, ...)` 的隔离 reader 被 resolution 显式调用；该 reader 不绑定工具，返回的候选证据进入 trace action。
+- `test_run_extraction_graph_runs_new_read_tools_without_document_scan_model`：确认只用新读取工具和 inline 证据预览也能完成字段写入，且不触发隔离 document scan model。

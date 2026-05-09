@@ -72,9 +72,7 @@ def build_broad_messages(state: Any) -> list[dict[str, str]]:
         "select necessary columns and add WHERE conditions when possible. "
         "If the table structure is messy or no reliable WHERE condition is available, plan a bounded page read "
         "such as SELECT * FROM data LIMIT 50 OFFSET 0. "
-        "The set_field reason should explain query_audit.summary. "
-        "Do not turn blank filter columns directly into a risk conclusion; let resolution interpret them using "
-        "field semantics, refs, and output-column emptiness. "
+        "The set_field reason should explain query_table summary and table_audit when relevant. "
         "Plan items should cite actual ids, section titles, or table columns from the provided document tree, not invented examples. "
     )
     user = "\n\n".join(

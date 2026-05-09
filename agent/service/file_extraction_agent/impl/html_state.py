@@ -29,6 +29,7 @@ class GraphState:
     field_states: dict[str, dict[str, Any]] = field(default_factory=dict)
     actions: list[dict[str, Any]] = field(default_factory=list)
     observed_evidence_ids: set[str] = field(default_factory=set)
+    inline_evidence_by_id: dict[str, dict[str, Any]] = field(default_factory=dict)
     failed_stage: str | None = None
 
 

@@ -7,7 +7,7 @@
 ```text
 测试 HTML
   -> build_html_document 建立 elements_by_id、tables_by_id 和 row_index
-  -> 直接调用 _overview / _read_* / _query_table / _set_field 等内部函数
+  -> 直接调用 _overview / _read_* / _query_table / _preview_inline_evidence / _set_field 等内部函数
   -> 校验工具返回、observed_evidence_ids、field_states 和 actions
   -> 错误路径返回 ok=false 或 errors，供模型修正参数后重试
 ```
@@ -30,9 +30,9 @@
 - `test_read_list_uses_leaf_list_id_with_zero_offset`：确认 overview 暴露的顶层 list id 可以直接作为 `read_list` 的 scope，并用 `block_offset=0` 读取列表项。
 - `test_search_elements_returns_paragraphs_and_observes_evidence`：确认关键词搜索返回匹配元素、可读 HTML、证据 id 和文本长度，并标记证据。
 - `test_search_elements_excludes_page_level_aggregate_text`：确认关键词搜索不会返回整页聚合文本作为证据。
-- `test_search_elements_result_can_be_used_as_evidence`：确认搜索观察到的 evidence id 可以用于 `set_field`。
+- `test_search_elements_result_can_be_used_as_evidence`：确认搜索观察到文本块后，还需要通过 `preview_inline_evidence` 生成 inline 级证据，才能用于 `set_field`。
 - `test_scan_document_uses_isolated_model_on_scope_without_tools_and_observes_blocks`：确认 scoped reader 只读取指定 scope，不绑定工具，并过滤 scope 外、未知或整页聚合 id。
-- `test_scan_document_result_can_be_used_as_evidence`：确认 scoped reader 返回的候选证据可以用于 `set_field`。
+- `test_scan_document_result_can_be_used_as_evidence`：确认 scoped reader 返回候选文本块后，需要先预览 inline 证据再写字段。
 - `test_scan_document_returns_error_without_scan_model`：确认未配置隔离 reader 时返回明确错误。
 - `test_scan_document_returns_error_for_unknown_scope_id`：确认 scope id 不存在时不调用 reader，并返回明确错误。
 - `test_table_extraction_selects_rows_with_evidence_ids`：确认 SQL 查询表格会返回匹配行、值和 `table_id + row_id` 证据。
@@ -43,11 +43,17 @@
 - `test_table_extraction_large_tables_allow_select_star_with_bounded_limit`：确认大表允许带 `LIMIT 50` 以内的 `SELECT *` 分页读取。
 - `test_table_extraction_large_tables_reject_select_star_above_limit`：确认大表 `SELECT *` 的分页上限为 50 行。
 - `test_table_extraction_large_tables_allow_specific_columns_without_truncating_rows`：确认大表选择具体列时不会按行数截断。
-- `test_table_extraction_reports_table_audit_for_empty_cells`：确认表格空 cell 会进入 `table_audit.blank_cells`。
-- `test_table_extraction_reports_query_audit_for_possible_missed_rows`：确认筛选列空白行和近似未选中行会进入 `query_audit.predicate_columns`。
-- `test_table_extraction_query_audit_summarizes_sparse_label_column_without_warning`：确认稀疏标签列只生成事实摘要，不输出硬编码风险状态。
-- `test_table_extraction_returns_audit_without_status`：确认 `query_audit` 不携带诊断状态字段。
+- `test_table_extraction_reports_table_audit_for_empty_cells`：确认表格空 cell 会进入轻量 `table_audit.blank_cells`，并按列返回空值数量和空值行 id。
+- `test_table_extraction_table_audit_keeps_first_ten_blank_row_ids_without_truncated_label`：确认空值行 id 最多保留前 10 个，且不额外返回 truncated 标记。
+- `test_table_extraction_returns_summary_without_query_audit`：确认 `query_table` 不再返回详细 `query_audit`，而是用顶层 `summary` 描述本次查询返回行数和输出列空值数量。
+- `test_table_extraction_summary_summarizes_selected_output_empty_cells_without_warning`：确认稀疏标签列只生成查询事实摘要，不输出硬编码风险状态。
+- `test_table_extraction_returns_lightweight_audit_without_status`：确认轻量表格审计不携带诊断状态字段。
 - `test_table_extraction_row_evidence_ids_can_be_used_by_set_field`：确认表格查询观察到的行证据可以用于字段写入。
+- `test_preview_inline_evidence_returns_sentence_candidates_and_observes_inline_ids`：确认已读取文本块可以被切成 inline 候选证据，并把生成的 inline id 标记为已观察。
+- `test_preview_inline_evidence_keeps_long_sentence_as_one_inline_candidate`：确认长合同句不会再按固定字符数二次截断，避免证据锚点切断定义或条款。
+- `test_preview_inline_evidence_requires_observed_text_source`：确认 inline 预览只能针对已观察的文本类元素，表格和列表必须分别走 `query_table` 和 `read_list`。
+- `test_set_field_requires_inline_evidence_for_text_blocks`：确认 resolved 字段不能直接使用整段文本块 id，必须使用 `preview_inline_evidence` 返回的 inline id。
+- `test_set_field_requires_row_or_item_level_evidence_for_tables_and_lists`：确认 resolved 字段不能只使用 table/list 容器 id，表格必须包含行 id，列表必须包含 item id。
 - `test_table_extraction_returns_sql_errors_for_model_retry`：确认 SQL 错误返回可重试信息、可用列名和通用双引号提示，且提示不含任务特化 SQL 示例。
 - `test_paragraph_extraction_returns_all_regex_matches`：确认段落正则抽取返回所有匹配文本及对应证据。
 - `test_set_field_records_value_and_finish_validates_required_fields`：确认字段写入后保存值和证据，必填字段齐全时 `finish` 成功。
@@ -58,4 +64,4 @@
 - `test_update_plan_rejects_invalid_plan_index`：确认越界计划索引返回明确错误。
 - `test_set_field_rejects_unobserved_evidence_ids`：确认未被读取或查询观察到的 evidence id 不能用于 resolved 字段。
 - `test_finish_fails_missing_required_field`：确认缺少必填字段时 `finish` 返回字段级错误。
-- `test_build_tools_exposes_model_facing_docstrings_without_state_argument`：确认模型可见工具 schema 隐藏内部 `state`，`read_blocks` 暴露 `indexes` 而不暴露旧的 `offset/number`，`read_block_range` 暴露 `start_index/count`，并在说明中暴露 section/leaf block、顶层 list id、顶层 table id、`block_offset=0` 和证据写入约束。
+- `test_build_tools_exposes_model_facing_docstrings_without_state_argument`：确认模型可见工具 schema 隐藏内部 `state`，`read_blocks` 暴露 `indexes` 而不暴露旧的 `offset/number`，`read_block_range` 暴露 `start_index/count`，并在说明中暴露 section/leaf block、顶层 list id、顶层 table id、`block_offset=0`、`preview_inline_evidence` 和证据写入约束。

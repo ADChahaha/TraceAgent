@@ -61,14 +61,18 @@ def test_resolution_messages_embed_compact_document_outline():
     assert "Document outline may include section containers and block items in document order" in content
     assert "Use the bound tool descriptions as the source of truth for exact arguments and reading behavior" in content
     assert "All SQL column names must be wrapped in double quotes" in content
+    assert "query_table returns rows, table_audit, and summary" in content
+    assert "Explain query_table summary and table_audit only when they affect the current field" in content
+    assert "query_audit.summary" not in content
     assert "query_audit few-shot" not in content
     assert "Example 1" not in content
     assert "Example 2" not in content
     assert "\"category\"='target'" not in content
-    assert "Blank filter columns must be interpreted with table context" in content
-    assert "If table context cannot explain blank filter cells" in content
-    assert "neighboring columns, captions, headers, or group titles" in content
-    assert "set_field evidence_ids must come from this run's read_blocks/read_block_range/read_list/query_table results" in content
+    assert "Use preview_inline_evidence before set_field when final text evidence is still a whole text block" in content
+    assert "set_field evidence_ids for resolved fields must be precise" in content
+    assert "text values need inline ids" in content
+    assert "tables need row ids" in content
+    assert "lists need item ids" in content
     assert "非空分布" not in content
 
 
@@ -145,8 +149,7 @@ def test_resolution_nudge_counts_new_read_tools_as_observed_evidence():
         {"tool_name": "read_section"},
         {"tool_name": "read_blocks"},
         {"tool_name": "read_block_range"},
-        {"tool_name": "read_list"},
-        {"tool_name": "query_table"},
+        {"tool_name": "preview_inline_evidence"},
     ]
 
     instruction = _continue_instruction(state)
@@ -168,6 +171,7 @@ def test_resolution_graph_exposes_plan_and_new_read_tools():
         "read_block_range",
         "read_list",
         "query_table",
+        "preview_inline_evidence",
         "set_field",
         "finish",
     ]

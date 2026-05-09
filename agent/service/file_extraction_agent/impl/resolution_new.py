@@ -34,20 +34,22 @@ def build_resolution_messages(state: Any) -> list[Any]:
             "2. Read only the evidence needed to complete that step. "
             "3. Once evidence for a field is sufficient, the next related tool call must be set_field; do not keep browsing. "
             "4. After all fields are done, call finish. "
+            "Use preview_inline_evidence before set_field when final text evidence is still a whole text block. "
+            "set_field evidence_ids for resolved fields must be precise: text values need inline ids, tables need row ids, "
+            "and lists need item ids. "
             "Use the built-in document outline to choose section ids. Call overview first when the outline is not enough. "
             "Document outline may include section containers and block items in document order. "
             "Use the bound tool descriptions as the source of truth for exact arguments and reading behavior. "
             "Do not wander around cover pages or unrelated headings unless the current field needs the document title. "
             "All SQL column names must be wrapped in double quotes. "
-            "query_table returns query_audit.summary; it is a table-query observation, not a risk conclusion. "
-            "When writing set_field reason, explain how query_audit.summary affects the current field, especially blank filter columns, "
-            "near_match_rows, empty output columns, and structural misalignment. "
-            "If neighboring columns, captions, headers, or group titles clearly explain blank filter cells and selected output columns are complete, "
-            "the set_field reason may cite that table context. If table context cannot explain blank filter cells, near-match rows, "
-            "or empty selected output columns, continue querying, use a safer query, or set_field(status='failed') to request human review. "
-            "Blank filter columns must be interpreted with table context; do not rewrite query_audit.summary directly into a risk or normal conclusion. "
+            "query_table returns rows, table_audit, and summary; these are table observations, not risk conclusions. "
+            "rows[].values show the selected SQL cells directly, including blank selected cells as empty strings. "
+            "table_audit.blank_cells gives whole-table blank counts and the first blank row ids for each affected column. "
+            "Explain query_table summary and table_audit only when they affect the current field. "
+            "If selected rows are empty, selected cells are blank, or table_audit suggests the table structure is unreliable for the field, "
+            "continue querying, use a safer query, or set_field(status='failed') to request human review. "
             "If a tool returns ok=false or error, do not quit. Read the error, fix parameters, and retry. "
-            "set_field evidence_ids must come from this run's read_blocks/read_block_range/read_list/query_table results. "
+            "set_field evidence_ids must come from this run's read_blocks/read_block_range/read_list/query_table/preview_inline_evidence results. "
             "Do not write fields using only the overview or broad plan."
         )
     )
@@ -55,7 +57,7 @@ def build_resolution_messages(state: Any) -> list[Any]:
         content="\n\n".join(
             [
                 "Task fields (each field must be set_field):\n" + _task_fields_text(state.task_spec),
-                "Document outline（用于选择 overview/read_section/read_blocks/read_block_range/read_list/query_table 的 id）:\n"
+                "Document outline（用于选择 overview/read_section/read_blocks/read_block_range/read_list/query_table，并在文本读取后用 preview_inline_evidence 细化证据）:\n"
                 + format_document_outline(state.document.tree),
             ]
         )
@@ -282,7 +284,7 @@ def _should_force_set_field_nudge(state: Any) -> bool:
     recent = actions[-4:]
     if any(action.get("tool_name") == "set_field" for action in recent):
         return False
-    read_like = {"read_section", "read_blocks", "read_block_range", "read_list", "query_table"}
+    read_like = {"read_section", "read_blocks", "read_block_range", "read_list", "query_table", "preview_inline_evidence"}
     return sum(1 for action in recent if action.get("tool_name") in read_like) >= 4
 
 

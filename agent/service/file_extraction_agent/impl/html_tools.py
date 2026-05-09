@@ -20,7 +20,10 @@ LARGE_TABLE_SELECT_STAR_ROW_LIMIT = 30
 LARGE_TABLE_SELECT_STAR_CELL_LIMIT = 300
 MAX_LARGE_TABLE_SELECT_STAR_LIMIT = 50
 MAX_READ_SECTION_HTML_CHARS = 12_000
+MAX_INLINE_EVIDENCE_PREVIEW = 40
+TABLE_AUDIT_BLANK_ROW_ID_LIMIT = 10
 SCAN_DOCUMENT_ALLOWED_TYPES = {"TITLE", "SECTION_HEADER", "TEXT", "LIST_ITEM", "CAPTION", "TABLE"}
+INLINE_TEXT_TYPES = {"TITLE", "SECTION_HEADER", "TEXT", "CAPTION"}
 
 try:
     from langchain_core.tools import tool
@@ -195,10 +198,40 @@ def build_tools(state: Any) -> list[Any]:
             reason: Why this table query is needed for the current field.
 
         Returns:
-            Matching table rows, evidence ids, table_audit, and query_audit.
+            Matching table rows, evidence ids, lightweight table_audit, and query summary.
+            Rows contain only the selected SQL cells. Blank selected cells are
+            returned as empty strings in row values. Use summary for returned
+            row count and selected-output blank counts; use table_audit for
+            whole-table blank-cell background.
         """
 
         return _query_table(state, section_id, block_offset, sql, reason=reason)
+
+    @tool
+    def preview_inline_evidence(source_id: str, start_index: int, count: int, reason: str) -> dict[str, Any]:
+        """
+        Preview inline evidence ids from an already-read text block.
+
+        Only use this after reading a text block with read_blocks,
+        read_block_range, search/scan results, or another text-reading tool,
+        and only when you are ready to make evidence precise for set_field.
+        This tool splits the source text into sentence-like inline candidates
+        and returns inline_id values. Use those inline_id values, not the whole
+        paragraph or heading id, in set_field evidence_ids for text evidence.
+        Do not use this for tables or lists: use row ids from query_table for
+        tables and item ids from read_list for lists.
+
+        Args:
+            source_id: Observed text-like element id to refine into inline evidence.
+            start_index: Zero-based first inline candidate to preview.
+            count: Number of inline candidates to preview.
+            reason: Why this inline evidence is needed for the current field.
+
+        Returns:
+            Inline evidence candidates and observed inline evidence ids.
+        """
+
+        return _preview_inline_evidence(state, source_id, start_index, count, reason=reason)
 
     @tool
     def set_field(
@@ -219,14 +252,22 @@ def build_tools(state: Any) -> list[Any]:
         not keep reading unrelated elements first.
 
         Use this only after this same run has observed the supporting evidence
-        through ``read_blocks``, ``read_block_range``, ``read_list``, or
-        ``query_table``. Do not call this from document overview alone.
+        through ``read_blocks``, ``read_block_range``, ``read_list``,
+        ``query_table``, or ``preview_inline_evidence``. Do not call this from
+        document overview alone.
+
+        Resolved evidence must be precise. Text values need inline ids returned
+        by preview_inline_evidence; do not use whole paragraph, heading, or
+        caption ids. Tables need row ids returned by query_table; a table id by
+        itself is not enough. Lists need item ids returned by read_list; a list
+        container id by itself is not enough.
 
         Args:
             name: Field name declared in task_spec.
             value: Extracted field value. Use null when status is ``failed``.
-            evidence_ids: Existing HTML ids supporting the value, such as
-                ``["dp-p-4"]`` or ``["dp-table-1", "dp-tr-2"]``.
+            evidence_ids: Observed ids supporting the value, such as
+                ``["dp-p-4::inline-0"]``, ``["dp-table-1", "dp-tr-2"]``, or
+                ``["dp-ul-1", "dp-li-2"]``.
             status: ``resolved`` when a value is found, or ``failed`` when the
                 field cannot be extracted.
             reason: Why this value is now sufficiently supported. Mention the
@@ -263,6 +304,7 @@ def build_tools(state: Any) -> list[Any]:
         read_block_range,
         read_list,
         query_table,
+        preview_inline_evidence,
         set_field,
         finish,
     ]
@@ -965,6 +1007,75 @@ def _query_table(
     return result
 
 
+def _preview_inline_evidence(
+    state: Any,
+    source_id: str,
+    start_index: int,
+    count: int,
+    *,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    document = _read(state, "document")
+    normalized_source_id = str(source_id or "").strip()
+    args = {
+        "source_id": source_id,
+        "start_index": start_index,
+        "count": count,
+    }
+    source = document.elements_by_id.get(normalized_source_id)
+    if source is None:
+        result = {"ok": False, "error": f"unknown source id: {normalized_source_id}"}
+        _record_action(state, "preview_inline_evidence", _args_with_reason(args, reason), result)
+        return result
+    if not _is_inline_text_source(source):
+        result = {
+            "ok": False,
+            "error": "source_id must be a text-like element; use query_table for tables and read_list for lists",
+            "source_id": normalized_source_id,
+        }
+        _record_action(state, "preview_inline_evidence", _args_with_reason(args, reason), result)
+        return result
+    if normalized_source_id not in _read(state, "observed_evidence_ids", set()):
+        result = {
+            "ok": False,
+            "error": "source_id must be observed before preview_inline_evidence",
+            "source_id": normalized_source_id,
+        }
+        _record_action(state, "preview_inline_evidence", _args_with_reason(args, reason), result)
+        return result
+
+    candidates = _inline_evidence_candidates(source)
+    normalized_range = _normalize_inline_range(start_index, count, len(candidates))
+    if isinstance(normalized_range, dict):
+        result = normalized_range
+        _record_action(state, "preview_inline_evidence", _args_with_reason(args, reason), result)
+        return result
+
+    start, bounded_count = normalized_range
+    selected = candidates[start : start + bounded_count]
+    _remember_inline_evidence(state, selected)
+    evidence_ids = [candidate["inline_id"] for candidate in selected]
+    _mark_observed(state, evidence_ids)
+    result = {
+        "source_id": normalized_source_id,
+        "source_type": source.type,
+        "start_index": start,
+        "count": len(selected),
+        "total_inline_count": len(candidates),
+        "inline_evidence": selected,
+        "evidence_ids": evidence_ids,
+        "truncated": start + len(selected) < len(candidates),
+        "note": "Use inline_id values in set_field evidence_ids for text evidence.",
+    }
+    _record_action(
+        state,
+        "preview_inline_evidence",
+        _args_with_reason({"source_id": normalized_source_id, "start_index": start, "count": len(selected)}, reason),
+        _summarize_tool_result(result),
+    )
+    return result
+
+
 def _read_section_auto_scan_query(section: Any, reason: str | None, section_id: str) -> str:
     parts = [
         str(reason or "").strip(),
@@ -1038,8 +1149,8 @@ def _table_extraction(state: Any, table_id: str, sql: str, *, reason: str | None
         )
         return result
     selected_columns = [description[0] for description in cursor.description or []]
+    output_columns = [column for column in selected_columns if column != "__row_id"]
     rows = []
-    selected_row_ids: list[str] = []
     for sqlite_row in cursor.fetchall():
         row_id = sqlite_row["__row_id"] if "__row_id" in sqlite_row.keys() else None
         values = {
@@ -1051,8 +1162,6 @@ def _table_extraction(state: Any, table_id: str, sql: str, *, reason: str | None
             row_id = _match_row_id(table, values)
         evidence_ids = [table_id, row_id] if row_id else [table_id]
         _mark_observed(state, evidence_ids)
-        if row_id:
-            selected_row_ids.append(row_id)
         rows.append(
             {
                 "row_id": row_id,
@@ -1061,18 +1170,12 @@ def _table_extraction(state: Any, table_id: str, sql: str, *, reason: str | None
             }
         )
     connection.close()
-    query_audit = _query_audit(
-        table=table,
-        sql=sql,
-        selected_row_ids=selected_row_ids,
-        selected_columns=[column for column in selected_columns if column != "__row_id"],
-    )
     result = {
         "table_id": table_id,
-        "columns": [column for column in selected_columns if column != "__row_id"],
+        "columns": output_columns,
         "rows": rows,
         "table_audit": table_audit,
-        "query_audit": query_audit,
+        "summary": _table_query_summary(rows, output_columns),
     }
     _record_action(state, "table_extraction", _args_with_reason({"table_id": table_id, "sql": sql}, reason), _summarize_tool_result(result))
     return result
@@ -1149,6 +1252,9 @@ def _set_field(
                 }
             ],
         }
+    granularity_errors = _resolved_evidence_granularity_errors(state, evidence_ids) if status == "resolved" else []
+    if granularity_errors:
+        return {"ok": False, "errors": [{"field": name, **error} for error in granularity_errors]}
     expected_type = _read(_field_defs_by_name(state)[name], "type", "string")
     if status == "resolved" and not _value_matches_type(value, expected_type):
         return {
@@ -1178,6 +1284,90 @@ def _set_field(
         {"ok": True, "field": field_state},
     )
     return {"ok": True, "field": field_state}
+
+
+def _resolved_evidence_granularity_errors(state: Any, evidence_ids: list[str]) -> list[dict[str, Any]]:
+    document = _read(state, "document")
+    evidence_set = set(evidence_ids)
+    errors: list[dict[str, Any]] = []
+
+    text_block_ids = [
+        evidence_id
+        for evidence_id in evidence_ids
+        if _is_coarse_text_evidence_id(document, evidence_id)
+    ]
+    if text_block_ids:
+        errors.append(
+            {
+                "message": "text evidence must use inline evidence ids from preview_inline_evidence",
+                "ids": text_block_ids,
+            }
+        )
+
+    table_ids = [
+        evidence_id
+        for evidence_id in evidence_ids
+        if _is_table_container_evidence_id(document, evidence_id)
+        and not _has_row_evidence_for_table(document, evidence_id, evidence_set)
+    ]
+    if table_ids:
+        errors.append(
+            {
+                "message": "table evidence must include row ids from query_table",
+                "ids": table_ids,
+            }
+        )
+
+    list_ids = [
+        evidence_id
+        for evidence_id in evidence_ids
+        if _is_list_container_evidence_id(document, evidence_id)
+        and not _has_item_evidence_for_list(document, evidence_id, evidence_set)
+    ]
+    if list_ids:
+        errors.append(
+            {
+                "message": "list evidence must include item ids from read_list",
+                "ids": list_ids,
+            }
+        )
+
+    return errors
+
+
+def _is_coarse_text_evidence_id(document: Any, evidence_id: str) -> bool:
+    element = document.elements_by_id.get(evidence_id)
+    if element is None:
+        return False
+    if element.tag in {"ul", "ol", "li", "table", "tr", "figure"}:
+        return False
+    return element.type in INLINE_TEXT_TYPES
+
+
+def _is_table_container_evidence_id(document: Any, evidence_id: str) -> bool:
+    element = document.elements_by_id.get(evidence_id)
+    return bool(element and element.type == "TABLE")
+
+
+def _has_row_evidence_for_table(document: Any, table_id: str, evidence_ids: set[str]) -> bool:
+    for evidence_id in evidence_ids:
+        row = document.row_index.get(evidence_id)
+        if row and row.get("table_id") == table_id:
+            return True
+    return False
+
+
+def _is_list_container_evidence_id(document: Any, evidence_id: str) -> bool:
+    element = document.elements_by_id.get(evidence_id)
+    return bool(element and element.tag in {"ul", "ol"})
+
+
+def _has_item_evidence_for_list(document: Any, list_id: str, evidence_ids: set[str]) -> bool:
+    for evidence_id in evidence_ids:
+        element = document.elements_by_id.get(evidence_id)
+        if element and element.tag == "li" and element.parent_id == list_id:
+            return True
+    return False
 
 
 def _finish(state: Any) -> dict[str, Any]:
@@ -1214,7 +1404,11 @@ def _field_defs_by_name(state: Any) -> dict[str, Any]:
 
 def _evidence_exists(state: Any, evidence_id: str) -> bool:
     document = _read(state, "document")
-    return evidence_id in document.elements_by_id or evidence_id in document.row_index
+    return (
+        evidence_id in document.elements_by_id
+        or evidence_id in document.row_index
+        or evidence_id in _inline_evidence_store(state)
+    )
 
 
 def _record_action(state: Any, tool_name: str, args: dict[str, Any], result: Any) -> None:
@@ -1257,6 +1451,26 @@ def _mark_observed(state: Any, evidence_ids: list[str]) -> None:
         except Exception:
             return
     observed.update(evidence_id for evidence_id in evidence_ids if evidence_id)
+
+
+def _inline_evidence_store(state: Any) -> dict[str, dict[str, Any]]:
+    store = _read(state, "inline_evidence_by_id", None)
+    if isinstance(store, dict):
+        return store
+    store = {}
+    try:
+        setattr(state, "inline_evidence_by_id", store)
+    except Exception:
+        return {}
+    return store
+
+
+def _remember_inline_evidence(state: Any, candidates: list[dict[str, Any]]) -> None:
+    store = _inline_evidence_store(state)
+    for candidate in candidates:
+        inline_id = str(candidate.get("inline_id") or "")
+        if inline_id:
+            store[inline_id] = dict(candidate)
 
 
 def _is_safe_select(sql: str) -> bool:
@@ -1329,7 +1543,7 @@ def _table_audit(table: Any) -> dict[str, Any]:
                 {
                     "column": column,
                     "blank_count": len(blank_row_ids),
-                    "blank_row_ids_sample": blank_row_ids[:5],
+                    "blank_row_ids": blank_row_ids[:TABLE_AUDIT_BLANK_ROW_ID_LIMIT],
                 }
             )
 
@@ -1356,154 +1570,17 @@ def _table_audit(table: Any) -> dict[str, Any]:
     }
 
 
-def _query_audit(
-    *,
-    table: Any,
-    sql: str,
-    selected_row_ids: list[str],
-    selected_columns: list[str],
-) -> dict[str, Any]:
-    rows = _read(table, "rows", []) or []
-    row_ids = _read(table, "row_ids", []) or []
-    selected_set = set(selected_row_ids)
-    predicates = _where_equal_predicates(sql)
-    predicate_columns = [
-        _predicate_column_audit(
-            rows=rows,
-            row_ids=row_ids,
-            selected_set=selected_set,
-            column=column,
-            literal=literal,
+def _table_query_summary(rows: list[dict[str, Any]], selected_columns: list[str]) -> str:
+    row_count = len(rows)
+    parts = [f"返回 {row_count} 行"]
+    for column in selected_columns:
+        empty_count = sum(
+            1
+            for row in rows
+            if not str((row.get("values") or {}).get(column, "")).strip()
         )
-        for column, literal in predicates
-    ]
-    output_columns = [
-        _output_column_audit(
-            rows=rows,
-            row_ids=row_ids,
-            selected_set=selected_set,
-            column=column,
-        )
-        for column in selected_columns
-    ]
-    return {
-        "summary": _query_audit_summary(
-            selected_row_count=len(selected_set),
-            predicate_columns=predicate_columns,
-            output_columns=output_columns,
-        ),
-        "selected_row_count": len(selected_set),
-        "predicate_columns": predicate_columns,
-        "output_columns": output_columns,
-        "evidence_integrity": {
-            "unresolved_selected_row_count": 0,
-            "unresolved_selected_row_ids": [],
-        },
-    }
-
-
-def _predicate_column_audit(
-    *,
-    rows: list[dict[str, Any]],
-    row_ids: list[str],
-    selected_set: set[str],
-    column: str,
-    literal: str,
-) -> dict[str, Any]:
-    blank_row_ids: list[str] = []
-    near_match_rows: list[dict[str, Any]] = []
-    for row_id, row in zip(row_ids, rows, strict=False):
-        value = str(row.get(column, "")).strip()
-        if not value:
-            if row_id not in selected_set:
-                blank_row_ids.append(row_id)
-            continue
-        if row_id not in selected_set and _normalized(value) == _normalized(literal) and value != literal:
-            near_match_rows.append({"row_id": row_id, "value": value})
-    return {
-        "column": column,
-        "operator": "=",
-        "literal": literal,
-        "selected_count": len(selected_set),
-        "blank_count": len(blank_row_ids),
-        "blank_row_ids_sample": blank_row_ids[:5],
-        "near_match_rows": near_match_rows[:5],
-        "keyword_unselected_rows": [],
-    }
-
-
-def _output_column_audit(
-    *,
-    rows: list[dict[str, Any]],
-    row_ids: list[str],
-    selected_set: set[str],
-    column: str,
-) -> dict[str, Any]:
-    empty_selected_row_ids = [
-        row_id
-        for row_id, row in zip(row_ids, rows, strict=False)
-        if row_id in selected_set and not str(row.get(column, "")).strip()
-    ]
-    return {
-        "column": column,
-        "empty_selected_count": len(empty_selected_row_ids),
-        "empty_selected_row_ids": empty_selected_row_ids,
-    }
-
-
-def _query_audit_summary(
-    *,
-    selected_row_count: int,
-    predicate_columns: list[dict[str, Any]],
-    output_columns: list[dict[str, Any]],
-) -> str:
-    parts = [f"返回 {selected_row_count} 行"]
-    for predicate in predicate_columns:
-        parts.append(f"筛选列“{predicate['column']}”空白 {predicate['blank_count']} 行")
-    for output in output_columns:
-        if output["empty_selected_count"]:
-            parts.append(f"输出列“{output['column']}”空值 {output['empty_selected_count']} 行")
-        else:
-            parts.append(f"输出列“{output['column']}”无空值")
+        parts.append(f"输出列“{column}”空值 {empty_count}/{row_count} 行")
     return "；".join(parts) + "。"
-
-
-def _where_equal_predicates(sql: str) -> list[tuple[str, str]]:
-    normalized = sql.strip().rstrip(";").strip()
-    match = re.search(r"(?is)\bwhere\b(.*?)(?:\border\s+by\b|\bgroup\s+by\b|\blimit\b|\boffset\b|$)", normalized)
-    if not match:
-        return []
-    where_clause = match.group(1)
-    predicates: list[tuple[str, str]] = []
-    for column, quote, value in re.findall(
-        r'"([^"]+)"\s*=\s*([\'"])(.*?)\2',
-        where_clause,
-        flags=re.DOTALL,
-    ):
-        predicates.append((column, value))
-    return predicates
-
-
-def _query_literals(sql: str, reason: str | None) -> list[str]:
-    raw_literals = [value for _quote, value in re.findall(r"([\'\"])(.*?)\1", sql)]
-    if reason:
-        raw_literals.extend(re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{2,}", reason))
-    literals: list[str] = []
-    for literal in raw_literals:
-        literal = literal.strip()
-        if not literal or literal in literals:
-            continue
-        literals.append(literal)
-    return literals
-
-
-def _row_contains_any_literal(row: dict[str, Any], literals: list[str]) -> bool:
-    text = " ".join(str(value) for value in row.values())
-    return any(literal in text for literal in literals)
-
-
-def _normalized(value: str) -> str:
-    return re.sub(r"\s+", "", value)
 
 
 def _heading_level(tag: str) -> int | None:
@@ -1703,6 +1780,21 @@ def _normalize_block_range(start_index: Any, count: Any, block_count: int) -> tu
     return start, bounded_count
 
 
+def _normalize_inline_range(start_index: Any, count: Any, inline_count: int) -> tuple[int, int] | dict[str, Any]:
+    start = _parse_range_integer(start_index)
+    if start is None or start < 0:
+        return {"ok": False, "error": "start_index must be a non-negative integer"}
+    requested_count = _parse_range_integer(count)
+    if requested_count is None or requested_count <= 0:
+        return {"ok": False, "error": "count must be a positive integer"}
+    if inline_count == 0:
+        return 0, 0
+    if start >= inline_count:
+        return {"ok": False, "error": f"start_index outside inline evidence: {start_index}", "inline_count": inline_count}
+    bounded_count = min(requested_count, MAX_INLINE_EVIDENCE_PREVIEW, inline_count - start)
+    return start, bounded_count
+
+
 def _parse_range_integer(value: Any) -> int | None:
     if isinstance(value, bool):
         return None
@@ -1775,6 +1867,55 @@ def _block_type(document: Any, element: Any) -> str:
     if element.tag in {"ul", "ol"}:
         return "LIST"
     return element.type
+
+
+def _is_inline_text_source(element: Any) -> bool:
+    if element.tag in {"ul", "ol", "li", "table", "tr", "figure"}:
+        return False
+    return element.type in INLINE_TEXT_TYPES
+
+
+def _inline_evidence_candidates(element: Any) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for inline_index, span in enumerate(_inline_text_spans(str(element.text or ""))):
+        start, end, text = span
+        candidates.append(
+            {
+                "inline_id": f"{element.id}::inline-{inline_index}",
+                "inline_index": inline_index,
+                "source_id": element.id,
+                "text": text,
+                "char_start": start,
+                "char_end": end,
+            }
+        )
+    return candidates
+
+
+def _inline_text_spans(text: str) -> list[tuple[int, int, str]]:
+    normalized = " ".join(str(text or "").split())
+    if not normalized:
+        return []
+
+    spans: list[tuple[int, int]] = []
+    start = 0
+    for match in re.finditer(r"[。！？!?]|(?<!\d)\.(?!\d)", normalized):
+        end = match.end()
+        if end > start:
+            spans.append((start, end))
+        start = end
+    if start < len(normalized):
+        spans.append((start, len(normalized)))
+
+    return [
+        (
+            start + len(normalized[start:end]) - len(normalized[start:end].lstrip()),
+            end - (len(normalized[start:end]) - len(normalized[start:end].rstrip())),
+            normalized[start:end].strip(),
+        )
+        for start, end in spans
+        if normalized[start:end].strip()
+    ]
 
 
 def _section_block_at(document: Any, section_id: str, block_offset: int) -> Any:
@@ -1985,6 +2126,7 @@ __all__ = [
     "_read_block_range",
     "_read_list",
     "_query_table",
+    "_preview_inline_evidence",
     "_table_extraction",
     "_paragraph_extraction",
     "_set_field",

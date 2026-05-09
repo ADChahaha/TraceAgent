@@ -72,12 +72,21 @@ class FakeResolutionModelWithScan:
                 },
             },
             {
+                "tool_name": "preview_inline_evidence",
+                "arguments": {
+                    "source_id": "dp-p-1",
+                    "start_index": 0,
+                    "count": 5,
+                    "reason": "把姓名段落细化为字段证据",
+                },
+            },
+            {
                 "tool_name": "set_field",
                 "arguments": {
                     "name": "student_name",
                     "value": "张三",
-                    "evidence_ids": ["dp-p-1"],
-                    "reason": "dp-p-1 支持学生姓名为张三",
+                    "evidence_ids": ["dp-p-1::inline-0"],
+                    "reason": "dp-p-1::inline-0 支持学生姓名为张三",
                 },
             },
             {"tool_name": "finish", "arguments": {}},
@@ -171,6 +180,7 @@ def test_run_extraction_graph_runs_new_read_tools_without_document_scan_model():
     assert scan_model.invoked is False
     assert [action["tool_name"] for action in result.trace["actions"]] == [
         "read_blocks",
+        "preview_inline_evidence",
         "set_field",
         "finish",
     ]

@@ -42,8 +42,8 @@ def test_build_broad_messages_includes_task_and_tree():
     assert "Japanese Criteria" not in content
     assert "master program" not in content
     assert "Do not prefill answers" in content
-    assert "set_field reason should explain query_audit.summary" in content
-    assert "Do not turn blank filter columns directly into a risk conclusion" in content
+    assert "set_field reason should explain query_table summary and table_audit when relevant" in content
+    assert "query_audit.summary" not in content
     assert "Write plan text in the same language as the document whenever possible" in content
 
 

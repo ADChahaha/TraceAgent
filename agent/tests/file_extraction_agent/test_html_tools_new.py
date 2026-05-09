@@ -9,6 +9,7 @@ from service.file_extraction_agent.impl.html_tools import (
     _finish,
     _overview,
     _paragraph_extraction,
+    _preview_inline_evidence,
     _read_block_range,
     _query_table,
     _read_blocks,
@@ -169,6 +170,24 @@ def _sparse_label_table_state():
       <tr id="dp-dorm-tr-3"><td>18栋</td><td>212</td><td>文明寝室</td></tr>
       <tr id="dp-dorm-tr-4"><td>18栋</td><td>214</td><td>文明寝室</td></tr>
       <tr id="dp-dorm-tr-5"><td>18栋</td><td>215</td><td></td></tr>
+    </table>
+    """
+    state = _state()
+    state.document = build_html_document(html)
+    return state
+
+
+def _many_blank_table_state():
+    blank_rows = "\n".join(
+        f'<tr id="dp-many-blank-tr-{index}"><td>{index}</td><td></td></tr>'
+        for index in range(1, 13)
+    )
+    html = f"""
+    <h2 id="dp-many-blank-h2-1">空值表</h2>
+    <table id="dp-many-blank-table-1">
+      <tr id="dp-many-blank-tr-0"><th>序号</th><th>标签</th></tr>
+      {blank_rows}
+      <tr id="dp-many-blank-tr-13"><td>13</td><td>有效</td></tr>
     </table>
     """
     state = _state()
@@ -464,18 +483,27 @@ def test_search_elements_excludes_page_level_aggregate_text():
 def test_search_elements_result_can_be_used_as_evidence():
     state = _state()
     _search_elements(state, "联系人", limit=5, reason="定位联系人字段")
+    preview = _preview_inline_evidence(
+        state,
+        "dp-p-1",
+        start_index=0,
+        count=5,
+        reason="把联系人段落细化为字段证据",
+    )
 
     result = _set_field(
         state,
         "contact_phone",
         "12345",
-        ["dp-p-1"],
+        [preview["inline_evidence"][0]["inline_id"]],
         "resolved",
         None,
     )
 
     assert result["ok"] is True
-    assert state.field_states["contact_phone"]["evidence_ids"] == ["dp-p-1"]
+    assert state.field_states["contact_phone"]["evidence_ids"] == [
+        "dp-p-1::inline-0"
+    ]
 
 
 def test_scan_document_uses_isolated_model_on_scope_without_tools_and_observes_blocks():
@@ -561,18 +589,27 @@ def test_scan_document_result_can_be_used_as_evidence():
 
     state.document_scan_model = FakeScanModel()
     _scan_document(state, "dp-p-1", "联系人", limit=3, reason="搜索联系人字段")
+    preview = _preview_inline_evidence(
+        state,
+        "dp-p-1",
+        start_index=0,
+        count=5,
+        reason="把 scoped reader 候选细化为字段证据",
+    )
 
     result = _set_field(
         state,
         "contact_phone",
         "12345",
-        ["dp-p-1"],
+        [preview["inline_evidence"][0]["inline_id"]],
         "resolved",
         None,
     )
 
     assert result["ok"] is True
-    assert state.field_states["contact_phone"]["evidence_ids"] == ["dp-p-1"]
+    assert state.field_states["contact_phone"]["evidence_ids"] == [
+        "dp-p-1::inline-0"
+    ]
 
 
 def test_scan_document_returns_error_without_scan_model():
@@ -707,12 +744,41 @@ def test_table_extraction_reports_table_audit_for_empty_cells():
         {
             "column": "作品类型",
             "blank_count": 1,
-            "blank_row_ids_sample": ["dp-risk-tr-2"],
+            "blank_row_ids": ["dp-risk-tr-2"],
         }
     ]
 
 
-def test_table_extraction_reports_query_audit_for_possible_missed_rows():
+def test_table_extraction_table_audit_keeps_first_ten_blank_row_ids_without_truncated_label():
+    result = _table_extraction(
+        _many_blank_table_state(),
+        "dp-many-blank-table-1",
+        'SELECT "序号", "标签" FROM data',
+        reason="读取空值表",
+    )
+
+    blank_column = result["table_audit"]["blank_cells"]["by_column"][0]
+    assert blank_column == {
+        "column": "标签",
+        "blank_count": 12,
+        "blank_row_ids": [
+            "dp-many-blank-tr-1",
+            "dp-many-blank-tr-2",
+            "dp-many-blank-tr-3",
+            "dp-many-blank-tr-4",
+            "dp-many-blank-tr-5",
+            "dp-many-blank-tr-6",
+            "dp-many-blank-tr-7",
+            "dp-many-blank-tr-8",
+            "dp-many-blank-tr-9",
+            "dp-many-blank-tr-10",
+        ],
+    }
+    assert "truncated" not in blank_column
+    assert "by_column_truncated" not in result["table_audit"]["blank_cells"]
+
+
+def test_table_extraction_returns_summary_without_query_audit():
     result = _table_extraction(
         _risky_table_state(),
         "dp-risk-table-1",
@@ -720,13 +786,11 @@ def test_table_extraction_reports_query_audit_for_possible_missed_rows():
         reason="抽取作品类型为学术论文的论文题目",
     )
 
-    predicate = result["query_audit"]["predicate_columns"][0]
-    assert predicate["blank_count"] == 1
-    assert predicate["blank_row_ids_sample"] == ["dp-risk-tr-2"]
-    assert predicate["near_match_rows"] == [{"row_id": "dp-risk-tr-3", "value": "学术 论文"}]
+    assert "query_audit" not in result
+    assert result["summary"] == "返回 1 行；输出列“论文题目”空值 0/1 行。"
 
 
-def test_table_extraction_query_audit_summarizes_sparse_label_column_without_warning():
+def test_table_extraction_summary_summarizes_selected_output_empty_cells_without_warning():
     result = _table_extraction(
         _sparse_label_table_state(),
         "dp-dorm-table-1",
@@ -734,20 +798,12 @@ def test_table_extraction_query_audit_summarizes_sparse_label_column_without_war
         reason="抽取文明寝室名称字段，筛选类别为文明寝室的行",
     )
 
-    assert result["query_audit"]["summary"] == (
-        "返回 2 行；筛选列“模范/文明”空白 2 行；"
-        "输出列“房间”无空值。"
-    )
-    predicate = result["query_audit"]["predicate_columns"][0]
-    assert predicate["column"] == "模范/文明"
-    assert predicate["literal"] == "文明寝室"
-    assert predicate["blank_count"] == 2
-    assert predicate["blank_row_ids_sample"] == ["dp-dorm-tr-1", "dp-dorm-tr-5"]
-    assert "non_empty_distribution" not in predicate
-    assert "非空分布" not in result["query_audit"]["summary"]
+    assert result["summary"] == "返回 2 行；输出列“房间”空值 0/2 行。"
+    assert "query_audit" not in result
+    assert "非空分布" not in result["summary"]
 
 
-def test_table_extraction_returns_audit_without_status():
+def test_table_extraction_returns_lightweight_audit_without_status():
     result = _table_extraction(
         _risky_table_state(),
         "dp-risk-table-1",
@@ -756,7 +812,8 @@ def test_table_extraction_returns_audit_without_status():
     )
 
     assert "query_quality" not in result
-    assert "status" not in result["query_audit"]
+    assert "query_audit" not in result
+    assert "status" not in result["table_audit"]
 
 
 def test_table_extraction_row_evidence_ids_can_be_used_by_set_field():
@@ -784,6 +841,189 @@ def test_table_extraction_row_evidence_ids_can_be_used_by_set_field():
         "dp-table-1",
         "dp-tr-3",
     ]
+
+
+def test_preview_inline_evidence_returns_sentence_candidates_and_observes_inline_ids():
+    state = _state()
+    _read_blocks(state, "dp-p-1", indexes=[0], reason="读取联系人段落")
+
+    result = _preview_inline_evidence(
+        state,
+        "dp-p-1",
+        start_index=0,
+        count=5,
+        reason="准备写联系人电话证据",
+    )
+
+    assert result["source_id"] == "dp-p-1"
+    assert result["total_inline_count"] == 1
+    assert result["inline_evidence"] == [
+        {
+            "inline_id": "dp-p-1::inline-0",
+            "inline_index": 0,
+            "source_id": "dp-p-1",
+            "text": "联系人：李老师 电话：12345",
+            "char_start": 0,
+            "char_end": len("联系人：李老师 电话：12345"),
+        }
+    ]
+    assert result["evidence_ids"] == ["dp-p-1::inline-0"]
+    assert state.observed_evidence_ids == {"dp-p-1", "dp-p-1::inline-0"}
+    assert state.inline_evidence_by_id["dp-p-1::inline-0"]["source_id"] == "dp-p-1"
+    assert state.actions[-1]["tool_name"] == "preview_inline_evidence"
+
+
+def test_preview_inline_evidence_keeps_long_sentence_as_one_inline_candidate():
+    state = _state()
+    long_sentence = "This definition contains many coordinated legal clauses, " + "additional words " * 45 + "and ends here."
+    state.document = build_html_document(
+        f'<p id="dp-long-sentence">{long_sentence}</p>'
+    )
+    _read_blocks(state, "dp-long-sentence", indexes=[0], reason="读取长定义句")
+
+    result = _preview_inline_evidence(
+        state,
+        "dp-long-sentence",
+        start_index=0,
+        count=5,
+        reason="长句作为一个 inline 证据锚点",
+    )
+
+    assert len(long_sentence) > 280
+    assert result["total_inline_count"] == 1
+    assert result["inline_evidence"][0]["text"] == long_sentence
+    assert result["inline_evidence"][0]["inline_id"] == "dp-long-sentence::inline-0"
+
+
+def test_preview_inline_evidence_requires_observed_text_source():
+    state = _state()
+
+    unobserved = _preview_inline_evidence(
+        state,
+        "dp-p-1",
+        start_index=0,
+        count=5,
+        reason="未先读取段落",
+    )
+    table = _preview_inline_evidence(
+        state,
+        "dp-table-1",
+        start_index=0,
+        count=5,
+        reason="表格不能转 inline",
+    )
+
+    assert unobserved == {
+        "ok": False,
+        "error": "source_id must be observed before preview_inline_evidence",
+        "source_id": "dp-p-1",
+    }
+    assert table == {
+        "ok": False,
+        "error": "source_id must be a text-like element; use query_table for tables and read_list for lists",
+        "source_id": "dp-table-1",
+    }
+
+
+def test_set_field_requires_inline_evidence_for_text_blocks():
+    state = _state()
+    _read_blocks(state, "dp-p-1", indexes=[0], reason="读取联系人段落")
+
+    coarse = _set_field(
+        state,
+        "contact_phone",
+        "12345",
+        ["dp-p-1"],
+        "resolved",
+        None,
+    )
+    preview = _preview_inline_evidence(
+        state,
+        "dp-p-1",
+        start_index=0,
+        count=5,
+        reason="细化联系人电话证据",
+    )
+    precise = _set_field(
+        state,
+        "contact_phone",
+        "12345",
+        [preview["inline_evidence"][0]["inline_id"]],
+        "resolved",
+        None,
+    )
+
+    assert coarse["ok"] is False
+    assert coarse["errors"][0]["message"] == (
+        "text evidence must use inline evidence ids from preview_inline_evidence"
+    )
+    assert coarse["errors"][0]["ids"] == ["dp-p-1"]
+    assert precise["ok"] is True
+    assert state.field_states["contact_phone"]["evidence_ids"] == [
+        "dp-p-1::inline-0"
+    ]
+
+
+def test_set_field_requires_row_or_item_level_evidence_for_tables_and_lists():
+    state = _mixed_outline_state()
+    _read_blocks(state, "dp-page-1", indexes=[2, 4], reason="读取表格和列表引用")
+
+    table_only = _set_field(
+        state,
+        "student_name",
+        "张三",
+        ["dp-table-1"],
+        "resolved",
+        None,
+    )
+    list_only = _set_field(
+        state,
+        "student_name",
+        "第一项",
+        ["dp-ul-1"],
+        "resolved",
+        None,
+    )
+    table_rows = _query_table(
+        state,
+        "dp-table-1",
+        block_offset=0,
+        sql="SELECT 姓名 FROM data WHERE 学院 = '计算机学院'",
+        reason="读取表格行",
+    )
+    table_precise = _set_field(
+        state,
+        "student_name",
+        "张三",
+        table_rows["rows"][0]["evidence_ids"],
+        "resolved",
+        None,
+    )
+    list_items = _read_list(
+        state,
+        "dp-ul-1",
+        block_offset=0,
+        item_offset=0,
+        number=1,
+        reason="读取列表项",
+    )
+    list_precise = _set_field(
+        state,
+        "student_name",
+        "第一项",
+        list_items["evidence_ids"],
+        "resolved",
+        None,
+    )
+
+    assert table_only["ok"] is False
+    assert table_only["errors"][0]["message"] == "table evidence must include row ids from query_table"
+    assert table_only["errors"][0]["ids"] == ["dp-table-1"]
+    assert list_only["ok"] is False
+    assert list_only["errors"][0]["message"] == "list evidence must include item ids from read_list"
+    assert list_only["errors"][0]["ids"] == ["dp-ul-1"]
+    assert table_precise["ok"] is True
+    assert list_precise["ok"] is True
 
 
 def test_table_extraction_returns_sql_errors_for_model_retry():
@@ -944,6 +1184,7 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
         "read_block_range",
         "read_list",
         "query_table",
+        "preview_inline_evidence",
         "set_field",
         "finish",
     ]
@@ -1001,6 +1242,16 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
     assert "top-level table id" in query_table_description
     assert "block_offset=0" in query_table_description
     assert "double quotes" in query_table_description
+    preview_inline = tools[names.index("preview_inline_evidence")]
+    preview_schema = getattr(preview_inline, "args_schema", None)
+    preview_fields = getattr(preview_schema, "model_fields", None) or getattr(preview_schema, "__fields__", {})
+    assert "source_id" in preview_fields
+    assert "start_index" in preview_fields
+    assert "count" in preview_fields
+    preview_description = _tool_description(preview_inline)
+    assert "Only use this after reading a text block" in preview_description
+    assert "inline_id" in preview_description
+    assert "set_field" in preview_description
     set_field = tools[names.index("set_field")]
     set_field_schema = getattr(set_field, "args_schema", None)
     set_field_fields = getattr(set_field_schema, "model_fields", None) or getattr(set_field_schema, "__fields__", {})
@@ -1010,6 +1261,10 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
     assert "unrelated elements" in set_field_description
     assert "read_blocks" in set_field_description
     assert "read_block_range" in set_field_description
+    assert "preview_inline_evidence" in set_field_description
+    assert "inline ids" in set_field_description
+    assert "row ids" in set_field_description
+    assert "item ids" in set_field_description
     assert "query_table" in set_field_description
 
 

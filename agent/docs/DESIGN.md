@@ -116,18 +116,18 @@ agent/
 - `service.file_extraction_agent.processor.extract(...)`
 - HTTP 入口：`routes/file_extraction_agent.py`
 
-当前固定采用两阶段流程：broad 负责规划抽取路线，resolution 按计划调用 HTML 工具读取证据并写字段。broad 不写字段值，resolution 必须让每个字段通过 `set_field` 进入 `resolved` 或 `failed`：
+当前 `file_extraction_agent` 的 no-plan 实验实现保留 broad 兼容占位，resolution 直接根据字段语义和文档 outline 调用 HTML 工具读取证据并写字段。broad 不写字段值，resolution 必须让每个字段通过 `set_field` 进入 `resolved` 或 `failed`：
 
 ```text
 backend 聚合后的 html + task_spec
   -> input_adapter.py 校验 html/task_spec/run_options 并组装 HtmlExtractionInput
-  -> html_index.py 基于已有 HTML id 构建 document tree、elements、tables 和 row_index
-  -> broad_new.py 读取 task_spec、document tree 和完整 HTML
-  -> broad model 只能调用 return_broad_plan(summary, plan, risks)
-  -> graph 把 BroadPlan 写入 state.broad_plan
-  -> resolution_new.py 把 broad plan、task fields 和 document outline 交给 LangGraph tool-calling loop
-  -> resolution model 按计划调用 update_plan / read_element / read_section / table_extraction / paragraph_extraction
-  -> 证据足够或失败明确后调用 set_field 写入字段状态、值、证据 id 和原因
+  -> html_index.py 基于已有 HTML id 构建 document tree、elements、tables 和 row_index；tree 按 DOM/section 容器语义保留 section、heading 和同层 block items 的顺序与预览
+  -> broad_new.py 写入兼容用空 BroadPlan，不调用模型
+  -> graph 把 broad_model 挂到 state.document_scan_model，作为可选 scoped reader
+  -> resolution_new.py 把 task fields 和 document outline 交给 LangGraph tool-calling loop
+  -> resolution model 调用 overview / read_section / read_blocks / read_block_range / read_list / query_table 读取证据
+  -> 如果文本块将作为最终证据，先调用 preview_inline_evidence 细化到 inline id
+  -> 证据足够或失败明确后调用 set_field 写入字段状态、值、证据 id 和原因；resolved 字段强制文本 inline、表格 row、列表 item 粒度
   -> 所有字段 set_field 后调用 finish 做完整性校验
   -> graph 映射成 ExtractionResult(result + trace)
   -> trace 保留 broad_plan、plan_statuses、document_tree、field_states 和 actions
@@ -137,23 +137,25 @@ backend 聚合后的 html + task_spec
 
 工具边界保持精简：
 
-- `return_broad_plan(summary, plan, risks)`：只允许 broad 调用，用于返回可执行计划，不写字段值。
-- `update_plan(plan_index, status, reason)`：按 broad plan 顺序推进 replay 状态。
-- `read_element(element_id, reason)`：读取单个元素；表格只返回 table-ref 元信息和列名。
-- `read_section(section_id, reason, depth)`：读取标题下的章节内容。
-- `table_extraction(table_id, sql, reason)`：对单张 HTML 表格执行安全 SELECT，并返回 rows、evidence_ids、table_audit 和 query_audit。
-- `paragraph_extraction(element_id, pattern, reason)`：对文本元素执行正则抽取。
-- `set_field(name, value, evidence_ids, reason, status, failure_reason)`：写字段值或失败状态，并校验证据 id 与字段类型。
+- `update_plan(plan_index, status, reason)`：保留为 replay 兼容工具；no-plan 实验通常不依赖它推进抽取。
+- `overview()`：返回 section container、heading 和同层 block items 的混排 outline；heading 不会默认拥有后续平级块。
+- `read_section(section_id, reason)`：只读取 heading 元素真实后代的章节预览；平级段落、列表和表格由 overview 直接暴露。
+- `read_blocks(section_id, indexes, reason)`：按 scope id 和模型选择的 index 列表读取块；section 容器按真实 DOM 后代读，heading 只按真实后代读，叶子块用 `indexes=[0]` 读。
+- `read_block_range(section_id, start_index, count, reason)`：按同一 scope 连续读取一段 block，用于顺序补上下文。
+- `read_list(section_id, block_offset, item_offset, number, reason)`：对 list block 做分页读取；overview 里的顶层 list id 可以直接配 `block_offset=0` 使用。
+- `query_table(section_id, block_offset, sql, reason)`：对 table block 执行安全 SELECT；overview 里的顶层 table id 可以直接配 `block_offset=0` 使用；返回 SQL 行、轻量 `table_audit` 和查询 `summary`。
+- `preview_inline_evidence(source_id, start_index, count, reason)`：把已观察到的文本块切成 inline 候选证据，用于写字段前细化文本证据。
+- `set_field(name, value, evidence_ids, reason, status, failure_reason)`：写字段值或失败状态，并校验证据 id、证据粒度与字段类型。
 - `finish()`：校验所有字段已完成、必填字段和证据一致性。
 
-表格处理是 `file_extraction_agent` 内部的专用检索能力，而不是业务特例。它只理解通用表格结构和字段提示，不硬编码“学术论文”“文明寝室”等业务词。模型应先用 document outline 定位表格，再通过 `read_element(table_id)` 查看列名，最后用 `table_extraction(table_id, sql)` 查询必要行列。字段最终定案通过 `set_field` 引用已观察到的 table id、row id 或其他 evidence id。
+列表和表格都支持 overview 直接入口。模型应先用 document outline 定位目标块；如果 overview 已给出 list id，就直接用 `read_list(list_id, 0, item_offset, number)` 读取列表项，否则先通过 `overview/read_section` 的 block index 选择列表块，再调用 `read_blocks(section_id, [index], reason)` 确认 ref，之后用 `read_list(section_id, block_offset, item_offset, number)` 展开。
+
+表格处理是 `file_extraction_agent` 内部的专用检索能力，而不是业务特例。它只理解通用表格结构和字段提示，不硬编码“学术论文”“文明寝室”等业务词。模型应先用 document outline 定位表格；如果 overview 已给出 table id，就直接用 `query_table(table_id, 0, sql)` 查询，否则再通过 `overview/read_section` 的 block index 选择表格块，必要时调用 `read_blocks(section_id, [index], reason)` 确认 ref，之后用 `query_table(section_id, block_offset, sql)` 查询。`overview` 只给 table id、行数和列名；`query_table` 的 `rows[].values` 直接显示 SQL 选中 cell 是否为空，`table_audit.blank_cells` 给整表每列空 cell 数和前 10 个空值行 id，`summary` 给本次查询返回行数和选中输出列空值数量。字段最终定案通过 `set_field` 引用已观察到的 inline id、list item id 或 table row id；只引用整段文本、list 容器或 table 容器会被拒绝。
 
 当前不把 image 作为抽取对象。文档内容类型先收敛为：
 
 ```text
-section_header / heading
-text / text_line
-table
+section / heading / text / list / table
 ```
 
 OCR 或表格结构质量提示不参与 broad、resolution 或 route policy 的自动判断。它只在 backend 组装 review handoff 时作为人工审核辅助信息展示，例如提示某个表格 block 行列错位、空 cell 比例高、文本异常字符多或 block 过长。主抽取链路仍以证据召回、字段定案和 route policy 为准。
@@ -177,7 +179,7 @@ OCR 或表格结构质量提示不参与 broad、resolution 或 route policy 的
 两阶段的动作边界由工具 schema 控制：
 
 - `broad_new.py` 负责生成 `BroadPlan(summary, plan, risks)`。
-- `resolution_new.py` 负责执行 `update_plan`、`read_element`、`read_section`、`table_extraction`、`paragraph_extraction`、`set_field` 和 `finish`。
+- `resolution_new.py` 负责执行 `update_plan`、`overview`、`read_section`、`read_blocks`、`read_list`、`query_table`、`set_field` 和 `finish`。精确工具参数和读取行为以绑定工具时注入的函数 docstring / schema 为准，resolution system prompt 只保留通用执行策略。
 
 更具体的 schema、校验和任务配置，建议直接查看：
 

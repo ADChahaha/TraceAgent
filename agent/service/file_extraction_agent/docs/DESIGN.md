@@ -14,7 +14,7 @@
   -> broad_new 不调用模型，直接写入空 BroadPlan 作为 trace 兼容占位
   -> graph 把 broad_model 挂到 state.document_scan_model，作为可选隔离全文扫描模型
   -> resolution_new 把 task fields 和 document outline 交给 LangGraph tool-calling loop
-  -> html_tools 提供 overview / read_section / read_blocks / read_block_range / read_list / query_table / set_field / finish
+  -> html_tools 提供 overview / read_section / read_blocks / read_block_range / read_list / query_table / preview_inline_evidence / set_field / finish
   -> 每个字段通过 set_field 写入 resolved 或 failed，并记录 evidence_ids 与 actions
   -> finish 校验字段完成度和证据一致性
   -> graph 映射成 ExtractionResult(status, result, failure_reason, trace)
@@ -173,7 +173,7 @@ task_spec + document outline
 
 resolution 的目标是让每个字段恰好通过一次 `set_field` 进入最终状态：
 
-- `resolved`：字段值已找到，并且 evidence ids 来自本轮读取或查表结果。
+- `resolved`：字段值已找到，并且 evidence ids 来自本轮读取、查表或 inline 证据预览结果。
 - `failed`：字段无法可靠抽取，需要给出 `failure_reason`。
 
 resolution 不接收 broad plan，也不调用 `update_plan`。它直接从字段语义和文档 outline 选择工具：
@@ -182,6 +182,7 @@ resolution 不接收 broad plan，也不调用 `update_plan`。它直接从字�
 Task fields + document outline
   -> 选择下一个未完成字段
   -> 用 overview / read_section / read_blocks / read_block_range / read_list / query_table 定位和读取证据
+  -> 文本证据在写字段前用 preview_inline_evidence 细化到 inline id
   -> 证据足够就立即 set_field
   -> 所有字段完成后 finish
 ```
@@ -225,11 +226,18 @@ read_list(section_id, block_offset, item_offset, number, reason)
 query_table(section_id, block_offset, sql, reason)
   -> 如果 section_id 已经是 overview 给出的 table id，使用 block_offset=0 直接查询
   -> 否则按 section_id + block_offset 找到 table block，再执行单条安全 SELECT
-  -> 返回 rows、evidence_ids、table_audit 和 query_audit
+  -> 返回 rows、evidence_ids、轻量 table_audit 和查询 summary；不返回逐行空值展开
+
+preview_inline_evidence(source_id, start_index, count, reason)
+  -> 只接受本轮已经被读取或扫描观察到的文本类 source_id
+  -> 把 source 文本按句子边界切成 inline 候选；长合同句保持完整，不按固定字符数二次截断
+  -> 返回 inline_id、source_id、inline_index、文本和字符范围，并把 inline_id 标记为 observed
+  -> 只用于写字段前把文本证据细化；表格证据用 query_table 的 row id，列表证据用 read_list 的 item id
 
 set_field(name, value, evidence_ids, reason, status, failure_reason)
   -> 校验字段存在、状态合法、值类型匹配
   -> 校验证据 id 已经被本轮工具观察到
+  -> resolved 字段强制证据粒度：文本必须用 inline id，表格必须包含 row id，列表必须包含 item id
   -> 写入 state.field_states
 
 finish()
@@ -248,14 +256,15 @@ finish()
 table_id + SQL
   -> 查找 HtmlTable
   -> 校验 SQL 安全性和大表边界
-  -> 计算 table_audit：行列数、空白单元格、重复表头等结构事实
   -> 执行 SQL
-  -> 计算 query_audit：返回行数、WHERE 等值列、近似未选中行、输出列空值等查询事实
-  -> 返回 rows + evidence_ids + table_audit + query_audit
+  -> 返回 rows：只包含 SQL 选中的列，空 cell 以空字符串直接出现在 values 中
+  -> 计算轻量 table_audit：行列数、每列空 cell 数、前 10 个空值行 id、重复表头等结构事实
+  -> 计算 summary：本次查询返回行数，以及选中输出列在返回行中的空值数量
+  -> 返回 rows + evidence_ids + table_audit + summary
   -> 同步把摘要写入 action trace
 ```
 
-`table_audit` 和 `query_audit` 是事实观察，不带 route 结论。resolution 必须在 `set_field.reason` 里解释这些观察对当前字段是否有影响；route policy 后续再结合字段值、证据文本和过程摘要判断是否需要 review。
+`table_audit` 和 `summary` 是事实观察，不带 route 结论。`overview` 不返回这些审计内容，只返回 table id、行数和列名，避免大纲膨胀。模型需要判断表格空值背景时必须调用 `query_table`：行级空值直接看 `rows[].values`，整表空值分布看 `table_audit.blank_cells`，本次查询返回行数和输出列空值数量看 `summary`。resolution 必须在 `set_field.reason` 里解释这些观察对当前字段是否有影响；route policy 后续再结合字段值、证据文本和过程摘要判断是否需要 review。
 
 ## 输出映射
 
