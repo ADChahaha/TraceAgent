@@ -54,7 +54,6 @@ agent/
     │   ├── schemas.py
     │   ├── input_adapter.py
     │   ├── impl/
-    │   │   ├── broad_new.py
     │   │   ├── graph.py
     │   │   ├── html_index.py
     │   │   ├── html_state.py
@@ -116,41 +115,46 @@ agent/
 - `service.file_extraction_agent.processor.extract(...)`
 - HTTP 入口：`routes/file_extraction_agent.py`
 
-当前 `file_extraction_agent` 的 no-plan 实验实现保留 broad 兼容占位，resolution 直接根据字段语义和文档 outline 调用 HTML 工具读取证据并写字段。broad 不写字段值，resolution 必须让每个字段通过 `set_field` 进入 `resolved` 或 `failed`：
+当前 `file_extraction_agent` 使用单 resolution agent：模型根据字段语义和 compact document outline 调用 HTML 工具读取证据并写字段，同时用 Reading Stages 维护右侧可读过程。resolution 必须让每个字段通过 `set_field` 进入 `resolved` 或 `failed`：
 
 ```text
 backend 聚合后的 html + task_spec
   -> input_adapter.py 校验 html/task_spec/run_options 并组装 HtmlExtractionInput
   -> html_index.py 基于已有 HTML id 构建 document tree、elements、tables 和 row_index；tree 按 DOM/section 容器语义保留 section、heading 和同层 block items 的顺序与预览
-  -> broad_new.py 写入兼容用空 BroadPlan，不调用模型
-  -> graph 把 broad_model 挂到 state.document_scan_model，作为可选 scoped reader
   -> resolution_new.py 把 task fields 和 document outline 交给 LangGraph tool-calling loop
+  -> resolution model 调用 reading stage 工具维护 append-only 可读阶段和候选证据 notes
   -> resolution model 调用 overview / read_section / read_blocks / read_block_range / read_list / query_table 读取证据
   -> 如果文本块将作为最终证据，先调用 preview_inline_evidence 细化到 inline id
-  -> 证据足够或失败明确后调用 set_field 写入字段状态、值、证据 id 和原因；resolved 字段强制文本 inline、表格 row、列表 item 粒度
+  -> 证据足够或失败明确后调用 set_field 写入字段状态、值、证据 id 和字段级 rationale；resolved 字段强制文本 inline、表格 row、列表 item 粒度
   -> 所有字段 set_field 后调用 finish 做完整性校验
   -> graph 映射成 ExtractionResult(result + trace)
-  -> trace 保留 broad_plan、plan_statuses、document_tree、field_states 和 actions
+  -> trace 保留 reading_stages、document_tree、field_states 和 actions
 ```
 
-这个设计不承诺 100% 召回。它的目标是让抽取过程变成可回放的“计划、读取、查表、写字段、完成”动作链路；证据不足或工具诊断提示风险时，字段可以先 `failed`，后续由 route policy 和人工 review 接住。所有读取、查表、计划推进、字段写入和 finish 都必须进入 trace，方便后续审核和调试。
+这个设计不承诺 100% 召回。它的目标是让抽取过程变成可回放的“阶段、读取、查表、记录候选证据、写字段、完成”动作链路；证据不足或工具诊断提示风险时，字段可以先 `failed`，后续由 route policy 和人工 review 接住。所有 reading stage、读取、查表、字段写入和 finish 都必须进入 trace，方便后续审核和调试。
 
 工具边界保持精简：
 
-- `update_plan(plan_index, status, reason)`：保留为 replay 兼容工具；no-plan 实验通常不依赖它推进抽取。
+- `start_stage(title, focus, basis)`：append 新阅读阶段，描述当前要理解什么以及为什么现在看这里；同一时间只允许一个 `in_progress` stage。
+- `append_stage_progress(stage_id, type, summary)`：在阶段内追加 `investigate / compare / verify_absence / conclude` 进展；`compare` 用于多处证据关系决定结论，`verify_absence` 用于写缺失类结论前说明已检查范围。
+- `record_stage_evidence(stage_id, evidence_ids, observation, supports, limits)`：记录候选证据 note，证据必须是已观察的 inline / table row / list item 粒度。
+- `review_stage_evidence(stage_id)`：按记录顺序复看阶段候选证据；不是 `set_field` 前置条件。
+- `complete_stage(stage_id, finding)`：写阶段 finding 并标记完成，不额外追加 `conclude` progress。
 - `overview()`：返回 section container、heading 和同层 block items 的混排 outline；heading 不会默认拥有后续平级块。
-- `read_section(section_id, reason)`：只读取 heading 元素真实后代的章节预览；平级段落、列表和表格由 overview 直接暴露。
-- `read_blocks(section_id, indexes, reason)`：按 scope id 和模型选择的 index 列表读取块；section 容器按真实 DOM 后代读，heading 只按真实后代读，叶子块用 `indexes=[0]` 读。
-- `read_block_range(section_id, start_index, count, reason)`：按同一 scope 连续读取一段 block，用于顺序补上下文。
-- `read_list(section_id, block_offset, item_offset, number, reason)`：对 list block 做分页读取；overview 里的顶层 list id 可以直接配 `block_offset=0` 使用。
-- `query_table(section_id, block_offset, sql, reason)`：对 table block 执行安全 SELECT；overview 里的顶层 table id 可以直接配 `block_offset=0` 使用；返回 SQL 行、轻量 `table_audit` 和查询 `summary`。
-- `preview_inline_evidence(source_id, start_index, count, reason)`：把已观察到的文本块切成 inline 候选证据，用于写字段前细化文本证据。
-- `set_field(name, value, evidence_ids, reason, status, failure_reason)`：写字段值或失败状态，并校验证据 id、证据粒度与字段类型。
+- `read_section(section_id)`：只读取 heading 元素真实后代的章节预览；平级段落、列表和表格由 overview 直接暴露。
+- `read_blocks(section_id, indexes)`：按 scope id 和模型选择的 index 列表读取块；section 容器按真实 DOM 后代读，heading 只按真实后代读，叶子块用 `indexes=[0]` 读。
+- `read_block_range(section_id, start_index, count)`：按同一 scope 连续读取一段 block，用于顺序补上下文。
+- `read_list(section_id, block_offset, item_offset, number)`：对 list block 做分页读取；overview 里的顶层 list id 可以直接配 `block_offset=0` 使用。
+- `query_table(section_id, block_offset, sql)`：对 table block 执行安全 SELECT；overview 里的顶层 table id 可以直接配 `block_offset=0` 使用；返回 SQL 行、轻量 `table_audit` 和查询 `summary`。
+- `preview_inline_evidence(source_id, start_index, count)`：把已观察到的文本块切成 inline 候选证据，用于写字段前细化文本证据。
+- `set_field(name, value, evidence_ids, status, failure_reason, stage_id, rationale)`：写字段值或失败状态，并校验证据 id、证据粒度与字段类型；`rationale` 是字段级理由，`failure_reason` 只在字段失败时使用。字段不再引用单独的 note id，和阶段候选证据 note 通过共享 `evidence_ids` 关联。
 - `finish()`：校验所有字段已完成、必填字段和证据一致性。
 
-列表和表格都支持 overview 直接入口。模型应先用 document outline 定位目标块；如果 overview 已给出 list id，就直接用 `read_list(list_id, 0, item_offset, number)` 读取列表项，否则先通过 `overview/read_section` 的 block index 选择列表块，再调用 `read_blocks(section_id, [index], reason)` 确认 ref，之后用 `read_list(section_id, block_offset, item_offset, number)` 展开。
+Reading Stages 不是预生成计划，不约束工具选择，也不替代证据。模型在进入一个大阅读阶段时 append stage，阶段内通过 progress events 和 evidence notes 记录“看了什么、候选依据是什么、得出了什么结论”。字段最终仍必须由 `set_field` 和已观察证据决定，`finish` 也不以 stage 完成度作为通过条件。前端可以用 stages 聚合人类可读的阅读过程，同时折叠工具错误、重复 preview 和 finish 校验噪声。
 
-表格处理是 `file_extraction_agent` 内部的专用检索能力，而不是业务特例。它只理解通用表格结构和字段提示，不硬编码“学术论文”“文明寝室”等业务词。模型应先用 document outline 定位表格；如果 overview 已给出 table id，就直接用 `query_table(table_id, 0, sql)` 查询，否则再通过 `overview/read_section` 的 block index 选择表格块，必要时调用 `read_blocks(section_id, [index], reason)` 确认 ref，之后用 `query_table(section_id, block_offset, sql)` 查询。`overview` 只给 table id、行数和列名；`query_table` 的 `rows[].values` 直接显示 SQL 选中 cell 是否为空，`table_audit.blank_cells` 给整表每列空 cell 数和前 10 个空值行 id，`summary` 给本次查询返回行数和选中输出列空值数量。字段最终定案通过 `set_field` 引用已观察到的 inline id、list item id 或 table row id；只引用整段文本、list 容器或 table 容器会被拒绝。
+列表和表格都支持 overview 直接入口。模型应先用 document outline 定位目标块；如果 overview 已给出 list id，就直接用 `read_list(list_id, 0, item_offset, number)` 读取列表项，否则先通过 `overview/read_section` 的 block index 选择列表块，再调用 `read_blocks(section_id, [index])` 确认 ref，之后用 `read_list(section_id, block_offset, item_offset, number)` 展开。
+
+表格处理是 `file_extraction_agent` 内部的专用检索能力，而不是业务特例。它只理解通用表格结构和字段提示，不硬编码“学术论文”“文明寝室”等业务词。模型应先用 document outline 定位表格；如果 overview 已给出 table id，就直接用 `query_table(table_id, 0, sql)` 查询，否则再通过 `overview/read_section` 的 block index 选择表格块，必要时调用 `read_blocks(section_id, [index])` 确认 ref，之后用 `query_table(section_id, block_offset, sql)` 查询。`overview` 只给 table id、行数和列名；`query_table` 的 `rows[].values` 直接显示 SQL 选中 cell 是否为空，`table_audit.blank_cells` 给整表每列空 cell 数和前 10 个空值行 id，`summary` 给本次查询返回行数和选中输出列空值数量。字段最终定案通过 `set_field` 引用已观察到的 inline id、list item id 或 table row id；只引用整段文本、list 容器或 table 容器会被拒绝。
 
 当前不把 image 作为抽取对象。文档内容类型先收敛为：
 
@@ -158,15 +162,15 @@ backend 聚合后的 html + task_spec
 section / heading / text / list / table
 ```
 
-OCR 或表格结构质量提示不参与 broad、resolution 或 route policy 的自动判断。它只在 backend 组装 review handoff 时作为人工审核辅助信息展示，例如提示某个表格 block 行列错位、空 cell 比例高、文本异常字符多或 block 过长。主抽取链路仍以证据召回、字段定案和 route policy 为准。
+OCR 或表格结构质量提示不参与 resolution 或 route policy 的自动判断。它只在 backend 组装 review handoff 时作为人工审核辅助信息展示，例如提示某个表格 block 行列错位、空 cell 比例高、文本异常字符多或 block 过长。主抽取链路仍以证据召回、字段定案和 route policy 为准。
 
-两阶段都使用 LangGraph 工具调用。`impl/graph.py` 负责编排阶段流转，模型调用层当前由 `service/file_extraction_agent/impl/model_factory.py` 统一处理：
+抽取阶段使用 LangGraph 工具调用。`impl/graph.py` 负责编排 resolution，模型调用层当前由 `service/file_extraction_agent/impl/model_factory.py` 统一处理：
 
 ```text
-调用方显式传入 model_config，或部署环境提供 BASE_URL / OPENAI_API_KEY / BROAD_MODEL / RESOLUTION_MODEL / MODEL
-  -> 如果 broad/resolution 模型名为空，build_chat_model 直接拒绝
+调用方显式传入 model_config，或部署环境提供 BASE_URL / OPENAI_API_KEY / RESOLUTION_MODEL / MODEL
+  -> 如果 resolution 模型名为空，build_chat_model 直接拒绝
   -> 用连接配置创建 langchain_openai.ChatOpenAI(...)
-  -> broad_new / resolution_new 通过 LangGraph tool-calling 执行
+  -> resolution_new 通过 LangGraph tool-calling 执行
   -> 如果构造或 invoke 阶段发生错误，不切换协议重试
 ```
 
@@ -174,19 +178,17 @@ OCR 或表格结构质量提示不参与 broad、resolution 或 route policy 的
 
 - 环境变量负责连接信息、密钥和可选模型名
 - HTTP 入参或 `processor.extract(...)` 的 `model_config` 负责显式覆盖模型连接配置
-- `model_factory.py` 负责把连接配置合并成 broad/resolution 两个 `ChatOpenAI` runnable
+- `model_factory.py` 负责把连接配置合并成 resolution `ChatOpenAI` runnable
 
-两阶段的动作边界由工具 schema 控制：
+resolution 的动作边界由工具 schema 控制：
 
-- `broad_new.py` 负责生成 `BroadPlan(summary, plan, risks)`。
-- `resolution_new.py` 负责执行 `update_plan`、`overview`、`read_section`、`read_blocks`、`read_list`、`query_table`、`set_field` 和 `finish`。精确工具参数和读取行为以绑定工具时注入的函数 docstring / schema 为准，resolution system prompt 只保留通用执行策略。
+- `resolution_new.py` 负责执行 Reading Stages、`overview`、`read_section`、`read_blocks`、`read_block_range`、`read_list`、`query_table`、`preview_inline_evidence`、`set_field` 和 `finish`。精确工具参数和读取行为以绑定工具时注入的函数 docstring / schema 为准，resolution system prompt 只保留通用执行策略。
 
 更具体的 schema、校验和任务配置，建议直接查看：
 
 - `service/document_processor/docs/API.md`
 - `service/file_extraction_agent/docs/API.md`
 - `service/file_extraction_agent/schemas.py`
-- `service/file_extraction_agent/impl/broad_new.py`
 - `service/file_extraction_agent/impl/resolution_new.py`
 
 ### `route_policy_agent`
@@ -204,7 +206,7 @@ OCR 或表格结构质量提示不参与 broad、resolution 或 route policy 的
 - Python 入口：`service.route_policy_agent.processor.evaluate(...)`
 - HTTP 入口：`routes/route_policy_agent.py`
 
-这一层只看任务/字段定义、字段输出、refs 中携带的证据文本与来源位置，以及每个字段 broad / resolution 两阶段的过程摘要。过程摘要来自 backend 对 `actions` 的归一化：会保留读取、查表、计划推进、字段写入、finish、表格诊断摘要和失败原因等事实，不包含完整原文、表格原始行、cell 列表、action refs 或模型原始推理。更具体的设计见：
+这一层只看任务/字段定义、字段输出、refs 中携带的证据文本与来源位置，以及每个字段的抽取过程摘要。过程摘要来自 backend 对 `actions` 的归一化：会保留 reading stage、读取、查表、候选证据记录、字段写入、finish、表格诊断摘要和失败原因等事实，不包含完整原文、表格原始行、cell 列表、action refs 或模型原始推理。更具体的设计见：
 
 对于由其他字段派生的字段，`route_policy_agent` 会按 `validation_rules.source_field/source_fields` 把来源字段的过程摘要作为 `related_field_processes` 注入 prompt。这样数量字段或复制候选字段能看到源字段执行过哪些读取、查表、写字段和定案动作，但仍不会看到工具返回正文或表格行。
 
@@ -234,7 +236,7 @@ raw file
 5. `backend` 将已校验聚合结果和外部 `task_spec` 交给 `file_extraction_agent`。
 6. `file_extraction_agent` 输出字段候选证据、工具留痕和字段最终结果。
 7. `backend` 从字段结果、证据 refs 和 trace actions 组装 `field_outputs + refs_with_text + field_processes`，交给 `route_policy_agent`。
-8. `route_policy_agent` 先通过 `input_validator` 校验字段名、字段输出、refs 文本和两阶段过程摘要完整性，再用小 LLM 输出字段级 `accept / review / reject`。
+8. `route_policy_agent` 先通过 `input_validator` 校验字段名、字段输出、refs 文本和抽取过程摘要完整性，再用小 LLM 输出字段级 `accept / review / reject`。
 9. `backend` 保存抽取结果、trace 和 route 决策，并继续驱动 review、field commit 和 audit。
 
 可以理解为：

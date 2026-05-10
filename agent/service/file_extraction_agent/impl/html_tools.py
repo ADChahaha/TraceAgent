@@ -24,6 +24,7 @@ MAX_INLINE_EVIDENCE_PREVIEW = 40
 TABLE_AUDIT_BLANK_ROW_ID_LIMIT = 10
 SCAN_DOCUMENT_ALLOWED_TYPES = {"TITLE", "SECTION_HEADER", "TEXT", "LIST_ITEM", "CAPTION", "TABLE"}
 INLINE_TEXT_TYPES = {"TITLE", "SECTION_HEADER", "TEXT", "CAPTION"}
+STAGE_PROGRESS_TYPES = {"investigate", "compare", "verify_absence", "conclude"}
 
 try:
     from langchain_core.tools import tool
@@ -38,31 +39,159 @@ def build_tools(state: Any) -> list[Any]:
     """Build model-facing resolution tools bound to the current graph state."""
 
     @tool
-    def update_plan(plan_index: int, status: str, reason: str) -> dict[str, Any]:
+    def start_stage(title: str, focus: str, basis: str) -> dict[str, Any]:
         """
-        Mark one broad-plan step as in progress or completed.
+        Start a new stage and append it to the replay trace.
 
-        Use this to keep the replay plan synchronized with your actual work.
-        Call ``update_plan(plan_index, "in_progress", reason)`` before starting
-        a broad-plan step, and call ``update_plan(plan_index, "completed",
-        reason)`` immediately after the step has produced its field value,
-        evidence, or routing decision. ``plan_index`` is 1-based and refers to
-        the numbered Broad plan shown in the prompt. Plan steps must advance
-        sequentially: only the earliest unfinished step may become
-        ``in_progress``, and a step must be ``in_progress`` before it can be
-        marked ``completed``.
+        Use this when you are entering a new document-understanding phase,
+        such as checking a reusable evidence area, comparing related clauses,
+        or verifying that a relevant concept is absent. This is not a field checklist
+        and should not copy task field names, labels, or hypotheses
+        as stage titles. Do not create a stage just for the initial overview.
+        Complete the current stage before starting another stage; only one
+        stage can be in progress at a time.
+
+        After start_stage, gather evidence with overview/read/query/preview
+        tools. Use append_stage_progress to mark meaningful changes inside the
+        stage. Do not call set_field until this same stage has a latest
+        progress of conclude.
 
         Args:
-            plan_index: 1-based index of the Broad plan item.
-            status: ``in_progress`` or ``completed``.
-            reason: Short explanation of why this plan step now has that
-                status.
-
+            title: Short stage title for replay.
+            focus: What document content or relationship you intend to understand.
+            basis: Why this stage is useful now. You may mention temporary
+                evidence-needs assumptions in natural language, but do not bind
+                fields to the stage as a hard list.
         Returns:
-            The stored plan status, or validation errors.
+            The appended stage, or validation errors.
         """
 
-        return _update_plan(state, plan_index, status, reason=reason)
+        return _start_stage(state, title, focus, basis)
+
+    @tool
+    def append_stage_progress(stage_id: str, type: str, summary: str) -> dict[str, Any]:
+        """
+        Append progress to an existing stage.
+
+        The type controls what changed and what tools are allowed next. Use
+        this tool when the stage has one of these semantic changes. The type
+        must be investigate, compare, verify_absence, or conclude:
+
+        investigate: use this after reading new content or when you need to
+        gather/refine evidence. After investigate, reading tools such as
+        overview, read_section, read_blocks, read_block_range, read_list,
+        query_table, and preview_inline_evidence may be used. Forbidden after
+        investigate: set_field, review_stage_evidence, and finish.
+
+        compare: use this only when the decision depends on relationships
+        between observed evidence, such as a rule and an exception, two
+        candidate clauses, a table row and nearby note, or conflicting values.
+        After compare, reading tools may still be used if more evidence is
+        needed. Do not use compare for ordinary task-field matching; put that
+        reasoning in set_field rationale. Forbidden after compare: set_field,
+        review_stage_evidence, and finish.
+
+        verify_absence: use this when a missing/null/NotMentioned outcome
+        depends on the checked scope. The summary should say which relevant
+        areas were checked and why that scope is enough. After verify_absence,
+        reading tools may still be used if the checked scope is not enough.
+        Forbidden after verify_absence: set_field, review_stage_evidence, and
+        finish.
+
+        conclude: use this only after you have finished reading enough evidence
+        for one or more field decisions and are ready to write fields. After
+        conclude, allowed tools are review_stage_evidence and set_field; finish
+        is allowed only after all fields are set. Forbidden after conclude:
+        overview, read_section, read_blocks, read_block_range, read_list,
+        query_table, preview_inline_evidence, and record_stage_evidence. If
+        evidence is insufficient after conclude, do not read directly and do
+        not use this as a normal continuation path. Only to correct a premature
+        conclude, append investigate, compare, or verify_absence to this same
+        stage; this withdraws the write-ready checkpoint. Only then may you
+        read more, and you must conclude again before writing.
+
+        Do not append progress just for display; use it only when it helps
+        replay explain the document review. Progress is append-only and is not
+        a strict state machine; repeat or skip types when the document review
+        naturally does so. Call complete_stage only when this stage's document-
+        understanding goal is stable and you are ready to move to a materially
+        different goal.
+
+        Args:
+            stage_id: Existing reading stage id.
+            type: Progress event type.
+            summary: Human-readable summary of what happened or changed.
+        Returns:
+            The appended progress event, or validation errors.
+        """
+
+        return _append_stage_progress(state, stage_id, type, summary)
+
+    @tool
+    def record_stage_evidence(
+        stage_id: str,
+        evidence_ids: list[str],
+        observation: str,
+        supports: str | None = None,
+        limits: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Record a candidate evidence note for a reading stage.
+
+        Use this only for evidence that is likely to be reused or important for
+        explaining the stage. The evidence_ids must already be observed and
+        precise: text evidence uses inline ids from preview_inline_evidence,
+        table evidence uses row ids from query_table, and list evidence uses
+        item ids from read_list. This note is not a final field conclusion and
+        does not replace set_field evidence_ids.
+
+        Args:
+            stage_id: Existing reading stage id.
+            evidence_ids: Observed precise evidence ids.
+            observation: What this evidence directly says.
+            supports: What kind of judgment this may support, in natural language.
+            limits: What this evidence does not prove or still needs to be compared with.
+        Returns:
+            The appended candidate evidence note, or validation errors.
+        """
+
+        return _record_stage_evidence(state, stage_id, evidence_ids, observation, supports, limits)
+
+    @tool
+    def review_stage_evidence(stage_id: str) -> dict[str, Any]:
+        """
+        Review candidate evidence notes for a stage in recorded order.
+
+        Use this only after the current stage's latest progress is conclude,
+        when it helps you remember earlier notes before writing fields. Do not
+        call it immediately after recording a note if you still remember it.
+
+        Args:
+            stage_id: Existing reading stage id.
+        Returns:
+            Candidate evidence notes in recorded order, or validation errors.
+        """
+
+        return _review_stage_evidence(state, stage_id)
+
+    @tool
+    def complete_stage(stage_id: str, finding: str) -> dict[str, Any]:
+        """
+        Complete a reading stage with a stage-level finding.
+
+        Use this when the current document-understanding stage has reached a
+        stable conclusion or you are moving to a materially different stage.
+        The finding should summarize what the stage established, not list every
+        output field.
+
+        Args:
+            stage_id: Existing reading stage id.
+            finding: Stage-level conclusion.
+        Returns:
+            The updated stage, or validation errors.
+        """
+
+        return _complete_stage(state, stage_id, finding)
 
     @tool
     def overview() -> dict[str, Any]:
@@ -83,7 +212,7 @@ def build_tools(state: Any) -> list[Any]:
         return _overview(state)
 
     @tool
-    def read_section(section_id: str, reason: str) -> dict[str, Any]:
+    def read_section(section_id: str) -> dict[str, Any]:
         """
         Read block previews for a heading's real descendants.
 
@@ -96,16 +225,14 @@ def build_tools(state: Any) -> list[Any]:
 
         Args:
             section_id: Existing heading id.
-            reason: Why this section is needed for the current field.
-
         Returns:
             Section title plus block offsets, block ids, types, and previews.
         """
 
-        return _read_section(state, section_id, reason=reason)
+        return _read_section(state, section_id)
 
     @tool
-    def read_blocks(section_id: str, indexes: list[int], reason: str) -> dict[str, Any]:
+    def read_blocks(section_id: str, indexes: list[int]) -> dict[str, Any]:
         """
         Read selected block indexes from a section container, heading, or leaf block id.
 
@@ -122,16 +249,14 @@ def build_tools(state: Any) -> list[Any]:
         Args:
             section_id: Existing section container, heading, or leaf block id.
             indexes: Zero-based selected block indexes inside that scope.
-            reason: Why these blocks are needed for the current field.
-
         Returns:
             HTML-like block content and observed evidence ids.
         """
 
-        return _read_blocks(state, section_id, indexes, reason=reason)
+        return _read_blocks(state, section_id, indexes)
 
     @tool
-    def read_block_range(section_id: str, start_index: int, count: int, reason: str) -> dict[str, Any]:
+    def read_block_range(section_id: str, start_index: int, count: int) -> dict[str, Any]:
         """
         Read a contiguous range of blocks from a section container, heading, or leaf block id.
 
@@ -147,16 +272,14 @@ def build_tools(state: Any) -> list[Any]:
             section_id: Existing section container, heading, or leaf block id.
             start_index: Zero-based first block index inside that scope.
             count: Number of consecutive blocks to read.
-            reason: Why this contiguous range is needed for the current field.
-
         Returns:
             HTML-like block content and observed evidence ids.
         """
 
-        return _read_block_range(state, section_id, start_index, count, reason=reason)
+        return _read_block_range(state, section_id, start_index, count)
 
     @tool
-    def read_list(section_id: str, block_offset: int, item_offset: int, number: int, reason: str) -> dict[str, Any]:
+    def read_list(section_id: str, block_offset: int, item_offset: int, number: int) -> dict[str, Any]:
         """
         Read list items from a list block or top-level list id.
 
@@ -171,16 +294,14 @@ def build_tools(state: Any) -> list[Any]:
                 Use 0 when section_id is already the list id.
             item_offset: Zero-based list item offset.
             number: Number of list items to read.
-            reason: Why these list items are needed for the current field.
-
         Returns:
             Full list item text and observed evidence ids.
         """
 
-        return _read_list(state, section_id, block_offset, item_offset, number, reason=reason)
+        return _read_list(state, section_id, block_offset, item_offset, number)
 
     @tool
-    def query_table(section_id: str, block_offset: int, sql: str, reason: str) -> dict[str, Any]:
+    def query_table(section_id: str, block_offset: int, sql: str) -> dict[str, Any]:
         """
         Query a table block by scope offset or top-level table id using SQL.
 
@@ -195,8 +316,6 @@ def build_tools(state: Any) -> list[Any]:
             block_offset: Zero-based block offset of the table inside the scope.
                 Use 0 when section_id is already the table id.
             sql: A single SELECT statement over table name ``data``.
-            reason: Why this table query is needed for the current field.
-
         Returns:
             Matching table rows, evidence ids, lightweight table_audit, and query summary.
             Rows contain only the selected SQL cells. Blank selected cells are
@@ -205,10 +324,10 @@ def build_tools(state: Any) -> list[Any]:
             whole-table blank-cell background.
         """
 
-        return _query_table(state, section_id, block_offset, sql, reason=reason)
+        return _query_table(state, section_id, block_offset, sql)
 
     @tool
-    def preview_inline_evidence(source_id: str, start_index: int, count: int, reason: str) -> dict[str, Any]:
+    def preview_inline_evidence(source_id: str, start_index: int, count: int) -> dict[str, Any]:
         """
         Preview inline evidence ids from an already-read text block.
 
@@ -225,22 +344,21 @@ def build_tools(state: Any) -> list[Any]:
             source_id: Observed text-like element id to refine into inline evidence.
             start_index: Zero-based first inline candidate to preview.
             count: Number of inline candidates to preview.
-            reason: Why this inline evidence is needed for the current field.
-
         Returns:
             Inline evidence candidates and observed inline evidence ids.
         """
 
-        return _preview_inline_evidence(state, source_id, start_index, count, reason=reason)
+        return _preview_inline_evidence(state, source_id, start_index, count)
 
     @tool
     def set_field(
         name: str,
         value: Any,
         evidence_ids: list[str],
-        reason: str,
         status: str = "resolved",
         failure_reason: str | None = None,
+        stage_id: str | None = None,
+        rationale: str | None = None,
     ) -> dict[str, Any]:
         """
         Set one output field with value and evidence ids.
@@ -248,8 +366,14 @@ def build_tools(state: Any) -> list[Any]:
         You must call this for each task field exactly once, either with
         ``status="resolved"`` when the value is supported, or with
         ``status="failed"`` when the field cannot be extracted. Call set_field
-        as soon as enough evidence for the current field has been observed; do
-        not keep reading unrelated elements first.
+        after the current reading stage's latest progress is conclude. Do not
+        write fields while the stage is still reading evidence.
+
+        Only call this when the current stage's latest progress is conclude:
+        you have finished reading enough evidence, appended conclude on the
+        current stage, and are ready to commit the field value. If evidence is
+        not enough, do not guess; append investigate, compare, or
+        verify_absence to the same stage and read more before concluding again.
 
         Use this only after this same run has observed the supporting evidence
         through ``read_blocks``, ``read_block_range``, ``read_list``,
@@ -260,7 +384,15 @@ def build_tools(state: Any) -> list[Any]:
         by preview_inline_evidence; do not use whole paragraph, heading, or
         caption ids. Tables need row ids returned by query_table; a table id by
         itself is not enough. Lists need item ids returned by read_list; a list
-        container id by itself is not enough.
+        container id by itself is not enough. For enum fields, value must be a
+        tagged object like {"variant": "name", "value": ...}; choose one
+        declared variant and put the payload in value. A null variant must use
+        value null and may be resolved without evidence.
+
+        Include a field-level rationale explaining why the selected evidence
+        supports this field value or failure. Pass the current stage_id.
+        Candidate evidence notes and field writes share the same evidence_ids;
+        replay can connect them by evidence id overlap.
 
         Args:
             name: Field name declared in task_spec.
@@ -270,15 +402,25 @@ def build_tools(state: Any) -> list[Any]:
                 ``["dp-ul-1", "dp-li-2"]``.
             status: ``resolved`` when a value is found, or ``failed`` when the
                 field cannot be extracted.
-            reason: Why this value is now sufficiently supported. Mention the
-                evidence ids and the current field.
             failure_reason: Required when status is ``failed``.
+            stage_id: Current reading stage id; the stage must already be in
+                conclude progress.
+            rationale: Field-level rationale for the value or failure.
 
         Returns:
             The stored field state or validation errors.
         """
 
-        return _set_field(state, name, value, evidence_ids, status, failure_reason, reason=reason)
+        return _set_field(
+            state,
+            name,
+            value,
+            evidence_ids,
+            status,
+            failure_reason,
+            stage_id=stage_id,
+            rationale=rationale,
+        )
 
     @tool
     def finish() -> dict[str, Any]:
@@ -297,7 +439,11 @@ def build_tools(state: Any) -> list[Any]:
         return _finish(state)
 
     return [
-        update_plan,
+        start_stage,
+        append_stage_progress,
+        record_stage_evidence,
+        review_stage_evidence,
+        complete_stage,
         overview,
         read_section,
         read_blocks,
@@ -311,6 +457,10 @@ def build_tools(state: Any) -> list[Any]:
 
 
 def _overview(state: Any) -> dict[str, Any]:
+    blocked = _reading_blocked_result(state)
+    if blocked is not None:
+        _record_action(state, "overview", {}, blocked)
+        return blocked
     document = _read(state, "document")
     result = {
         "sections": _section_overview(document),
@@ -320,107 +470,336 @@ def _overview(state: Any) -> dict[str, Any]:
     return result
 
 
-def _update_plan(state: Any, plan_index: int, status: str, *, reason: str | None = None) -> dict[str, Any]:
-    try:
-        index = int(plan_index)
-    except (TypeError, ValueError):
-        result = {"ok": False, "errors": [{"message": "plan_index must be an integer"}]}
-        _record_action(state, "update_plan", _args_with_reason({"plan_index": plan_index, "status": status}, reason), result)
+def _start_stage(state: Any, title: str, focus: str, basis: str) -> dict[str, Any]:
+    errors = []
+    normalized_title = _required_text(title, "title", errors)
+    normalized_focus = _required_text(focus, "focus", errors)
+    normalized_basis = _required_text(basis, "basis", errors)
+    args = {"title": title, "focus": focus, "basis": basis}
+    if errors:
+        result = {"ok": False, "errors": errors}
+        _record_action(state, "start_stage", args, result)
         return result
 
-    plan_items = _read(_read(state, "broad_plan"), "plan", []) or []
-    if index < 1 or index > len(plan_items):
+    stages = _reading_stages(state)
+    active_stage = _active_stage(state)
+    if active_stage is not None:
         result = {
             "ok": False,
             "errors": [
                 {
-                    "message": "plan_index is outside the broad plan",
-                    "plan_index": index,
-                    "plan_count": len(plan_items),
+                    "message": "complete current stage before starting a new stage",
+                    "active_stage_id": active_stage.get("stage_id"),
                 }
             ],
         }
-        _record_action(state, "update_plan", _args_with_reason({"plan_index": index, "status": status}, reason), result)
+        _record_action(state, "start_stage", args, result)
         return result
-    if status not in {"in_progress", "completed"}:
-        result = {"ok": False, "errors": [{"message": "status must be in_progress or completed"}]}
-        _record_action(state, "update_plan", _args_with_reason({"plan_index": index, "status": status}, reason), result)
-        return result
-
-    statuses = _read(state, "plan_statuses", None)
-    if not isinstance(statuses, dict):
-        statuses = {}
-    sequence_error = _validate_plan_sequence(statuses, index, status, len(plan_items))
-    if sequence_error is not None:
-        result = {"ok": False, "errors": [sequence_error]}
-        _record_action(state, "update_plan", _args_with_reason({"plan_index": index, "status": status}, reason), result)
-        return result
-
-    plan_state = {
-        "plan_index": index,
-        "status": status,
-        "step": str(plan_items[index - 1]),
-        "reason": reason,
+    stage_id = f"stage-{len(stages) + 1}"
+    stage = {
+        "stage_id": stage_id,
+        "title": normalized_title,
+        "focus": normalized_focus,
+        "basis": normalized_basis,
+        "status": "in_progress",
+        "progress": [],
+        "evidence_notes": [],
+        "finding": None,
     }
-    if isinstance(statuses, dict):
-        statuses[index] = plan_state
-    _record_action(
-        state,
-        "update_plan",
-        _args_with_reason({"plan_index": index, "status": status}, reason),
-        {"ok": True, "plan": plan_state},
-    )
-    return {"ok": True, "plan": plan_state}
+    stages.append(stage)
+    result = {"ok": True, "stage": stage}
+    _record_action(state, "start_stage", args, result)
+    return result
 
 
-def _validate_plan_sequence(
-    statuses: dict[Any, Any],
-    index: int,
-    status: str,
-    plan_count: int,
-) -> dict[str, Any] | None:
-    current_status = _plan_status_at(statuses, index)
-    next_index = _next_unfinished_plan_index(statuses, plan_count)
-    if status == "in_progress":
-        if current_status == "completed":
-            return {
-                "message": "plan is already completed",
-                "plan_index": index,
+def _append_stage_progress(state: Any, stage_id: str, type: str, summary: str) -> dict[str, Any]:
+    args = {"stage_id": stage_id, "type": type, "summary": summary}
+    stage = _find_stage(state, stage_id)
+    if stage is None:
+        result = {"ok": False, "errors": [{"message": "unknown stage_id", "stage_id": stage_id}]}
+        _record_action(state, "append_stage_progress", args, result)
+        return result
+    errors = []
+    normalized_summary = _required_text(summary, "summary", errors)
+    normalized_type = str(type or "").strip()
+    if normalized_type not in STAGE_PROGRESS_TYPES:
+        errors.append(
+            {
+                "message": "invalid progress type",
+                "type": type,
+                "allowed": sorted(STAGE_PROGRESS_TYPES),
             }
-        if index != next_index:
-            return {
-                "message": "plan_index must advance sequentially",
-                "requested_plan_index": index,
-                "next_plan_index": next_index,
-            }
-        return None
+        )
+    if errors:
+        result = {"ok": False, "errors": errors}
+        _record_action(state, "append_stage_progress", args, result)
+        return result
 
-    if current_status != "in_progress":
+    progress = _stage_progress(stage)
+    event = {
+        "event_id": f"{stage['stage_id']}-progress-{len(progress) + 1}",
+        "type": normalized_type,
+        "summary": normalized_summary,
+    }
+    progress.append(event)
+    result = {"ok": True, "stage_id": stage["stage_id"], "progress": event}
+    _record_action(state, "append_stage_progress", args, result)
+    return result
+
+
+def _record_stage_evidence(
+    state: Any,
+    stage_id: str,
+    evidence_ids: list[str],
+    observation: str,
+    supports: str | None = None,
+    limits: str | None = None,
+) -> dict[str, Any]:
+    args = {
+        "stage_id": stage_id,
+        "evidence_ids": evidence_ids,
+        "observation": observation,
+        "supports": supports,
+        "limits": limits,
+    }
+    stage = _find_stage(state, stage_id)
+    if stage is None:
+        result = {"ok": False, "errors": [{"message": "unknown stage_id", "stage_id": stage_id}]}
+        _record_action(state, "record_stage_evidence", args, result)
+        return result
+
+    errors = _validate_stage_evidence_ids(state, evidence_ids)
+    normalized_observation = _required_text(observation, "observation", errors)
+    if errors:
+        result = {"ok": False, "errors": errors}
+        _record_action(state, "record_stage_evidence", args, result)
+        return result
+
+    notes = _stage_evidence_notes(stage)
+    note = {
+        "note_id": f"{stage['stage_id']}-evidence-{len(notes) + 1}",
+        "stage_id": stage["stage_id"],
+        "evidence_ids": list(evidence_ids),
+        "observation": normalized_observation,
+        "supports": _optional_text(supports),
+        "limits": _optional_text(limits),
+    }
+    notes.append(note)
+    result = {"ok": True, "stage_id": stage["stage_id"], "evidence_note": note}
+    _record_action(state, "record_stage_evidence", args, result)
+    return result
+
+
+def _review_stage_evidence(state: Any, stage_id: str) -> dict[str, Any]:
+    args = {"stage_id": stage_id}
+    stage = _find_stage(state, stage_id)
+    if stage is None:
+        result = {"ok": False, "errors": [{"message": "unknown stage_id", "stage_id": stage_id}]}
+        _record_action(state, "review_stage_evidence", args, result)
+        return result
+    conclude_error = _require_current_conclude_stage(state, stage_id, "review_stage_evidence")
+    if conclude_error is not None:
+        result = {"ok": False, "errors": [conclude_error]}
+        _record_action(state, "review_stage_evidence", args, result)
+        return result
+
+    result = {
+        "ok": True,
+        "stage_id": stage["stage_id"],
+        "evidence_notes": list(_stage_evidence_notes(stage)),
+    }
+    _record_action(state, "review_stage_evidence", args, result)
+    return result
+
+
+def _complete_stage(state: Any, stage_id: str, finding: str) -> dict[str, Any]:
+    args = {"stage_id": stage_id, "finding": finding}
+    stage = _find_stage(state, stage_id)
+    if stage is None:
+        result = {"ok": False, "errors": [{"message": "unknown stage_id", "stage_id": stage_id}]}
+        _record_action(state, "complete_stage", args, result)
+        return result
+    errors = []
+    normalized_finding = _required_text(finding, "finding", errors)
+    if errors:
+        result = {"ok": False, "errors": errors}
+        _record_action(state, "complete_stage", args, result)
+        return result
+
+    stage["status"] = "completed"
+    stage["finding"] = normalized_finding
+    result = {"ok": True, "stage": stage}
+    _record_action(state, "complete_stage", args, result)
+    return result
+
+
+def _reading_stages(state: Any) -> list[dict[str, Any]]:
+    stages = _read(state, "reading_stages", None)
+    if isinstance(stages, list):
+        return stages
+    stages = []
+    try:
+        setattr(state, "reading_stages", stages)
+    except Exception:
+        return []
+    return stages
+
+
+def _find_stage(state: Any, stage_id: Any) -> dict[str, Any] | None:
+    normalized_stage_id = str(stage_id or "").strip()
+    for stage in _reading_stages(state):
+        if str(stage.get("stage_id") or "") == normalized_stage_id:
+            return stage
+    return None
+
+
+def _active_stage(state: Any) -> dict[str, Any] | None:
+    for stage in _reading_stages(state):
+        if stage.get("status") == "in_progress":
+            return stage
+    return None
+
+
+def _stage_progress(stage: dict[str, Any]) -> list[dict[str, Any]]:
+    progress = stage.get("progress")
+    if not isinstance(progress, list):
+        progress = []
+        stage["progress"] = progress
+    return progress
+
+
+def _stage_evidence_notes(stage: dict[str, Any]) -> list[dict[str, Any]]:
+    notes = stage.get("evidence_notes")
+    if not isinstance(notes, list):
+        notes = []
+        stage["evidence_notes"] = notes
+    return notes
+
+
+def _validate_stage_evidence_ids(state: Any, evidence_ids: Any) -> list[dict[str, Any]]:
+    errors: list[dict[str, Any]] = []
+    if not isinstance(evidence_ids, list) or not evidence_ids:
+        return [{"message": "evidence_ids must be a non-empty list"}]
+    if any(not isinstance(evidence_id, str) or not evidence_id.strip() for evidence_id in evidence_ids):
+        return [{"message": "evidence_ids must contain non-empty strings"}]
+
+    invalid_ids = [evidence_id for evidence_id in evidence_ids if not _evidence_exists(state, evidence_id)]
+    if invalid_ids:
+        errors.append({"message": "unknown evidence ids", "ids": invalid_ids})
+    unobserved_ids = [
+        evidence_id
+        for evidence_id in evidence_ids
+        if evidence_id not in _read(state, "observed_evidence_ids", set())
+    ]
+    if unobserved_ids:
+        errors.append(
+            {
+                "message": "evidence ids must be observed before record_stage_evidence",
+                "ids": unobserved_ids,
+            }
+        )
+    if not errors:
+        errors.extend(_resolved_evidence_granularity_errors(state, evidence_ids))
+    return errors
+
+
+def _validate_field_stage_refs(
+    state: Any,
+    stage_id: str | None,
+) -> list[dict[str, Any]]:
+    errors: list[dict[str, Any]] = []
+    if stage_id is None:
+        errors.append({"message": "set_field requires current stage to be in conclude progress"})
+        return errors
+    if _find_stage(state, stage_id) is None:
+        errors.append({"message": "unknown stage_id", "stage_id": stage_id})
+        return errors
+    conclude_error = _require_current_conclude_stage(state, stage_id, "set_field")
+    if conclude_error is not None:
+        errors.append(conclude_error)
+    return errors
+
+
+def _require_current_conclude_stage(state: Any, stage_id: str | None, tool_name: str) -> dict[str, Any] | None:
+    stage = _find_stage(state, stage_id)
+    if stage is None:
+        return {"message": "unknown stage_id", "stage_id": stage_id}
+    active_stage = _active_stage(state)
+    if active_stage is None or active_stage.get("stage_id") != stage.get("stage_id"):
         return {
-            "message": "plan must be in_progress before completed",
-            "plan_index": index,
-            "current_status": current_status,
+            "message": f"{tool_name} requires current stage to be in conclude progress",
+            "stage_id": stage_id,
+        }
+    if _latest_stage_progress_type(stage) != "conclude":
+        return {
+            "message": f"{tool_name} requires current stage to be in conclude progress",
+            "stage_id": stage_id,
         }
     return None
 
 
-def _next_unfinished_plan_index(statuses: dict[Any, Any], plan_count: int) -> int:
-    for index in range(1, plan_count + 1):
-        if _plan_status_at(statuses, index) != "completed":
-            return index
-    return plan_count
+def _latest_stage_progress_type(stage: dict[str, Any]) -> str | None:
+    progress = stage.get("progress")
+    if not isinstance(progress, list) or not progress:
+        return None
+    latest = progress[-1]
+    if not isinstance(latest, dict):
+        return None
+    return str(latest.get("type") or "").strip() or None
 
 
-def _plan_status_at(statuses: dict[Any, Any], index: int) -> str | None:
-    raw = statuses.get(index, statuses.get(str(index)))
-    if isinstance(raw, dict):
-        value = raw.get("status")
-    else:
-        value = getattr(raw, "status", None)
-    return value if value in {"in_progress", "completed"} else None
+def _reading_blocked_result(state: Any) -> dict[str, Any] | None:
+    active_stage = _active_stage(state)
+    if active_stage is None or _latest_stage_progress_type(active_stage) != "conclude":
+        return None
+    return {
+        "ok": False,
+        "errors": [
+            {
+                "message": "reading tools are disabled after conclude progress",
+                "stage_id": active_stage.get("stage_id"),
+                "next_step": (
+                    "review_stage_evidence or set_field if the current notes are sufficient; "
+                    "otherwise append investigate to the same stage to withdraw conclude before reading"
+                ),
+            }
+        ],
+    }
+
+
+def _blocked_read_action(
+    state: Any,
+    tool_name: str,
+    args: dict[str, Any],
+    reason: str | None = None,
+) -> dict[str, Any] | None:
+    result = _reading_blocked_result(state)
+    if result is None:
+        return None
+    _record_action(state, tool_name, _args_with_reason(args, reason), result)
+    return result
+
+
+def _required_text(value: Any, name: str, errors: list[dict[str, Any]]) -> str:
+    if not isinstance(value, str) or not value.strip():
+        errors.append({"message": f"{name} must be a non-empty string"})
+        return ""
+    return value.strip()
+
+
+def _optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return str(value)
+    stripped = value.strip()
+    return stripped or None
 
 
 def _read_element(state: Any, element_id: str, *, reason: str | None = None) -> dict[str, Any]:
+    blocked = _blocked_read_action(state, "read_element", {"element_id": element_id}, reason)
+    if blocked is not None:
+        return blocked
     document = _read(state, "document")
     element = document.elements_by_id.get(element_id)
     if element is None:
@@ -461,6 +840,9 @@ def _read_element(state: Any, element_id: str, *, reason: str | None = None) -> 
 
 
 def _search_elements(state: Any, query: str, limit: int = 10, *, reason: str | None = None) -> dict[str, Any]:
+    blocked = _blocked_read_action(state, "search_elements", {"query": query, "limit": limit}, reason)
+    if blocked is not None:
+        return blocked
     document = _read(state, "document")
     normalized_query = " ".join(str(query or "").split())
     try:
@@ -510,6 +892,14 @@ def _search_elements(state: Any, query: str, limit: int = 10, *, reason: str | N
 
 
 def _scan_document(state: Any, scope_id: str, query: str, limit: int = 10, *, reason: str | None = None) -> dict[str, Any]:
+    blocked = _blocked_read_action(
+        state,
+        "scan_document",
+        {"scope_id": scope_id, "query": query, "limit": limit},
+        reason,
+    )
+    if blocked is not None:
+        return blocked
     document = _read(state, "document")
     normalized_scope_id = str(scope_id or "").strip()
     normalized_query = " ".join(str(query or "").split())
@@ -734,11 +1124,27 @@ def _task_fields_for_scan(state: Any) -> str:
         lines.append(
             f"- {_read(field, 'name')}: type={_read(field, 'type', 'string')}, "
             f"required={_read(field, 'required', False)}, description={_read(field, 'description', '') or ''}"
+            + _enum_variants_for_prompt(field)
         )
     instructions = _read(task_spec, "instructions", None)
     if instructions:
         lines.append("Instructions: " + str(instructions))
     return "\n".join(lines)
+
+
+def _enum_variants_for_prompt(field: Any) -> str:
+    if _read(field, "type") != "enum":
+        return ""
+    variants = _read(field, "variants", []) or []
+    parts = [
+        f"{_read(variant, 'name')}:{_read(variant, 'type')}"
+        for variant in variants
+    ]
+    return (
+        ", variants="
+        + " | ".join(parts)
+        + '. Use enum values as tagged objects: {"variant": "name", "value": ...}'
+    )
 
 
 def _parse_scan_document_candidates(message: Any) -> list[dict[str, Any]]:
@@ -833,6 +1239,9 @@ def _scan_candidate_snippet(text: str, query: str) -> str:
 
 
 def _read_section(state: Any, section_id: str, *, reason: str | None = None) -> dict[str, Any]:
+    blocked = _blocked_read_action(state, "read_section", {"section_id": section_id}, reason)
+    if blocked is not None:
+        return blocked
     document = _read(state, "document")
     section = _section_element(document, section_id)
     if isinstance(section, dict):
@@ -859,6 +1268,9 @@ def _read_blocks(
     *,
     reason: str | None = None,
 ) -> dict[str, Any]:
+    blocked = _blocked_read_action(state, "read_blocks", {"section_id": section_id, "indexes": indexes}, reason)
+    if blocked is not None:
+        return blocked
     document = _read(state, "document")
     section = _scope_element(document, section_id)
     if isinstance(section, dict):
@@ -893,6 +1305,14 @@ def _read_block_range(
     *,
     reason: str | None = None,
 ) -> dict[str, Any]:
+    blocked = _blocked_read_action(
+        state,
+        "read_block_range",
+        {"section_id": section_id, "start_index": start_index, "count": count},
+        reason,
+    )
+    if blocked is not None:
+        return blocked
     document = _read(state, "document")
     section = _scope_element(document, section_id)
     args = {"section_id": section_id, "start_index": start_index, "count": count}
@@ -938,6 +1358,14 @@ def _read_list(
     *,
     reason: str | None = None,
 ) -> dict[str, Any]:
+    blocked = _blocked_read_action(
+        state,
+        "read_list",
+        {"section_id": section_id, "block_offset": block_offset, "item_offset": item_offset, "number": number},
+        reason,
+    )
+    if blocked is not None:
+        return blocked
     document = _read(state, "document")
     list_block = _scope_block_at(document, section_id, block_offset)
     if isinstance(list_block, dict):
@@ -986,6 +1414,14 @@ def _query_table(
     *,
     reason: str | None = None,
 ) -> dict[str, Any]:
+    blocked = _blocked_read_action(
+        state,
+        "query_table",
+        {"section_id": section_id, "block_offset": block_offset, "sql": sql},
+        reason,
+    )
+    if blocked is not None:
+        return blocked
     document = _read(state, "document")
     table_block = _scope_block_at(document, section_id, block_offset)
     if isinstance(table_block, dict):
@@ -1015,6 +1451,14 @@ def _preview_inline_evidence(
     *,
     reason: str | None = None,
 ) -> dict[str, Any]:
+    blocked = _blocked_read_action(
+        state,
+        "preview_inline_evidence",
+        {"source_id": source_id, "start_index": start_index, "count": count},
+        reason,
+    )
+    if blocked is not None:
+        return blocked
     document = _read(state, "document")
     normalized_source_id = str(source_id or "").strip()
     args = {
@@ -1086,6 +1530,9 @@ def _read_section_auto_scan_query(section: Any, reason: str | None, section_id: 
 
 
 def _table_extraction(state: Any, table_id: str, sql: str, *, reason: str | None = None) -> dict[str, Any]:
+    blocked = _blocked_read_action(state, "table_extraction", {"table_id": table_id, "sql": sql}, reason)
+    if blocked is not None:
+        return blocked
     document = _read(state, "document")
     table = document.tables_by_id.get(table_id)
     if table is None:
@@ -1182,6 +1629,9 @@ def _table_extraction(state: Any, table_id: str, sql: str, *, reason: str | None
 
 
 def _paragraph_extraction(state: Any, element_id: str, pattern: str, *, reason: str | None = None) -> dict[str, Any]:
+    blocked = _blocked_read_action(state, "paragraph_extraction", {"element_id": element_id, "pattern": pattern}, reason)
+    if blocked is not None:
+        return blocked
     document = _read(state, "document")
     element = document.elements_by_id.get(element_id)
     if element is None:
@@ -1222,6 +1672,8 @@ def _set_field(
     failure_reason: str | None,
     *,
     reason: str | None = None,
+    stage_id: str | None = None,
+    rationale: str | None = None,
 ) -> dict[str, Any]:
     if status not in {"resolved", "failed"}:
         return {"ok": False, "errors": [{"field": name, "message": "invalid status"}]}
@@ -1255,8 +1707,12 @@ def _set_field(
     granularity_errors = _resolved_evidence_granularity_errors(state, evidence_ids) if status == "resolved" else []
     if granularity_errors:
         return {"ok": False, "errors": [{"field": name, **error} for error in granularity_errors]}
-    expected_type = _read(_field_defs_by_name(state)[name], "type", "string")
-    if status == "resolved" and not _value_matches_type(value, expected_type):
+    stage_ref_errors = _validate_field_stage_refs(state, stage_id)
+    if stage_ref_errors:
+        return {"ok": False, "errors": [{"field": name, **error} for error in stage_ref_errors]}
+    field_def = _field_defs_by_name(state)[name]
+    value_ok, expected_type = _value_matches_field(value, field_def)
+    if status == "resolved" and not value_ok:
         return {
             "ok": False,
             "errors": [
@@ -1275,12 +1731,24 @@ def _set_field(
         "evidence_ids": list(evidence_ids),
         "failure_reason": failure_reason,
         "reason": reason,
+        "stage_id": stage_id,
+        "rationale": rationale if rationale is not None else reason,
     }
     _read(state, "field_states")[name] = field_state
+    action_args = {
+        "name": name,
+        "value": value,
+        "evidence_ids": evidence_ids,
+        "status": status,
+        "stage_id": stage_id,
+        "rationale": rationale,
+    }
+    if failure_reason is not None:
+        action_args["failure_reason"] = failure_reason
     _record_action(
         state,
         "set_field",
-        _args_with_reason({"name": name, "value": value, "evidence_ids": evidence_ids, "status": status}, reason),
+        _args_with_reason(action_args, reason),
         {"ok": True, "field": field_state},
     )
     return {"ok": True, "field": field_state}
@@ -1381,9 +1849,11 @@ def _finish(state: Any) -> dict[str, Any]:
         if field_state is None:
             continue
         if field_state.get("status") == "resolved":
-            if not field_state.get("evidence_ids"):
+            value = field_state.get("value")
+            if not _resolved_value_allows_missing_evidence(value, field_def) and not field_state.get("evidence_ids"):
                 errors.append({"field": name, "message": "resolved field requires evidence"})
-            if not _value_matches_type(field_state.get("value"), _read(field_def, "type", "string")):
+            value_ok, _expected_type = _value_matches_field(value, field_def)
+            if not value_ok:
                 errors.append({"field": name, "message": "field value does not match type"})
     result = {"ok": not errors, "errors": errors}
     _record_action(state, "finish", {}, result)
@@ -2101,11 +2571,57 @@ def _value_matches_type(value: Any, field_type: str) -> bool:
         return isinstance(value, int | float) and not isinstance(value, bool)
     if field_type == "boolean":
         return isinstance(value, bool)
+    if field_type == "bool":
+        return isinstance(value, bool)
     if field_type == "list[string]":
         return isinstance(value, list) and all(isinstance(item, str) for item in value)
     if field_type == "list[number]":
         return isinstance(value, list) and all(isinstance(item, int | float) and not isinstance(item, bool) for item in value)
+    if field_type == "null":
+        return value is None
     return False
+
+
+def _value_matches_field(value: Any, field_def: Any) -> tuple[bool, str]:
+    field_type = _read(field_def, "type", "string")
+    if field_type != "enum":
+        expected_type = "boolean" if field_type == "bool" else str(field_type)
+        return _value_matches_type(value, expected_type), expected_type
+    variant = _enum_variant_for_value(value, field_def)
+    if variant is None:
+        return False, "enum"
+    expected_type = _read(variant, "type", "string")
+    expected_type = "boolean" if expected_type == "bool" else str(expected_type)
+    payload = value.get("value") if isinstance(value, dict) else None
+    return _value_matches_type(payload, expected_type), expected_type
+
+
+def _enum_variant_for_value(value: Any, field_def: Any) -> Any | None:
+    if not isinstance(value, dict):
+        return None
+    if "value" not in value:
+        return None
+    variant_name = value.get("variant")
+    if not isinstance(variant_name, str) or not variant_name:
+        return None
+    variants = _read(field_def, "variants", []) or []
+    for variant in variants:
+        if _read(variant, "name") == variant_name:
+            return variant
+    return None
+
+
+def _resolved_value_allows_missing_evidence(value: Any, field_def: Any) -> bool:
+    field_type = _read(field_def, "type", "string")
+    if field_type == "null":
+        return value is None
+    if field_type != "enum":
+        return False
+    variant = _enum_variant_for_value(value, field_def)
+    if variant is None:
+        return False
+    variant_type = _read(variant, "type", "string")
+    return variant_type == "null" and isinstance(value, dict) and value.get("value") is None
 
 
 def _args_with_reason(args: dict[str, Any], reason: str | None) -> dict[str, Any]:
@@ -2117,7 +2633,11 @@ def _args_with_reason(args: dict[str, Any], reason: str | None) -> dict[str, Any
 __all__ = [
     "build_tools",
     "_overview",
-    "_update_plan",
+    "_start_stage",
+    "_append_stage_progress",
+    "_record_stage_evidence",
+    "_review_stage_evidence",
+    "_complete_stage",
     "_search_elements",
     "_scan_document",
     "_read_element",

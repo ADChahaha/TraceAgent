@@ -284,7 +284,8 @@ def test_evaluate_includes_source_field_process_for_derived_count_field():
     user_payload = json.loads(fake_client.calls[0]["messages"][1]["content"])
     system_prompt = fake_client.calls[0]["messages"][0]["content"]
     assert "related_field_processes" in system_prompt
-    assert "来源字段" in system_prompt
+    assert "source-field process summaries" in system_prompt
+    assert "Use the document language for route_reason whenever possible" in system_prompt
     assert user_payload["field_output"]["field_name"] == "academic_paper_count"
     assert user_payload["field_process"]["broad_extraction"]["search_queries"] == []
     assert user_payload["related_field_processes"][0]["field_name"] == "academic_paper_names"
@@ -407,9 +408,9 @@ def test_evaluate_passes_query_audit_and_reason_to_policy_prompt():
     assert "空白行表示未获评普通寝室" in user_payload["field_process"]["field_resolution"]["reason"]
     system_prompt = fake_client.calls[0]["messages"][0]["content"]
     assert "Few-shot examples for query_audit" in system_prompt
-    assert "空白筛选列必须结合表格上下文判断" in system_prompt
-    assert "不能只因为空白行未被 WHERE 选中就说正常" in system_prompt
-    assert "相邻列、表注或表头" in system_prompt
+    assert "Blank filter columns must be interpreted with table context" in system_prompt
+    assert "Do not claim blank rows are normal merely because WHERE did not select them" in system_prompt
+    assert "neighboring columns, captions, headers, or group titles" in system_prompt
     assert "非空分布" not in system_prompt
 
 
@@ -491,6 +492,62 @@ def test_evaluate_reviews_failed_required_field_without_model_call():
     assert result.field_routes[0].needs_review is True
     assert "required" in result.field_routes[0].route_reason
     assert fake_client.calls == []
+
+
+def test_evaluate_allows_optional_failed_field_to_be_accepted_by_policy_client():
+    fake_client = FakePolicyClient(
+        decisions=[
+            {
+                "route": "accept",
+                "route_reason": "字段不是必填，过程说明文档没有可靠发票号，自动留空即可。",
+            }
+        ]
+    )
+
+    result = processor_module.evaluate(
+        task_spec=_task_spec(required=False),
+        field_outputs=[
+            RouteFieldOutput(
+                field_name="invoice_no",
+                status="failed",
+            )
+        ],
+        refs_with_text=[
+            FieldRefsWithText(
+                field_name="invoice_no",
+                refs=[],
+            )
+        ],
+        field_processes=[
+            RouteFieldProcess(
+                field_name="invoice_no",
+                broad_extraction=RouteProcessStage(
+                    search_queries=["发票号 OR 发票号码"],
+                    candidate_action_count=1,
+                    finish_reason="检查相关区域后没有找到可靠字段值",
+                ),
+                field_resolution=RouteProcessStage(
+                    status="failed",
+                    search_queries=["发票号"],
+                    candidate_action_count=1,
+                    final_decision_used=True,
+                    reason="文档没有明确发票号。",
+                    failure_reason="文档没有明确发票号，字段应留空。",
+                    finish_reason="finish ok",
+                ),
+            )
+        ],
+        policy_client=fake_client,
+    )
+
+    assert result.field_routes[0].route == "accept"
+    assert result.field_routes[0].needs_review is False
+    assert len(fake_client.calls) == 1
+    user_payload = json.loads(fake_client.calls[0]["messages"][1]["content"])
+    assert user_payload["field_output"]["status"] == "failed"
+    assert user_payload["field_process"]["field_resolution"]["failure_reason"] == (
+        "文档没有明确发票号，字段应留空。"
+    )
 
 
 def test_evaluate_reviews_missing_required_field_output_without_model_call():

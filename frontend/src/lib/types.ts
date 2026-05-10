@@ -329,3 +329,59 @@ export interface ReviewSubmitPayload {
   comment?: string | null;
   reviewer?: string | null;
 }
+
+export interface ContractNliExperimentSummary {
+  dataset: string;
+  run_id: string;
+  default_sample_id: string | null;
+  samples: Array<{
+    sample_id: string;
+    document_id: number;
+    filename: string;
+    hypotheses: Record<string, {
+      label: string;
+      short_description: string;
+      hypothesis: string;
+      choice: string;
+      evidence: string[];
+    }>;
+    text_chars: number;
+  }>;
+  report: {
+    summary: Record<string, {
+      samples: number;
+      completed: number;
+      errors: number;
+      hypotheses: number;
+      choice_accuracy: number;
+      evidence_tp: number;
+      evidence_fp: number;
+      evidence_fn: number;
+      evidence_precision: number;
+      evidence_recall: number;
+      evidence_f1: number;
+    }>;
+  };
+}
+
+export interface ContractNliHtmlProcess {
+  sample_id: string;
+  document_id: string;
+  filename: string;
+  document_type?: string | null;
+  source_kind?: string | null;
+  raw_html_chars: number;
+  agent_html_chars: number;
+  agent_html?: string | null;
+  display_html?: string | null;
+  raw_html_excerpt: string;
+  agent_html_excerpt: string;
+  display_html_excerpt?: string | null;
+  raw_element_count: number;
+  agent_element_count: number;
+  ocr_block_count?: number | null;
+  query_checks: Array<{
+    query: string;
+    match_count: number;
+  }>;
+}

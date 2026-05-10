@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import asdict, is_dataclass
 from typing import Any
 
-from service.file_extraction_agent.impl.broad_new import run_broad_planner
 from service.file_extraction_agent.impl.html_state import GraphState, HtmlExtractionInput, build_graph_state
 from service.file_extraction_agent.impl.resolution_new import run_resolution
 from service.file_extraction_agent.schemas import ExtractionResult
@@ -13,21 +12,13 @@ from service.file_extraction_agent.schemas import ExtractionResult
 
 def run_extraction_graph(
     extraction_input: HtmlExtractionInput,
-    broad_model: Any = None,
     resolution_model: Any = None,
     **legacy_kwargs: Any,
 ) -> ExtractionResult:
-    broad_model = broad_model if broad_model is not None else legacy_kwargs.get("broad_client")
     resolution_model = (
         resolution_model if resolution_model is not None else legacy_kwargs.get("resolution_client")
     )
     state = build_graph_state(extraction_input)
-    state.document_scan_model = broad_model
-    try:
-        run_broad_planner(state, broad_model)
-    except Exception as exc:
-        return build_failed_result(state, "broad", exc)
-
     try:
         outcome = run_resolution(state, resolution_model)
     except Exception as exc:
@@ -52,8 +43,7 @@ def map_state_to_result(
         if field_state.get("status") == "resolved"
     }
     trace: dict[str, Any] = {
-        "broad_plan": _plain(state.broad_plan),
-        "plan_statuses": _plain(state.plan_statuses),
+        "reading_stages": _plain(getattr(state, "reading_stages", [])),
         "document_tree": _plain(state.document.tree),
         "field_states": _plain(state.field_states),
         "actions": _plain(state.actions),

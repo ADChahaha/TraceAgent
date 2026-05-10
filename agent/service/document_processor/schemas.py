@@ -24,5 +24,6 @@ class ProcessResult:
     markdown: str = ""
     md_list: list[str] = field(default_factory=list)
     blocks: list[dict[str, Any]] = field(default_factory=list)
+    semantic_document: dict[str, Any] = field(default_factory=dict)
     meta_info: dict[str, Any] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)

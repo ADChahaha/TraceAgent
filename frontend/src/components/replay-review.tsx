@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Check, ChevronRight, ClipboardList, Expand, Gauge, History, Loader2, MousePointerClick, Pause, Play, X } from "lucide-react";
+import { Check, ChevronRight, ClipboardList, Expand, Gauge, History, Loader2, MousePointerClick, Pause, Play, Search, X } from "lucide-react";
 
 import { stringifyValue } from "@/lib/json";
 import type { ReplayAction, ReplayFieldState, ReplayOutlineNode, TaskReplay, TaskResultField } from "@/lib/types";
@@ -693,6 +693,8 @@ export function ReplayReview({
                 <div className="replay-dialogue-footer">
                   {currentActionType === "update_plan" ? (
                     <PlanToolCallCard key={`plan-${index}`} action={currentAction} documentOutline={documentOutline} />
+                  ) : currentActionType === "search_elements" ? (
+                    <SearchElementsCallCard key={`search-${index}`} action={currentAction} />
                   ) : visibleFieldWrite ? (
                     <ReplayFieldWriteCard
                       key={`field-${index}-${visibleFieldWrite.sourceName}`}
@@ -1053,6 +1055,46 @@ function PlanToolCallCard({
   );
 }
 
+function SearchElementsCallCard({ action }: { action: ReplayAction | null }) {
+  const args = readObject(action?.args);
+  const result = readObject(action?.result);
+  const query = readString(args?.query) || readString(result?.query);
+  const limit = readNumber(args?.limit) || readNumber(result?.limit);
+  const matchCount = readNumber(result?.match_count);
+  const matches = readSearchElementMatches(result).slice(0, 3);
+  return (
+    <div className="replay-plan-call-card" aria-label="search_elements 动作结果">
+      <div className="replay-plan-call-title inline-flex items-center gap-1.5">
+        <Search className="h-3.5 w-3.5" />
+        search_elements
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        {query ? <span className="replay-plan-call-status">{query}</span> : null}
+        <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-bold text-muted-foreground">
+          {matchCount ?? matches.length} match{(matchCount ?? matches.length) === 1 ? "" : "es"}
+        </span>
+        {limit ? (
+          <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-bold text-muted-foreground">
+            limit {limit}
+          </span>
+        ) : null}
+      </div>
+      {matches.length > 0 ? (
+        <div className="mt-2 grid max-h-32 gap-2 overflow-auto">
+          {matches.map((match) => (
+            <div key={`${match.elementId}-${match.snippet}`} className="rounded border border-border/80 bg-white/70 px-2 py-1.5">
+              <div className="font-mono text-[11px] font-semibold text-primary">{match.elementId}</div>
+              <div className="mt-1 text-xs leading-5 text-foreground">{match.snippet}</div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="replay-plan-call-reason">没有命中候选证据。</div>
+      )}
+    </div>
+  );
+}
+
 function OutlineTreeNode({
   node,
   activeOutlineId,
@@ -1305,6 +1347,9 @@ function getHighlightState(_actions: ReplayAction[], currentAction: ReplayAction
   if (type === "table_extraction") {
     return getTableExtractionHighlightState(currentAction);
   }
+  if (type === "search_elements") {
+    return getSearchElementsHighlightState(currentAction);
+  }
   if (type === "paragraph_extraction") {
     return getParagraphExtractionHighlightState(currentAction);
   }
@@ -1381,6 +1426,21 @@ function getParagraphExtractionHighlightState(action: ReplayAction): HighlightSt
   };
 }
 
+function getSearchElementsHighlightState(action: ReplayAction): HighlightState {
+  const result = readObject(action.result);
+  const ids = readSearchElementMatches(result).flatMap((match) => match.evidenceIds);
+  const currentIds = Array.from(new Set(ids.filter(Boolean)));
+  if (currentIds.length === 0) {
+    return emptyHighlightState();
+  }
+  return {
+    ...emptyHighlightState(),
+    currentIds,
+    readIds: currentIds,
+    preserveReadOrder: true,
+  };
+}
+
 function getGenericEvidenceHighlightState(action: ReplayAction): HighlightState {
   const args = readObject(action.args);
   const result = readObject(action.result);
@@ -1411,6 +1471,27 @@ function extractTableExtractionRowIds(result: Record<string, unknown> | null): s
     }
   }
   return Array.from(new Set(ids));
+}
+
+function readSearchElementMatches(result: Record<string, unknown> | null): Array<{
+  elementId: string;
+  snippet: string;
+  evidenceIds: string[];
+}> {
+  const matches = Array.isArray(result?.matches) ? result.matches : [];
+  return matches
+    .map((match) => {
+      const item = readObject(match);
+      const evidenceIds = readStringArray(item?.evidence_ids) ?? [];
+      const elementId = readString(item?.element_id) || evidenceIds[0] || "";
+      const snippet = readString(item?.snippet) || readString(item?.text) || "";
+      return {
+        elementId,
+        snippet,
+        evidenceIds: evidenceIds.length > 0 ? evidenceIds : elementId ? [elementId] : [],
+      };
+    })
+    .filter((match) => match.elementId || match.snippet);
 }
 
 function extractIdsFromToolHtml(html: string): string[] {
@@ -2236,10 +2317,14 @@ function normalizeBackendOutlineNodes(
       continue;
     }
     const rawText = normalizeOutlineText(rawNode.text || rawNode.label || id);
-    const isTableNode = String(rawNode.type || "").toUpperCase() === "TABLE";
-    const label = isTableNode
-      ? formatTableLabel(context.currentHeaderText, rawText, rawNode)
-      : formatHeaderLabel(rawText);
+    const nodeType = String(rawNode.type || "").toUpperCase();
+    const isTableNode = nodeType === "TABLE";
+    const isTextNode = nodeType === "TEXT";
+    const label = isTextNode
+      ? formatTextLabel(rawText)
+      : isTableNode
+        ? formatTableLabel(context.currentHeaderText, rawText, rawNode)
+        : formatHeaderLabel(rawText);
     const node: DocumentOutlineNode = {
       id,
       label,
@@ -2335,6 +2420,11 @@ function isPageElement(element: HTMLElement): boolean {
 function formatHeaderLabel(text: string): string {
   const label = truncateLabel(text);
   return label ? `Header: ${label}` : "Header";
+}
+
+function formatTextLabel(text: string): string {
+  const label = truncateLabel(text);
+  return label ? `Text: ${label}` : "Text";
 }
 
 function formatTableLabel(headerText: string, fallbackText: string, rawNode?: ReplayOutlineNode): string {

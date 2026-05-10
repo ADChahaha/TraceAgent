@@ -20,20 +20,40 @@ def build_resolution_messages(state: Any) -> list[Any]:
             "Your actions will be replayed in the frontend as a human-like document search animation, "
             "so every tool call must be clear, credible, and displayable. "
             "You are not a chat assistant or a research assistant. You are the field-writing agent. "
-            "Your goal is to finish every field in Task fields. "
+            "Your goal is to finish every field in Task fields, but the reading path should look like a document review. "
             "Each field must be finalized exactly once with set_field, with status resolved or failed. "
             "Handle one field at a time, or one tightly related group of fields. "
             "Do not browse many unrelated areas and then write all fields at the end. "
-            "Every tool call except finish requires a reason. Write reasons in the same language as the document whenever possible. "
-            "Reasons must be short, specific, and understandable to users; avoid internal jargon and vague phrases like 'continue extraction'. "
             "The action trace must support frontend replay: "
-            "Use update_plan to keep broad-plan progress synchronized; call update_plan(plan_index, status, reason) "
-            "when starting and completing each broad-plan step. "
-            "Use the task field descriptions and document outline as the primary guide. "
-            "1. Pick the next unresolved field, inspect the outline, and choose the narrowest useful read action. "
-            "2. Read only the evidence needed to complete that step. "
-            "3. Once evidence for a field is sufficient, the next related tool call must be set_field; do not keep browsing. "
-            "4. After all fields are done, call finish. "
+            "Use reading stage tools to maintain append-only human-readable execution stages. "
+            "Do not create a stage for the initial overview; the compact outline is already in this prompt. "
+            "Stages are not field checklists, and they should not copy field names, labels, questions, or hypotheses as titles. "
+            "Start a stage only when entering a useful document-understanding phase, then append progress when reading changes the stage state. "
+            "Stage obligations: "
+            "Reading phase: use overview/read/query/preview tools to gather evidence; do not call set_field or review_stage_evidence. "
+            "Conclude checkpoint: call conclude only after you have finished reading enough evidence and are ready to write fields; do not use conclude as a vague progress summary. "
+            "Writing phase: use review_stage_evidence if helpful, then set_field with stage_id and rationale; do not read while conclude is still the latest progress. "
+            "Premature conclude correction: only if conclude turns out to lack enough evidence, append investigate/compare/verify_absence to the same stage before any more reading; this withdraws the write-ready checkpoint. "
+            "Complete phase: call complete_stage only when this document-understanding goal is stable and you are ready to move to a materially different goal. "
+            "Use investigate, compare, or verify_absence while reading. "
+            "When the current stage has enough evidence for one or more field decisions, append progress type conclude before writing fields. "
+            "After conclude, reading tools are disabled while conclude remains the latest progress: review notes and set fields if evidence is sufficient. "
+            "Do not use conclude as a normal continuation point; only correct a premature conclude by appending investigate/compare/verify_absence to the same stage before reading more. "
+            "Use compare only when a decision depends on relationships between observed evidence, not for ordinary task-field matching. "
+            "Do not use compare for ordinary task-field matching; write that reasoning in set_field rationale. "
+            "Use verify_absence before absence-like field outcomes when the checked scope matters. "
+            "Complete the current stage before starting another stage; only one stage can be in progress at a time. "
+            "Use record_stage_evidence for important reusable candidate evidence, after precise inline/table-row/list-item evidence has been observed. "
+            "Candidate evidence notes and fields share the same evidence_ids, so do not create or pass separate note ids when writing fields. "
+            "Use review_stage_evidence only when it helps you remember earlier stage evidence; it is optional and returns notes in recorded order. "
+            "set_field and review_stage_evidence are allowed only after the current stage's latest progress is conclude. "
+            "set_field must include a field-level rationale. "
+            "Use task fields to understand what evidence is needed; write stages as document-understanding goals. "
+            "1. Pick the next unresolved evidence need or related field group, inspect the outline, and choose the narrowest useful read action. "
+            "2. Read only the evidence needed to complete that stage; record important candidate evidence when helpful. "
+            "3. Append conclude before writing fields from that stage. "
+            "4. After conclude, set fields with stage_id and rationale; if evidence is insufficient, append investigate to the same stage to withdraw the write-ready checkpoint, then read more and conclude again. "
+            "5. After all fields are done, call finish. "
             "Use preview_inline_evidence before set_field when final text evidence is still a whole text block. "
             "set_field evidence_ids for resolved fields must be precise: text values need inline ids, tables need row ids, "
             "and lists need item ids. "
@@ -50,7 +70,7 @@ def build_resolution_messages(state: Any) -> list[Any]:
             "continue querying, use a safer query, or set_field(status='failed') to request human review. "
             "If a tool returns ok=false or error, do not quit. Read the error, fix parameters, and retry. "
             "set_field evidence_ids must come from this run's read_blocks/read_block_range/read_list/query_table/preview_inline_evidence results. "
-            "Do not write fields using only the overview or broad plan."
+            "Do not write fields using only the overview."
         )
     )
     human = HumanMessage(
@@ -162,8 +182,8 @@ def _continue_instruction(state: Any) -> str:
     if _should_force_set_field_nudge(state):
         return (
             "You have read several pieces of evidence but have not written a field. Stop browsing broadly. "
-            "If evidence for the current field is sufficient, the next tool call must be set_field. "
-            "If evidence is still insufficient, make only one more precise tool call for the same field, then set_field. "
+            "If evidence for the current field is sufficient, append conclude for the current stage, then call set_field with stage_id and rationale. "
+            "If evidence is still insufficient, do not write or read directly; append investigate to the same stage to withdraw the write-ready checkpoint, then continue reading. "
             "Do not switch to another field. "
             "Do not answer in plain text."
         )
@@ -176,8 +196,10 @@ def _continue_instruction(state: Any) -> str:
         return (
             "Extraction is not complete. Missing fields: "
             + ", ".join(missing)
-            + ". Continue using tools. For each missing field, read only necessary evidence, call set_field as soon as evidence is sufficient, "
-            "then move to the next field. "
+            + ". Continue using tools. Use missing fields only to identify unresolved evidence needs. "
+            "Do not turn the missing field list into stages. "
+            "Read only necessary evidence for the next unresolved evidence need or related field group, append conclude when that stage has enough evidence, "
+            "then call set_field with stage_id and rationale. "
             "Do not collect evidence for many fields and write them all later. Do not answer in plain text."
         )
     return (
@@ -191,10 +213,26 @@ def _task_fields_text(task_spec: Any) -> str:
     for field in getattr(task_spec, "fields", []) or []:
         lines.append(
             f"- {field.name}: type={field.type}, required={field.required}, description={field.description or ''}"
+            + _enum_variants_text(field)
         )
     if getattr(task_spec, "instructions", None):
         lines.append("Instructions: " + task_spec.instructions)
     return "\n".join(lines)
+
+
+def _enum_variants_text(field: Any) -> str:
+    if _read(field, "type") != "enum":
+        return ""
+    variants = _read(field, "variants", []) or []
+    parts = [
+        f"{_read(variant, 'name')}:{_read(variant, 'type')}"
+        for variant in variants
+    ]
+    return (
+        ", variants="
+        + " | ".join(parts)
+        + '. Use enum values as tagged objects: {"variant": "name", "value": ...}'
+    )
 
 
 def format_document_outline(tree: list[dict[str, Any]]) -> str:

@@ -11,9 +11,10 @@ task_spec + field_outputs + refs_with_text + field_processes
   -> mapper.build_field_policy_contexts(...) 合并单字段定义、输出、证据和过程摘要
   -> 如果字段定义声明 source_field/source_fields，把来源字段过程摘要作为 related_field_processes 放入 prompt
   -> required 且 allow_missing=false 的字段如果 failed、空值或缺少 field_output，直接 review，不调用模型
+  -> optional failed 字段不硬编码 review；如果过程摘要说明字段确实不存在、为空或不适用，交给小 LLM 判断是否 accept 空输出
   -> resolved 但抽取过程摘要为空的字段直接 review，不调用模型
   -> query_audit/table_audit 作为工具事实观察进入 prompt，不用 status 硬判风险
-  -> resolved 字段用 prompts.build_route_policy_messages(...) 构造只含字段、refs、field_process 和 related_field_processes 的评价上下文
+  -> resolved 字段用 prompts.build_route_policy_messages(...) 构造英文 system prompt 和只含字段、refs、field_process、related_field_processes 的评价上下文
   -> policy_client.invoke(RoutePolicyDecision, messages) 得到 accept/review/reject
   -> 对 task_spec 中缺席的 required 字段补 route=review
   -> 汇总 RoutePolicyResult(field_routes[])
@@ -27,8 +28,9 @@ task_spec + field_outputs + refs_with_text + field_processes
 - 模型判断证据不足时，字段进入 `review`。
 - resolved 字段如果抽取过程摘要为空，直接进入 `review`，不调用小 LLM。
 - `query_audit.summary` 和 `table_audit.summary` 会进入小 LLM prompt，route policy 根据字段值、refs 和 `field_resolution.reason` 判断是否需要 review，prompt 不引导模型按非空数量分布做硬分类。
-- system prompt 内置 query audit few-shot：空白筛选列必须结合表头、表注、分组标题、相邻列和 refs 判断；不能只因为空白行未被 WHERE 选中就说正常。
+- system prompt 内置英文 query audit few-shot：空白筛选列必须结合表头、表注、分组标题、相邻列和 refs 判断；不能只因为空白行未被 WHERE 选中就说正常；`route_reason` 尽量使用文档语言。
 - required 字段抽取失败时直接 `review`，不调用小 LLM。
+- optional 字段抽取失败时会调用小 LLM，由它根据过程摘要判断是否 `accept` 空输出或送 `review`。
 - required 字段完全缺少 `field_output` 时补一条 `review` route。
 - required 字段值为空时直接 `review`，不调用小 LLM。
 - 未显式传入 policy client 时，会把连接参数交给 client builder。
@@ -50,7 +52,7 @@ task_spec + field_outputs + refs_with_text + field_processes
 
 - 构造 `academic_paper_count` 指向 `academic_paper_names` 的 `source_field`。
 - 来源列表字段使用 `type=list[string]`，和 file extraction 字段类型契约保持一致。
-- 确认 system prompt 明确解释 `related_field_processes` 是来源字段过程摘要。
+- 确认 system prompt 明确解释 `related_field_processes` 是 source-field process summaries，并要求 `route_reason` 尽量使用文档语言。
 - 确认数量字段自己的 payload 里除了当前字段过程摘要，还包含来源字段 `academic_paper_names` 的 `related_field_processes`。
 - 确认来源字段 broad 查过的 `学术论文 OR 论文题目 OR 作品类型` 会传给 route policy，但工具返回结果不会进入 prompt。
 
@@ -68,7 +70,7 @@ task_spec + field_outputs + refs_with_text + field_processes
 
 - 构造 `query_audit.summary` 和 `field_resolution.reason`。
 - 确认 processor 仍调用小 LLM，并且 prompt 中没有 `status`，由小 LLM结合查表摘要和模型解释判断。
-- 确认 system prompt 包含 query audit few-shot，固定“空白筛选列必须结合表格上下文判断”和“不能只因为空白行未被 WHERE 选中就说正常”的判断样例。
+- 确认 system prompt 包含英文 query audit few-shot，固定“空白筛选列必须结合表格上下文判断”和“不能只因为空白行未被 WHERE 选中就说正常”的判断样例。
 - 确认 system prompt 不再要求模型查看非空数量分布，避免把工具事实变成按数量硬分类的规则。
 
 `test_evaluate_passes_table_audit_summary_to_policy_prompt`
@@ -80,6 +82,12 @@ task_spec + field_outputs + refs_with_text + field_processes
 
 - 构造一个 failed 且 critical required 的字段。
 - 确认 processor 直接返回 `review`，不会调用模型。
+
+`test_evaluate_allows_optional_failed_field_to_be_accepted_by_policy_client`
+
+- 构造一个 optional failed 字段，并提供 broad/resolution 过程摘要说明文档没有可靠字段值。
+- 用假的 policy client 返回 `accept`。
+- 确认 processor 不再把 optional failed 硬编码成 `review`，而是把 failed 状态和 `failure_reason` 放进 prompt 交给 policy client。
 
 `test_evaluate_reviews_missing_required_field_output_without_model_call`
 

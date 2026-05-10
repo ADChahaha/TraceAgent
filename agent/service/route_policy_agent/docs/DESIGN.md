@@ -103,6 +103,7 @@ backend 传入 task_description / task_spec
   -> mapper 按 field_name 合并 FieldDefinition、FieldOutput、refs_with_text、field_process
   -> 如果字段声明了 source_field/source_fields，mapper 附加来源字段的 related_field_processes
   -> deterministic rule 先把 required 且 allow_missing=false 的未填写字段 route=review
+  -> optional failed 字段不硬编码 review，而是交给小 LLM 判断它是确认不存在/不适用的空输出，还是需要人工复核的失败
   -> prompts 构造只包含字段定义、字段输出、refs 文本、当前字段过程摘要和来源字段过程摘要的 route prompt
   -> policy_client 调小 LLM 独立判断 accept / review / reject
   -> 返回 RoutePolicyResult
@@ -166,6 +167,7 @@ FieldDefinition + FieldOutput + refs_with_text + field_process
   -> input_validator 校验输入完整性和字段对应关系
   -> mapper 合并字段定义、字段值、该字段 refs 和两阶段过程摘要
   -> required 且 allow_missing=false 的字段如果 failed、空字符串、空列表或缺少 field_output，直接 review
+  -> optional failed 字段如果有过程摘要，进入小 LLM 判断；小 LLM 可以 accept 确认不存在的空输出，也可以 review 不确定失败
   -> prompts 构造不包含工具返回结果、不包含原始推理的评价上下文
   -> policy_client.invoke(RoutePolicyDecision)
   -> FieldRouteDecision
@@ -183,6 +185,19 @@ FieldDefinition + FieldOutput + refs_with_text + field_process
 `reject`。`reject` 仍用于字段不可提交、关键证据不支持或其他业务上必须拒绝
 的情况。
 
+非必填字段的 `status=failed` 不等同于“必须人工复核”。它可能表示抽取 agent
+已经读过相关证据并确认字段在文档中不存在、为空、不适用，应该自动接受空输出；
+也可能表示搜索路径不足、工具失败、证据矛盾或模型不确定，需要人工复核。因此
+processor 不再把 optional failed 字段硬编码成 `review`，而是把 `failure_reason`、
+`field_resolution.reason`、搜索摘要和 refs 交给小 LLM 判断：
+
+```text
+optional failed field_output + field_process
+  -> 过程摘要为空：直接 review
+  -> 过程摘要说明字段缺失 / 不适用 / 空白：小 LLM 可 route=accept
+  -> 过程摘要显示工具失败 / 搜索不足 / 可能有值：小 LLM 应 route=review
+```
+
 实际处理 pipeline 是：
 
 ```text
@@ -193,7 +208,7 @@ processor.evaluate(task_spec, field_outputs, refs_with_text, field_processes)
   -> 派生字段额外带上 source_field/source_fields 对应的 related_field_processes
   -> required + allow_missing=false 且没填的字段直接生成 FieldRouteDecision(route=review)
   -> resolved 但抽取过程摘要为空的字段直接生成 FieldRouteDecision(route=review)
-  -> resolved 字段由 prompts 构造只含字段定义、字段输出、refs 文本和过程摘要的 messages
+  -> resolved 或 optional failed 字段由 prompts 构造只含字段定义、字段输出、refs 文本和过程摘要的 messages
   -> policy_client.invoke(RoutePolicyDecision, messages)
   -> 如果 task_spec 中还有 required + allow_missing=false 但完全缺席的字段，补一条 route=review
   -> 汇总 RoutePolicyResult(field_routes[])
@@ -240,6 +255,8 @@ ValidatedPolicyInput
   -> 派生字段的 related_field_processes，说明来源字段 broad/resolution 做过哪些读取、查表、写字段或定案动作
   -> 输出 route + reason
 ```
+
+`prompts.py` 的 system prompt 使用英文表达 route policy 规则，并要求模型在可能时用文档语言输出 `route_reason`。这样 route policy 可以在英文合同、日文招生简章或中文通知等不同源文档上减少系统提示语言对判断边界的干扰。
 
 小 LLM 不允许输出新的字段值。如果它认为值需要修改，只能输出 `route=review`，由 backend 的人工审核流程处理。
 

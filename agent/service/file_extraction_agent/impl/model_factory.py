@@ -1,4 +1,4 @@
-"""Build LangChain chat models for broad and resolution stages."""
+"""Build the LangChain chat model for the resolution stage."""
 
 from __future__ import annotations
 
@@ -11,11 +11,9 @@ from langchain_openai import ChatOpenAI
 from service.file_extraction_agent.schemas import ModelConfig
 
 
-def build_stage_models(config: ModelConfig | dict | None) -> tuple[Any, Any]:
+def build_resolution_model(config: ModelConfig | dict | None) -> Any:
     normalized = normalize_model_config(config)
-    broad_model = build_chat_model(normalized, normalized.broad_model_name)
-    resolution_model = build_chat_model(normalized, normalized.resolution_model_name)
-    return broad_model, resolution_model
+    return build_chat_model(normalized, normalized.resolution_model_name)
 
 
 def normalize_model_config(config: ModelConfig | dict | None) -> ModelConfig:
@@ -23,6 +21,8 @@ def normalize_model_config(config: ModelConfig | dict | None) -> ModelConfig:
         return _model_config_from_env()
     if isinstance(config, ModelConfig):
         return config
+    if "broad_model_name" in config:
+        raise ValueError("broad_model_name is not supported")
     return ModelConfig(**config)
 
 
@@ -61,7 +61,6 @@ def _model_config_from_env() -> ModelConfig:
         provider=values.get("PROVIDER", "openai"),
         base_url=values.get("BASE_URL") or None,
         api_key=values.get("OPENAI_API_KEY") or None,
-        broad_model_name=values.get("BROAD_MODEL") or model,
         resolution_model_name=values.get("RESOLUTION_MODEL") or model,
         temperature=_float_env(values.get("TEMPERATURE"), 0.0),
         top_p=_optional_float_env(values.get("TOP_P")),
@@ -116,4 +115,4 @@ def _int_env(value: str | None, default: int) -> int:
     return int(value)
 
 
-__all__ = ["build_stage_models", "normalize_model_config", "build_chat_model"]
+__all__ = ["build_resolution_model", "normalize_model_config", "build_chat_model"]

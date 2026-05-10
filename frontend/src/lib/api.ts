@@ -1,6 +1,8 @@
 import type {
   AuditResult,
   Capabilities,
+  ContractNliHtmlProcess,
+  ContractNliExperimentSummary,
   ReviewHandoff,
   ReviewSubmitPayload,
   TaskReplay,
@@ -68,6 +70,18 @@ export async function submitTaskReview(
 
 export async function getTaskAudit(taskId: string): Promise<AuditResult> {
   return requestJson<AuditResult>(`/api/backend/tasks/${encodeURIComponent(taskId)}/audit`);
+}
+
+export async function getContractNliExperiment(): Promise<ContractNliExperimentSummary> {
+  return requestJson<ContractNliExperimentSummary>("/api/backend/experiments/contract-nli");
+}
+
+export async function getContractNliExperimentDetail(taskId: string): Promise<TaskDetailData> {
+  return requestJson<TaskDetailData>(`/api/backend/experiments/contract-nli/samples/${encodeURIComponent(taskId)}/detail`);
+}
+
+export async function getContractNliHtmlProcess(taskId: string): Promise<ContractNliHtmlProcess> {
+  return requestJson<ContractNliHtmlProcess>(`/api/backend/experiments/contract-nli/samples/${encodeURIComponent(taskId)}/html-process`);
 }
 
 export async function loadTaskDetail(taskId: string): Promise<TaskDetailData> {

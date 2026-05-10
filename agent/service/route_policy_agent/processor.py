@@ -111,15 +111,6 @@ def _route_missing_required_field(
 ) -> FieldRouteDecision | None:
     field = context.field_definition
     if not _is_required_without_missing_allowed(field):
-        if context.field_output.status == "failed":
-            return FieldRouteDecision(
-                field_name=context.field_output.field_name,
-                route="review",
-                route_reason=(
-                    f"字段 {field.field_name} 抽取失败，但不是阻断字段，"
-                    "需要人工检查后决定是否补录。"
-                ),
-            )
         return None
 
     if context.field_output.status == "failed":
@@ -148,7 +139,7 @@ def _route_missing_required_field(
 def _route_missing_extraction_process(
     context: FieldPolicyContext,
 ) -> FieldRouteDecision | None:
-    if context.field_output.status != "resolved":
+    if context.field_output.status not in {"resolved", "failed"}:
         return None
     process = context.field_process
     has_broad_signal = bool(

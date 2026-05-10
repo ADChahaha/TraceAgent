@@ -11,7 +11,7 @@ HTTP request
   -> multipart file + file_type upload
   -> UploadFileProxy exposes a file-like object
   -> service.document_processor.processor.process(file_obj, file_type)
-  -> ProcessResult(filename, html, display_html, markdown, md_list, blocks, meta_info, warnings)
+  -> ProcessResult(filename, html, display_html, markdown, md_list, blocks, semantic_document, meta_info, warnings)
   -> JSON response
 ```
 
@@ -32,4 +32,4 @@ HTTP request
 
 - Mocks business `process(...)`.
 - Verifies upload and `file_type` forwarding.
-- Verifies JSON response shape, including structured blocks used later for evidence lookup.
+- Verifies JSON response shape, including structured blocks and semantic document output used later for evidence lookup.

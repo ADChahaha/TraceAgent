@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 
 import { getCapabilities } from "@/lib/api";
 import type { Capabilities } from "@/lib/types";
@@ -49,5 +50,18 @@ export function HomeWorkspace() {
     );
   }
 
-  return <UploadWorkbench capabilities={capabilities} />;
+  return (
+    <main className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-background px-4 py-3 shadow-sm">
+        <div>
+          <p className="text-sm font-semibold text-foreground">实验入口</p>
+          <p className="text-xs text-muted-foreground">ContractNLI 内置样本已移到 backend，可直接查看 action trace。</p>
+        </div>
+        <Link href="/experiments/contract-nli" className="text-sm font-medium text-primary hover:underline">
+          打开 ContractNLI
+        </Link>
+      </div>
+      <UploadWorkbench capabilities={capabilities} />
+    </main>
+  );
 }

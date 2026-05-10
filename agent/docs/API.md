@@ -41,12 +41,11 @@ python -m uvicorn main:app --host 127.0.0.1 --port 8000
 ```text
 BASE_URL
 OPENAI_API_KEY
-BROAD_MODEL
 RESOLUTION_MODEL
 ROUTE_POLICY_MODEL
 ```
 
-`BASE_URL` 和 `OPENAI_API_KEY` 是模型服务连接参数。`BROAD_MODEL` / `RESOLUTION_MODEL` 分别用于字段抽取的 broad / resolution 阶段；`ROUTE_POLICY_MODEL` 只用于 route policy 阶段。route policy 不读取通用 `MODEL`，也没有默认模型名；缺少 `ROUTE_POLICY_MODEL` 时会返回 422。
+`BASE_URL` 和 `OPENAI_API_KEY` 是模型服务连接参数。`RESOLUTION_MODEL` 用于字段抽取；`ROUTE_POLICY_MODEL` 只用于 route policy 阶段。route policy 不读取通用 `MODEL`，也没有默认模型名；缺少 `ROUTE_POLICY_MODEL` 时会返回 422。
 
 ## 健康检查
 
@@ -127,7 +126,7 @@ POST /v1/file-extraction-agent/extract
 - `task_spec`：必填，字段抽取 schema。
 - `run_options`：可选，抽取运行预算。
 - `model_config`：可选，覆盖字段抽取模型连接配置。
-- `base_url`、`api_key` / `openai_api_key`、`broad_model_name`、`resolution_model_name`、`model`、`temperature`、`top_p`、`top_k`：可选，兼容形式的模型连接覆盖字段；未传 `model_config` 时会组装成同一份 `ModelConfig`。
+- `base_url`、`api_key` / `openai_api_key`、`resolution_model_name`、`model`、`temperature`、`top_p`、`top_k`：可选，兼容形式的模型连接覆盖字段；未传 `model_config` 时会组装成同一份 `ModelConfig`。
 
 处理流程：
 
@@ -137,8 +136,7 @@ html + task_spec
   -> processor.extract(...)
   -> input_adapter 校验 html 非空、task_spec.fields 非空、run_options 合法
   -> html_index 从现有 id 构建 document tree、element/table/row 索引
-  -> broad_new 生成字段读取计划
-  -> resolution_new 通过 read_element / table_extraction / paragraph_extraction / set_field / finish 定案字段
+  -> resolution_new 通过 Reading Stages / read_section / read_blocks / read_block_range / read_list / query_table / preview_inline_evidence / set_field / finish 定案字段
   -> 返回 ExtractionResult(result + trace)
 ```
 
@@ -146,7 +144,7 @@ html + task_spec
 
 - 缺少 `html`、`task_spec`、`task_spec.fields` 为空、HTML 关键元素缺少 id 或 `run_options.max_tool_calls<=0` 时返回 422。
 - 缺少模型连接参数时返回 422。
-- broad / resolution 模型阶段失败时，业务结果会收口为 `status=failed` 的 `ExtractionResult`。
+- resolution 模型阶段失败时，业务结果会收口为 `status=failed` 的 `ExtractionResult`。
 
 ## Route Policy 判断
 
@@ -161,7 +159,7 @@ POST /v1/route-policy-agent/evaluate
 - `task_spec`：必填，和抽取阶段一致的字段定义。
 - `field_outputs[]`：必填，来自 `ExtractionResult.result.fields`。
 - `refs_with_text[]`：必填，backend 从抽取 trace 组装的证据文本。
-- `field_processes[]`：必填，backend 从抽取 trace actions 组装的两阶段过程摘要。
+- `field_processes[]`：必填，backend 从抽取 trace actions 组装的过程摘要。
 - `metadata`：可选，调用方透传元信息。
 - `base_url`、`openai_api_key`、`model`：可选，覆盖 route policy 模型连接配置；不传 `model` 时读取 `ROUTE_POLICY_MODEL`。
 - `structured_output_strategy`：可选，固定只支持 `tool_call`；显式传入 `auto` 或 `json_schema` 会返回 422。

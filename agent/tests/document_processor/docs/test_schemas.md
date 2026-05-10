@@ -10,5 +10,6 @@ Tests `service.document_processor.schemas.ProcessResult`.
 - `markdown`
 - `md_list`
 - `blocks`
+- `semantic_document`
 - `meta_info`
 - `warnings`

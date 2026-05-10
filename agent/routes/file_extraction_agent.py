@@ -34,7 +34,6 @@ class ExtractRequest(BaseModel):
     base_url: str | None = None
     api_key: str | None = None
     openai_api_key: str | None = None
-    broad_model_name: str | None = None
     resolution_model_name: str | None = None
     model: str | None = None
     temperature: float | None = None
@@ -74,7 +73,6 @@ def _model_config(request: ExtractRequest) -> ModelConfig | dict[str, Any] | Non
             request.base_url,
             request.api_key,
             request.openai_api_key,
-            request.broad_model_name,
             request.resolution_model_name,
             request.model,
             request.temperature,
@@ -88,7 +86,6 @@ def _model_config(request: ExtractRequest) -> ModelConfig | dict[str, Any] | Non
     return {
         "base_url": request.base_url,
         "api_key": request.api_key or request.openai_api_key,
-        "broad_model_name": request.broad_model_name or default_model,
         "resolution_model_name": request.resolution_model_name or default_model,
         "temperature": request.temperature if request.temperature is not None else 0.0,
         "top_p": request.top_p,
@@ -104,4 +101,3 @@ def _plain(value: Any) -> Any:
     if isinstance(value, list):
         return [_plain(item) for item in value]
     return value
-

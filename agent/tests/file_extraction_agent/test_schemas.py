@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from service.file_extraction_agent.schemas import (
+    EnumVariantDefinition,
     ExtractionResult,
     FieldDefinition,
     ModelConfig,
@@ -31,11 +32,68 @@ def test_field_definition_rejects_untyped_list():
         FieldDefinition(name="rooms", type="list")
 
 
+def test_field_definition_accepts_tagged_enum_variants_with_basic_payload_types():
+    field = FieldDefinition(
+        name="answer",
+        type="enum",
+        variants=[
+            {"name": "text", "type": "string"},
+            {"name": "score", "type": "number"},
+            {"name": "flags", "type": "list[string]"},
+            {"name": "amounts", "type": "list[number]"},
+            {"name": "confirmed", "type": "bool"},
+            {"name": "missing", "type": "null"},
+        ],
+    )
+
+    assert [variant.name for variant in field.variants] == [
+        "text",
+        "score",
+        "flags",
+        "amounts",
+        "confirmed",
+        "missing",
+    ]
+    assert [variant.type for variant in field.variants] == [
+        "string",
+        "number",
+        "list[string]",
+        "list[number]",
+        "boolean",
+        "null",
+    ]
+
+
+def test_field_definition_rejects_invalid_enum_shapes():
+    with pytest.raises(ValueError):
+        FieldDefinition(name="answer", type="enum")
+    with pytest.raises(ValueError):
+        FieldDefinition(
+            name="answer",
+            type="enum",
+            variants=[{"name": "text", "type": "object"}],
+        )
+    with pytest.raises(ValueError):
+        FieldDefinition(
+            name="answer",
+            type="enum",
+            variants=[
+                {"name": "text", "type": "string"},
+                {"name": "text", "type": "number"},
+            ],
+        )
+    with pytest.raises(ValueError):
+        FieldDefinition(
+            name="answer",
+            type="string",
+            variants=[EnumVariantDefinition(name="text", type="string")],
+        )
+
+
 def test_model_config_keeps_stage_model_names_and_sampling_options():
     config = ModelConfig(
         base_url="https://example.com/v1",
         api_key="key",
-        broad_model_name="broad",
         resolution_model_name="resolution",
         temperature=0.2,
         top_p=0.9,
@@ -44,7 +102,6 @@ def test_model_config_keeps_stage_model_names_and_sampling_options():
         request_timeout=90.0,
     )
 
-    assert config.broad_model_name == "broad"
     assert config.resolution_model_name == "resolution"
     assert config.temperature == 0.2
     assert config.top_p == 0.9

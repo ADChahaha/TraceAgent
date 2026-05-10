@@ -27,6 +27,7 @@ from service.document_processor.mineru_html import (
     build_display_html_from_content_list,
     build_html_from_content_list,
     build_markdown_from_content_list,
+    build_semantic_document_from_content_list,
 )
 from service.document_processor.schemas import ProcessResult
 
@@ -55,6 +56,7 @@ def process(file_obj, file_type: str | None = None) -> ProcessResult:
         markdown=build_markdown_from_content_list(content_list),
         md_list=[block["text"] for block in blocks if block.get("text")],
         blocks=blocks,
+        semantic_document=build_semantic_document_from_content_list(content_list),
         meta_info={"engine": "mineru-pipeline"},
         warnings=[],
     )

@@ -24,6 +24,20 @@
   -> 刷新任务详情，并用最新 summary 回写最近任务列表
 ```
 
+内置实验查看链路是独立于上传任务的辅助入口：
+
+```text
+用户从 / 点击 ContractNLI 实验入口
+  -> /experiments/contract-nli 挂载 ContractNliExperiment
+  -> getContractNliExperiment 请求 /api/backend/experiments/contract-nli
+  -> backend 返回内置 dev_all 报告、样本列表和默认样本 id
+  -> getContractNliExperimentDetail 请求默认样本 detail
+  -> getContractNliHtmlProcess 请求默认样本 HTML 输入过程
+  -> ContractNliExperiment 展示 raw HTML、agent HTML、元素数量和关键词命中
+  -> ContractNliExperiment 把 detail.replay 和 detail.result.fields 交给 ReplayReview
+  -> ReplayReview 使用同一套 action 播放、高亮和字段卡逻辑展示 search_elements / set_field trace
+```
+
 职责边界：
 
 - `frontend` 只通过 `/api/backend/*` 访问 backend，不直接从浏览器跨域请求 FastAPI。
@@ -41,12 +55,14 @@ frontend/
   src/
     app/
       api/backend/[...path]/route.ts
+      experiments/contract-nli/page.tsx
       page.tsx
       tasks/[taskId]/page.tsx
       layout.tsx
       globals.css
     components/
       home-workspace.tsx
+      contract-nli-experiment.tsx
       upload-workbench.tsx
       task-detail.tsx
       replay-review.tsx
@@ -70,6 +86,7 @@ frontend/
 
 - `src/app/` 只组织 Next.js 路由、布局和 API route handler。
 - `src/components/` 放业务界面组件；业务组件通过 props 支持测试注入 API 函数。
+- `src/components/contract-nli-experiment.tsx` 只负责加载 backend 内置 ContractNLI 实验数据，并复用 `ReplayReview` 展示；对 HTML 样本额外展示 backend 返回的输入转换过程，不直接解析本地实验目录。
 - `src/components/markdown-evidence.tsx` 只渲染受控 markdown 子集，用于 evidence 文本，不执行 HTML。
 - `src/components/ui/` 放 shadcn/ui 风格基础组件，不写业务流程。
 - `src/lib/api.ts` 封装浏览器侧 backend 代理调用和错误语义。
@@ -127,6 +144,7 @@ frontend/
   -> ReplayReview 左侧展示 outline，中间用 iframe 展示 backend 的 display_html，右侧展示 plan 和当前动作对话
   -> reduceReplayFields 从 result.fields 建立字段名、显示名、agent_value 和 route
   -> 再把 review.fields 合并进去，补齐 agent 没有写入但 route_policy 要求 review 的字段
+  -> 当前 action 是 search_elements 时，在动作输出区显示 query、命中数量和候选 evidence snippet，并把 matches.evidence_ids 作为本 action 的高亮/读取锚点
   -> 当前 action result 里如果返回 query_audit.summary、table_audit.summary 或其他 *_audit.summary，ReplayReview 会在该 action 的模型输出区显示诊断摘要；table_extraction 失败时显示“查询失败”警示，SQL 正常但返回 0 行时显示“未查到结果”普通提示
   -> 当前 action 是 set_field 时，在字段写入卡显示字段值、证据 chip、route badge 和 route_reason
   -> 字段值很长时，字段写入卡把字段内容放进独立滚动区，复核输入和提交按钮留在卡片底部；全屏且存在字段写入卡时，ReplayReview 根节点带 `has-field-write` 状态，让布局为底部复核区预留更高空间，避免 review 区被长列表顶出视口
@@ -161,6 +179,10 @@ frontend/
 代理测试
   -> 注入 fetcher
   -> 验证 multipart 转发、backend URL 组装、错误状态和 detail 保留
+
+实验页测试
+  -> mock backend API 函数
+  -> 验证 ContractNLI 样本列表、默认样本 detail、HTML 输入过程和 search_elements 动作卡
 ```
 
 每个测试文件都有 `tests/docs/` 下的一一对应说明文档，测试文档只解释测试目标和链路，不放开发设计内容。

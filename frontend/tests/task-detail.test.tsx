@@ -389,6 +389,59 @@ it("动作输出展示返回的诊断摘要，字段写入卡不再承接诊断�
   expect(screen.queryByLabelText("字段质量风险")).not.toBeInTheDocument();
 });
 
+it("search_elements 动作展示检索词和命中片段", async () => {
+  const searchDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      display_html: '<h1 id="p001_b000">Contract</h1><p id="p001_b001">Confidential Information includes financial information.</p>',
+      actions: [
+        {
+          tool_name: "search_elements",
+          args: {
+            query: "Confidential Information",
+            limit: 20,
+            reason: "Search for Confidential Information clauses"
+          },
+          result: {
+            query: "Confidential Information",
+            limit: 20,
+            match_count: 1,
+            matches: [
+              {
+                element_id: "p001_b001",
+                type: "TEXT",
+                snippet: "Confidential Information includes financial information.",
+                evidence_ids: ["p001_b001"],
+                text_chars: 58
+              }
+            ],
+            truncated: false
+          }
+        }
+      ]
+    }
+  };
+  const injectedLoadTaskDetail = jest.fn(async () => searchDetail);
+
+  render(
+    <TaskDetail
+      taskId="task-001"
+      initialSummary={waitingReviewSummary}
+      loadTaskDetail={injectedLoadTaskDetail}
+    />
+  );
+
+  expect(await screen.findByText("AI extraction replay")).toBeInTheDocument();
+  const searchCard = screen.getByLabelText("search_elements 动作结果");
+  expect(within(searchCard).getByText("search_elements")).toBeInTheDocument();
+  expect(within(searchCard).getByText("Confidential Information")).toBeInTheDocument();
+  expect(within(searchCard).getByText("1 match")).toBeInTheDocument();
+  expect(
+    within(searchCard).getByText("Confidential Information includes financial information.")
+  ).toBeInTheDocument();
+});
+
 it("字段证据 chip 只定位文档证据，不回跳 replay action", async () => {
   const user = userEvent.setup();
   const multiActionDetail: TaskDetailData = {

@@ -6,21 +6,25 @@ import json
 from service.file_extraction_agent.impl.html_index import build_html_document
 from service.file_extraction_agent.impl.html_tools import (
     build_tools,
+    _append_stage_progress,
+    _complete_stage,
     _finish,
     _overview,
     _paragraph_extraction,
     _preview_inline_evidence,
+    _record_stage_evidence,
     _read_block_range,
     _query_table,
     _read_blocks,
     _read_element,
     _read_list,
     _read_section,
+    _review_stage_evidence,
     _scan_document,
     _search_elements,
     _set_field,
+    _start_stage,
     _table_extraction,
-    _update_plan,
 )
 
 
@@ -56,8 +60,7 @@ def _state():
         field_states={},
         actions=[],
         observed_evidence_ids=set(),
-        broad_plan=SimpleNamespace(summary="测试", plan=["读取名单表", "写入字段"], risks=[]),
-        plan_statuses={},
+        reading_stages=[],
     )
 
 
@@ -89,8 +92,7 @@ def _mixed_outline_state():
         field_states={},
         actions=[],
         observed_evidence_ids=set(),
-        broad_plan=SimpleNamespace(summary="测试", plan=["读取正文"], risks=[]),
-        plan_statuses={},
+        reading_stages=[],
     )
 
 
@@ -102,12 +104,43 @@ def _list_state():
     return state
 
 
+def _enum_state():
+    state = _state()
+    state.task_spec.fields = [
+        SimpleNamespace(
+            name="answer",
+            type="enum",
+            required=True,
+            variants=[
+                SimpleNamespace(name="text", type="string"),
+                SimpleNamespace(name="score", type="number"),
+                SimpleNamespace(name="flag", type="boolean"),
+                SimpleNamespace(name="labels", type="list[string]"),
+                SimpleNamespace(name="amounts", type="list[number]"),
+                SimpleNamespace(name="missing", type="null"),
+            ],
+        )
+    ]
+    return state
+
+
 def _mark_list_evidence_observed(state):
     _table_extraction(
         state,
         "dp-table-1",
         "SELECT 姓名 FROM data WHERE 学院 = '计算机学院'",
     )
+
+
+def _start_conclude_stage(state, summary: str = "证据已经读完，可以写字段。") -> str:
+    stage_id = _start_stage(
+        state,
+        "整理已读证据",
+        "复核已观察证据并写字段",
+        "测试需要进入 conclude 写字段期。",
+    )["stage"]["stage_id"]
+    _append_stage_progress(state, stage_id, "conclude", summary)
+    return stage_id
 
 
 def _large_table_state(row_count: int = 40):
@@ -490,6 +523,7 @@ def test_search_elements_result_can_be_used_as_evidence():
         count=5,
         reason="把联系人段落细化为字段证据",
     )
+    stage_id = _start_conclude_stage(state)
 
     result = _set_field(
         state,
@@ -498,6 +532,7 @@ def test_search_elements_result_can_be_used_as_evidence():
         [preview["inline_evidence"][0]["inline_id"]],
         "resolved",
         None,
+        stage_id=stage_id,
     )
 
     assert result["ok"] is True
@@ -596,6 +631,7 @@ def test_scan_document_result_can_be_used_as_evidence():
         count=5,
         reason="把 scoped reader 候选细化为字段证据",
     )
+    stage_id = _start_conclude_stage(state)
 
     result = _set_field(
         state,
@@ -604,6 +640,7 @@ def test_scan_document_result_can_be_used_as_evidence():
         [preview["inline_evidence"][0]["inline_id"]],
         "resolved",
         None,
+        stage_id=stage_id,
     )
 
     assert result["ok"] is True
@@ -825,6 +862,7 @@ def test_table_extraction_row_evidence_ids_can_be_used_by_set_field():
     )
 
     row = result["rows"][0]
+    stage_id = _start_conclude_stage(state)
     set_result = _set_field(
         state,
         "student_name",
@@ -832,6 +870,7 @@ def test_table_extraction_row_evidence_ids_can_be_used_by_set_field():
         row["evidence_ids"],
         "resolved",
         None,
+        stage_id=stage_id,
     )
 
     assert row["row_id"] == "dp-tr-3"
@@ -895,6 +934,33 @@ def test_preview_inline_evidence_keeps_long_sentence_as_one_inline_candidate():
     assert result["inline_evidence"][0]["inline_id"] == "dp-long-sentence::inline-0"
 
 
+def test_preview_inline_evidence_keeps_semicolon_clauses_in_sentence_candidate():
+    state = _state()
+    text = (
+        "Company shall not use Confidential Information except for evaluation; "
+        "provided, however, Confidential Information shall not include public information; "
+        "and Recipient shall return materials upon request."
+    )
+    state.document = build_html_document(f'<p id="dp-semicolon">{text}</p>')
+    _read_blocks(state, "dp-semicolon", indexes=[0], reason="读取分号法律句")
+
+    result = _preview_inline_evidence(
+        state,
+        "dp-semicolon",
+        start_index=0,
+        count=5,
+        reason="分号法律句作为一个 inline 证据锚点",
+    )
+
+    assert result["total_inline_count"] == 1
+    assert [item["text"] for item in result["inline_evidence"]] == [
+        text,
+    ]
+    assert [item["inline_id"] for item in result["inline_evidence"]] == [
+        "dp-semicolon::inline-0",
+    ]
+
+
 def test_preview_inline_evidence_requires_observed_text_source():
     state = _state()
 
@@ -928,6 +994,7 @@ def test_preview_inline_evidence_requires_observed_text_source():
 def test_set_field_requires_inline_evidence_for_text_blocks():
     state = _state()
     _read_blocks(state, "dp-p-1", indexes=[0], reason="读取联系人段落")
+    stage_id = _start_conclude_stage(state)
 
     coarse = _set_field(
         state,
@@ -936,7 +1003,10 @@ def test_set_field_requires_inline_evidence_for_text_blocks():
         ["dp-p-1"],
         "resolved",
         None,
+        stage_id=stage_id,
     )
+    _complete_stage(state, stage_id, "粗粒度证据被拒绝后，重新进入阅读阶段细化证据。")
+    _start_stage(state, "细化联系人证据", "把联系人段落切成 inline", "上一阶段证据粒度太粗。")
     preview = _preview_inline_evidence(
         state,
         "dp-p-1",
@@ -944,6 +1014,8 @@ def test_set_field_requires_inline_evidence_for_text_blocks():
         count=5,
         reason="细化联系人电话证据",
     )
+    precise_stage_id = state.reading_stages[-1]["stage_id"]
+    _append_stage_progress(state, precise_stage_id, "conclude", "inline 证据已经足够。")
     precise = _set_field(
         state,
         "contact_phone",
@@ -951,6 +1023,7 @@ def test_set_field_requires_inline_evidence_for_text_blocks():
         [preview["inline_evidence"][0]["inline_id"]],
         "resolved",
         None,
+        stage_id=precise_stage_id,
     )
 
     assert coarse["ok"] is False
@@ -967,6 +1040,7 @@ def test_set_field_requires_inline_evidence_for_text_blocks():
 def test_set_field_requires_row_or_item_level_evidence_for_tables_and_lists():
     state = _mixed_outline_state()
     _read_blocks(state, "dp-page-1", indexes=[2, 4], reason="读取表格和列表引用")
+    stage_id = _start_conclude_stage(state)
 
     table_only = _set_field(
         state,
@@ -975,6 +1049,7 @@ def test_set_field_requires_row_or_item_level_evidence_for_tables_and_lists():
         ["dp-table-1"],
         "resolved",
         None,
+        stage_id=stage_id,
     )
     list_only = _set_field(
         state,
@@ -983,21 +1058,16 @@ def test_set_field_requires_row_or_item_level_evidence_for_tables_and_lists():
         ["dp-ul-1"],
         "resolved",
         None,
+        stage_id=stage_id,
     )
+    _complete_stage(state, stage_id, "容器证据被拒绝后，重新读取精确行和列表项。")
+    _start_stage(state, "读取精确表格和列表证据", "查询行并读取列表项", "上一阶段证据粒度太粗。")
     table_rows = _query_table(
         state,
         "dp-table-1",
         block_offset=0,
         sql="SELECT 姓名 FROM data WHERE 学院 = '计算机学院'",
         reason="读取表格行",
-    )
-    table_precise = _set_field(
-        state,
-        "student_name",
-        "张三",
-        table_rows["rows"][0]["evidence_ids"],
-        "resolved",
-        None,
     )
     list_items = _read_list(
         state,
@@ -1007,6 +1077,17 @@ def test_set_field_requires_row_or_item_level_evidence_for_tables_and_lists():
         number=1,
         reason="读取列表项",
     )
+    precise_stage_id = state.reading_stages[-1]["stage_id"]
+    _append_stage_progress(state, precise_stage_id, "conclude", "行和列表项证据已经足够。")
+    table_precise = _set_field(
+        state,
+        "student_name",
+        "张三",
+        table_rows["rows"][0]["evidence_ids"],
+        "resolved",
+        None,
+        stage_id=precise_stage_id,
+    )
     list_precise = _set_field(
         state,
         "student_name",
@@ -1014,6 +1095,7 @@ def test_set_field_requires_row_or_item_level_evidence_for_tables_and_lists():
         list_items["evidence_ids"],
         "resolved",
         None,
+        stage_id=precise_stage_id,
     )
 
     assert table_only["ok"] is False
@@ -1056,6 +1138,7 @@ def test_set_field_records_value_and_finish_validates_required_fields():
         "dp-table-1",
         "SELECT 姓名 FROM data WHERE 学院 = '计算机学院'",
     )
+    stage_id = _start_conclude_stage(state)
 
     set_result = _set_field(
         state,
@@ -1064,6 +1147,7 @@ def test_set_field_records_value_and_finish_validates_required_fields():
         ["dp-table-1", "dp-tr-2"],
         "resolved",
         None,
+        stage_id=stage_id,
     )
     finish_result = _finish(state)
 
@@ -1075,6 +1159,7 @@ def test_set_field_records_value_and_finish_validates_required_fields():
 def test_set_field_rejects_value_that_does_not_match_field_type():
     state = _list_state()
     _mark_list_evidence_observed(state)
+    stage_id = _start_conclude_stage(state)
 
     result = _set_field(
         state,
@@ -1083,6 +1168,7 @@ def test_set_field_rejects_value_that_does_not_match_field_type():
         ["dp-table-1", "dp-tr-2"],
         "resolved",
         None,
+        stage_id=stage_id,
     )
 
     assert result == {
@@ -1098,55 +1184,421 @@ def test_set_field_rejects_value_that_does_not_match_field_type():
     assert "student_names" not in state.field_states
 
 
-def test_update_plan_records_plan_status_and_action():
-    state = _state()
+def test_set_field_accepts_tagged_enum_payloads_and_rejects_invalid_variant_values():
+    state = _enum_state()
+    _read_blocks(state, "dp-p-1", [0], reason="读取联系人")
+    inline = _preview_inline_evidence(state, "dp-p-1", 0, 1, reason="细化证据")
+    inline_id = inline["inline_evidence"][0]["inline_id"]
+    stage_id = _start_conclude_stage(state)
 
-    result = _update_plan(state, 1, "in_progress", reason="开始读取名单表")
-    completed = _update_plan(state, 1, "completed", reason="名单表已产生字段证据")
-
-    assert result["ok"] is True
-    assert completed["ok"] is True
-    assert state.plan_statuses[1]["status"] == "completed"
-    assert state.plan_statuses[1]["step"] == "读取名单表"
-    assert state.actions[-1]["tool_name"] == "update_plan"
-    assert state.actions[-1]["args"] == {
-        "plan_index": 1,
-        "status": "completed",
-        "reason": "名单表已产生字段证据",
-    }
-
-
-def test_update_plan_rejects_starting_later_plan_before_previous_completed():
-    state = _state()
-    state.broad_plan = SimpleNamespace(
-        summary="测试",
-        plan=["读取名单表", "确认联系人", "确认字段", "写入字段"],
-        risks=[],
+    bad_variant = _set_field(
+        state,
+        "answer",
+        {"variant": "unknown", "value": "联系人：李老师 电话：12345"},
+        [inline_id],
+        "resolved",
+        None,
+        reason="未知 enum variant",
+        stage_id=stage_id,
+    )
+    bad_payload = _set_field(
+        state,
+        "answer",
+        {"variant": "score", "value": "1"},
+        [inline_id],
+        "resolved",
+        None,
+        reason="payload 类型错误",
+        stage_id=stage_id,
+    )
+    ok = _set_field(
+        state,
+        "answer",
+        {"variant": "text", "value": "联系人：李老师 电话：12345"},
+        [inline_id],
+        "resolved",
+        None,
+        reason="按 text variant 写入",
+        stage_id=stage_id,
     )
 
-    _update_plan(state, 1, "in_progress", reason="开始读取名单表")
-    _update_plan(state, 1, "completed", reason="名单表已产生字段证据")
-    result = _update_plan(state, 4, "in_progress", reason="跳到写字段")
-
-    assert result["ok"] is False
-    assert result["errors"][0]["message"] == "plan_index must advance sequentially"
-    assert result["errors"][0]["next_plan_index"] == 2
-    assert result["errors"][0]["requested_plan_index"] == 4
+    assert bad_variant["ok"] is False
+    assert bad_variant["errors"][0]["expected_type"] == "enum"
+    assert bad_payload["ok"] is False
+    assert bad_payload["errors"][0]["expected_type"] == "number"
+    assert ok["ok"] is True
+    assert state.field_states["answer"]["value"]["variant"] == "text"
 
 
-def test_update_plan_rejects_completing_plan_that_is_not_in_progress():
-    result = _update_plan(_state(), 1, "completed", reason="直接完成")
+def test_finish_allows_resolved_null_enum_variant_without_evidence():
+    state = _enum_state()
+    stage_id = _start_conclude_stage(state)
 
-    assert result["ok"] is False
-    assert result["errors"][0]["message"] == "plan must be in_progress before completed"
-    assert result["errors"][0]["plan_index"] == 1
+    missing_payload = _set_field(
+        state,
+        "answer",
+        {"variant": "missing"},
+        [],
+        "resolved",
+        None,
+        reason="缺少显式 value",
+        stage_id=stage_id,
+    )
+    set_result = _set_field(
+        state,
+        "answer",
+        {"variant": "missing", "value": None},
+        [],
+        "resolved",
+        None,
+        reason="该字段显式选择 null variant",
+        stage_id=stage_id,
+    )
+    finish_result = _finish(state)
+
+    assert missing_payload["ok"] is False
+    assert missing_payload["errors"][0]["expected_type"] == "enum"
+    assert set_result["ok"] is True
+    assert finish_result == {"ok": True, "errors": []}
 
 
-def test_update_plan_rejects_invalid_plan_index():
-    result = _update_plan(_state(), 99, "completed", reason="不存在")
+def test_finish_still_requires_evidence_for_non_null_enum_variant():
+    state = _enum_state()
+    stage_id = _start_conclude_stage(state)
 
-    assert result["ok"] is False
-    assert result["errors"][0]["message"] == "plan_index is outside the broad plan"
+    set_result = _set_field(
+        state,
+        "answer",
+        {"variant": "flag", "value": True},
+        [],
+        "resolved",
+        None,
+        reason="非 null variant 仍需要证据",
+        stage_id=stage_id,
+    )
+    finish_result = _finish(state)
+
+    assert set_result["ok"] is True
+    assert finish_result["ok"] is False
+    assert finish_result["errors"] == [
+        {"field": "answer", "message": "resolved field requires evidence"}
+    ]
+
+
+def test_start_stage_appends_reading_stage_and_action():
+    state = _state()
+
+    result = _start_stage(
+        state,
+        title="理解通知对象",
+        focus="先看通知正文和名单附近内容",
+        basis="学生姓名和联系方式可能来自同一处通知正文。",
+    )
+
+    assert result["ok"] is True
+    assert result["stage"]["stage_id"] == "stage-1"
+    assert result["stage"]["status"] == "in_progress"
+    assert result["stage"]["title"] == "理解通知对象"
+    assert result["stage"]["focus"] == "先看通知正文和名单附近内容"
+    assert result["stage"]["basis"] == "学生姓名和联系方式可能来自同一处通知正文。"
+    assert result["stage"]["progress"] == []
+    assert result["stage"]["evidence_notes"] == []
+    assert state.reading_stages == [result["stage"]]
+    assert state.actions[-1]["tool_name"] == "start_stage"
+
+
+def test_start_stage_rejects_new_stage_while_current_stage_is_in_progress():
+    state = _state()
+    first = _start_stage(state, "理解通知对象", "先看通知正文", "联系人字段需要正文证据。")
+
+    second = _start_stage(state, "理解名单", "继续看名单", "名单可能给出姓名。")
+    completed = _complete_stage(state, first["stage"]["stage_id"], "通知对象已经理解。")
+    third = _start_stage(state, "理解名单", "继续看名单", "名单可能给出姓名。")
+
+    assert second["ok"] is False
+    assert second["errors"][0]["message"] == "complete current stage before starting a new stage"
+    assert second["errors"][0]["active_stage_id"] == "stage-1"
+    assert len(state.reading_stages) == 2
+    assert completed["ok"] is True
+    assert third["ok"] is True
+    assert third["stage"]["stage_id"] == "stage-2"
+
+
+def test_append_stage_progress_and_complete_stage_are_append_only():
+    state = _state()
+    stage_id = _start_stage(state, "理解名单来源", "看名单和联系人附近内容", "这些内容可能共享证据。")["stage"][
+        "stage_id"
+    ]
+
+    progress = _append_stage_progress(
+        state,
+        stage_id,
+        "investigate",
+        "读取名单前后的正文，确认名单表是否是目标来源。",
+    )
+    completed = _complete_stage(
+        state,
+        stage_id,
+        "名单表可作为学生姓名来源，联系人需要另看正文。",
+    )
+
+    stage = state.reading_stages[0]
+    assert progress["ok"] is True
+    assert progress["progress"]["event_id"] == "stage-1-progress-1"
+    assert stage["progress"][0]["type"] == "investigate"
+    assert completed["ok"] is True
+    assert stage["status"] == "completed"
+    assert stage["finding"] == "名单表可作为学生姓名来源，联系人需要另看正文。"
+    assert stage["progress"] == [progress["progress"]]
+    assert "progress" not in completed
+    assert state.actions[-2]["tool_name"] == "append_stage_progress"
+    assert state.actions[-1]["tool_name"] == "complete_stage"
+
+
+def test_append_stage_progress_rejects_unknown_stage_or_type_without_mutation():
+    state = _state()
+    stage_id = _start_stage(state, "理解名单来源", "看名单附近内容", "名单可能给出字段证据。")["stage"][
+        "stage_id"
+    ]
+
+    bad_stage = _append_stage_progress(state, "missing", "investigate", "查看正文")
+    bad_type = _append_stage_progress(state, stage_id, "read", "查看正文")
+    bad_refocus = _append_stage_progress(state, stage_id, "refocus", "方向变化写进后续 summary")
+    bad_issue = _append_stage_progress(state, stage_id, "issue", "工具错误保留在 actions")
+
+    assert bad_stage["ok"] is False
+    assert bad_stage["errors"][0]["message"] == "unknown stage_id"
+    assert bad_type["ok"] is False
+    assert bad_type["errors"][0]["message"] == "invalid progress type"
+    assert bad_type["errors"][0]["allowed"] == [
+        "compare",
+        "conclude",
+        "investigate",
+        "verify_absence",
+    ]
+    assert bad_refocus["ok"] is False
+    assert bad_refocus["errors"][0]["message"] == "invalid progress type"
+    assert bad_issue["ok"] is False
+    assert bad_issue["errors"][0]["message"] == "invalid progress type"
+    assert state.reading_stages[0]["progress"] == []
+
+
+def test_record_stage_evidence_and_review_returns_notes_in_record_order():
+    state = _state()
+    stage_id = _start_stage(state, "理解联系人来源", "看联系人段落", "联系人字段需要正文证据。")["stage"][
+        "stage_id"
+    ]
+    _read_blocks(state, "dp-p-1", indexes=[0], reason="读取联系人段落")
+    inline = _preview_inline_evidence(state, "dp-p-1", start_index=0, count=1, reason="细化联系人证据")
+    inline_id = inline["inline_evidence"][0]["inline_id"]
+
+    first = _record_stage_evidence(
+        state,
+        stage_id,
+        [inline_id],
+        "联系人段落同时给出联系人和电话。",
+        supports="可支持联系方式相关判断。",
+        limits="不能证明名单字段。",
+    )
+    second = _record_stage_evidence(
+        state,
+        stage_id,
+        [inline_id],
+        "同一证据可复用到电话字段。",
+        supports="可支持电话字段。",
+        limits="仍需保留精确 inline id。",
+    )
+    _append_stage_progress(state, stage_id, "conclude", "已读完联系人证据，可以复看候选依据。")
+    review = _review_stage_evidence(state, stage_id)
+
+    assert first["ok"] is True
+    assert first["evidence_note"]["note_id"] == "stage-1-evidence-1"
+    assert second["evidence_note"]["note_id"] == "stage-1-evidence-2"
+    assert [note["note_id"] for note in review["evidence_notes"]] == [
+        "stage-1-evidence-1",
+        "stage-1-evidence-2",
+    ]
+    assert review["evidence_notes"][0]["observation"] == "联系人段落同时给出联系人和电话。"
+
+
+def test_review_stage_evidence_requires_active_conclude_stage():
+    state = _state()
+    stage_id = _start_stage(state, "理解联系人来源", "看联系人段落", "联系人字段需要正文证据。")["stage"][
+        "stage_id"
+    ]
+    premature = _review_stage_evidence(state, stage_id)
+    _append_stage_progress(state, stage_id, "investigate", "已经读取联系人段落。")
+    still_reading = _review_stage_evidence(state, stage_id)
+    _append_stage_progress(state, stage_id, "conclude", "本阶段证据已经足够，可以复看 notes。")
+    allowed = _review_stage_evidence(state, stage_id)
+
+    assert premature["ok"] is False
+    assert premature["errors"][0]["message"] == "review_stage_evidence requires current stage to be in conclude progress"
+    assert still_reading["ok"] is False
+    assert still_reading["errors"][0]["message"] == "review_stage_evidence requires current stage to be in conclude progress"
+    assert allowed["ok"] is True
+
+
+def test_record_stage_evidence_requires_observed_precise_evidence():
+    state = _state()
+    stage_id = _start_stage(state, "理解名单来源", "看名单附近内容", "名单可能给出字段证据。")["stage"][
+        "stage_id"
+    ]
+    _read_blocks(state, "dp-p-1", indexes=[0], reason="读取联系人段落")
+
+    coarse_text = _record_stage_evidence(state, stage_id, ["dp-p-1"], "整段文字还不够精确。")
+    unknown = _record_stage_evidence(state, stage_id, ["missing"], "不存在的证据。")
+
+    assert coarse_text["ok"] is False
+    assert coarse_text["errors"][0]["message"] == "text evidence must use inline evidence ids from preview_inline_evidence"
+    assert unknown["ok"] is False
+    assert unknown["errors"][0]["message"] == "unknown evidence ids"
+    assert state.reading_stages[0]["evidence_notes"] == []
+
+
+def test_set_field_records_stage_rationale_without_separate_evidence_note_ids():
+    state = _state()
+    stage_id = _start_stage(state, "理解联系人来源", "看联系人段落", "联系人字段需要正文证据。")["stage"][
+        "stage_id"
+    ]
+    _read_blocks(state, "dp-p-1", indexes=[0], reason="读取联系人段落")
+    inline = _preview_inline_evidence(state, "dp-p-1", start_index=0, count=1, reason="细化联系人证据")
+    inline_id = inline["inline_evidence"][0]["inline_id"]
+    _record_stage_evidence(state, stage_id, [inline_id], "联系人段落给出电话。")
+    _append_stage_progress(state, stage_id, "conclude", "联系人证据已经读完，可以写电话字段。")
+
+    result = _set_field(
+        state,
+        "contact_phone",
+        "12345",
+        [inline_id],
+        "resolved",
+        None,
+        stage_id=stage_id,
+        rationale="inline 证据直接给出电话 12345。",
+    )
+
+    assert result["ok"] is True
+    field = state.field_states["contact_phone"]
+    assert field["stage_id"] == stage_id
+    assert field["rationale"] == "inline 证据直接给出电话 12345。"
+    assert "evidence_note_ids" not in field
+    assert state.actions[-1]["args"]["rationale"] == "inline 证据直接给出电话 12345。"
+    assert "evidence_note_ids" not in state.actions[-1]["args"]
+
+
+def test_set_field_requires_active_conclude_stage():
+    state = _state()
+    stage_id = _start_stage(state, "理解联系人来源", "看联系人段落", "联系人字段需要正文证据。")["stage"][
+        "stage_id"
+    ]
+    _read_blocks(state, "dp-p-1", indexes=[0], reason="读取联系人段落")
+    inline = _preview_inline_evidence(state, "dp-p-1", start_index=0, count=1, reason="细化联系人证据")
+    inline_id = inline["inline_evidence"][0]["inline_id"]
+
+    before_progress = _set_field(
+        state,
+        "contact_phone",
+        "12345",
+        [inline_id],
+        "resolved",
+        None,
+        stage_id=stage_id,
+        rationale="还没有进入 conclude。",
+    )
+    _append_stage_progress(state, stage_id, "investigate", "已经读取联系人段落。")
+    during_reading = _set_field(
+        state,
+        "contact_phone",
+        "12345",
+        [inline_id],
+        "resolved",
+        None,
+        stage_id=stage_id,
+        rationale="仍然处于阅读期。",
+    )
+    _append_stage_progress(state, stage_id, "conclude", "本阶段证据已读完。")
+    after_conclude = _set_field(
+        state,
+        "contact_phone",
+        "12345",
+        [inline_id],
+        "resolved",
+        None,
+        stage_id=stage_id,
+        rationale="进入 conclude 后可以写字段。",
+    )
+
+    assert before_progress["ok"] is False
+    assert before_progress["errors"][0]["message"] == "set_field requires current stage to be in conclude progress"
+    assert during_reading["ok"] is False
+    assert during_reading["errors"][0]["message"] == "set_field requires current stage to be in conclude progress"
+    assert after_conclude["ok"] is True
+
+
+def test_set_field_rejects_unknown_stage_id():
+    state = _state()
+    _read_blocks(state, "dp-p-1", indexes=[0], reason="读取联系人段落")
+    inline = _preview_inline_evidence(state, "dp-p-1", start_index=0, count=1, reason="细化联系人证据")
+    inline_id = inline["inline_evidence"][0]["inline_id"]
+
+    bad_stage = _set_field(
+        state,
+        "contact_phone",
+        "12345",
+        [inline_id],
+        "resolved",
+        None,
+        stage_id="missing",
+        rationale="尝试引用不存在的阶段。",
+    )
+
+    assert bad_stage["ok"] is False
+    assert bad_stage["errors"][0]["message"] == "unknown stage_id"
+
+
+def test_read_tools_reject_new_evidence_after_conclude_progress():
+    state = _state()
+    stage_id = _start_stage(state, "理解联系人来源", "看联系人段落", "联系人字段需要正文证据。")["stage"][
+        "stage_id"
+    ]
+    _read_blocks(state, "dp-p-1", indexes=[0], reason="读取联系人段落")
+    _append_stage_progress(state, stage_id, "conclude", "联系人证据已经读完。")
+
+    overview = _overview(state)
+    read_blocks = _read_blocks(state, "dp-p-long", indexes=[0], reason="conclude 后不应继续读")
+    read_section = _read_section(state, "dp-h2-1", reason="conclude 后不应继续读")
+    read_range = _read_block_range(state, "dp-p-long", start_index=0, count=1, reason="conclude 后不应继续读")
+    read_list = _read_list(state, "dp-ul-1", block_offset=0, item_offset=0, number=1, reason="conclude 后不应继续读")
+    query_table = _query_table(state, "dp-table-1", 0, "SELECT * FROM data", reason="conclude 后不应继续查")
+    preview = _preview_inline_evidence(state, "dp-p-1", start_index=0, count=1, reason="conclude 后不应继续细化")
+    search = _search_elements(state, "联系人", limit=5, reason="conclude 后不应继续搜")
+
+    for result in [overview, read_blocks, read_section, read_range, read_list, query_table, preview, search]:
+        assert result["ok"] is False
+        assert result["errors"][0]["message"] == "reading tools are disabled after conclude progress"
+        assert result["errors"][0]["stage_id"] == stage_id
+    assert state.observed_evidence_ids == {"dp-p-1"}
+
+
+def test_current_stage_can_resume_investigation_after_conclude_progress():
+    state = _state()
+    stage_id = _start_stage(state, "理解联系人来源", "看联系人段落", "联系人字段需要正文证据。")["stage"][
+        "stage_id"
+    ]
+    _read_blocks(state, "dp-p-1", indexes=[0], reason="读取联系人段落")
+    _append_stage_progress(state, stage_id, "conclude", "联系人证据不足，需要继续调查。")
+    blocked = _read_blocks(state, "dp-p-long", indexes=[0], reason="同一 conclude 阶段不能继续读")
+    resumed = _append_stage_progress(state, stage_id, "investigate", "证据不足，在同一阶段继续读取更长通知正文。")
+    allowed = _read_blocks(state, "dp-p-long", indexes=[0], reason="同一阶段重新 investigate 后可以继续读")
+
+    assert blocked["ok"] is False
+    assert blocked["errors"][0]["stage_id"] == stage_id
+    assert resumed["ok"] is True
+    assert state.reading_stages[0]["stage_id"] == stage_id
+    assert state.reading_stages[0]["status"] == "in_progress"
+    assert allowed["section_id"] == "dp-p-long"
+    assert allowed["evidence_ids"] == ["dp-p-long"]
 
 
 def test_set_field_rejects_unobserved_evidence_ids():
@@ -1177,7 +1629,11 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
     names = [_tool_name(tool) for tool in tools]
 
     assert names == [
-        "update_plan",
+        "start_stage",
+        "append_stage_progress",
+        "record_stage_evidence",
+        "review_stage_evidence",
+        "complete_stage",
         "overview",
         "read_section",
         "read_blocks",
@@ -1188,12 +1644,41 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
         "set_field",
         "finish",
     ]
-    update_plan = tools[names.index("update_plan")]
-    update_schema = getattr(update_plan, "args_schema", None)
-    update_fields = getattr(update_schema, "model_fields", None) or getattr(update_schema, "__fields__", {})
-    assert "state" not in update_fields
-    assert "plan_index" in update_fields
-    assert "status" in update_fields
+    start_stage = tools[names.index("start_stage")]
+    start_schema = getattr(start_stage, "args_schema", None)
+    start_fields = getattr(start_schema, "model_fields", None) or getattr(start_schema, "__fields__", {})
+    assert {"title", "focus", "basis"} <= set(start_fields)
+    assert "state" not in start_fields
+    assert "reason" not in start_fields
+    start_description = _tool_description(start_stage)
+    assert "Start a new stage" in start_description
+    assert "not a field checklist" in start_description
+    progress = tools[names.index("append_stage_progress")]
+    progress_schema = getattr(progress, "args_schema", None)
+    progress_fields = getattr(progress_schema, "model_fields", None) or getattr(progress_schema, "__fields__", {})
+    assert {"stage_id", "type", "summary"} <= set(progress_fields)
+    assert "reason" not in progress_fields
+    progress_description = _tool_description(progress)
+    assert "investigate, compare, verify_absence, or conclude" in progress_description
+    assert "refocus" not in progress_description
+    assert "issue" not in progress_description
+    assert "Do not append progress just for display" in progress_description
+    record = tools[names.index("record_stage_evidence")]
+    record_schema = getattr(record, "args_schema", None)
+    record_fields = getattr(record_schema, "model_fields", None) or getattr(record_schema, "__fields__", {})
+    assert {"stage_id", "evidence_ids", "observation", "supports", "limits"} <= set(record_fields)
+    assert "reason" not in record_fields
+    assert "candidate evidence note" in _tool_description(record)
+    review = tools[names.index("review_stage_evidence")]
+    review_schema = getattr(review, "args_schema", None)
+    review_fields = getattr(review_schema, "model_fields", None) or getattr(review_schema, "__fields__", {})
+    assert {"stage_id"} <= set(review_fields)
+    assert "recorded order" in _tool_description(review)
+    complete = tools[names.index("complete_stage")]
+    complete_schema = getattr(complete, "args_schema", None)
+    complete_fields = getattr(complete_schema, "model_fields", None) or getattr(complete_schema, "__fields__", {})
+    assert {"stage_id", "finding"} <= set(complete_fields)
+    assert "reason" not in complete_fields
     overview = tools[names.index("overview")]
     overview_description = _tool_description(overview)
     assert "section headers" in overview_description
@@ -1203,7 +1688,7 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
     read_section_fields = getattr(read_section_schema, "model_fields", None) or getattr(read_section_schema, "__fields__", {})
     assert "state" not in read_section_fields
     assert "section_id" in read_section_fields
-    assert "reason" in read_section_fields
+    assert "reason" not in read_section_fields
     assert "actual DOM descendants" in _tool_description(read_section)
     read_blocks = tools[names.index("read_blocks")]
     blocks_schema = getattr(read_blocks, "args_schema", None)
@@ -1255,10 +1740,32 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
     set_field = tools[names.index("set_field")]
     set_field_schema = getattr(set_field, "args_schema", None)
     set_field_fields = getattr(set_field_schema, "model_fields", None) or getattr(set_field_schema, "__fields__", {})
-    assert "reason" in set_field_fields
+    assert "reason" not in set_field_fields
+    assert "stage_id" in set_field_fields
+    assert "rationale" in set_field_fields
+    assert "evidence_note_ids" not in set_field_fields
+    start_stage_description = " ".join(_tool_description(tools[names.index("start_stage")]).split())
+    assert "Start a new stage" in start_stage_description
+    assert "After start_stage" in start_stage_description
+    progress_description = " ".join(_tool_description(tools[names.index("append_stage_progress")]).split())
+    assert "type controls what changed and what tools are allowed next" in progress_description
+    assert "investigate:" in progress_description
+    assert "compare:" in progress_description
+    assert "verify_absence:" in progress_description
+    assert "conclude:" in progress_description
+    assert "Forbidden after investigate: set_field, review_stage_evidence, and finish" in progress_description
+    assert "Forbidden after compare: set_field, review_stage_evidence, and finish" in progress_description
+    assert "Forbidden after verify_absence: set_field, review_stage_evidence, and finish" in progress_description
+    assert "allowed tools are review_stage_evidence and set_field" in progress_description
+    assert "Forbidden after conclude: overview, read_section, read_blocks, read_block_range, read_list, query_table, preview_inline_evidence, and record_stage_evidence" in progress_description
+    assert "If evidence is insufficient after conclude" in progress_description
+    assert "do not use this as a normal continuation path" in progress_description
+    assert "withdraws the write-ready checkpoint" in progress_description
+    assert "Do not append progress just for display" in progress_description
     set_field_description = " ".join(_tool_description(set_field).split())
     assert "for each task field exactly once" in set_field_description
-    assert "unrelated elements" in set_field_description
+    assert "Only call this when the current stage's latest progress is conclude" in set_field_description
+    assert "latest progress is conclude" in set_field_description
     assert "read_blocks" in set_field_description
     assert "read_block_range" in set_field_description
     assert "preview_inline_evidence" in set_field_description
@@ -1266,6 +1773,14 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
     assert "row ids" in set_field_description
     assert "item ids" in set_field_description
     assert "query_table" in set_field_description
+    for tool in tools:
+        schema = getattr(tool, "args_schema", None)
+        fields = getattr(schema, "model_fields", None) or getattr(schema, "__fields__", {})
+        assert "reason" not in fields, _tool_name(tool)
+    assert "enum fields" in set_field_description
+    assert '{"variant": "name", "value": ...}' in set_field_description
+    assert "null variant" in set_field_description
+    assert "field-level rationale" in set_field_description
 
 
 def _tool_name(tool):

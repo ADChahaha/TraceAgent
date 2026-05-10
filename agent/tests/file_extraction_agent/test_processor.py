@@ -1,37 +1,39 @@
 from __future__ import annotations
 
-from service.file_extraction_agent.processor import extract
-from service.file_extraction_agent.schemas import ModelConfig
+import pytest
+
 from service.file_extraction_agent.impl import model_factory as model_factory_module
 from service.file_extraction_agent.impl.model_factory import normalize_model_config
+from service.file_extraction_agent.processor import extract
+from service.file_extraction_agent.schemas import ModelConfig
 
 
 def test_extract_builds_input_models_and_runs_graph(monkeypatch):
     captured = {}
 
-    def fake_build_stage_models(config):
+    def fake_build_resolution_model(config):
         captured["config"] = config
-        return "broad-model", "resolution-model"
+        return "resolution-model"
 
-    def fake_run_graph(extraction_input, broad_model, resolution_model):
+    def fake_run_graph(extraction_input, resolution_model):
         captured["html"] = extraction_input.html
         captured["field"] = extraction_input.task_spec.fields[0].name
-        captured["models"] = (broad_model, resolution_model)
+        captured["model"] = resolution_model
         return "ok"
 
-    monkeypatch.setattr("service.file_extraction_agent.processor.build_stage_models", fake_build_stage_models)
+    monkeypatch.setattr("service.file_extraction_agent.processor.build_resolution_model", fake_build_resolution_model)
     monkeypatch.setattr("service.file_extraction_agent.processor.run_extraction_graph", fake_run_graph)
 
     result = extract(
         html='<p id="dp-p-1">正文</p>',
         task_spec={"fields": [{"name": "title"}]},
-        model_config=ModelConfig(broad_model_name="broad", resolution_model_name="resolution"),
+        model_config=ModelConfig(resolution_model_name="resolution"),
     )
 
     assert result == "ok"
     assert captured["html"] == '<p id="dp-p-1">正文</p>'
     assert captured["field"] == "title"
-    assert captured["models"] == ("broad-model", "resolution-model")
+    assert captured["model"] == "resolution-model"
 
 
 def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
@@ -41,7 +43,6 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
             [
                 'BASE_URL="https://example.com/v1"',
                 'OPENAI_API_KEY="key"',
-                'BROAD_MODEL="broad"',
                 'RESOLUTION_MODEL="resolution"',
                 'TEMPERATURE="0.1"',
                 'TOP_P="0.9"',
@@ -60,7 +61,6 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
         "BASE_URL",
         "API_KEY",
         "OPENAI_API_KEY",
-        "BROAD_MODEL",
         "RESOLUTION_MODEL",
         "MODEL",
         "TEMPERATURE",
@@ -75,7 +75,6 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
 
     assert config.base_url == "https://example.com/v1"
     assert config.api_key == "key"
-    assert config.broad_model_name == "broad"
     assert config.resolution_model_name == "resolution"
     assert config.temperature == 0.1
     assert config.top_p == 0.9
@@ -101,7 +100,6 @@ def test_normalize_model_config_ignores_generic_api_key_env(monkeypatch, tmp_pat
         "BASE_URL",
         "API_KEY",
         "OPENAI_API_KEY",
-        "BROAD_MODEL",
         "RESOLUTION_MODEL",
         "MODEL",
         "TEMPERATURE",
@@ -116,10 +114,14 @@ def test_normalize_model_config_ignores_generic_api_key_env(monkeypatch, tmp_pat
 
     assert config.base_url == "https://example.com/v1"
     assert config.api_key is None
-    assert config.broad_model_name == "model"
     assert config.resolution_model_name == "model"
     assert config.max_retries == 6
     assert config.request_timeout is None
+
+
+def test_normalize_model_config_rejects_broad_model_name():
+    with pytest.raises(ValueError, match="broad_model_name is not supported"):
+        normalize_model_config({"broad_model_name": "broad", "resolution_model_name": "resolution"})
 
 
 def test_build_chat_model_passes_retry_and_timeout(monkeypatch):

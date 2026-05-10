@@ -51,6 +51,7 @@ backend/
   routes/
     tasks.py
     reviews.py
+    experiments.py
     capabilities.py
     errors.py
   crud/
@@ -63,6 +64,7 @@ backend/
   services/
     task_service.py
     agent_client.py
+    contract_nli_experiment.py
     route_policy.py
     review_service.py
     audit_service.py
@@ -87,10 +89,12 @@ backend/
 - `core/db.py` 初始化 SQLite 连接，不直接写业务查询。
 - `core/storage.py` 只保留上传文件元信息所需的哈希工具，不落盘保存原始文件。
 - `routes/` 只做 HTTP 入参出参适配，把请求转交给 `services/`。
+- `routes/experiments.py` 只暴露内置实验数据读取接口，不写任务数据库，也不触发 agent 调用。
 - `routes/reviews.py` 定义 review 提交请求模型；其他响应暂按服务层字典返回。
 - `models/schema.py` 定义 SQLite DDL。第一版没有引入 ORM，CRUD 直接使用 `sqlite3.Row` 和参数化 SQL。
 - `crud/` 封装基础数据库读写，不写业务编排。
 - `services/` 负责任务创建、agent 调用、状态流转、route policy、review 和 audit。
+- `services/contract_nli_experiment.py` 从 `backend/data/contract_nli/` 读取已完成实验输出，并组装成前端可复用的 replay/detail 结构。
 
 ## 3. 主处理链路
 
@@ -147,6 +151,29 @@ POST /tasks/{task_id}/review
   -> audit_service 写入 field_commits
   -> 更新 tasks.status / stage / completed_at
   -> 后续 summary 返回 completed / done / needs_review=false
+```
+
+内置实验数据读取流程如下：
+
+```text
+GET /experiments/contract-nli
+  -> routes.experiments 调用 contract_nli_experiment.load_experiment_report()
+  -> 从 backend/data/contract_nli/dev_all_document_level_official_evidence_schema/agent_vs_direct_report.json 读取摘要
+  -> 返回 dataset、run_id、样本列表、默认样本 id 和报告 summary
+
+GET /experiments/contract-nli/samples/{sample_id}/detail
+  -> 校验 sample_id 是否存在于报告 samples
+  -> 读取 backend/data/contract_nli/.../agent_runs/{sample_id}/extraction_result.json
+  -> 从 trace.actions 的 search/read 结果里收集可展示 HTML
+  -> 把 agent result、trace.actions、field_states 组装成 TaskDetailData 兼容结构
+  -> 前端可直接复用 ReplayReview 展示 search_elements、set_field 和证据高亮
+
+GET /experiments/contract-nli/samples/{sample_id}/html-process
+  -> 校验 sample_id 是否存在于报告 samples
+  -> 从 ContractNLI raw 目录读取对应的原始 HTML 文件
+  -> 清理 script/style/noscript，并按 p/li/dt/dd/heading 等块级节点生成 agent HTML
+  -> 返回 raw/agent HTML 片段、元素数量、字符数和关键词命中统计
+  -> 前端用它解释 sec-html 样本进入 agent 前的转换过程
 ```
 
 ## 4. 模块职责

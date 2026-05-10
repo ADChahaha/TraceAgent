@@ -8,8 +8,31 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-FieldType = Literal["string", "number", "boolean", "list[string]", "list[number]"]
+BasicFieldType = Literal["string", "number", "boolean", "list[string]", "list[number]", "null"]
+FieldType = Literal["string", "number", "boolean", "list[string]", "list[number]", "null", "enum"]
 ResultStatus = Literal["completed", "failed"]
+
+
+class EnumVariantDefinition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    type: BasicFieldType
+    description: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_bool_alias(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("type") == "bool":
+            data = dict(data)
+            data["type"] = "boolean"
+        return data
+
+    @model_validator(mode="after")
+    def validate_name(self) -> "EnumVariantDefinition":
+        if not self.name:
+            raise ValueError("enum variant name is required")
+        return self
 
 
 class FieldDefinition(BaseModel):
@@ -17,6 +40,7 @@ class FieldDefinition(BaseModel):
 
     name: str
     type: FieldType = "string"
+    variants: list[EnumVariantDefinition] = Field(default_factory=list)
     required: bool = False
     description: str | None = None
     field_name: str | None = Field(default=None, exclude=True)
@@ -37,6 +61,14 @@ class FieldDefinition(BaseModel):
     def fill_field_name(self) -> "FieldDefinition":
         if not self.name:
             raise ValueError("field name is required")
+        if self.type == "enum":
+            if not self.variants:
+                raise ValueError("enum field requires variants")
+            names = [variant.name for variant in self.variants]
+            if len(names) != len(set(names)):
+                raise ValueError("enum variant names must be unique")
+        elif self.variants:
+            raise ValueError("variants are only allowed when field type is enum")
         self.field_name = self.name
         return self
 
@@ -54,7 +86,6 @@ class ModelConfig:
     provider: str = "openai"
     base_url: str | None = None
     api_key: str | None = None
-    broad_model_name: str = ""
     resolution_model_name: str = ""
     temperature: float = 0.0
     top_p: float | None = None
@@ -86,7 +117,9 @@ class ExtractionResult:
 
 __all__ = [
     "FieldType",
+    "BasicFieldType",
     "ResultStatus",
+    "EnumVariantDefinition",
     "FieldDefinition",
     "TaskSpec",
     "ModelConfig",

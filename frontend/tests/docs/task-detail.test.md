@@ -11,6 +11,7 @@
   -> TaskDetail 顶部展示任务 status/stage/route 和失败原因
   -> ReplayReview 展示文档文件名、outline、iframe 文档、plan 和当前 action
   -> result.fields 与 review.fields 合并成 replay 字段卡
+  -> search_elements action 显示检索词、命中数和候选片段
   -> action result 返回 query_audit.summary、table_audit.summary 或其他 *_audit.summary 时，在当前动作输出区展示诊断摘要；table_extraction 失败显示警示，正常执行但 0 行显示普通提示
   -> set_field action 到达时显示字段值、route badge、route_reason 和证据 chip
   -> 长字段值在字段写入卡内部独立滚动，复核输入和提交按钮不被长列表挤出卡片底部
@@ -34,6 +35,7 @@
 - `低层 API 仍保留 trace 和 audit 读取能力`：验证 `getTaskTrace` 和 `getTaskAudit` 这些底层 API 函数仍可单独使用，详情页收口不等于删除 backend 调试接口适配。
 - `waiting_review 任务只展示 replay，并在 review 字段卡片里提交修正`：验证详情页不再出现“结果/复核/证据/审计”tab，也不展示原始 trace/audit 文案；当前 `set_field` 卡片显示字段显示名、`review` badge 和 route 原因，并能提交 `revise_and_approve` payload，刷新后同步最近任务缓存。
 - `动作输出展示返回的诊断摘要，字段写入卡不再承接诊断文字`：验证当前 action result 只要返回 `*_audit.summary`，ReplayReview 就在该动作输出区展示诊断摘要；后续 `set_field` 字段卡只展示字段值、路由和证据，不再承接上一动作的诊断文字。
+- `search_elements 动作展示检索词和命中片段`：验证当前 action 是 `search_elements` 时，ReplayReview 会显示专门的动作结果卡，包含 query、match count 和候选证据 snippet，方便审阅 ContractNLI 这类检索型 trace。
 - `字段证据 chip 只定位文档证据，不回跳 replay action`：验证用户从字段写入卡点击证据 chip 时，只暂停并滚动文档 iframe，不把 replay 序号切回最早引用该证据的 action。
 - `read_element 查询表结构时高亮表名和表头`：验证模型只看到 `table-ref` 表结构摘要时，ReplayReview 高亮原 HTML 里的 caption/表名和表头，不把整张表或表体内容标成已读。
 - `read_element 查询表结构自动播放时读取表名入口`：验证自动播放 `read_element(TABLE)` 时会把首个可读锚点切到 caption/表名入口，不再滚动和读取原始 table/figure block。

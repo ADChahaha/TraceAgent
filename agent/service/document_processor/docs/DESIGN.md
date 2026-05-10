@@ -19,10 +19,11 @@ file_obj
   -> read_source_bytes(...)
   -> mineru_converter.convert_pdf_bytes_to_content_list(...)
   -> mineru_html.build_blocks_from_content_list(...)
+  -> mineru_html.build_semantic_document_from_content_list(...)
   -> mineru_html.build_html_from_content_list(...)
   -> mineru_html.build_display_html_from_content_list(...)
   -> mineru_html.build_markdown_from_content_list(...)
-  -> ProcessResult(filename, html, display_html, markdown, md_list, blocks, meta_info, warnings)
+  -> ProcessResult(filename, html, display_html, markdown, md_list, blocks, semantic_document, meta_info, warnings)
 ```
 
 ## Files
@@ -74,8 +75,36 @@ Owns conversion from MinerU pages to HTML.
 - `build_display_html_from_content_list(...)`: full HTML document with CSS.
 - `build_blocks_from_content_list(...)`: backend evidence blocks using the same
   rendered ids as HTML.
+- `build_semantic_document_from_content_list(...)`: section/block/inline
+  semantic structure for section-level context and fine evidence highlighting.
 - `build_markdown_from_content_list(...)`: markdown-like text for storage and
   audit views.
+
+`semantic_document` 的基础实现思路：
+
+```text
+MinerU content_list_v2 pages
+  -> 复用 build_blocks_from_content_list(...) 生成稳定 block_id/page_no/bbox/kind
+  -> 过滤 page_header/page_number 等不适合推理的噪声
+  -> 遇到 heading block 创建新 section
+  -> section.text 收入 heading 本身和直到下一个 section 前的所有正文 block
+  -> block 按 heading/lead_in/clause/paragraph/list_item/table/signature 标注类型
+  -> clause block 挂到最近一个以冒号结尾的 lead_in block
+  -> block 内按分号和条件短语生成 inline 片段
+  -> 返回 {"sections": [...], "blocks": [...], "inlines": [...]}
+```
+
+HTML fragment 的层级输出规则：
+
+```text
+MinerU content_list_v2 pages
+  -> 逐页过滤不可见 block
+  -> level=2 title 打开 <section id="{block_id}_section">，标题本身保留为 <h2 id="{block_id}">
+  -> level=3 title 打开 <section id="{block_id}_subsection">，标题本身保留为 <h3 id="{block_id}">
+  -> level>=4 title 不再作为章节层级，降级为 <p id="{block_id}" data-type="title" data-level="N">
+  -> paragraph/list/table 分别输出为原生 <p>/<ul>/<table> block，block id 直接放在该标签上
+  -> list item 和 table row 继续输出稳定子证据 id
+```
 
 IDs are deterministic from page and block position:
 
@@ -90,8 +119,14 @@ and footnotes for visible text/table content. `blocks` reuse the rendered HTML
 ids for paragraphs, headings, list items and table rows so backend can recover
 evidence text by id. Empty pages, image-only blocks, and source image debug
 paths are filtered out so replay HTML only shows content that the extraction
-agent can actually use.
+agent can actually use. In generated HTML, level-2 titles define section
+wrappers, level-3 titles define subsection wrappers, and level-4 or deeper
+titles stay at ordinary block level so downstream tools do not treat them as
+additional section scopes.
 
 ## Table Handling
 
-Continued-table merging is disabled. The output keeps MinerU table HTML as-is.
+Continued-table merging is disabled. The output keeps MinerU table cells and row
+content, but normalizes the first `<table>` id to the document block id and
+injects deterministic `<tr>` ids so table lookup tools can address the table and
+rows directly.
