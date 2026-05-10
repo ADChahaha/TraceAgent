@@ -139,6 +139,7 @@ def _start_conclude_stage(state, summary: str = "证据已经读完，可以写�
         "复核已观察证据并写字段",
         "测试需要进入 conclude 写字段期。",
     )["stage"]["stage_id"]
+    _append_stage_progress(state, stage_id, "investigate", "测试已完成证据观察，准备进入写字段检查点。")
     _append_stage_progress(state, stage_id, "conclude", summary)
     return stage_id
 
@@ -1007,6 +1008,8 @@ def test_set_field_requires_inline_evidence_for_text_blocks():
     )
     _complete_stage(state, stage_id, "粗粒度证据被拒绝后，重新进入阅读阶段细化证据。")
     _start_stage(state, "细化联系人证据", "把联系人段落切成 inline", "上一阶段证据粒度太粗。")
+    precise_stage_id = state.reading_stages[-1]["stage_id"]
+    _append_stage_progress(state, precise_stage_id, "investigate", "准备细化联系人段落证据。")
     preview = _preview_inline_evidence(
         state,
         "dp-p-1",
@@ -1014,7 +1017,6 @@ def test_set_field_requires_inline_evidence_for_text_blocks():
         count=5,
         reason="细化联系人电话证据",
     )
-    precise_stage_id = state.reading_stages[-1]["stage_id"]
     _append_stage_progress(state, precise_stage_id, "conclude", "inline 证据已经足够。")
     precise = _set_field(
         state,
@@ -1062,6 +1064,8 @@ def test_set_field_requires_row_or_item_level_evidence_for_tables_and_lists():
     )
     _complete_stage(state, stage_id, "容器证据被拒绝后，重新读取精确行和列表项。")
     _start_stage(state, "读取精确表格和列表证据", "查询行并读取列表项", "上一阶段证据粒度太粗。")
+    precise_stage_id = state.reading_stages[-1]["stage_id"]
+    _append_stage_progress(state, precise_stage_id, "investigate", "准备查询表格行并读取列表项。")
     table_rows = _query_table(
         state,
         "dp-table-1",
@@ -1077,7 +1081,6 @@ def test_set_field_requires_row_or_item_level_evidence_for_tables_and_lists():
         number=1,
         reason="读取列表项",
     )
-    precise_stage_id = state.reading_stages[-1]["stage_id"]
     _append_stage_progress(state, precise_stage_id, "conclude", "行和列表项证据已经足够。")
     table_precise = _set_field(
         state,
@@ -1388,6 +1391,7 @@ def test_record_stage_evidence_and_review_returns_notes_in_record_order():
     stage_id = _start_stage(state, "理解联系人来源", "看联系人段落", "联系人字段需要正文证据。")["stage"][
         "stage_id"
     ]
+    _append_stage_progress(state, stage_id, "investigate", "准备读取联系人段落。")
     _read_blocks(state, "dp-p-1", indexes=[0], reason="读取联系人段落")
     inline = _preview_inline_evidence(state, "dp-p-1", start_index=0, count=1, reason="细化联系人证据")
     inline_id = inline["inline_evidence"][0]["inline_id"]
@@ -1439,11 +1443,47 @@ def test_review_stage_evidence_requires_active_conclude_stage():
     assert allowed["ok"] is True
 
 
+def test_reading_tools_require_reading_progress_after_start_stage():
+    state = _state()
+    stage_id = _start_stage(state, "理解联系人来源", "看联系人段落", "联系人字段需要正文证据。")["stage"][
+        "stage_id"
+    ]
+
+    blocked = _read_blocks(state, "dp-p-1", indexes=[0], reason="还没声明阅读进展就读取")
+    progress = _append_stage_progress(state, stage_id, "investigate", "准备读取联系人段落。")
+    allowed = _read_blocks(state, "dp-p-1", indexes=[0], reason="进入阅读期后读取联系人段落")
+
+    assert blocked["ok"] is False
+    assert blocked["errors"][0]["message"] == "reading tools require current stage reading progress"
+    assert blocked["errors"][0]["stage_id"] == stage_id
+    assert progress["ok"] is True
+    assert allowed["section_id"] == "dp-p-1"
+
+
+def test_conclude_requires_prior_reading_progress():
+    state = _state()
+    stage_id = _start_stage(state, "理解联系人来源", "看联系人段落", "联系人字段需要正文证据。")["stage"][
+        "stage_id"
+    ]
+
+    premature = _append_stage_progress(state, stage_id, "conclude", "不能作为第一个 progress。")
+    investigate = _append_stage_progress(state, stage_id, "investigate", "准备读取联系人段落。")
+    conclude = _append_stage_progress(state, stage_id, "conclude", "阅读进展后可以进入 conclude。")
+
+    assert premature["ok"] is False
+    assert premature["errors"][0]["message"] == "conclude requires prior reading progress"
+    assert state.reading_stages[0]["progress"] == [
+        investigate["progress"],
+        conclude["progress"],
+    ]
+
+
 def test_record_stage_evidence_requires_observed_precise_evidence():
     state = _state()
     stage_id = _start_stage(state, "理解名单来源", "看名单附近内容", "名单可能给出字段证据。")["stage"][
         "stage_id"
     ]
+    _append_stage_progress(state, stage_id, "investigate", "准备读取联系人段落。")
     _read_blocks(state, "dp-p-1", indexes=[0], reason="读取联系人段落")
 
     coarse_text = _record_stage_evidence(state, stage_id, ["dp-p-1"], "整段文字还不够精确。")
@@ -1461,6 +1501,7 @@ def test_set_field_records_stage_rationale_without_separate_evidence_note_ids():
     stage_id = _start_stage(state, "理解联系人来源", "看联系人段落", "联系人字段需要正文证据。")["stage"][
         "stage_id"
     ]
+    _append_stage_progress(state, stage_id, "investigate", "准备读取联系人段落。")
     _read_blocks(state, "dp-p-1", indexes=[0], reason="读取联系人段落")
     inline = _preview_inline_evidence(state, "dp-p-1", start_index=0, count=1, reason="细化联系人证据")
     inline_id = inline["inline_evidence"][0]["inline_id"]
@@ -1492,6 +1533,7 @@ def test_set_field_requires_active_conclude_stage():
     stage_id = _start_stage(state, "理解联系人来源", "看联系人段落", "联系人字段需要正文证据。")["stage"][
         "stage_id"
     ]
+    _append_stage_progress(state, stage_id, "investigate", "准备读取联系人段落。")
     _read_blocks(state, "dp-p-1", indexes=[0], reason="读取联系人段落")
     inline = _preview_inline_evidence(state, "dp-p-1", start_index=0, count=1, reason="细化联系人证据")
     inline_id = inline["inline_evidence"][0]["inline_id"]
@@ -1562,6 +1604,7 @@ def test_read_tools_reject_new_evidence_after_conclude_progress():
     stage_id = _start_stage(state, "理解联系人来源", "看联系人段落", "联系人字段需要正文证据。")["stage"][
         "stage_id"
     ]
+    _append_stage_progress(state, stage_id, "investigate", "准备读取联系人段落。")
     _read_blocks(state, "dp-p-1", indexes=[0], reason="读取联系人段落")
     _append_stage_progress(state, stage_id, "conclude", "联系人证据已经读完。")
 
@@ -1586,6 +1629,7 @@ def test_current_stage_can_resume_investigation_after_conclude_progress():
     stage_id = _start_stage(state, "理解联系人来源", "看联系人段落", "联系人字段需要正文证据。")["stage"][
         "stage_id"
     ]
+    _append_stage_progress(state, stage_id, "investigate", "准备读取联系人段落。")
     _read_blocks(state, "dp-p-1", indexes=[0], reason="读取联系人段落")
     _append_stage_progress(state, stage_id, "conclude", "联系人证据不足，需要继续调查。")
     blocked = _read_blocks(state, "dp-p-long", indexes=[0], reason="同一 conclude 阶段不能继续读")
@@ -1653,6 +1697,7 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
     start_description = _tool_description(start_stage)
     assert "Start a new stage" in start_description
     assert "not a field checklist" in start_description
+    assert "related evidence-to-field writing unit" in start_description
     progress = tools[names.index("append_stage_progress")]
     progress_schema = getattr(progress, "args_schema", None)
     progress_fields = getattr(progress_schema, "model_fields", None) or getattr(progress_schema, "__fields__", {})
@@ -1749,6 +1794,7 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
     assert "After start_stage" in start_stage_description
     progress_description = " ".join(_tool_description(tools[names.index("append_stage_progress")]).split())
     assert "type controls what changed and what tools are allowed next" in progress_description
+    assert "Only write multiple fields in one stage when they share the same section, table, list, or comparison chain" in progress_description
     assert "investigate:" in progress_description
     assert "compare:" in progress_description
     assert "verify_absence:" in progress_description

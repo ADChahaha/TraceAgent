@@ -25,7 +25,7 @@ html + task_spec + run_options
 
 ## Reading Stages
 
-当前是单 resolution agent：模型直接根据字段和 compact outline 读证据、写字段；右侧可读过程由 `reading_stages` 维护。stage 描述“当前围绕什么理解目标读文档”，不是把输出字段、标签、问题或假设逐项列成 checklist。
+当前是单 resolution agent：模型直接根据字段和 compact outline 读证据、写字段；右侧可读过程由 `reading_stages` 维护。stage 描述“当前围绕什么理解目标读文档”，不是把输出字段、标签、问题或假设逐项列成 checklist。一个 stage 是一组相关证据到字段写入的单元：只有共享同一 section、table、list 或对比链路的字段才应该放在同一 stage；下一批字段如果需要明显不同的条款、章节、表格、列表或 hypothesis，就应先 `complete_stage`，再 `start_stage`。
 
 推荐语义：
 
@@ -33,6 +33,7 @@ html + task_spec + run_options
 compact outline 已在 prompt 中注入
   -> resolution 形成临时 evidence-needs 假设，但不硬绑定字段组
   -> 进入一个大阅读阶段时 start_stage
+  -> 先 append_stage_progress(type="investigate" | "compare" | "verify_absence")，说明为什么开始读或确认什么范围
   -> 读到关键事实、需要对比多处证据、或需要确认缺失时 append_stage_progress
   -> 重要候选依据用 record_stage_evidence 记录；它和字段共用同一批 evidence_ids
   -> 当前证据足以写一个或多个字段时 append_stage_progress(type="conclude")
@@ -48,20 +49,22 @@ stage 内部采用“先读、再写”的门控：
 
 ```text
 start_stage
-  -> 阅读期：overview / read_* / query_table / preview_inline_evidence / record_stage_evidence
   -> append_stage_progress(type="investigate" | "compare" | "verify_absence") 记录阅读推进
+  -> 阅读期：overview / read_* / query_table / preview_inline_evidence / record_stage_evidence
   -> append_stage_progress(type="conclude") 表示进入写字段检查点
   -> 写字段期：review_stage_evidence / set_field
   -> 如果 conclude 过早且证据不足，append_stage_progress(type="investigate" | "compare" | "verify_absence") 撤回写字段检查点
   -> complete_stage
 ```
 
-只有当前 `in_progress` stage 的最新 progress 是 `conclude` 时，模型才可以调用 `review_stage_evidence` 和 `set_field`。进入 `conclude` 后，本 stage 不能直接读取新证据；如果发现还缺证据，说明这次 `conclude` 过早，应在同一个 stage 追加新的 `investigate`、`compare` 或 `verify_absence` progress，撤回写字段检查点，让最新 progress 回到证据阶段，再继续读取。忘记本阶段已经记录过哪些候选依据时，可以在 conclude 阶段调用 `review_stage_evidence` 复看 notes；如果 notes 不足以支持字段，就不要硬写字段，也不要直接读，应该先撤回 conclude、补证据、再重新 `conclude`。这样 replay 能体现“准备写字段时发现证据不足，于是回到同一问题补查”，同时避免把 `conclude` 用成普通继续阅读入口。
+`start_stage` 后不能直接读取；必须先追加 `investigate`、`compare` 或 `verify_absence`，让 replay 知道这一阶段为什么开始读。`conclude` 也不能作为 stage 的第一个 progress，它只表示“读完了，准备写字段”。只有当前 `in_progress` stage 的最新 progress 是 `conclude` 时，模型才可以调用 `review_stage_evidence` 和 `set_field`。进入 `conclude` 后，本 stage 不能直接读取新证据；如果发现还缺证据，说明这次 `conclude` 过早，应在同一个 stage 追加新的 `investigate`、`compare` 或 `verify_absence` progress，撤回写字段检查点，让最新 progress 回到证据阶段，再继续读取。忘记本阶段已经记录过哪些候选依据时，可以在 conclude 阶段调用 `review_stage_evidence` 复看 notes；如果 notes 不足以支持字段，就不要硬写字段，也不要直接读，应该先撤回 conclude、补证据、再重新 `conclude`。这样 replay 能体现“准备写字段时发现证据不足，于是回到同一问题补查”，同时避免把 `conclude` 用成普通继续阅读入口。
 
 阶段义务：
 
-- 阅读期：用 `overview/read_*/query_table/preview_inline_evidence` 收集证据，可追加 `investigate/compare/verify_absence`，不能 `set_field`。
-- conclude 检查点：只有读完并准备写字段时才追加 `conclude`；它不是泛泛的进度总结。
+- 阶段启动：`start_stage` 后先追加 `investigate/compare/verify_absence`，不能直接读取。
+- 阅读期：用 `overview/read_*/query_table/preview_inline_evidence` 收集证据，可继续追加 `investigate/compare/verify_absence`，不能 `set_field`。
+- 缺失确认：`verify_absence` 用来解释缺失类或 `null` 结论检查了哪些范围；它是可读检查点，不是每个字段都必须走的硬流程。
+- conclude 检查点：只有读完并准备写字段时才追加 `conclude`；它不是泛泛的进度总结，也不能作为 stage 的第一个 progress。
 - 写字段期：最新 progress 是 `conclude` 时，可选 `review_stage_evidence`，然后 `set_field(stage_id, rationale, evidence_ids)`；此时不能直接继续读。
 - 纠正过早 conclude：只有写前发现证据不足时，才在同一 stage 追加阅读类 progress，撤回写字段检查点；补读后必须重新 `conclude`。
 - 完成阶段：只有当前理解目标稳定、准备切换到明显不同目标时才 `complete_stage`。

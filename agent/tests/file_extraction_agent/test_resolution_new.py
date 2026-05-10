@@ -56,10 +56,15 @@ def test_resolution_messages_embed_compact_document_outline():
     assert "Use reading stage tools to maintain append-only human-readable execution stages" in content
     assert "Do not create a stage for the initial overview" in content
     assert "Stages are not field checklists" in content
+    assert "A stage is a related evidence-to-field writing unit" in content
+    assert "Only write multiple fields in one stage when they share the same section, table, list, or comparison chain" in content
+    assert "If the next field needs a materially different clause, section, table, list, or hypothesis, complete the current stage and start another stage" in content
     assert "Complete the current stage before starting another stage" in content
     assert "Stage obligations:" in content
-    assert "Reading phase: use overview/read/query/preview tools" in content
+    assert "Stage startup: after start_stage, append investigate/compare/verify_absence before any reading tool" in content
+    assert "Reading phase: after a reading progress exists, use overview/read/query/preview tools" in content
     assert "Conclude checkpoint: call conclude only after you have finished reading enough evidence and are ready to write fields" in content
+    assert "conclude cannot be the first progress event in a stage" in content
     assert "Writing phase: use review_stage_evidence if helpful, then set_field" in content
     assert "Premature conclude correction: only if conclude turns out to lack enough evidence" in content
     assert "this withdraws the write-ready checkpoint" in content
@@ -69,7 +74,8 @@ def test_resolution_messages_embed_compact_document_outline():
     assert "Do not use conclude as a normal continuation point" in content
     assert "only correct a premature conclude by appending investigate/compare/verify_absence to the same stage before reading more" in content
     assert "Use compare only when a decision depends on relationships between observed evidence" in content
-    assert "Use verify_absence before absence-like field outcomes" in content
+    assert "Use verify_absence for absence-like or null outcomes when the checked scope matters" in content
+    assert "not a mandatory per-field checklist" in content
     assert "Do not use compare for ordinary task-field matching" in content
     assert "record_stage_evidence" in content
     assert "set_field and review_stage_evidence are allowed only after the current stage's latest progress is conclude" in content
@@ -212,6 +218,7 @@ def test_resolution_nudge_counts_new_read_tools_as_observed_evidence():
 
     assert "Stop browsing broadly" in instruction
     assert "append conclude for the current stage" in instruction
+    assert "append investigate/compare/verify_absence before reading" in instruction
     assert "then call set_field with stage_id and rationale" in instruction
     assert "If evidence is still insufficient" in instruction
     assert "do not write or read directly" in instruction
@@ -224,6 +231,8 @@ def test_resolution_nudge_keeps_missing_fields_from_becoming_plan_items():
 
     assert "Use missing fields only to identify unresolved evidence needs" in instruction
     assert "Do not turn the missing field list into stages" in instruction
+    assert "After start_stage, append investigate/compare/verify_absence before reading" in instruction
+    assert "append conclude only after reading progress and enough evidence" in instruction
     assert "For each missing field" not in instruction
 
 

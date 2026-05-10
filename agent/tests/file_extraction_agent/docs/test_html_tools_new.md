@@ -68,6 +68,8 @@
 - `test_append_stage_progress_rejects_unknown_stage_or_type_without_mutation`：确认未知 stage 或非法 progress type 会返回错误，且不会污染已有 stage；当前只允许 `investigate/compare/verify_absence/conclude`，`refocus/issue` 不再作为 progress type。
 - `test_record_stage_evidence_and_review_returns_notes_in_record_order`：确认候选证据 note 只能基于已观察精确证据记录，`review_stage_evidence` 按记录顺序返回。
 - `test_review_stage_evidence_requires_active_conclude_stage`：确认只有当前活动 stage 的最新 progress 是 `conclude` 时，才能复看该 stage 的候选证据 notes。
+- `test_reading_tools_require_reading_progress_after_start_stage`：确认 `start_stage` 后不能直接调用读取工具，必须先追加 `investigate/compare/verify_absence` 这类阅读进展，之后才能读取证据。
+- `test_conclude_requires_prior_reading_progress`：确认 `conclude` 不能作为 stage 的第一个 progress；必须先有阅读类 progress，才能进入写字段检查点。
 - `test_record_stage_evidence_requires_observed_precise_evidence`：确认候选证据 note 拒绝未知证据和整段文本块这类粗粒度证据。
 - `test_set_field_records_stage_rationale_without_separate_evidence_note_ids`：确认字段写入会保留 `stage_id` 和字段级 `rationale`，但不再保存单独的 `evidence_note_ids`；字段和候选 note 通过共享 `evidence_ids` 关联。
 - `test_set_field_requires_active_conclude_stage`：确认 `set_field` 只能在当前活动 stage 进入 `conclude` 后调用，阅读期不能边读边写字段。
@@ -76,4 +78,4 @@
 - `test_current_stage_can_resume_investigation_after_conclude_progress`：确认 conclude 后若发现证据不足，不能直接读；必须在同一个 stage 追加新的 `investigate` progress 撤回过早的写字段检查点，之后才能继续读取。
 - `test_set_field_rejects_unobserved_evidence_ids`：确认未被读取或查询观察到的 evidence id 不能用于 resolved 字段。
 - `test_finish_fails_missing_required_field`：确认缺少必填字段时 `finish` 返回字段级错误。
-- `test_build_tools_exposes_model_facing_docstrings_without_state_argument`：确认模型可见工具 schema 隐藏内部 `state` 和 no-reason ablation 不需要的 `reason`，并暴露 Reading Stages 工具、四类 progress type、`set_field` 的 stage/rationale 参数、enum tagged value 写法、null variant 证据规则、`read_blocks(indexes)`、`read_block_range(start_index/count)`、顶层 list/table 入口和最终证据粒度约束。
+- `test_build_tools_exposes_model_facing_docstrings_without_state_argument`：确认模型可见工具 schema 隐藏内部 `state` 和 no-reason ablation 不需要的 `reason`，并暴露 Reading Stages 工具、stage 是相关证据到字段写入单元的粒度约束、四类 progress type、`set_field` 的 stage/rationale 参数、enum tagged value 写法、null variant 证据规则、`read_blocks(indexes)`、`read_block_range(start_index/count)`、顶层 list/table 入口和最终证据粒度约束。

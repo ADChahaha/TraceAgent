@@ -45,16 +45,21 @@ def build_tools(state: Any) -> list[Any]:
 
         Use this when you are entering a new document-understanding phase,
         such as checking a reusable evidence area, comparing related clauses,
-        or verifying that a relevant concept is absent. This is not a field checklist
+        or verifying that a relevant concept is absent. It is not a field checklist
         and should not copy task field names, labels, or hypotheses
-        as stage titles. Do not create a stage just for the initial overview.
+        as stage titles. A stage is a related evidence-to-field writing unit:
+        it should cover fields that share the same section, table, list, or
+        comparison chain. If the next field needs a materially different
+        clause, section, table, list, or hypothesis, complete this stage and
+        start another one. Do not create a stage just for the initial overview.
         Complete the current stage before starting another stage; only one
         stage can be in progress at a time.
 
         After start_stage, gather evidence with overview/read/query/preview
-        tools. Use append_stage_progress to mark meaningful changes inside the
-        stage. Do not call set_field until this same stage has a latest
-        progress of conclude.
+        tools only after appending a reading progress event: investigate,
+        compare, or verify_absence. Use append_stage_progress to mark
+        meaningful changes inside the stage. Do not call set_field until this
+        same stage has a latest progress of conclude.
 
         Args:
             title: Short stage title for replay.
@@ -77,8 +82,14 @@ def build_tools(state: Any) -> list[Any]:
         this tool when the stage has one of these semantic changes. The type
         must be investigate, compare, verify_absence, or conclude:
 
-        investigate: use this after reading new content or when you need to
-        gather/refine evidence. After investigate, reading tools such as
+        Only write multiple fields in one stage when they share the same
+        section, table, list, or comparison chain. If the next field needs a
+        materially different clause, section, table, list, or hypothesis,
+        complete the current stage before starting a new stage.
+
+        investigate: use this before reading new content and after reading
+        when the evidence understanding changes or needs refinement. After
+        investigate, reading tools such as
         overview, read_section, read_blocks, read_block_range, read_list,
         query_table, and preview_inline_evidence may be used. Forbidden after
         investigate: set_field, review_stage_evidence, and finish.
@@ -108,7 +119,9 @@ def build_tools(state: Any) -> list[Any]:
         not use this as a normal continuation path. Only to correct a premature
         conclude, append investigate, compare, or verify_absence to this same
         stage; this withdraws the write-ready checkpoint. Only then may you
-        read more, and you must conclude again before writing.
+        read more, and you must conclude again before writing. Conclude cannot
+        be the first progress event in a stage; append investigate, compare, or
+        verify_absence first.
 
         Do not append progress just for display; use it only when it helps
         replay explain the document review. Progress is append-only and is not
@@ -530,6 +543,8 @@ def _append_stage_progress(state: Any, stage_id: str, type: str, summary: str) -
                 "allowed": sorted(STAGE_PROGRESS_TYPES),
             }
         )
+    if normalized_type == "conclude" and not _has_reading_progress(stage):
+        errors.append({"message": "conclude requires prior reading progress", "stage_id": stage_id})
     if errors:
         result = {"ok": False, "errors": errors}
         _record_action(state, "append_stage_progress", args, result)
@@ -748,9 +763,34 @@ def _latest_stage_progress_type(stage: dict[str, Any]) -> str | None:
     return str(latest.get("type") or "").strip() or None
 
 
+def _has_reading_progress(stage: dict[str, Any]) -> bool:
+    progress = stage.get("progress")
+    if not isinstance(progress, list):
+        return False
+    return any(
+        isinstance(event, dict)
+        and str(event.get("type") or "").strip() in {"investigate", "compare", "verify_absence"}
+        for event in progress
+    )
+
+
 def _reading_blocked_result(state: Any) -> dict[str, Any] | None:
     active_stage = _active_stage(state)
-    if active_stage is None or _latest_stage_progress_type(active_stage) != "conclude":
+    if active_stage is None:
+        return None
+    latest_progress = _latest_stage_progress_type(active_stage)
+    if latest_progress is None:
+        return {
+            "ok": False,
+            "errors": [
+                {
+                    "message": "reading tools require current stage reading progress",
+                    "stage_id": active_stage.get("stage_id"),
+                    "next_step": "append investigate, compare, or verify_absence before reading",
+                }
+            ],
+        }
+    if latest_progress != "conclude":
         return None
     return {
         "ok": False,

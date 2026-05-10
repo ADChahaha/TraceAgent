@@ -147,7 +147,7 @@ string / number / boolean / list[string] / list[number] / null / enum
 
 ## Reading Stages
 
-`reading_stages` 不是广义的预生成计划，而是可回放的右侧执行阶段：帮助模型和前端知道“现在围绕什么理解目标读文档”，但不把早期假设变成执行约束。stage 描述文档理解目标，不描述输出字段清单。
+`reading_stages` 不是广义的预生成计划，而是可回放的右侧执行阶段：帮助模型和前端知道“现在围绕什么理解目标读文档”，但不把早期假设变成执行约束。stage 描述文档理解目标，不描述输出字段清单。一个 stage 是一组相关证据到字段写入的单元：只有共享同一 section、table、list 或对比链路的字段才应该放在同一 stage；下一批字段如果需要明显不同的条款、章节、表格、列表或 hypothesis，就应先完成当前 stage，再开启新 stage。
 
 `reading_stages` 采用两层结构：
 
@@ -170,7 +170,8 @@ string / number / boolean / list[string] / list[number] / null / enum
 resolution 看到 task fields + compact overview
   -> 基于字段语义形成临时 evidence-needs 假设，但不把字段永久绑定到 stage
   -> 准备进入某个理解阶段时，调用 start_stage append 一个新 stage；同一时间只能有一个 in_progress stage
-  -> 同一个阶段内先读取、选候选证据、对比或确认缺失
+  -> start_stage 后先 append investigate / compare / verify_absence，说明这一阶段开始读什么或确认什么范围
+  -> 同一个阶段内再读取、选候选证据、对比或确认缺失
   -> 当前证据足以写一个或多个字段时 append_stage_progress(type="conclude")
   -> 只有进入 conclude 后，才复看 notes 并写字段
   -> 只有发现 conclude 过早且证据不足时，才在同一个 stage 追加 investigate / compare / verify_absence，撤回写字段检查点后补读
@@ -183,11 +184,13 @@ resolution 看到 task fields + compact overview
 - `reading_stages` 是工作记忆和 replay 元数据，不是证据来源，也不是 route policy 结论。
 - stage 采用 append-only 事件流：`start_stage` 创建阶段，`append_stage_progress` 追加阶段内进展，`record_stage_evidence` 记录候选证据，`complete_stage` 只写阶段 finding 并收尾；除状态收尾外，不覆盖旧解释。
 - `start_stage` 是单活动阶段工具：如果已有 stage 仍是 `in_progress`，必须先 `complete_stage`，不能并行开启另一个 stage。
-- progress 是按时间追加的事件流，但阶段工具有读写门控：最新 progress 不是 `conclude` 时处于阅读期，可以继续读证据、记录候选依据或追加 `investigate / compare / verify_absence / conclude`；最新 progress 是 `conclude` 时处于写字段检查点，只能复看本阶段 notes、`set_field`、纠正过早 conclude 的阅读类 progress、`complete_stage` 或 `finish`，不能直接调用读取工具。
+- progress 是按时间追加的事件流，但阶段工具有读写门控：`start_stage` 后必须先追加 `investigate / compare / verify_absence` 才能读取；最新 progress 不是 `conclude` 时处于阅读期，可以继续读证据、记录候选依据或追加 `investigate / compare / verify_absence / conclude`；最新 progress 是 `conclude` 时处于写字段检查点，只能复看本阶段 notes、`set_field`、纠正过早 conclude 的阅读类 progress、`complete_stage` 或 `finish`，不能直接调用读取工具。
 - start 时可以在 `basis` 里自然语言说明“某些字段/假设可能共享这块证据，所以准备看什么”，但不要把字段列表写成硬 schema，也不要承诺这个 stage 会解决哪些字段。
 - 初始字段/假设分组只是临时 evidence-needs 假设；读到实际文档结构和证据后，可以在后续 `investigate`、`compare` 的 summary 或下一个 stage 的 `basis` 里说明理解目标如何调整。
 - stage 不应该为每个字段、标签、问题或假设建立独立项，也不应该复制字段名、标签或假设文本作为 title。
 - `set_field` 和 `review_stage_evidence` 必须引用当前 `in_progress` stage，并且只能在该 stage 最新 progress 为 `conclude` 后调用；最终字段仍以已观察到的 inline / row / item 证据为准。
+- `conclude` 不能是一个 stage 的第一个 progress；它只表示阅读进展已经足以进入写字段检查点。
+- `verify_absence` 用来解释缺失类或 `null` 结论检查了哪些范围、为什么足够；它是人类可读的检查点，不是每个字段必须执行的 checklist。
 - 进入 `conclude` 后不能直接读取新证据，包括 `overview`、`read_section`、`read_blocks`、`read_block_range`、`read_list`、`query_table`、`preview_inline_evidence`、`search_elements`、`scan_document`、`read_element`、`paragraph_extraction` 和底层 `table_extraction`。如果发现证据不足，说明这次 `conclude` 过早；模型应先在同一个 stage 追加新的 `investigate`、`compare` 或 `verify_absence` progress，撤回写字段检查点，让最新 progress 回到证据阶段，再继续读。不能在 conclude 检查点直接读，也不能把这个通道当作普通继续阅读入口。
 - UI 可以把外层 stage 展示成右侧阶段，把内层 progress 展示成“看了什么 -> 选了什么依据 -> 得出了什么结论”的展开内容，并折叠工具错误、重复 inline preview、choice/evidence 双字段写入等技术噪声。
 - 实验评估应先在排除已知 SEC HTML normalize 问题的 PDF/TXT 子集上对比当前 no-plan baseline；成功标准是 trace 可读性提升且 choice accuracy / evidence F1 不显著回退。
@@ -195,14 +198,23 @@ resolution 看到 task fields + compact overview
 阶段义务：
 
 ```text
+阶段启动
+  -> start_stage 后必须先追加 investigate / compare / verify_absence
+  -> 不能直接调用读取工具，也不能直接 conclude
+
 阅读期
   -> 能调用 overview / read_* / query_table / preview_inline_evidence
   -> 能追加 investigate / compare / verify_absence / conclude
   -> 不能 review_stage_evidence 或 set_field
 
+缺失确认
+  -> verify_absence 说明缺失类或 null 结论已经检查的范围
+  -> 不是每个字段都必须走的硬性步骤
+
 conclude 检查点
   -> 只在已经读完足够证据、准备写一个或多个字段时追加
   -> 不是泛泛的阶段总结，也不是“稍后还要继续读”的占位
+  -> 不能作为 stage 第一个 progress
 
 写字段期
   -> latest progress 是 conclude

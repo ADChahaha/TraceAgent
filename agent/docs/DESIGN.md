@@ -136,7 +136,7 @@ backend 聚合后的 html + task_spec
 工具边界保持精简：
 
 - `start_stage(title, focus, basis)`：append 新阅读阶段，描述当前要理解什么以及为什么现在看这里；同一时间只允许一个 `in_progress` stage。
-- `append_stage_progress(stage_id, type, summary)`：在阶段内追加 `investigate / compare / verify_absence / conclude` 进展；`compare` 用于多处证据关系决定结论，`verify_absence` 用于写缺失类结论前说明已检查范围。
+- `append_stage_progress(stage_id, type, summary)`：在阶段内追加 `investigate / compare / verify_absence / conclude` 进展；`start_stage` 后必须先追加阅读类 progress 才能读取，`conclude` 不能作为 stage 首个 progress；`compare` 用于多处证据关系决定结论，`verify_absence` 用于缺失类或 `null` 结论前说明已检查范围，但不是每个字段的硬性步骤。
 - `record_stage_evidence(stage_id, evidence_ids, observation, supports, limits)`：记录候选证据 note，证据必须是已观察的 inline / table row / list item 粒度。
 - `review_stage_evidence(stage_id)`：按记录顺序复看阶段候选证据；不是 `set_field` 前置条件。
 - `complete_stage(stage_id, finding)`：写阶段 finding 并标记完成，不额外追加 `conclude` progress。
@@ -150,7 +150,7 @@ backend 聚合后的 html + task_spec
 - `set_field(name, value, evidence_ids, status, failure_reason, stage_id, rationale)`：写字段值或失败状态，并校验证据 id、证据粒度与字段类型；`rationale` 是字段级理由，`failure_reason` 只在字段失败时使用。字段不再引用单独的 note id，和阶段候选证据 note 通过共享 `evidence_ids` 关联。
 - `finish()`：校验所有字段已完成、必填字段和证据一致性。
 
-Reading Stages 不是预生成计划，不约束工具选择，也不替代证据。模型在进入一个大阅读阶段时 append stage，阶段内通过 progress events 和 evidence notes 记录“看了什么、候选依据是什么、得出了什么结论”。字段最终仍必须由 `set_field` 和已观察证据决定，`finish` 也不以 stage 完成度作为通过条件。前端可以用 stages 聚合人类可读的阅读过程，同时折叠工具错误、重复 preview 和 finish 校验噪声。
+Reading Stages 不是预生成计划，不约束工具选择，也不替代证据。模型在进入一个大阅读阶段时 append stage，随后先追加 `investigate / compare / verify_absence` 说明为什么开始读或确认什么范围，再调用读取工具；阶段内通过 progress events 和 evidence notes 记录“看了什么、候选依据是什么、得出了什么结论”。一个 stage 只应该覆盖共享同一 section、table、list 或对比链路的一组字段写入；关系不大的下一批字段应先完成当前 stage，再开启新 stage。字段最终仍必须由 `set_field` 和已观察证据决定，`finish` 也不以 stage 完成度作为通过条件。前端可以用 stages 聚合人类可读的阅读过程，同时折叠工具错误、重复 preview 和 finish 校验噪声。
 
 列表和表格都支持 overview 直接入口。模型应先用 document outline 定位目标块；如果 overview 已给出 list id，就直接用 `read_list(list_id, 0, item_offset, number)` 读取列表项，否则先通过 `overview/read_section` 的 block index 选择列表块，再调用 `read_blocks(section_id, [index])` 确认 ref，之后用 `read_list(section_id, block_offset, item_offset, number)` 展开。
 
