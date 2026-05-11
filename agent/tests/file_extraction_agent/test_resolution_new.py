@@ -52,34 +52,37 @@ def test_resolution_messages_embed_compact_document_outline():
     assert "Document overview:" not in content
     assert "{'tree':" not in content
     assert "You are the field-writing agent" in content
-    assert "Each field must be finalized exactly once with set_field" in content
+    assert "Each field must be finalized exactly once through complete_stage fields" in content
     assert "Use reading stage tools to maintain append-only human-readable execution stages" in content
     assert "Do not create a stage for the initial overview" in content
     assert "Stages are not field checklists" in content
     assert "A stage is a related evidence-to-field writing unit" in content
-    assert "Only write multiple fields in one stage when they share the same section, table, list, or comparison chain" in content
-    assert "If the next field needs a materially different clause, section, table, list, or hypothesis, complete the current stage and start another stage" in content
+    assert "Put related fields in the same stage when they are being resolved from the same part of the document or the same comparison" in content
+    assert "Do not put unrelated fields in the same stage" in content
+    assert "If the next field is not related to the current stage's evidence or comparison, complete the current stage and start another stage" in content
+    assert "Only keep multiple fields in one stage when they share the same clause, evidence path, table, list, or comparison chain" not in content
+    assert "Same section alone is not enough to keep writing in the same stage" not in content
+    assert "remaining fields, remaining obligations, or remaining provisions" not in content
+    assert "hypoth" not in content.lower()
+    assert "polarity" not in content.lower()
+    assert "decision direction" not in content.lower()
     assert "Complete the current stage before starting another stage" in content
     assert "Stage obligations:" in content
     assert "Stage startup: after start_stage, append investigate/compare/verify_absence before any reading tool" in content
     assert "Reading phase: after a reading progress exists, use overview/read/query/preview tools" in content
-    assert "Conclude checkpoint: call conclude only after you have finished reading enough evidence and are ready to write fields" in content
-    assert "conclude cannot be the first progress event in a stage" in content
-    assert "Writing phase: use review_stage_evidence if helpful, then set_field" in content
-    assert "Premature conclude correction: only if conclude turns out to lack enough evidence" in content
-    assert "this withdraws the write-ready checkpoint" in content
-    assert "Complete phase: call complete_stage only when this document-understanding goal is stable" in content
-    assert "When the current stage has enough evidence for one or more field decisions, append progress type conclude before writing fields" in content
-    assert "After conclude, reading tools are disabled while conclude remains the latest progress" in content
-    assert "Do not use conclude as a normal continuation point" in content
-    assert "only correct a premature conclude by appending investigate/compare/verify_absence to the same stage before reading more" in content
+    assert "Complete stage: call complete_stage only when at least one field can be written reliably" in content
+    assert "fields is not a promised output list for the stage" in content
+    assert "If complete_stage fails, the stage remains in_progress" in content
+    assert "continue reading in the same stage" in content
     assert "Use compare only when a decision depends on relationships between observed evidence" in content
     assert "Use verify_absence for absence-like or null outcomes when the checked scope matters" in content
     assert "not a mandatory per-field checklist" in content
     assert "Do not use compare for ordinary task-field matching" in content
     assert "record_stage_evidence" in content
-    assert "set_field and review_stage_evidence are allowed only after the current stage's latest progress is conclude" in content
-    assert "set_field must include a field-level rationale" in content
+    assert "Record important candidate evidence for each field before complete_stage" in content
+    assert "Once a field has candidate evidence in the current stage, prefer completing that reliable field" in content
+    assert "Do not keep expanding the stage to unrelated evidence needs" in content
+    assert "complete_stage fields must include field-level rationale" in content
     assert "refocus" not in content.lower()
     assert "issue progress" not in content.lower()
     assert "Evidence note ids" not in content
@@ -87,8 +90,7 @@ def test_resolution_messages_embed_compact_document_outline():
     assert "update_soft_plan" not in content
     assert "soft plan" not in content.lower()
     assert "Pick the next unresolved evidence need or related field group" in content
-    assert "Append conclude before writing fields from that stage" in content
-    assert "append investigate to the same stage to withdraw the write-ready checkpoint" in content
+    assert "Call complete_stage with the fields that are already reliable from that stage" in content
     assert "Call overview first when the outline is not enough" in content
     assert "Document outline may include section containers and block items in document order" in content
     assert "Use the bound tool descriptions as the source of truth for exact arguments and reading behavior" in content
@@ -100,8 +102,8 @@ def test_resolution_messages_embed_compact_document_outline():
     assert "Example 1" not in content
     assert "Example 2" not in content
     assert "\"category\"='target'" not in content
-    assert "Use preview_inline_evidence before set_field when final text evidence is still a whole text block" in content
-    assert "set_field evidence_ids for resolved fields must be precise" in content
+    assert "Use preview_inline_evidence before complete_stage when final text evidence is still a whole text block" in content
+    assert "complete_stage evidence_ids for resolved fields must be precise" in content
     assert "text values need inline ids" in content
     assert "tables need row ids" in content
     assert "lists need item ids" in content
@@ -187,7 +189,7 @@ def test_resolution_graph_nudges_model_when_it_stops_before_finish():
                 tool_calls=[
                     {
                         "name": "finish",
-                        "args": {},
+                        "args": {"confirm": "finish"},
                         "id": "finish-call",
                     }
                 ],
@@ -201,7 +203,7 @@ def test_resolution_graph_nudges_model_when_it_stops_before_finish():
     graph.invoke({"messages": build_resolution_messages(state)}, config={"recursion_limit": 8})
 
     assert len(calls) >= 2
-    assert "All fields have been set_field" in calls[1][-1].content
+    assert "All fields have been completed" in calls[1][-1].content
     assert state.actions[-1]["tool_name"] == "finish"
 
 
@@ -217,12 +219,13 @@ def test_resolution_nudge_counts_new_read_tools_as_observed_evidence():
     instruction = _continue_instruction(state)
 
     assert "Stop browsing broadly" in instruction
-    assert "append conclude for the current stage" in instruction
+    assert "call complete_stage for the current stage with fields" in instruction
     assert "append investigate/compare/verify_absence before reading" in instruction
-    assert "then call set_field with stage_id and rationale" in instruction
+    assert "field-level rationale" in instruction
     assert "If evidence is still insufficient" in instruction
-    assert "do not write or read directly" in instruction
-    assert "append investigate to the same stage to withdraw the write-ready checkpoint" in instruction
+    assert "continue reading in the same stage" in instruction
+    assert "If you already recorded candidate evidence for a field" in instruction
+    assert "complete_stage for that field before browsing unrelated content" in instruction
     assert "then append conclude and set_field" not in instruction
 
 
@@ -232,7 +235,8 @@ def test_resolution_nudge_keeps_missing_fields_from_becoming_plan_items():
     assert "Use missing fields only to identify unresolved evidence needs" in instruction
     assert "Do not turn the missing field list into stages" in instruction
     assert "After start_stage, append investigate/compare/verify_absence before reading" in instruction
-    assert "append conclude only after reading progress and enough evidence" in instruction
+    assert "call complete_stage only after reading progress and enough evidence" in instruction
+    assert "Do not collect many field evidence notes and write them all at the end" in instruction
     assert "For each missing field" not in instruction
 
 
@@ -254,13 +258,21 @@ def test_resolution_graph_exposes_plan_reading_stage_and_read_tools():
         "read_list",
         "query_table",
         "preview_inline_evidence",
-        "set_field",
         "finish",
     ]
 
 
-def test_resolution_tools_do_not_expose_reason_argument():
+def test_resolution_tools_expose_reason_only_for_read_tools():
     tools = build_tools(_state())
+    read_tools_with_reason = {
+        "overview",
+        "read_section",
+        "read_blocks",
+        "read_block_range",
+        "read_list",
+        "query_table",
+        "preview_inline_evidence",
+    }
 
     for tool in tools:
         name = getattr(tool, "name", getattr(tool, "__name__", ""))
@@ -268,4 +280,8 @@ def test_resolution_tools_do_not_expose_reason_argument():
         if schema is None:
             continue
         fields = getattr(schema, "model_fields", {})
-        assert "reason" not in fields, name
+        if name in read_tools_with_reason:
+            assert "reason" in fields, name
+            assert fields["reason"].is_required(), name
+        else:
+            assert "reason" not in fields, name

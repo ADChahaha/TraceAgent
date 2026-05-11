@@ -115,7 +115,7 @@ agent/
 - `service.file_extraction_agent.processor.extract(...)`
 - HTTP 入口：`routes/file_extraction_agent.py`
 
-当前 `file_extraction_agent` 使用单 resolution agent：模型根据字段语义和 compact document outline 调用 HTML 工具读取证据并写字段，同时用 Reading Stages 维护右侧可读过程。resolution 必须让每个字段通过 `set_field` 进入 `resolved` 或 `failed`：
+当前 `file_extraction_agent` 使用单 resolution agent：模型根据字段语义和 compact document outline 调用 HTML 工具读取证据并写字段，同时用 Reading Stages 维护右侧可读过程。resolution 通过 `complete_stage(fields=[...])` 批量提交当前阶段已经能可靠落地的字段，最终每个字段都进入 `resolved` 或 `failed`：
 
 ```text
 backend 聚合后的 html + task_spec
@@ -125,8 +125,8 @@ backend 聚合后的 html + task_spec
   -> resolution model 调用 reading stage 工具维护 append-only 可读阶段和候选证据 notes
   -> resolution model 调用 overview / read_section / read_blocks / read_block_range / read_list / query_table 读取证据
   -> 如果文本块将作为最终证据，先调用 preview_inline_evidence 细化到 inline id
-  -> 证据足够或失败明确后调用 set_field 写入字段状态、值、证据 id 和字段级 rationale；resolved 字段强制文本 inline、表格 row、列表 item 粒度
-  -> 所有字段 set_field 后调用 finish 做完整性校验
+  -> 证据足够或失败明确后调用 complete_stage 批量写入本次已经可靠的字段；resolved 字段强制文本 inline、表格 row、列表 item 粒度
+  -> 所有字段完成后调用 finish 做完整性校验
   -> graph 映射成 ExtractionResult(result + trace)
   -> trace 保留 reading_stages、document_tree、field_states 和 actions
 ```
@@ -136,25 +136,25 @@ backend 聚合后的 html + task_spec
 工具边界保持精简：
 
 - `start_stage(title, focus, basis)`：append 新阅读阶段，描述当前要理解什么以及为什么现在看这里；同一时间只允许一个 `in_progress` stage。
-- `append_stage_progress(stage_id, type, summary)`：在阶段内追加 `investigate / compare / verify_absence / conclude` 进展；`start_stage` 后必须先追加阅读类 progress 才能读取，`conclude` 不能作为 stage 首个 progress；`compare` 用于多处证据关系决定结论，`verify_absence` 用于缺失类或 `null` 结论前说明已检查范围，但不是每个字段的硬性步骤。
-- `record_stage_evidence(stage_id, evidence_ids, observation, supports, limits)`：记录候选证据 note，证据必须是已观察的 inline / table row / list item 粒度。
-- `review_stage_evidence(stage_id)`：按记录顺序复看阶段候选证据；不是 `set_field` 前置条件。
-- `complete_stage(stage_id, finding)`：写阶段 finding 并标记完成，不额外追加 `conclude` progress。
-- `overview()`：返回 section container、heading 和同层 block items 的混排 outline；heading 不会默认拥有后续平级块。
-- `read_section(section_id)`：只读取 heading 元素真实后代的章节预览；平级段落、列表和表格由 overview 直接暴露。
-- `read_blocks(section_id, indexes)`：按 scope id 和模型选择的 index 列表读取块；section 容器按真实 DOM 后代读，heading 只按真实后代读，叶子块用 `indexes=[0]` 读。
-- `read_block_range(section_id, start_index, count)`：按同一 scope 连续读取一段 block，用于顺序补上下文。
-- `read_list(section_id, block_offset, item_offset, number)`：对 list block 做分页读取；overview 里的顶层 list id 可以直接配 `block_offset=0` 使用。
-- `query_table(section_id, block_offset, sql)`：对 table block 执行安全 SELECT；overview 里的顶层 table id 可以直接配 `block_offset=0` 使用；返回 SQL 行、轻量 `table_audit` 和查询 `summary`。
-- `preview_inline_evidence(source_id, start_index, count)`：把已观察到的文本块切成 inline 候选证据，用于写字段前细化文本证据。
-- `set_field(name, value, evidence_ids, status, failure_reason, stage_id, rationale)`：写字段值或失败状态，并校验证据 id、证据粒度与字段类型；`rationale` 是字段级理由，`failure_reason` 只在字段失败时使用。字段不再引用单独的 note id，和阶段候选证据 note 通过共享 `evidence_ids` 关联。
-- `finish()`：校验所有字段已完成、必填字段和证据一致性。
+- `append_stage_progress(stage_id, type, summary)`：在阶段内追加 `investigate / compare / verify_absence` 进展；`start_stage` 后必须先追加阅读类 progress 才能读取；`compare` 用于多处证据关系决定结论，`verify_absence` 用于缺失类或 `null` 结论前说明已检查范围，但不是每个字段的硬性步骤。
+- `record_stage_evidence(stage_id, field_name, evidence_ids, observation, supports, limits)`：为单个字段记录候选证据 note，证据必须是已观察的 inline / table row / list item 粒度；resolved 字段如果提供 evidence，必须引用同字段已记录的候选证据。
+- `review_stage_evidence(stage_id)`：按记录顺序复看当前 stage 的候选证据；不是 `complete_stage` 前置条件。
+- `complete_stage(stage_id, finding, fields)`：批量写入这次已经能可靠落地的字段并完成 stage；`fields` 不能为空，但只表示本次可提交的部分字段，不是预设产出列表。任一字段带非空 `missing`、类型不匹配、证据未观察或粒度不够时，整个调用失败，不写字段，stage 继续保持 `in_progress`。
+- `overview(reason)`：返回 section container、heading 和同层 block items 的混排 outline；section container 带 `block_count/valid_indexes/read_args`，有父 section 内容的 heading 会指向容器读法；heading 不会默认拥有后续平级块；`reason` 必填。
+- `read_section(section_id, reason)`：只读取 heading 元素真实后代的章节预览，并返回 `direct_block_count`；如果 heading 是父 section 容器的首个直接子节点，会返回 `container.block_count/valid_indexes/read_args/blocks`，提示模型改用父容器 `read_blocks` 读取内容；`reason` 必填。
+- `read_blocks(section_id, indexes, reason)`：按 scope id 和模型选择的 index 列表读取块；section 容器按真实 DOM 后代读，heading 只按真实后代读，叶子块用 `indexes=[0]` 读；`reason` 必填。
+- `read_block_range(section_id, start_index, count, reason)`：按同一 scope 连续读取一段 block，用于顺序补上下文；`reason` 必填。
+- `read_list(section_id, block_offset, item_offset, number, reason)`：对 list block 做分页读取；overview 里的顶层 list id 可以直接配 `block_offset=0` 使用；`reason` 必填。
+- `query_table(section_id, block_offset, sql, reason)`：对 table block 执行安全 SELECT；overview 里的顶层 table id 可以直接配 `block_offset=0` 使用；返回 SQL 行、轻量 `table_audit` 和查询 `summary`；`reason` 必填。
+- `preview_inline_evidence(source_id, start_index, count, reason)`：把已观察到的文本块切成 inline 候选证据，用于写字段前细化文本证据；`reason` 必填。
+- `complete_stage.fields[]`：每项写字段名、值或失败状态、证据 id、字段级 rationale 和可选失败原因；字段不再引用单独的 note id，和阶段候选证据 note 通过共享 `evidence_ids` 关联。
+- `finish(confirm="finish")`：校验所有字段已完成、必填字段和证据一致性。
 
-Reading Stages 不是预生成计划，不约束工具选择，也不替代证据。模型在进入一个大阅读阶段时 append stage，随后先追加 `investigate / compare / verify_absence` 说明为什么开始读或确认什么范围，再调用读取工具；阶段内通过 progress events 和 evidence notes 记录“看了什么、候选依据是什么、得出了什么结论”。一个 stage 只应该覆盖共享同一 section、table、list 或对比链路的一组字段写入；关系不大的下一批字段应先完成当前 stage，再开启新 stage。字段最终仍必须由 `set_field` 和已观察证据决定，`finish` 也不以 stage 完成度作为通过条件。前端可以用 stages 聚合人类可读的阅读过程，同时折叠工具错误、重复 preview 和 finish 校验噪声。
+Reading Stages 不是预生成计划，不约束工具选择，也不替代证据。模型在进入一个大阅读阶段时 append stage，随后先追加 `investigate / compare / verify_absence` 说明为什么开始读或确认什么范围，再调用读取工具；阶段内通过 progress events 和 evidence notes 记录“看了什么、候选依据是什么、得出了什么结论”。当模型认为这次阅读已经足以可靠写下一个或多个字段时，调用 `complete_stage(fields=[...])`；成功后批量写字段并完成当前 stage，失败则不写字段、stage 不动，模型继续读。一个 stage 不预设必须产出哪些字段；`fields` 只是当前已经可靠的部分字段。字段最终仍必须由 `complete_stage` 和已观察证据决定，`finish` 也不以 stage 完成度作为通过条件。前端可以用 stages 聚合人类可读的阅读过程，同时折叠工具错误、重复 preview 和 finish 校验噪声。
 
-列表和表格都支持 overview 直接入口。模型应先用 document outline 定位目标块；如果 overview 已给出 list id，就直接用 `read_list(list_id, 0, item_offset, number)` 读取列表项，否则先通过 `overview/read_section` 的 block index 选择列表块，再调用 `read_blocks(section_id, [index])` 确认 ref，之后用 `read_list(section_id, block_offset, item_offset, number)` 展开。
+列表和表格都支持 overview 直接入口。模型应先用 document outline 定位目标块；如果 overview 已给出 list id，就直接用 `read_list(list_id, 0, item_offset, number, reason)` 读取列表项，否则先通过 `overview/read_section` 的 block index 选择列表块，再调用 `read_blocks(section_id, [index], reason)` 确认 ref，之后用 `read_list(section_id, block_offset, item_offset, number, reason)` 展开。
 
-表格处理是 `file_extraction_agent` 内部的专用检索能力，而不是业务特例。它只理解通用表格结构和字段提示，不硬编码“学术论文”“文明寝室”等业务词。模型应先用 document outline 定位表格；如果 overview 已给出 table id，就直接用 `query_table(table_id, 0, sql)` 查询，否则再通过 `overview/read_section` 的 block index 选择表格块，必要时调用 `read_blocks(section_id, [index])` 确认 ref，之后用 `query_table(section_id, block_offset, sql)` 查询。`overview` 只给 table id、行数和列名；`query_table` 的 `rows[].values` 直接显示 SQL 选中 cell 是否为空，`table_audit.blank_cells` 给整表每列空 cell 数和前 10 个空值行 id，`summary` 给本次查询返回行数和选中输出列空值数量。字段最终定案通过 `set_field` 引用已观察到的 inline id、list item id 或 table row id；只引用整段文本、list 容器或 table 容器会被拒绝。
+表格处理是 `file_extraction_agent` 内部的专用检索能力，而不是业务特例。它只理解通用表格结构和字段提示，不硬编码“学术论文”“文明寝室”等业务词。模型应先用 document outline 定位表格；如果 overview 已给出 table id，就直接用 `query_table(table_id, 0, sql, reason)` 查询，否则再通过 `overview/read_section` 的 block index 选择表格块，必要时调用 `read_blocks(section_id, [index], reason)` 确认 ref，之后用 `query_table(section_id, block_offset, sql, reason)` 查询。`overview` 只给 table id、行数和列名；`query_table` 的 `rows[].values` 直接显示 SQL 选中 cell 是否为空，`table_audit.blank_cells` 给整表每列空 cell 数和前 10 个空值行 id，`summary` 给本次查询返回行数和选中输出列空值数量。字段最终定案通过 `complete_stage.fields[].evidence_ids` 引用已观察到的 inline id、list item id 或 table row id；只引用整段文本、list 容器或 table 容器会被拒绝。
 
 当前不把 image 作为抽取对象。文档内容类型先收敛为：
 
@@ -182,7 +182,7 @@ OCR 或表格结构质量提示不参与 resolution 或 route policy 的自动�
 
 resolution 的动作边界由工具 schema 控制：
 
-- `resolution_new.py` 负责执行 Reading Stages、`overview`、`read_section`、`read_blocks`、`read_block_range`、`read_list`、`query_table`、`preview_inline_evidence`、`set_field` 和 `finish`。精确工具参数和读取行为以绑定工具时注入的函数 docstring / schema 为准，resolution system prompt 只保留通用执行策略。
+- `resolution_new.py` 负责执行 Reading Stages、`overview`、`read_section`、`read_blocks`、`read_block_range`、`read_list`、`query_table`、`preview_inline_evidence`、`complete_stage` 和 `finish`。精确工具参数和读取行为以绑定工具时注入的函数 docstring / schema 为准，resolution system prompt 只保留通用执行策略。
 
 更具体的 schema、校验和任务配置，建议直接查看：
 

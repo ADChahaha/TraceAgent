@@ -13,9 +13,10 @@
   -> model_factory 从显式 model_config 或环境变量构造 resolution ChatOpenAI，并注入重试和超时配置
   -> resolution_new 把 task fields 和 document outline 交给 LangGraph tool-calling loop
   -> resolution 可调用 reading stage 工具维护当前右侧执行阶段
-  -> html_tools 提供 reading stage / overview / read_section / read_blocks / read_block_range / read_list / query_table / preview_inline_evidence / set_field / finish
-  -> 每个字段通过 set_field 写入 resolved 或 failed，并记录 evidence_ids、rationale 与 actions
-  -> finish 校验字段完成度和证据一致性
+  -> html_tools 提供 reading stage / overview / read_section / read_blocks / read_block_range / read_list / query_table / preview_inline_evidence / complete_stage / finish(confirm="finish")
+  -> 模型先用 record_stage_evidence(field_name, evidence_ids, ...) 把候选证据逐字段挂账
+  -> 每个字段通过 complete_stage(fields=[...]) 批量写入 resolved 或 failed，并校验字段证据已逐字段挂账、粒度足够、类型正确
+  -> finish(confirm="finish") 校验字段完成度和证据一致性
   -> graph 映射成 ExtractionResult(status, result, failure_reason, trace)
 ```
 
@@ -147,7 +148,7 @@ string / number / boolean / list[string] / list[number] / null / enum
 
 ## Reading Stages
 
-`reading_stages` 不是广义的预生成计划，而是可回放的右侧执行阶段：帮助模型和前端知道“现在围绕什么理解目标读文档”，但不把早期假设变成执行约束。stage 描述文档理解目标，不描述输出字段清单。一个 stage 是一组相关证据到字段写入的单元：只有共享同一 section、table、list 或对比链路的字段才应该放在同一 stage；下一批字段如果需要明显不同的条款、章节、表格、列表或 hypothesis，就应先完成当前 stage，再开启新 stage。
+`reading_stages` 不是广义的预生成计划，而是可回放的右侧执行阶段：帮助模型和前端知道“现在围绕什么理解目标读文档”，但不把早期假设变成执行约束。stage 描述文档理解目标，不描述输出字段清单。一个 stage 是一组相关证据到字段写入的单元：相关字段如果正在从同一处文档内容或同一个对比关系里解决，可以放在同一 stage；不相关字段不要塞进同一 stage。下一批字段如果和当前 stage 的证据或对比关系不相关，就应先完成当前 stage，再开启新 stage。
 
 `reading_stages` 采用两层结构：
 
@@ -172,123 +173,142 @@ resolution 看到 task fields + compact overview
   -> 准备进入某个理解阶段时，调用 start_stage append 一个新 stage；同一时间只能有一个 in_progress stage
   -> start_stage 后先 append investigate / compare / verify_absence，说明这一阶段开始读什么或确认什么范围
   -> 同一个阶段内再读取、选候选证据、对比或确认缺失
-  -> 当前证据足以写一个或多个字段时 append_stage_progress(type="conclude")
-  -> 只有进入 conclude 后，才复看 notes 并写字段
-  -> 只有发现 conclude 过早且证据不足时，才在同一个 stage 追加 investigate / compare / verify_absence，撤回写字段检查点后补读
-  -> 进入下一个大阶段时 complete_stage 当前 stage，再 start_stage 下一个 stage
+  -> 重要候选依据用 record_stage_evidence(field_name, evidence_ids, ...) 逐字段记录
+  -> 当前已有一个或多个字段能可靠写入时 complete_stage(fields=[...])
+  -> complete_stage 成功后批量写字段并完成 stage
+  -> complete_stage 失败时不写字段，stage 保持 in_progress，继续读或补证据
+  -> 进入下一个大阶段时 start_stage 下一个 stage
   -> finish 只校验字段和证据；UI 可把未 completed 的 stage 标为 replay incomplete
 ```
 
 约束：
 
 - `reading_stages` 是工作记忆和 replay 元数据，不是证据来源，也不是 route policy 结论。
-- stage 采用 append-only 事件流：`start_stage` 创建阶段，`append_stage_progress` 追加阶段内进展，`record_stage_evidence` 记录候选证据，`complete_stage` 只写阶段 finding 并收尾；除状态收尾外，不覆盖旧解释。
+- stage 采用 append-only 事件流：`start_stage` 创建阶段，`append_stage_progress` 追加阶段内进展，`record_stage_evidence` 记录候选证据，`complete_stage` 批量写入本次已经可靠的字段并收尾；除字段写入和状态收尾外，不覆盖旧解释。
 - `start_stage` 是单活动阶段工具：如果已有 stage 仍是 `in_progress`，必须先 `complete_stage`，不能并行开启另一个 stage。
-- progress 是按时间追加的事件流，但阶段工具有读写门控：`start_stage` 后必须先追加 `investigate / compare / verify_absence` 才能读取；最新 progress 不是 `conclude` 时处于阅读期，可以继续读证据、记录候选依据或追加 `investigate / compare / verify_absence / conclude`；最新 progress 是 `conclude` 时处于写字段检查点，只能复看本阶段 notes、`set_field`、纠正过早 conclude 的阅读类 progress、`complete_stage` 或 `finish`，不能直接调用读取工具。
+- progress 是按时间追加的事件流，但阶段工具有读写门控：`start_stage` 后必须先追加 `investigate / compare / verify_absence` 才能读取；当前 stage 处于阅读期时，可以继续读证据、逐字段记录候选依据、复看本阶段 notes 或追加 `investigate / compare / verify_absence`。当模型认为这次阅读已经足以可靠写下一个或多个字段时，调用 `complete_stage(fields=[...])`；成功后写字段并完成 stage，失败时 stage 不动，继续读取。
 - start 时可以在 `basis` 里自然语言说明“某些字段/假设可能共享这块证据，所以准备看什么”，但不要把字段列表写成硬 schema，也不要承诺这个 stage 会解决哪些字段。
 - 初始字段/假设分组只是临时 evidence-needs 假设；读到实际文档结构和证据后，可以在后续 `investigate`、`compare` 的 summary 或下一个 stage 的 `basis` 里说明理解目标如何调整。
+- 相关字段可以同 stage，不相关字段必须换 stage。判断标准是字段是否由当前 stage 已经读取的文档内容、候选证据或对比关系共同支撑；如果下一批字段需要换到不相关的证据目标，就先完成当前 stage。
 - stage 不应该为每个字段、标签、问题或假设建立独立项，也不应该复制字段名、标签或假设文本作为 title。
-- `set_field` 和 `review_stage_evidence` 必须引用当前 `in_progress` stage，并且只能在该 stage 最新 progress 为 `conclude` 后调用；最终字段仍以已观察到的 inline / row / item 证据为准。
-- `conclude` 不能是一个 stage 的第一个 progress；它只表示阅读进展已经足以进入写字段检查点。
+- `complete_stage.fields` 必须引用当前 `in_progress` stage，字段最终仍以已观察到、且已通过 `record_stage_evidence(field_name=当前字段)` 挂账的 inline / row / item 证据为准。
+- `complete_stage.fields` 不能为空，但只表示模型此刻已经能可靠写下来的部分字段，不是 stage 的预设产出列表，也不要求覆盖整个 task。
 - `verify_absence` 用来解释缺失类或 `null` 结论检查了哪些范围、为什么足够；它是人类可读的检查点，不是每个字段必须执行的 checklist。
-- 进入 `conclude` 后不能直接读取新证据，包括 `overview`、`read_section`、`read_blocks`、`read_block_range`、`read_list`、`query_table`、`preview_inline_evidence`、`search_elements`、`scan_document`、`read_element`、`paragraph_extraction` 和底层 `table_extraction`。如果发现证据不足，说明这次 `conclude` 过早；模型应先在同一个 stage 追加新的 `investigate`、`compare` 或 `verify_absence` progress，撤回写字段检查点，让最新 progress 回到证据阶段，再继续读。不能在 conclude 检查点直接读，也不能把这个通道当作普通继续阅读入口。
+- `complete_stage` 是唯一的阶段出口：如果 `fields` 为空、任何字段带非空 `missing`、字段类型不匹配、证据未被观察、证据粒度不够或失败字段缺少 `failure_reason`，工具返回错误，不写任何字段，也不把 stage 标为 completed。模型应继续在同一个 stage 内读取、查表、预览 inline 或记录候选证据。
 - UI 可以把外层 stage 展示成右侧阶段，把内层 progress 展示成“看了什么 -> 选了什么依据 -> 得出了什么结论”的展开内容，并折叠工具错误、重复 inline preview、choice/evidence 双字段写入等技术噪声。
 - 实验评估应先在排除已知 SEC HTML normalize 问题的 PDF/TXT 子集上对比当前 no-plan baseline；成功标准是 trace 可读性提升且 choice accuracy / evidence F1 不显著回退。
+
+### 字段级候选证据绑定
+
+`record_stage_evidence` 不是普通备忘录，而是字段写入前的候选证据登记。模型每次认为一组证据可能支撑某个字段时，都要先逐字段挂账：
+
+```text
+read_blocks / query_table / read_list
+  -> preview_inline_evidence 或观察 row/item 证据
+  -> record_stage_evidence(stage_id, field_name, evidence_ids, observation, limits?)
+  -> complete_stage(stage_id, fields=[...])
+```
+
+校验规则按字段实际值判断，不按业务标签判断：
+
+- `resolved` 且实际值非 `null`：必须有 `evidence_ids`，且这些 id 必须已被同一 stage 的 `record_stage_evidence(field_name=当前字段)` 记录过。
+- `resolved` 且实际值为 `null`：允许 `evidence_ids=[]`；如果提供了 evidence，也必须已被同一字段的 `record_stage_evidence` 记录过。
+- tagged enum 先按 `variant` 找到声明的 payload type，再按 payload value 判断是否为 `null`；不根据 variant 名称做领域特化。
+- `failed`：不要求 evidence，但必须有 `failure_reason`。
+- 文本证据仍必须是 `preview_inline_evidence` 返回的 inline id，表格证据必须是 `query_table` 返回的 row id，列表证据必须是 `read_list` 返回的 item id。
+
+这条规则把证据池从“本轮看过的所有 evidence id”收紧为“已经明确挂到当前字段的候选 evidence id”。它不限制模型读取顺序，也不禁止多个字段最终在同一次 `complete_stage` 里提交；但每个字段的证据都必须先单独解释一次，避免模型读完很多内容后把全局证据随手分配给大量字段。
+
+### Stage 软收口
+
+暂不对单个 stage 的读取次数或字段数量做硬限制。为了减少模型一直留在一个宽泛 stage 里工作，先在 prompt 和工具说明里给出软收口规则：
+
+```text
+stage started
+  -> 读取并细化证据
+  -> record_stage_evidence(field_name=...) 产生某字段的候选证据
+  -> 优先 complete_stage 写入这些已挂账字段
+  -> 只有为了补同一字段或同一证据链的证据时，才继续留在当前 stage 里读取
+  -> 下一批字段如果需要不同证据路径，先 complete_stage，再 start_stage
+```
+
+这不是业务领域规则，而是通用执行纪律：stage 可以表达一个文档理解目标，但不应该变成“全文读完后一次性填表”的容器。模型仍可在同一 stage 内读多个相关证据；区别是有字段级候选证据后，应先收口提交可靠字段，而不是继续扩展到不相关字段。
 
 阶段义务：
 
 ```text
 阶段启动
   -> start_stage 后必须先追加 investigate / compare / verify_absence
-  -> 不能直接调用读取工具，也不能直接 conclude
+  -> 不能直接调用读取工具，也不能直接 complete_stage
 
 阅读期
   -> 能调用 overview / read_* / query_table / preview_inline_evidence
-  -> 能追加 investigate / compare / verify_absence / conclude
-  -> 不能 review_stage_evidence 或 set_field
+  -> 能追加 investigate / compare / verify_absence
+  -> 能 review_stage_evidence 复看本 stage 候选依据
+  -> 证据足够时用 complete_stage(fields=[...]) 批量写字段并完成 stage
 
 缺失确认
   -> verify_absence 说明缺失类或 null 结论已经检查的范围
   -> 不是每个字段都必须走的硬性步骤
 
-conclude 检查点
-  -> 只在已经读完足够证据、准备写一个或多个字段时追加
-  -> 不是泛泛的阶段总结，也不是“稍后还要继续读”的占位
-  -> 不能作为 stage 第一个 progress
-
-写字段期
-  -> latest progress 是 conclude
-  -> 能 review_stage_evidence 和 set_field
-  -> 不能直接调用读取工具
-
-纠正过早 conclude
-  -> 只有 conclude 后发现证据不足时，才在同一个 stage 追加 investigate / compare / verify_absence
-  -> 语义是撤回写字段检查点，不是普通继续阅读
-  -> 最新 progress 回到阅读期后再继续读取
-  -> 读够后再次 append conclude
-
 完成阶段
-  -> complete_stage 只在当前理解目标稳定、准备切换到明显不同目标时调用
+  -> complete_stage 只在至少一个字段已经能可靠落地时调用
+  -> fields 只写这次已经可靠的部分字段，不承诺当前 stage 应产出的字段集合
+  -> 调用失败时 stage 不动，继续读
 ```
 
-内层 progress event 的 `type` 先收敛为四类；这些不是外层 stage 类型，模型可以在同一个 stage 内多次切换或重复使用：
+内层 progress event 的 `type` 先收敛为三类；这些不是外层 stage 类型，模型可以在同一个 stage 内多次切换或重复使用：
 
 | type | 语义 | 例子 |
 | --- | --- | --- |
 | `investigate` | 围绕一个主题理解相关条款，可以覆盖一个或多个 section。 | `Understand what counts as confidential information` |
 | `compare` | 当字段判断依赖两处或多处已观察证据之间的关系时使用，例如规则与例外、定义与限制、冲突候选值、表格内容与周边注释。 | `Compare the selected table row with the note that limits when the value applies` |
 | `verify_absence` | 在写入缺失类结论前使用，说明已经检查哪些合理相关区域，以及为什么这些区域足以支持“未找到”。 | `Verify that the relevant sections and nearby table notes do not mention the requested item` |
-| `conclude` | 汇总已选证据并形成一组相关字段的判断。 | `Conclude post-termination and retention obligations` |
 
-不把 `orient` 作为 progress type：开头看结构来自 prompt 注入的 compact overview，`overview()` 是普通动作。也不使用 `read`、`evidence`、`resolve`、`set_field` 作为 progress type；这些属于原始工具事件、候选证据记录或字段写入。
+不把 `orient` 作为 progress type：开头看结构来自 prompt 注入的 compact overview，`overview()` 是普通动作。也不使用 `read`、`evidence`、`resolve`、`set_field` 或 `conclude` 作为 progress type；这些属于原始工具事件、候选证据记录、字段写入或旧写字段检查点。
 
 `compare` 和 `verify_absence` 只在能提高理解透明度时使用：
 
 ```text
 单条证据已经直接支持字段
   -> investigate
-  -> conclude
-  -> set_field
+  -> complete_stage(fields=[...])
 
 字段结论依赖多个已观察证据之间的关系
   -> investigate
   -> compare
-  -> conclude
-  -> set_field
+  -> complete_stage(fields=[...])
 
 字段结论表示缺失、空值、无法抽取或其他 absence-like 结果
   -> investigate
   -> verify_absence
-  -> conclude
-  -> set_field
+  -> complete_stage(fields=[...])
 ```
 
-不要把“文档证据和 task field / question 的常规匹配”称为 `compare`；每次 `set_field` 都天然需要这种匹配，它应该写在字段级 `rationale` 里。`compare` 只用于比较两个或多个已经观察到的证据、规则、候选值、表格内容或周边说明之间的关系。
+不要把“文档证据和 task field / question 的常规匹配”称为 `compare`；每次字段写入都天然需要这种匹配，它应该写在字段级 `rationale` 里。`compare` 只用于比较两个或多个已经观察到的证据、规则、候选值、表格内容或周边说明之间的关系。
 
-`conclude` 是写字段检查点，不再只是可选总结。模型应先把当前需要看的材料读完，再追加 `conclude` 说明“哪些证据已经足以支持哪些判断或哪些缺失结论”，随后才能 `review_stage_evidence` 和 `set_field`。`complete_stage(finding)` 仍然负责阶段级最终 finding；它不自动追加 `conclude`，避免重复。
+`complete_stage` 是写字段和完成阶段的同一个动作，不再存在单独的 conclude 检查点。模型应先把当前需要看的材料读完，再用 `complete_stage` 提交这次已经可靠的字段。若工具返回错误，说明字段还不能可靠写下；stage 保持 `in_progress`，模型继续读，而不是空关 stage。
 
-如果进入 `conclude` 后发现还缺证据，模型可以先用 `review_stage_evidence(stage_id)` 复看本阶段 notes，确认是不是只是忘了已经记录的依据。若 notes 仍不足以支持字段，不应硬写字段，也不能在 conclude 检查点直接读取；应在同一个 stage 追加新的 `investigate`、`compare` 或 `verify_absence` progress，明确撤回这次过早的写字段检查点，然后继续读取并补充证据，最后再次追加 `conclude`。
-
-阶段内候选证据需要单独记录，不应等到 `set_field` 时才临时回忆：
+阶段内候选证据需要单独记录，不应等到写字段时才临时回忆：
 
 ```text
 read_blocks / query_table / read_list
   -> preview_inline_evidence 或观察 row/item 证据
-  -> record_stage_evidence(stage_id, evidence_ids, observation, supports?, limits?)
-  -> append_stage_progress(stage_id, type="conclude", summary=...)
+  -> record_stage_evidence(stage_id, field_name, evidence_ids, observation, supports?, limits?)
   -> 后续需要写字段前可 review_stage_evidence(stage_id)
-  -> set_field(..., evidence_ids, stage_id, rationale)
+  -> complete_stage(stage_id, finding, fields=[...])
 ```
 
-`record_stage_evidence` 写的是候选依据，不是字段结论：
+`record_stage_evidence` 写的是字段级候选依据，不是字段结论：
 
+- `field_name`：这组候选证据准备服务的字段名；一条 note 只挂一个字段，跨段证据可以在同一字段 note 中给多个 `evidence_ids`。
 - `observation`：这组证据直接说明了什么。
-- `supports`：它可能支持哪类判断，用自然语言表达，可以提“某些字段/假设可能相关”，但不作为硬绑定。
+- `supports`：它可能如何支持该字段，用自然语言表达；这是可读解释，不替代 `complete_stage.fields[].rationale`。
 - `limits`：它不能证明什么、或还需要和哪里对比。
-- note 的内部 `note_id` 只用于 trace 排序和展示，模型不需要、也不应该在 `set_field` 里再次引用它。
-- 字段和候选 evidence note 的关联由相同 `evidence_ids` 自动推导：只要 `set_field.evidence_ids` 与某个 stage note 的 `evidence_ids` 重叠，UI/replay 就可以把它们连起来。
+- note 的内部 `note_id` 只用于 trace 排序和展示，模型不需要、也不应该在 `complete_stage.fields` 里再次引用它。
+- `complete_stage.fields[].evidence_ids` 必须来自同字段的候选 evidence note；UI/replay 也可以按 `field_name + evidence_ids` 把字段写入和候选证据连起来。
 
-`review_stage_evidence(stage_id)` 按记录顺序返回该 stage 的 evidence notes，不按重要性排序，也不重排。它只能在当前 stage 进入 `conclude` 后调用；仍然不是 `set_field` 前的必经步骤。`set_field` 必须携带真实 `evidence_ids` 和字段级 `rationale`，不能只引用 note。
+`review_stage_evidence(stage_id)` 按记录顺序返回该 stage 的 evidence notes，不按重要性排序，也不重排。它不是 `complete_stage` 前的必经步骤。`complete_stage.fields` 必须携带真实 `evidence_ids` 和字段级 `rationale`，不能只引用 note。
 
 ## Resolution 阶段
 
@@ -304,7 +324,7 @@ task_spec + document outline
   -> 超过 max_tool_calls 或未 finish，返回失败
 ```
 
-resolution 的目标是让每个字段恰好通过一次 `set_field` 进入最终状态：
+resolution 的目标是让每个字段恰好通过一次 `complete_stage.fields[]` 进入最终状态：
 
 - `resolved`：字段值已找到，并且 evidence ids 来自本轮读取、查表或 inline 证据预览结果。
 - `failed`：字段无法可靠抽取，需要给出 `failure_reason`。
@@ -318,16 +338,15 @@ Task fields + compact overview
   -> start_stage(title, focus, basis)
   -> 用 overview / read_section / read_blocks / read_block_range / read_list / query_table 定位和读取证据
   -> 文本证据在写字段前用 preview_inline_evidence 细化到 inline id
-  -> 关键候选依据用 record_stage_evidence 记录
-  -> append_stage_progress(type="conclude") 进入写字段检查点
+  -> 关键候选依据用 record_stage_evidence(field_name, ...) 逐字段记录
   -> 写字段前可用 review_stage_evidence 按顺序复看
-  -> 如证据不足，在同一 stage 追加 investigate / compare / verify_absence 后继续读
-  -> set_field 写字段级 rationale
-  -> 阶段结束时 complete_stage(finding)，再进入下一个 stage
+  -> complete_stage(fields=[...]) 写字段级 rationale 并完成当前 stage
+  -> 如证据不足，complete_stage 返回错误，继续在当前 stage 补读
+  -> 当前 stage 完成后再进入下一个 stage
   -> 所有字段完成后 finish
 ```
 
-resolution system prompt 使用英文表达 replay、表格查询和证据校验等通用约束；精确工具参数和读取行为只写在 `html_tools.py` 的工具函数 docstring 里，并由 LangGraph 绑定工具时注入模型上下文，避免系统 prompt 和工具 schema 漂移。模型可调用工具不暴露 `reason` 参数；字段失败时仍通过 `failure_reason` 记录可审计原因。字段值本身也应跟随任务定义和文档语言输出。
+resolution system prompt 使用英文表达 replay、表格查询和证据校验等通用约束；精确工具参数和读取行为只写在 `html_tools.py` 的工具函数 docstring 里，并由 LangGraph 绑定工具时注入模型上下文，避免系统 prompt 和工具 schema 漂移。模型可调用的读取相关工具必须暴露必填 `reason` 参数，用来解释为什么现在读取、查询或预览这块内容；stage、候选证据、字段写入和 finish 不暴露旧的通用 `reason` 参数。字段失败时仍通过 `failure_reason` 记录可审计原因。字段值本身也应跟随任务定义和文档语言输出。
 
 ## 工具边界
 
@@ -343,77 +362,90 @@ start_stage(title, focus, basis)
   -> basis 可以自然语言提到临时字段/假设相关性，但不写硬字段列表
 
 append_stage_progress(stage_id, type, summary)
-  -> 在 stage 内 append investigate / compare / verify_absence / conclude 事件
+  -> 在 stage 内 append investigate / compare / verify_absence 事件
   -> summary 写阶段内发生了什么，不复述工具参数
-  -> investigate / compare / verify_absence 属于阅读期；conclude 是写字段检查点
-  -> 最新 progress 为 conclude 后，读取工具会拒绝直接读取新证据
-  -> 如果 conclude 过早且证据不足，append 阅读类 progress 撤回写字段检查点，读取工具随最新 progress 回到阅读期
+  -> investigate / compare / verify_absence 属于阅读期
+  -> type="conclude" 会被拒绝；字段写入统一走 complete_stage
 
-record_stage_evidence(stage_id, evidence_ids, observation, supports, limits)
-  -> 记录当前 stage 的候选证据 note
+record_stage_evidence(stage_id, field_name, evidence_ids, observation, supports, limits)
+  -> 记录当前 stage 中某一个字段的候选证据 note
   -> evidence_ids 必须来自已观察 inline / row / item 证据
-  -> note 不写字段值，也不替代 set_field
+  -> field_name 必须是 task_spec 中的字段名
+  -> note 不写字段值，也不替代 complete_stage.fields
 
 review_stage_evidence(stage_id)
   -> 按记录顺序返回 stage 下的候选证据 notes
   -> 不按重要性排序，不自动重排
-  -> 只能在当前 stage 的最新 progress 为 conclude 后调用
-  -> 可选工具，不是 set_field 前置条件
+  -> 可选工具，不是 complete_stage 前置条件
 
-complete_stage(stage_id, finding)
-  -> 把 stage 标为 completed 并写 finding
-  -> finding 写这个阶段最终理解到什么，不写字段 checklist
-  -> 不自动追加 conclude progress；写字段前必须由模型显式 append conclude
+complete_stage(stage_id, finding, fields)
+  -> fields 必须非空，只写本次已经能可靠落地的部分字段
+  -> 每个 field 包含 name、value、evidence_ids、rationale、status 和可选 failure_reason
+  -> 若任一 field 带非空 missing、类型不匹配、证据未观察或粒度不够，整体返回错误
+  -> 失败时不写任何 field_state，不完成 stage，模型继续在当前 stage 读
+  -> 成功时批量写 field_states，把 stage 标为 completed，并写 finding
 
-overview()
+overview(reason)
   -> 返回 section container、heading 和同层 block items 的混排 outline
+  -> reason 必填，用来说明为什么现在需要看 outline
+  -> section container 返回 `block_count`、`valid_indexes` 和可直接传给 `read_blocks` 的 `read_args`
+  -> 如果 heading 的内容实际在父 section 容器里，heading item 返回 `container_id`、`container_block_count`、`valid_indexes` 和容器 `read_args`
   -> 只给模型看摘要和读法，不给表格数据行
   -> list item 直接标记为 read_list，并带 block_offset=0
   -> table item 直接标记为 query_table，并带 block_offset=0
 
-read_section(section_id)
+read_section(section_id, reason)
   -> 只读取 heading
+  -> reason 必填，用来说明为什么现在读这个 section
+  -> 返回 `direct_block_count`，说明该 heading 自身真实后代有多少可读 block
   -> 只返回该 heading 元素真实后代的 block offsets 和 first-sentence preview
   -> 不把后续平级 p/list/table 隐式算进前一个 heading；这些平级块由 overview 直接暴露
+  -> 如果 heading 是父 section 容器的首个直接子节点，且正文块在父容器里，返回 `container.block_count`、`container.valid_indexes`、`container.read_args` 和容器内 block previews，模型应改用这些参数调用 `read_blocks`
   -> 章节过长时在工具内部触发隔离 scoped reader
 
-read_blocks(section_id, indexes)
+read_blocks(section_id, indexes, reason)
   -> 对 section container、heading 真实后代 scope 或 leaf block scope 做 index 列表查询
+  -> reason 必填，用来说明为什么现在读取这些 index
   -> indexes 来自 overview/read_section 暴露的 block index，由模型挑选需要读取的一个或多个离散块
   -> 返回选中 block 的完整 HTML 或 ref；leaf block scope 使用 indexes=[0]
   -> list 只返回 ref，由 read_list 展开；table 可返回 ref，但也可以直接由 query_table 读取
 
-read_block_range(section_id, start_index, count)
+read_block_range(section_id, start_index, count, reason)
   -> 对和 read_blocks 相同的 scope 做连续窗口读取
+  -> reason 必填，用来说明为什么现在连续扫上下文
   -> start_index 和 count 表示模型要顺序扫的一段上下文，工具最多返回 20 个块
   -> 返回实际读取到的 indexes、blocks 和 evidence_ids；非连续证据仍应使用 read_blocks
 
-read_list(section_id, block_offset, item_offset, number)
+read_list(section_id, block_offset, item_offset, number, reason)
   -> 如果 section_id 已经是 overview 给出的 list id，使用 block_offset=0 直接读取
+  -> reason 必填，用来说明为什么现在读取这些 list items
   -> 否则按 section_id + block_offset 找到 list block，再分页返回 list item
 
-query_table(section_id, block_offset, sql)
+query_table(section_id, block_offset, sql, reason)
   -> 如果 section_id 已经是 overview 给出的 table id，使用 block_offset=0 直接查询
+  -> reason 必填，用来说明为什么现在查询这张表和这条 SQL 要解决什么证据需求
   -> 否则按 section_id + block_offset 找到 table block，再执行单条安全 SELECT
   -> 返回 rows、evidence_ids、轻量 table_audit 和查询 summary；不返回逐行空值展开
 
-preview_inline_evidence(source_id, start_index, count)
+preview_inline_evidence(source_id, start_index, count, reason)
   -> 只接受本轮已经被读取或扫描观察到的文本类 source_id
+  -> reason 必填，用来说明为什么现在把这个 source 细化成 inline 证据
   -> 把 source 文本按句号、问号和叹号边界切成 inline 候选；长句不按固定字符数二次截断
   -> 返回 inline_id、source_id、inline_index、文本和字符范围，并把 inline_id 标记为 observed
   -> 只用于写字段前把文本证据细化；表格证据用 query_table 的 row id，列表证据用 read_list 的 item id
 
-set_field(name, value, evidence_ids, status, failure_reason, stage_id, rationale)
-  -> 校验字段存在、状态合法、值类型匹配
+complete_stage(stage_id, finding, fields)
+  -> 校验 stage_id 是当前 in_progress stage，且 fields 非空
+  -> 校验每个字段存在、状态合法、值类型匹配
   -> enum 字段先按 value.variant 查找 variant 定义，再按该 variant 的 payload type 校验 value.value
   -> 校验证据 id 已经被本轮工具观察到
   -> resolved 非 null 字段强制证据粒度：文本必须用 inline id，表格必须包含 row id，列表必须包含 item id
   -> resolved null 字段或 enum null variant 允许 evidence_ids 为空
-  -> 校验 stage_id 存在
-  -> 写入 state.field_states，包括字段级 rationale
+  -> 任一字段失败则不写任何 field_state，不完成 stage
+  -> 全部通过后写入 state.field_states、字段级 rationale 和 stage finding，并把 stage 标为 completed
 
-finish()
-  -> 校验所有字段都已 set_field
+finish(confirm="finish")
+  -> 校验所有字段都已通过 complete_stage 写入
   -> 校验必填字段、证据完整性和最终一致性；null 字段或 enum null variant 不要求 evidence
   -> 返回 ok=true 或错误列表
 ```

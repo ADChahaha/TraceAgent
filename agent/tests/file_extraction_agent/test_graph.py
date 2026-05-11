@@ -17,6 +17,14 @@ class FakeResolutionModel:
                 },
             },
             {
+                "tool_name": "append_stage_progress",
+                "arguments": {
+                    "stage_id": "stage-1",
+                    "type": "investigate",
+                    "summary": "准备读取名单表并查询学生姓名行。",
+                },
+            },
+            {
                 "tool_name": "read_blocks",
                 "arguments": {
                     "section_id": "dp-table-1",
@@ -34,24 +42,31 @@ class FakeResolutionModel:
                 },
             },
             {
-                "tool_name": "append_stage_progress",
+                "tool_name": "record_stage_evidence",
                 "arguments": {
                     "stage_id": "stage-1",
-                    "type": "conclude",
-                    "summary": "名单表行证据已经足以写学生姓名字段。",
+                    "field_name": "student_name",
+                    "evidence_ids": ["dp-table-1", "dp-tr-2"],
+                    "observation": "名单表中计算机学院对应的姓名是张三。",
                 },
             },
             {
-                "tool_name": "set_field",
+                "tool_name": "complete_stage",
                 "arguments": {
-                    "name": "student_name",
-                    "value": "张三",
-                    "evidence_ids": ["dp-table-1", "dp-tr-2"],
                     "stage_id": "stage-1",
-                    "rationale": "dp-table-1 和 dp-tr-2 支持学生姓名为张三",
+                    "finding": "名单表行证据已经足以写学生姓名字段。",
+                    "fields": [
+                        {
+                            "name": "student_name",
+                            "value": "张三",
+                            "evidence_ids": ["dp-table-1", "dp-tr-2"],
+                            "status": "resolved",
+                            "rationale": "查询到的表格行直接覆盖学生姓名。",
+                        }
+                    ],
                 },
             },
-            {"tool_name": "finish", "arguments": {}},
+            {"tool_name": "finish", "arguments": {"confirm": "finish"}},
         ]
 
     def invoke(self, messages):
@@ -67,6 +82,14 @@ class FakeResolutionModelWithScan:
                     "title": "理解姓名段落",
                     "focus": "读取姓名段落并细化 inline 证据",
                     "basis": "姓名字段可能直接来自通知正文。",
+                },
+            },
+            {
+                "tool_name": "append_stage_progress",
+                "arguments": {
+                    "stage_id": "stage-1",
+                    "type": "investigate",
+                    "summary": "准备读取姓名段落并细化 inline 证据。",
                 },
             },
             {
@@ -87,24 +110,31 @@ class FakeResolutionModelWithScan:
                 },
             },
             {
-                "tool_name": "append_stage_progress",
+                "tool_name": "record_stage_evidence",
                 "arguments": {
                     "stage_id": "stage-1",
-                    "type": "conclude",
-                    "summary": "姓名段落 inline 证据已经足以写字段。",
+                    "field_name": "student_name",
+                    "evidence_ids": ["dp-p-1::inline-0"],
+                    "observation": "姓名段落直接写明学生姓名是张三。",
                 },
             },
             {
-                "tool_name": "set_field",
+                "tool_name": "complete_stage",
                 "arguments": {
-                    "name": "student_name",
-                    "value": "张三",
-                    "evidence_ids": ["dp-p-1::inline-0"],
                     "stage_id": "stage-1",
-                    "rationale": "dp-p-1::inline-0 支持学生姓名为张三",
+                    "finding": "姓名段落 inline 证据已经足以写字段。",
+                    "fields": [
+                        {
+                            "name": "student_name",
+                            "value": "张三",
+                            "evidence_ids": ["dp-p-1::inline-0"],
+                            "status": "resolved",
+                            "rationale": "inline 证据直接覆盖学生姓名。",
+                        }
+                    ],
                 },
             },
-            {"tool_name": "finish", "arguments": {}},
+            {"tool_name": "finish", "arguments": {"confirm": "finish"}},
         ]
 
     def invoke(self, messages):
@@ -177,10 +207,11 @@ def test_run_extraction_graph_runs_resolution_without_broad_stage():
     assert result.result["student_name"] == "张三"
     assert [action["tool_name"] for action in result.trace["actions"]] == [
         "start_stage",
+        "append_stage_progress",
         "read_blocks",
         "query_table",
-        "append_stage_progress",
-        "set_field",
+        "record_stage_evidence",
+        "complete_stage",
         "finish",
     ]
     assert result.trace["reading_stages"][0]["title"] == "理解名单来源"
@@ -196,9 +227,10 @@ def test_run_extraction_graph_runs_new_read_tools_without_document_scan_model():
     assert result.result["student_name"] == "张三"
     assert [action["tool_name"] for action in result.trace["actions"]] == [
         "start_stage",
+        "append_stage_progress",
         "read_blocks",
         "preview_inline_evidence",
-        "append_stage_progress",
-        "set_field",
+        "record_stage_evidence",
+        "complete_stage",
         "finish",
     ]
