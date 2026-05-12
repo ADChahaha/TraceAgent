@@ -46,6 +46,7 @@ def build_resolution_messages(state: Any) -> list[Any]:
             "3. Once evidence for a field is sufficient, the next related tool call must be set_field; do not keep browsing. "
             "4. After all fields are done, call finish. "
             "Use preview_inline_evidence before set_field when final text evidence is still a whole text block. "
+            "After previewing final evidence, call record_note with the related field_names and evidence_ids before set_field when the evidence affects the current field or field group. "
             "set_field evidence_ids for resolved fields must be precise: text values need inline ids, tables need row ids, "
             "and lists need item ids. "
             "Use the built-in document outline to choose section ids. Call overview first when the outline is not enough. "

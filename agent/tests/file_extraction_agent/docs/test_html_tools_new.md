@@ -50,6 +50,8 @@
 - `test_table_extraction_returns_lightweight_audit_without_status`：确认轻量表格审计不携带诊断状态字段。
 - `test_table_extraction_row_evidence_ids_can_be_used_by_set_field`：确认表格查询观察到的行证据可以用于字段写入。
 - `test_preview_inline_evidence_returns_sentence_candidates_and_observes_inline_ids`：确认已读取文本块可以被切成 inline 候选证据，并把生成的 inline id 标记为已观察。
+- `test_record_note_records_related_fields_and_evidence_for_trace`：确认 `record_note` 可以把一个或多个字段、多个已观察证据和人类可读 note 写入 `state.notes` 与 replay action。
+- `test_record_note_rejects_unknown_fields_and_unobserved_evidence`：确认 `record_note` 会拒绝不存在的字段名和未被读取或 preview 过的 evidence id。
 - `test_preview_inline_evidence_keeps_long_sentence_as_one_inline_candidate`：确认长合同句不会再按固定字符数二次截断，避免证据锚点切断定义或条款。
 - `test_preview_inline_evidence_requires_observed_text_source`：确认 inline 预览只能针对已观察的文本类元素，表格和列表必须分别走 `query_table` 和 `read_list`。
 - `test_set_field_requires_inline_evidence_for_text_blocks`：确认 resolved 字段不能直接使用整段文本块 id，必须使用 `preview_inline_evidence` 返回的 inline id。

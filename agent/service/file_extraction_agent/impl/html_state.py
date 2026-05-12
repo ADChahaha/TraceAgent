@@ -26,6 +26,7 @@ class GraphState:
     document_scan_model: Any = None
     plan_statuses: dict[int, dict[str, Any]] = field(default_factory=dict)
     field_states: dict[str, dict[str, Any]] = field(default_factory=dict)
+    notes: list[dict[str, Any]] = field(default_factory=list)
     actions: list[dict[str, Any]] = field(default_factory=list)
     observed_evidence_ids: set[str] = field(default_factory=set)
     inline_evidence_by_id: dict[str, dict[str, Any]] = field(default_factory=dict)

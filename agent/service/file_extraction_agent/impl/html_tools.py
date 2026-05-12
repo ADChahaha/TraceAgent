@@ -205,7 +205,12 @@ def build_tools(state: Any) -> list[Any]:
         return _query_table(state, section_id, block_offset, sql, reason=reason)
 
     @tool
-    def preview_inline_evidence(source_id: str, start_index: int, count: int, reason: str) -> dict[str, Any]:
+    def preview_inline_evidence(
+        source_id: str,
+        start_index: int,
+        count: int,
+        reason: str,
+    ) -> dict[str, Any]:
         """
         Preview inline evidence ids from an already-read text block.
 
@@ -229,6 +234,30 @@ def build_tools(state: Any) -> list[Any]:
         """
 
         return _preview_inline_evidence(state, source_id, start_index, count, reason=reason)
+
+    @tool
+    def record_note(field_names: list[str], evidence_ids: list[str], note: str, reason: str) -> dict[str, Any]:
+        """
+        Record a human-readable note about evidence for one or more fields.
+
+        Use this after reading/querying/previewing evidence and before set_field
+        when the evidence matters to the current field or tightly related field
+        group. field_names may contain multiple fields when they share the same
+        evidence. evidence_ids must already have been observed by this run.
+        This tool only records memory for replay and review; it does not set field values
+        and does not replace set_field.
+
+        Args:
+            field_names: Task field names this note is about.
+            evidence_ids: Observed evidence ids the note is based on.
+            note: Short user-readable statement of what the evidence shows.
+            reason: Why this note is useful for the current field step.
+
+        Returns:
+            The recorded note or validation errors.
+        """
+
+        return _record_note(state, field_names, evidence_ids, note, reason=reason)
 
     @tool
     def set_field(
@@ -302,6 +331,7 @@ def build_tools(state: Any) -> list[Any]:
         read_list,
         query_table,
         preview_inline_evidence,
+        record_note,
         set_field,
         finish,
     ]
@@ -1085,6 +1115,69 @@ def _preview_inline_evidence(
     return result
 
 
+def _record_note(
+    state: Any,
+    field_names: list[str],
+    evidence_ids: list[str],
+    note: str,
+    *,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    normalized_field_names = _normalize_field_names(field_names)
+    normalized_evidence_ids = _normalize_evidence_ids(evidence_ids)
+    normalized_note = str(note or "").strip()
+    args = {
+        "field_names": normalized_field_names,
+        "evidence_ids": normalized_evidence_ids,
+        "note": normalized_note,
+    }
+    unknown_field_names = _unknown_field_names(state, normalized_field_names)
+    if unknown_field_names:
+        result = {
+            "ok": False,
+            "error": "unknown field_names",
+            "field_names": unknown_field_names,
+        }
+        _record_action(state, "record_note", _args_with_reason(args, reason), result)
+        return result
+    unknown_evidence_ids = [
+        evidence_id
+        for evidence_id in normalized_evidence_ids
+        if evidence_id not in _read(state, "observed_evidence_ids", set())
+    ]
+    if unknown_evidence_ids:
+        result = {
+            "ok": False,
+            "error": "unknown evidence ids",
+            "evidence_ids": unknown_evidence_ids,
+        }
+        _record_action(state, "record_note", _args_with_reason(args, reason), result)
+        return result
+    if not normalized_field_names:
+        result = {"ok": False, "error": "field_names is required"}
+        _record_action(state, "record_note", _args_with_reason(args, reason), result)
+        return result
+    if not normalized_evidence_ids:
+        result = {"ok": False, "error": "evidence_ids is required"}
+        _record_action(state, "record_note", _args_with_reason(args, reason), result)
+        return result
+    if not normalized_note:
+        result = {"ok": False, "error": "note is required"}
+        _record_action(state, "record_note", _args_with_reason(args, reason), result)
+        return result
+    recorded_note = {
+        "field_names": normalized_field_names,
+        "evidence_ids": normalized_evidence_ids,
+        "note": normalized_note,
+    }
+    notes = _read(state, "notes", None)
+    if isinstance(notes, list):
+        notes.append(recorded_note)
+    result = {"ok": True, "note": recorded_note}
+    _record_action(state, "record_note", _args_with_reason(args, reason), result)
+    return result
+
+
 def _read_section_auto_scan_query(section: Any, reason: str | None, section_id: str) -> str:
     parts = [
         str(reason or "").strip(),
@@ -1409,6 +1502,41 @@ def _field_defs_by_name(state: Any) -> dict[str, Any]:
     task_spec = _read(state, "task_spec")
     fields = _read(task_spec, "fields", []) or []
     return {str(_read(field, "name")): field for field in fields if _read(field, "name")}
+
+
+def _normalize_field_names(field_names: list[str] | None) -> list[str]:
+    if field_names is None:
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for field_name in field_names:
+        name = str(field_name or "").strip()
+        if not name or name in seen:
+            continue
+        normalized.append(name)
+        seen.add(name)
+    return normalized
+
+
+def _normalize_evidence_ids(evidence_ids: list[str] | None) -> list[str]:
+    if evidence_ids is None:
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for evidence_id in evidence_ids:
+        evidence_id_text = str(evidence_id or "").strip()
+        if not evidence_id_text or evidence_id_text in seen:
+            continue
+        normalized.append(evidence_id_text)
+        seen.add(evidence_id_text)
+    return normalized
+
+
+def _unknown_field_names(state: Any, field_names: list[str]) -> list[str]:
+    if not field_names:
+        return []
+    known = _field_defs_by_name(state)
+    return [field_name for field_name in field_names if field_name not in known]
 
 
 def _evidence_exists(state: Any, evidence_id: str) -> bool:
@@ -2136,6 +2264,7 @@ __all__ = [
     "_read_list",
     "_query_table",
     "_preview_inline_evidence",
+    "_record_note",
     "_table_extraction",
     "_paragraph_extraction",
     "_set_field",

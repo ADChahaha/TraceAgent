@@ -16,6 +16,7 @@ from service.file_extraction_agent.impl.html_tools import (
     _read_element,
     _read_list,
     _read_section,
+    _record_note,
     _scan_document,
     _search_elements,
     _set_field,
@@ -55,6 +56,7 @@ def _state():
         ),
         field_states={},
         actions=[],
+        notes=[],
         observed_evidence_ids=set(),
         plan_statuses={},
     )
@@ -87,6 +89,7 @@ def _mixed_outline_state():
         ),
         field_states={},
         actions=[],
+        notes=[],
         observed_evidence_ids=set(),
         plan_statuses={},
     )
@@ -871,6 +874,69 @@ def test_preview_inline_evidence_returns_sentence_candidates_and_observes_inline
     assert state.actions[-1]["tool_name"] == "preview_inline_evidence"
 
 
+def test_record_note_records_related_fields_and_evidence_for_trace():
+    state = _state()
+    _read_blocks(state, "dp-p-1", indexes=[0], reason="读取联系人段落")
+    preview = _preview_inline_evidence(
+        state,
+        "dp-p-1",
+        start_index=0,
+        count=5,
+        reason="准备给联系人电话和学生姓名字段确认证据",
+    )
+    result = _record_note(
+        state,
+        field_names=["contact_phone", "student_name"],
+        evidence_ids=preview["evidence_ids"],
+        note="联系人段落同时包含联系人和电话信息。",
+        reason="记录当前证据服务的字段",
+    )
+
+    assert result == {
+        "ok": True,
+        "note": {
+            "field_names": ["contact_phone", "student_name"],
+            "evidence_ids": ["dp-p-1::inline-0"],
+            "note": "联系人段落同时包含联系人和电话信息。",
+        },
+    }
+    assert state.notes == [result["note"]]
+    assert state.actions[-1]["tool_name"] == "record_note"
+    assert state.actions[-1]["args"]["field_names"] == ["contact_phone", "student_name"]
+    assert state.actions[-1]["result"]["note"] == result["note"]
+
+
+def test_record_note_rejects_unknown_fields_and_unobserved_evidence():
+    state = _state()
+    _read_blocks(state, "dp-p-1", indexes=[0], reason="读取联系人段落")
+
+    unknown_field = _record_note(
+        state,
+        field_names=["missing_field"],
+        evidence_ids=["dp-p-1"],
+        note="字段不存在。",
+        reason="尝试绑定不存在的字段",
+    )
+    unobserved_evidence = _record_note(
+        state,
+        field_names=["contact_phone"],
+        evidence_ids=["dp-p-1::inline-0"],
+        note="证据还没有被 preview。",
+        reason="尝试绑定未观察证据",
+    )
+
+    assert unknown_field == {
+        "ok": False,
+        "error": "unknown field_names",
+        "field_names": ["missing_field"],
+    }
+    assert unobserved_evidence == {
+        "ok": False,
+        "error": "unknown evidence ids",
+        "evidence_ids": ["dp-p-1::inline-0"],
+    }
+
+
 def test_preview_inline_evidence_keeps_long_sentence_as_one_inline_candidate():
     state = _state()
     long_sentence = "This definition contains many coordinated legal clauses, " + "additional words " * 45 + "and ends here."
@@ -1177,6 +1243,7 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
         "read_list",
         "query_table",
         "preview_inline_evidence",
+        "record_note",
         "set_field",
         "finish",
     ]
@@ -1244,6 +1311,15 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
     assert "Only use this after reading a text block" in preview_description
     assert "inline_id" in preview_description
     assert "set_field" in preview_description
+    record_note = tools[names.index("record_note")]
+    note_schema = getattr(record_note, "args_schema", None)
+    note_fields = getattr(note_schema, "model_fields", None) or getattr(note_schema, "__fields__", {})
+    assert "field_names" in note_fields
+    assert "evidence_ids" in note_fields
+    assert "note" in note_fields
+    note_description = _tool_description(record_note)
+    assert "human-readable note" in note_description
+    assert "does not set field values" in note_description
     set_field = tools[names.index("set_field")]
     set_field_schema = getattr(set_field, "args_schema", None)
     set_field_fields = getattr(set_field_schema, "model_fields", None) or getattr(set_field_schema, "__fields__", {})

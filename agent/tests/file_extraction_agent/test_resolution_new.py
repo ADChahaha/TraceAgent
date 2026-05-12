@@ -84,6 +84,7 @@ def test_resolution_messages_embed_compact_document_outline():
     assert "Example 2" not in content
     assert "\"category\"='target'" not in content
     assert "Use preview_inline_evidence before set_field when final text evidence is still a whole text block" in content
+    assert "After previewing final evidence, call record_note" in content
     assert "set_field evidence_ids for resolved fields must be precise" in content
     assert "text values need inline ids" in content
     assert "tables need row ids" in content
@@ -187,6 +188,7 @@ def test_resolution_graph_exposes_plan_and_new_read_tools():
         "read_list",
         "query_table",
         "preview_inline_evidence",
+        "record_note",
         "set_field",
         "finish",
     ]

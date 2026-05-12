@@ -47,6 +47,7 @@ def map_state_to_result(
         "plan_statuses": _plain(state.plan_statuses),
         "document_tree": _plain(state.document.tree),
         "field_states": _plain(state.field_states),
+        "notes": _plain(getattr(state, "notes", [])),
         "actions": _plain(state.actions),
     }
     failed_stage = getattr(state, "failed_stage", None)

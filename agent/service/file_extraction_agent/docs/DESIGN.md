@@ -243,6 +243,13 @@ preview_inline_evidence(source_id, start_index, count, reason)
   -> 返回 inline_id、source_id、inline_index、文本和字符范围，并把 inline_id 标记为 observed
   -> 只用于写字段前把文本证据细化；表格证据用 query_table 的 row id，列表证据用 read_list 的 item id
 
+record_note(field_names, evidence_ids, note, reason)
+  -> 在读到或 preview 到证据后，记录一条面向人类 replay 的字段笔记
+  -> field_names 必须来自 task_spec.fields；允许一次 note 绑定多个共享同一证据的相关字段
+  -> evidence_ids 必须已经被本轮 read/query/preview 工具观察到；支持多个 evidence id
+  -> note 写清楚这些证据说明了什么，但不写字段值、不替代 set_field、不参与 scorer
+  -> 写入 state.notes，并同步进入 actions，方便前端显示“模型为什么认为这些证据和这些字段相关”
+
 set_field(name, value, evidence_ids, reason, status, failure_reason)
   -> 校验字段存在、状态合法、值类型匹配
   -> 校验证据 id 已经被本轮工具观察到
