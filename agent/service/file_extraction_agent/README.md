@@ -10,7 +10,7 @@ HTML-based document field extraction agent.
 html + task_spec + run_options
   -> input_adapter 校验输入并构造 HtmlExtractionInput
   -> html_index 基于已有 id 构建 document.tree / elements_by_id / tables_by_id / row_index
-  -> broad_new 仅保留兼容占位 BroadPlan
+  -> broad_new 不调用模型，也不生成默认 BroadPlan
   -> resolution_new 生成任务提示并挂载工具
   -> update_plan 声明当前局部工作单元和可能相关的字段组
   -> overview 先给出混排 outline

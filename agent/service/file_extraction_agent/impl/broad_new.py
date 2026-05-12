@@ -94,17 +94,8 @@ def build_broad_messages(state: Any) -> list[dict[str, str]]:
 def run_broad_planner(state: Any, broad_model: Any) -> BroadPlan:
     """Skip broad planning and let resolution work from the outline directly."""
 
-    plan = BroadPlan(
-        summary="Default document navigation plan",
-        plan=[
-            "Review the document overview and identify relevant sections.",
-            "Read needed section block previews and then read exact blocks, lists, or tables.",
-            "Write each field with observed evidence and finish the run.",
-        ],
-        risks=[],
-    )
-    setattr(state, "broad_plan", plan)
-    return plan
+    setattr(state, "broad_plan", None)
+    return BroadPlan(summary="", plan=[], risks=[])
 
 
 def parse_broad_plan_tool_call(message: Any) -> BroadPlan:

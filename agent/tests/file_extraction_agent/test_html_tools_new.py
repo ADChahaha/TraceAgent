@@ -56,7 +56,7 @@ def _state():
         field_states={},
         actions=[],
         observed_evidence_ids=set(),
-        broad_plan=SimpleNamespace(summary="测试", plan=["读取名单表", "写入字段"], risks=[]),
+        broad_plan=None,
         plan_statuses={},
     )
 
@@ -89,7 +89,7 @@ def _mixed_outline_state():
         field_states={},
         actions=[],
         observed_evidence_ids=set(),
-        broad_plan=SimpleNamespace(summary="测试", plan=["读取正文"], risks=[]),
+        broad_plan=None,
         plan_statuses={},
     )
 
@@ -1107,7 +1107,7 @@ def test_update_plan_records_plan_status_and_action():
     assert result["ok"] is True
     assert completed["ok"] is True
     assert state.plan_statuses[1]["status"] == "completed"
-    assert state.plan_statuses[1]["step"] == "读取名单表"
+    assert state.plan_statuses[1]["step"] == "名单表已产生字段证据"
     assert state.actions[-1]["tool_name"] == "update_plan"
     assert state.actions[-1]["args"] == {
         "plan_index": 1,
@@ -1116,22 +1116,16 @@ def test_update_plan_records_plan_status_and_action():
     }
 
 
-def test_update_plan_rejects_starting_later_plan_before_previous_completed():
+def test_update_plan_allows_non_sequential_local_plan_indexes():
     state = _state()
-    state.broad_plan = SimpleNamespace(
-        summary="测试",
-        plan=["读取名单表", "确认联系人", "确认字段", "写入字段"],
-        risks=[],
-    )
 
     _update_plan(state, 1, "in_progress", reason="开始读取名单表")
     _update_plan(state, 1, "completed", reason="名单表已产生字段证据")
     result = _update_plan(state, 4, "in_progress", reason="跳到写字段")
 
-    assert result["ok"] is False
-    assert result["errors"][0]["message"] == "plan_index must advance sequentially"
-    assert result["errors"][0]["next_plan_index"] == 2
-    assert result["errors"][0]["requested_plan_index"] == 4
+    assert result["ok"] is True
+    assert state.plan_statuses[4]["status"] == "in_progress"
+    assert state.plan_statuses[4]["step"] == "跳到写字段"
 
 
 def test_update_plan_rejects_completing_plan_that_is_not_in_progress():
@@ -1142,11 +1136,11 @@ def test_update_plan_rejects_completing_plan_that_is_not_in_progress():
     assert result["errors"][0]["plan_index"] == 1
 
 
-def test_update_plan_rejects_invalid_plan_index():
+def test_update_plan_accepts_new_local_plan_index_without_broad_plan():
     result = _update_plan(_state(), 99, "completed", reason="不存在")
 
     assert result["ok"] is False
-    assert result["errors"][0]["message"] == "plan_index is outside the broad plan"
+    assert result["errors"][0]["message"] == "plan must be in_progress before completed"
 
 
 def test_set_field_rejects_unobserved_evidence_ids():

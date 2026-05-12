@@ -40,20 +40,17 @@ def build_tools(state: Any) -> list[Any]:
     @tool
     def update_plan(plan_index: int, status: str, reason: str) -> dict[str, Any]:
         """
-        Mark one broad-plan step as in progress or completed.
+        Mark one local work unit as in progress or completed.
 
-        Use this to keep the replay plan synchronized with your actual work.
+        Use this as a local work log for frontend replay.
         Call ``update_plan(plan_index, "in_progress", reason)`` before starting
-        a broad-plan step, and call ``update_plan(plan_index, "completed",
-        reason)`` immediately after the step has produced its field value,
-        evidence, or routing decision. ``plan_index`` is 1-based and refers to
-        the numbered Broad plan shown in the prompt. Plan steps must advance
-        sequentially: only the earliest unfinished step may become
-        ``in_progress``, and a step must be ``in_progress`` before it can be
-        marked ``completed``.
+        a local field or field-group step, and call ``update_plan(plan_index,
+        "completed", reason)`` immediately after the step has produced its
+        field value, evidence, or routing decision. ``plan_index`` is a
+        model-chosen local log number, not a reference to a broad plan.
 
         Args:
-            plan_index: 1-based index of the Broad plan item.
+            plan_index: 1-based local log number chosen by the model.
             status: ``in_progress`` or ``completed``.
             reason: Short explanation of why this plan step now has that
                 status.
@@ -328,15 +325,13 @@ def _update_plan(state: Any, plan_index: int, status: str, *, reason: str | None
         _record_action(state, "update_plan", _args_with_reason({"plan_index": plan_index, "status": status}, reason), result)
         return result
 
-    plan_items = _read(_read(state, "broad_plan"), "plan", []) or []
-    if index < 1 or index > len(plan_items):
+    if index < 1:
         result = {
             "ok": False,
             "errors": [
                 {
-                    "message": "plan_index is outside the broad plan",
+                    "message": "plan_index must be positive",
                     "plan_index": index,
-                    "plan_count": len(plan_items),
                 }
             ],
         }
@@ -350,16 +345,30 @@ def _update_plan(state: Any, plan_index: int, status: str, *, reason: str | None
     statuses = _read(state, "plan_statuses", None)
     if not isinstance(statuses, dict):
         statuses = {}
-    sequence_error = _validate_plan_sequence(statuses, index, status, len(plan_items))
-    if sequence_error is not None:
-        result = {"ok": False, "errors": [sequence_error]}
+        setattr(state, "plan_statuses", statuses)
+    current_status = _plan_status_at(statuses, index)
+    if status == "in_progress" and current_status == "completed":
+        result = {"ok": False, "errors": [{"message": "plan is already completed", "plan_index": index}]}
+        _record_action(state, "update_plan", _args_with_reason({"plan_index": index, "status": status}, reason), result)
+        return result
+    if status == "completed" and current_status != "in_progress":
+        result = {
+            "ok": False,
+            "errors": [
+                {
+                    "message": "plan must be in_progress before completed",
+                    "plan_index": index,
+                    "current_status": current_status,
+                }
+            ],
+        }
         _record_action(state, "update_plan", _args_with_reason({"plan_index": index, "status": status}, reason), result)
         return result
 
     plan_state = {
         "plan_index": index,
         "status": status,
-        "step": str(plan_items[index - 1]),
+        "step": str(reason or f"local plan {index}"),
         "reason": reason,
     }
     if isinstance(statuses, dict):

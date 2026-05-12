@@ -161,8 +161,7 @@ def test_run_extraction_graph_skips_broad_plan_then_runs_resolution():
 
     assert result.status == "completed"
     assert result.result["student_name"] == "张三"
-    assert result.trace["broad_plan"]["summary"] == "Default document navigation plan"
-    assert result.trace["broad_plan"]["plan"]
+    assert result.trace["broad_plan"] is None
     assert len(result.trace["actions"]) >= 1
 
 

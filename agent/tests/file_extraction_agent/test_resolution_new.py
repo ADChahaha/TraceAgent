@@ -53,7 +53,7 @@ def test_resolution_messages_embed_compact_document_outline():
     assert "You are the field-writing agent" in content
     assert "Each field must be finalized exactly once with set_field" in content
     assert "Write reasons in the same language as the document whenever possible" in content
-    assert "Use update_plan to keep broad-plan progress synchronized" in content
+    assert "Use update_plan as a local work log for frontend replay" in content
     assert "Use the task field descriptions and document outline as the primary guide" in content
     assert "update_plan(plan_index" in content
     assert "Treat each update_plan as a local work unit" in content

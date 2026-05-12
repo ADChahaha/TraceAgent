@@ -58,10 +58,10 @@
 - `test_paragraph_extraction_returns_all_regex_matches`：确认段落正则抽取返回所有匹配文本及对应证据。
 - `test_set_field_records_value_and_finish_validates_required_fields`：确认字段写入后保存值和证据，必填字段齐全时 `finish` 成功。
 - `test_set_field_rejects_value_that_does_not_match_field_type`：确认字段值类型不匹配时返回错误且不污染 `field_states`。
-- `test_update_plan_records_plan_status_and_action`：确认计划状态可按 `in_progress -> completed` 写入并进入 replay action。
-- `test_update_plan_rejects_starting_later_plan_before_previous_completed`：确认计划步骤不能跳过前面的未完成项。
-- `test_update_plan_rejects_completing_plan_that_is_not_in_progress`：确认计划步骤必须先进入 `in_progress` 才能完成。
-- `test_update_plan_rejects_invalid_plan_index`：确认越界计划索引返回明确错误。
+- `test_update_plan_records_plan_status_and_action`：确认本地计划日志可按 `in_progress -> completed` 写入并进入 replay action，step 来自模型给出的 reason。
+- `test_update_plan_allows_non_sequential_local_plan_indexes`：确认计划编号只是本地日志编号，不再受 broad plan 顺序约束。
+- `test_update_plan_rejects_completing_plan_that_is_not_in_progress`：确认本地计划日志必须先进入 `in_progress` 才能完成。
+- `test_update_plan_accepts_new_local_plan_index_without_broad_plan`：确认没有 broad plan 时，新编号不会被越界校验拦截，但直接 completed 仍会按状态机返回错误。
 - `test_set_field_rejects_unobserved_evidence_ids`：确认未被读取或查询观察到的 evidence id 不能用于 resolved 字段。
 - `test_finish_fails_missing_required_field`：确认缺少必填字段时 `finish` 返回字段级错误。
 - `test_build_tools_exposes_model_facing_docstrings_without_state_argument`：确认模型可见工具 schema 隐藏内部 `state`，`read_blocks` 暴露 `indexes` 而不暴露旧的 `offset/number`，`read_block_range` 暴露 `start_index/count`，并在说明中暴露 section/leaf block、顶层 list id、顶层 table id、`block_offset=0`、`preview_inline_evidence` 和证据写入约束。

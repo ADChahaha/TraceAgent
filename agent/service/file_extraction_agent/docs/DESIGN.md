@@ -4,14 +4,14 @@
 
 ## 基本实现思路
 
-当前实现是“HTML 索引 + 空 broad 占位 + resolution 直接工具执行 + 轻量 update_plan 记忆”：
+当前实现是“HTML 索引 + 无 broad plan + resolution 直接工具执行 + 轻量 update_plan 记忆”：
 
 ```text
 调用方传入 html、task_spec、run_options、model_config
   -> input_adapter 校验 html 非空、task_spec.fields 非空、max_tool_calls > 0
   -> html_index 解析 HTML，基于已有 id 构建 document.tree、elements_by_id、tables_by_id、row_index；tree 按 DOM/section 容器语义保留 section、heading 和同层 block items 的顺序与预览
   -> model_factory 从显式 model_config 或环境变量构造 broad / resolution 两个 ChatOpenAI，并注入重试和超时配置
-  -> broad_new 不调用模型，直接写入空 BroadPlan 作为 trace 兼容占位
+  -> broad_new 不调用模型，也不生成兼容 broad plan；state.broad_plan 保持为 None
   -> graph 把 broad_model 挂到 state.document_scan_model，作为可选隔离全文扫描模型
   -> resolution_new 把 task fields 和 document outline 交给 LangGraph tool-calling loop
   -> html_tools 提供 update_plan / overview / read_section / read_blocks / read_block_range / read_list / query_table / preview_inline_evidence / set_field / finish
@@ -22,7 +22,7 @@
 
 `trace` 是前端 replay 和 backend route policy 的共同来源。它包含：
 
-- `broad_plan`：no-plan 实验中的兼容占位，默认是 `summary="No broad plan"`、空 `plan` 和空 `risks`。
+- `broad_plan`：保留 trace 字段用于兼容旧消费者，但当前恒为 `None`，不再提供默认三步计划。
 - `plan_statuses`：resolution 的轻量计划进度和当前工作单元状态。
 - `document_tree`：从 HTML 推出的混排 outline，包含 section container、heading 和同层 block items 的摘要。
 - `field_states`：每个字段的值、状态、证据 id、原因或失败原因。
@@ -142,24 +142,24 @@ string / number / boolean / list[string] / list[number]
 
 ## Broad 阶段
 
-`broad_new.py` 在当前实现中不再调用模型，也不再生成路线计划。它只写入空 `BroadPlan`，让下游 trace 结构保持兼容。
+`broad_new.py` 在当前实现中不再调用模型，也不再生成路线计划或默认三步兼容计划。它只把 `state.broad_plan` 置为 `None`，让 resolution 直接从字段语义和 document outline 开始工作。
 
 ```text
 GraphState
   -> run_broad_planner(...)
-  -> state.broad_plan = BroadPlan(summary="No broad plan", plan=[], risks=[])
+  -> state.broad_plan = None
 ```
 
 约束：
 
 - broad 不调用模型，不读取完整 HTML 来制定路线。
-- broad 不写最终字段值，也不写候选章节、元素、关键词或风险。
+- broad 不写最终字段值，也不写候选章节、元素、关键词、风险或默认计划。
 - broad_model 只会在 resolution 主 agent 显式调用 `scan_document`，或 `read_section` 因章节过长自动触发 scoped scan 时，作为隔离 reader 被调用；它不会获得工具，也不能递归调用其他 agent。
 - `build_broad_messages`、`return_broad_plan` 和解析函数暂时保留，方便和旧 plan 模式对比或回滚。
 
 ## 轻量 Plan 记忆
 
-`update_plan` 不是 stage 状态机，也不是字段证据账本。它只是轻量工作记忆和 replay 标题，用来让模型和用户看清“这一段准备解决哪些相关字段、为什么读这些条款、最后写了哪些字段”。最终字段仍由 `set_field` 写入；`update_plan` 不参与 scorer，不替代字段 rationale，也不做 plan 级硬校验。
+`update_plan` 不是 stage 状态机，也不是字段证据账本。它只是轻量工作记忆和 replay 标题，用来让模型和用户看清“这一段准备解决哪些相关字段、为什么读这些条款、最后写了哪些字段”。最终字段仍由 `set_field` 写入；`update_plan` 不参与 scorer，不替代字段 rationale，也不绑定 broad plan 或做 plan 级硬校验。
 
 推荐 prompt 纪律：
 
@@ -223,6 +223,7 @@ resolution system prompt 使用英文表达 replay、表格查询、plan 软记�
 ```text
 update_plan(plan_index, status, reason)
   -> 记录当前局部工作单元、相关字段和 replay 标题
+  -> plan_index 是模型自选的本地日志编号，不引用 broad plan
   -> 只更新 plan_statuses，不写字段、不绑定证据、不参与最终校验
 
 overview()

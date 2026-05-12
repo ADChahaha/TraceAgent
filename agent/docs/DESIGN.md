@@ -116,13 +116,13 @@ agent/
 - `service.file_extraction_agent.processor.extract(...)`
 - HTTP 入口：`routes/file_extraction_agent.py`
 
-当前 `file_extraction_agent` 保留 broad 兼容占位，resolution 直接根据字段语义和文档 outline 调用 HTML 工具读取证据，并在需要时用轻量 `update_plan` 声明当前局部工作单元。broad 不写字段值，resolution 必须让每个字段通过 `set_field` 进入 `resolved` 或 `failed`：
+当前 `file_extraction_agent` 不再生成 broad plan，resolution 直接根据字段语义和文档 outline 调用 HTML 工具读取证据，并在需要时用轻量 `update_plan` 声明当前局部工作单元。broad 不写字段值、不写默认计划，resolution 必须让每个字段通过 `set_field` 进入 `resolved` 或 `failed`：
 
 ```text
 backend 聚合后的 html + task_spec
   -> input_adapter.py 校验 html/task_spec/run_options 并组装 HtmlExtractionInput
   -> html_index.py 基于已有 HTML id 构建 document tree、elements、tables 和 row_index；tree 按 DOM/section 容器语义保留 section、heading 和同层 block items 的顺序与预览
-  -> broad_new.py 写入兼容用空 BroadPlan，不调用模型
+  -> broad_new.py 不调用模型，也不生成默认 BroadPlan；trace.broad_plan 保持为 None
   -> graph 把 broad_model 挂到 state.document_scan_model，作为可选 scoped reader
   -> resolution_new.py 把 task fields 和 document outline 交给 LangGraph tool-calling loop
   -> resolution model 在必要时先调用 update_plan 声明当前局部工作单元，再调用 overview / read_section / read_blocks / read_block_range / read_list / query_table 读取证据
@@ -130,7 +130,7 @@ backend 聚合后的 html + task_spec
   -> 证据足够或失败明确后调用 set_field 写入字段状态、值、证据 id 和原因；resolved 字段强制文本 inline、表格 row、列表 item 粒度
   -> 所有字段 set_field 后调用 finish 做完整性校验
   -> graph 映射成 ExtractionResult(result + trace)
-  -> trace 保留 broad_plan、plan_statuses、document_tree、field_states 和 actions
+  -> trace 保留 broad_plan=None、plan_statuses、document_tree、field_states 和 actions
 ```
 
 这个设计不承诺 100% 召回。它的目标是让抽取过程变成可回放的“计划、读取、查表、写字段、完成”动作链路；证据不足或工具诊断提示风险时，字段可以先 `failed`，后续由 route policy 和人工 review 接住。所有读取、查表、计划推进、字段写入和 finish 都必须进入 trace，方便后续审核和调试。
