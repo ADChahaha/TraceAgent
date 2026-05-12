@@ -47,6 +47,7 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
                 'TEMPERATURE="0.1"',
                 'TOP_P="0.9"',
                 'TOP_K="40"',
+                'REASONING_EFFORT="high"',
                 'MODEL_MAX_RETRIES="8"',
                 'MODEL_REQUEST_TIMEOUT="120"',
             ]
@@ -66,6 +67,7 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
         "TEMPERATURE",
         "TOP_P",
         "TOP_K",
+        "REASONING_EFFORT",
         "MODEL_MAX_RETRIES",
         "MODEL_REQUEST_TIMEOUT",
     ):
@@ -79,6 +81,7 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
     assert config.temperature == 0.1
     assert config.top_p == 0.9
     assert config.top_k == 40
+    assert config.reasoning_effort == "high"
     assert config.max_retries == 8
     assert config.request_timeout == 120.0
 
@@ -105,6 +108,7 @@ def test_normalize_model_config_ignores_generic_api_key_env(monkeypatch, tmp_pat
         "TEMPERATURE",
         "TOP_P",
         "TOP_K",
+        "REASONING_EFFORT",
         "MODEL_MAX_RETRIES",
         "MODEL_REQUEST_TIMEOUT",
     ):
@@ -170,3 +174,20 @@ def test_build_chat_model_passes_sampling_parameters_without_model_kwargs(monkey
     assert captured["top_p"] == 1.0
     assert captured["extra_body"] == {"top_k": 1}
     assert "model_kwargs" not in captured
+
+
+def test_build_chat_model_passes_reasoning_effort(monkeypatch):
+    captured = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(model_factory_module, "ChatOpenAI", FakeChatOpenAI)
+
+    model_factory_module.build_chat_model(
+        ModelConfig(reasoning_effort="high"),
+        "resolution",
+    )
+
+    assert captured["reasoning_effort"] == "high"

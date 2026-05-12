@@ -98,6 +98,7 @@ def test_model_config_keeps_stage_model_names_and_sampling_options():
         temperature=0.2,
         top_p=0.9,
         top_k=40,
+        reasoning_effort="high",
         max_retries=7,
         request_timeout=90.0,
     )
@@ -106,6 +107,7 @@ def test_model_config_keeps_stage_model_names_and_sampling_options():
     assert config.temperature == 0.2
     assert config.top_p == 0.9
     assert config.top_k == 40
+    assert config.reasoning_effort == "high"
     assert config.max_retries == 7
     assert config.request_timeout == 90.0
 

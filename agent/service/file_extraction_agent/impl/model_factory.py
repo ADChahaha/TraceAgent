@@ -45,6 +45,8 @@ def build_chat_model(config: ModelConfig, model_name: str) -> Any:
         kwargs["api_key"] = config.api_key
     if config.top_p is not None:
         kwargs["top_p"] = config.top_p
+    if config.reasoning_effort:
+        kwargs["reasoning_effort"] = config.reasoning_effort
     if config.top_k is not None:
         kwargs["extra_body"] = {"top_k": config.top_k}
 
@@ -65,6 +67,7 @@ def _model_config_from_env() -> ModelConfig:
         temperature=_float_env(values.get("TEMPERATURE"), 0.0),
         top_p=_optional_float_env(values.get("TOP_P")),
         top_k=_optional_int_env(values.get("TOP_K")),
+        reasoning_effort=values.get("REASONING_EFFORT") or "high",
         max_retries=_int_env(values.get("MODEL_MAX_RETRIES"), 6),
         request_timeout=_optional_float_env(values.get("MODEL_REQUEST_TIMEOUT")),
     )

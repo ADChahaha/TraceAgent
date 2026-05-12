@@ -160,7 +160,7 @@ OCR 或表格结构质量提示不参与 broad、resolution 或 route policy 的
 抽取阶段使用 LangGraph 工具调用。`impl/graph.py` 负责编排 resolution，模型调用层当前由 `service/file_extraction_agent/impl/model_factory.py` 统一处理：
 
 ```text
-调用方显式传入 model_config，或部署环境提供 BASE_URL / OPENAI_API_KEY / RESOLUTION_MODEL / MODEL
+调用方显式传入 model_config，或部署环境提供 BASE_URL / OPENAI_API_KEY / RESOLUTION_MODEL / MODEL / REASONING_EFFORT
   -> 如果 resolution 模型名为空，build_chat_model 直接拒绝
   -> 用连接配置创建 langchain_openai.ChatOpenAI(...)
   -> resolution_new 通过 LangGraph tool-calling 执行

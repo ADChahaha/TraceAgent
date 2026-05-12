@@ -43,9 +43,10 @@ BASE_URL
 OPENAI_API_KEY
 RESOLUTION_MODEL
 ROUTE_POLICY_MODEL
+REASONING_EFFORT
 ```
 
-`BASE_URL` 和 `OPENAI_API_KEY` 是模型服务连接参数。`RESOLUTION_MODEL` 用于字段抽取；`ROUTE_POLICY_MODEL` 只用于 route policy 阶段。route policy 不读取通用 `MODEL`，也没有默认模型名；缺少 `ROUTE_POLICY_MODEL` 时会返回 422。
+`BASE_URL` 和 `OPENAI_API_KEY` 是模型服务连接参数。`RESOLUTION_MODEL` 用于字段抽取；字段抽取的 `REASONING_EFFORT` 默认是 `high`，可用于 DeepSeek 等 OpenAI-compatible 源显式指定思考强度。`ROUTE_POLICY_MODEL` 只用于 route policy 阶段。route policy 不读取通用 `MODEL`，也没有默认模型名；缺少 `ROUTE_POLICY_MODEL` 时会返回 422。
 
 ## 健康检查
 
@@ -126,7 +127,7 @@ POST /v1/file-extraction-agent/extract
 - `task_spec`：必填，字段抽取 schema。
 - `run_options`：可选，抽取运行预算。
 - `model_config`：可选，覆盖字段抽取模型连接配置。
-- `base_url`、`api_key` / `openai_api_key`、`resolution_model_name`、`model`、`temperature`、`top_p`、`top_k`：可选，兼容形式的模型连接覆盖字段；未传 `model_config` 时会组装成同一份 `ModelConfig`。
+- `base_url`、`api_key` / `openai_api_key`、`resolution_model_name`、`model`、`temperature`、`top_p`、`top_k`、`reasoning_effort`：可选，兼容形式的模型连接覆盖字段；未传 `model_config` 时会组装成同一份 `ModelConfig`。
 
 处理流程：
 
