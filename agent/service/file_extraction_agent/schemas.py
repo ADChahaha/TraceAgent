@@ -91,6 +91,7 @@ class ModelConfig:
     top_p: float | None = None
     top_k: int | None = None
     reasoning_effort: str | None = "high"
+    thinking_type: str | None = "disabled"
     max_retries: int = 6
     request_timeout: float | None = None
 

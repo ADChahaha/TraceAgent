@@ -48,6 +48,7 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
                 'TOP_P="0.9"',
                 'TOP_K="40"',
                 'REASONING_EFFORT="high"',
+                'THINKING_TYPE="disabled"',
                 'MODEL_MAX_RETRIES="8"',
                 'MODEL_REQUEST_TIMEOUT="120"',
             ]
@@ -68,6 +69,7 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
         "TOP_P",
         "TOP_K",
         "REASONING_EFFORT",
+        "THINKING_TYPE",
         "MODEL_MAX_RETRIES",
         "MODEL_REQUEST_TIMEOUT",
     ):
@@ -82,6 +84,7 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
     assert config.top_p == 0.9
     assert config.top_k == 40
     assert config.reasoning_effort == "high"
+    assert config.thinking_type == "disabled"
     assert config.max_retries == 8
     assert config.request_timeout == 120.0
 
@@ -109,6 +112,7 @@ def test_normalize_model_config_ignores_generic_api_key_env(monkeypatch, tmp_pat
         "TOP_P",
         "TOP_K",
         "REASONING_EFFORT",
+        "THINKING_TYPE",
         "MODEL_MAX_RETRIES",
         "MODEL_REQUEST_TIMEOUT",
     ):
@@ -191,7 +195,10 @@ def test_build_chat_model_passes_sampling_parameters_without_model_kwargs(monkey
     )
 
     assert captured["top_p"] == 1.0
-    assert captured["extra_body"] == {"top_k": 1}
+    assert captured["extra_body"] == {
+        "top_k": 1,
+        "thinking": {"type": "disabled"},
+    }
     assert "model_kwargs" not in captured
 
 

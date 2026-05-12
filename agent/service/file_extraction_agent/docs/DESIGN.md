@@ -101,12 +101,12 @@ string / number / boolean / list[string] / list[number]
 ```text
 显式 model_config 或 .env / 进程环境
   -> 读取 BASE_URL / OPENAI_API_KEY / RESOLUTION_MODEL / MODEL
-  -> 读取 TEMPERATURE / TOP_P / TOP_K / REASONING_EFFORT
+  -> 读取 TEMPERATURE / TOP_P / TOP_K / REASONING_EFFORT / THINKING_TYPE
   -> 读取 MODEL_MAX_RETRIES / MODEL_REQUEST_TIMEOUT
   -> 创建 resolution_model
 ```
 
-`REASONING_EFFORT` 未设置时默认是 `high`，用于需要显式思考强度的 OpenAI-compatible 模型源。`MODEL_MAX_RETRIES` 未设置时默认是 `6`，用于减少模型服务短暂连接错误导致的整份文档失败。`MODEL_REQUEST_TIMEOUT` 未设置时不显式传入超时，保持底层客户端默认行为。
+`REASONING_EFFORT` 未设置时默认是 `high`，用于需要显式思考强度的 OpenAI-compatible 模型源；如果设为 `none/off/disabled/false/0`，则不传该参数。`THINKING_TYPE` 未设置时默认是 `disabled`，会通过 `extra_body.thinking.type` 显式关闭 DeepSeek thinking mode，避免 tool-calling 多轮回放缺少 `reasoning_content`。`MODEL_MAX_RETRIES` 未设置时默认是 `6`，用于减少模型服务短暂连接错误导致的整份文档失败。`MODEL_REQUEST_TIMEOUT` 未设置时不显式传入超时，保持底层客户端默认行为。
 
 ## HTML 索引
 

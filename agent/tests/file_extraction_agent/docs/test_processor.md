@@ -10,5 +10,5 @@
 - `test_normalize_model_config_rejects_broad_model_name`：确认旧的 `broad_model_name` 不再被模型配置接受，避免 broad 兼容字段重新进入抽取链路。
 - `test_normalize_model_config_allows_disabling_reasoning_effort`：确认 `REASONING_EFFORT=none` 会归一化为不传思考强度，方便关闭不兼容的 thinking 模式。
 - `test_build_chat_model_passes_retry_and_timeout`：确认 `model_factory` 创建 `ChatOpenAI` 时会传入 `max_retries` 和 `request_timeout`。
-- `test_build_chat_model_passes_sampling_parameters_without_model_kwargs`：确认 `top_p` 作为 `ChatOpenAI` 显式参数传入，`top_k` 放进兼容接口使用的 `extra_body`，避免通过 `model_kwargs` 变成不被服务端接受的请求参数。
+- `test_build_chat_model_passes_sampling_parameters_without_model_kwargs`：确认 `top_p` 作为 `ChatOpenAI` 显式参数传入，`top_k` 和 `thinking.type` 放进兼容接口使用的 `extra_body`，避免通过 `model_kwargs` 变成不被服务端接受的请求参数。
 - `test_build_chat_model_passes_reasoning_effort`：确认 `REASONING_EFFORT` 归一化后会作为 `ChatOpenAI(reasoning_effort=...)` 传入请求。

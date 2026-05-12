@@ -47,8 +47,13 @@ def build_chat_model(config: ModelConfig, model_name: str) -> Any:
         kwargs["top_p"] = config.top_p
     if config.reasoning_effort:
         kwargs["reasoning_effort"] = config.reasoning_effort
+    extra_body: dict[str, Any] = {}
     if config.top_k is not None:
-        kwargs["extra_body"] = {"top_k": config.top_k}
+        extra_body["top_k"] = config.top_k
+    if config.thinking_type:
+        extra_body["thinking"] = {"type": config.thinking_type}
+    if extra_body:
+        kwargs["extra_body"] = extra_body
 
     return ChatOpenAI(**kwargs)
 
@@ -68,6 +73,7 @@ def _model_config_from_env() -> ModelConfig:
         top_p=_optional_float_env(values.get("TOP_P")),
         top_k=_optional_int_env(values.get("TOP_K")),
         reasoning_effort=_reasoning_effort_env(values.get("REASONING_EFFORT")),
+        thinking_type=values.get("THINKING_TYPE") or "disabled",
         max_retries=_int_env(values.get("MODEL_MAX_RETRIES"), 6),
         request_timeout=_optional_float_env(values.get("MODEL_REQUEST_TIMEOUT")),
     )
