@@ -246,9 +246,13 @@ def build_tools(state: Any) -> list[Any]:
 
         You must call this for each task field exactly once, either with
         ``status="resolved"`` when the value is supported, or with
-        ``status="failed"`` when the field cannot be extracted. Call set_field
-        as soon as enough evidence for the current field has been observed; do
-        not keep reading unrelated elements first.
+        ``status="failed"`` when the field cannot be completed reliably and
+        needs human review. Null is a valid resolved value when the declared
+        field type is null, or when an enum variant declares a null payload.
+        Do not use status failed just because value is null, absent, negative,
+        or an allowed enum variant represents no mention. Call set_field as
+        soon as enough evidence for the current field has been observed; do not
+        keep reading unrelated elements first.
 
         Use this only after this same run has observed the supporting evidence
         through ``read_blocks``, ``read_block_range``, ``read_list``,
@@ -263,12 +267,15 @@ def build_tools(state: Any) -> list[Any]:
 
         Args:
             name: Field name declared in task_spec.
-            value: Extracted field value. Use null when status is ``failed``.
+            value: Extracted field value. Use null when the declared field type
+                or selected enum variant type is ``null``; use null with
+                ``status="failed"`` only when no reliable value can be set.
             evidence_ids: Observed ids supporting the value, such as
                 ``["dp-p-4::inline-0"]``, ``["dp-table-1", "dp-tr-2"]``, or
                 ``["dp-ul-1", "dp-li-2"]``.
-            status: ``resolved`` when a value is found, or ``failed`` when the
-                field cannot be extracted.
+            status: ``resolved`` when a valid value, including a declared null
+                value, is set; ``failed`` only when the field needs human
+                review because it cannot be completed reliably.
             reason: Why this value is now sufficiently supported. Mention the
                 evidence ids and the current field.
             failure_reason: Required when status is ``failed``.

@@ -16,7 +16,7 @@
 ## 测试函数
 
 - `test_format_document_outline_returns_compact_text_not_raw_json`：确认 outline 是模型友好的 XML-like 文本，包含章节和表格引用，不暴露 Python dict 或正文噪声。
-- `test_resolution_messages_embed_compact_document_outline`：确认 resolution prompt 包含 compact outline、字段一次性定案规则、reason 面向用户和尽量使用文档语言的约束、replay 同步约束、`update_soft_plan` stage-like 软计划约束、开头按证据主题或文档区域对字段分组、相同类型或共享部分证据且可一起判断的字段保持在同一 plan item、plan 里提到字段时必须逐个写出真实字段名且不能用范围/through/全部字段/剩余字段等缩写概括、section/同层 block 读取策略、inline/table row/list item 证据粒度要求，并把具体工具参数与读取行为交给 LangGraph 绑定的 tool docstring 注入；同时确认不再内嵌 `query_audit` 相关提示，也不含 broad plan 提示。
+- `test_resolution_messages_embed_compact_document_outline`：确认 resolution prompt 包含 compact outline、字段一次性定案规则、`null` 类型或 enum null payload 必须作为合法 resolved 值处理、`failed` 仅用于无法可靠自动完成且需要人工 review、reason 面向用户和尽量使用文档语言的约束、replay 同步约束、`update_soft_plan` stage-like 软计划约束、开头按证据主题或文档区域对字段分组、相同类型或共享部分证据且可一起判断的字段保持在同一 plan item、plan 里提到字段时必须逐个写出真实字段名且不能用范围/through/全部字段/剩余字段等缩写概括、section/同层 block 读取策略、inline/table row/list item 证据粒度要求，并把具体工具参数与读取行为交给 LangGraph 绑定的 tool docstring 注入；同时确认不再内嵌 `query_audit` 相关提示，也不含 broad plan 提示。
 - `test_format_document_outline_prioritizes_index_pages`：确认疑似目录页会被放进 `index-pages`，模型应先用它定位主章节。
 - `test_resolution_graph_nudges_model_when_it_stops_before_finish`：确认字段已写但模型停在普通文本时，会收到继续调用工具的提醒并最终触发 `finish`。
 - `test_resolution_nudge_counts_new_read_tools_as_observed_evidence`：确认 `read_blocks`、`read_block_range`、`read_list`、`query_table`、`preview_inline_evidence` 等读取或证据细化动作会触发“停止广泛浏览、优先 set_field”的 nudge。

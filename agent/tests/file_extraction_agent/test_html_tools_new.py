@@ -1238,6 +1238,9 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
     set_field_description = " ".join(_tool_description(set_field).split())
     assert "for each task field exactly once" in set_field_description
     assert "unrelated elements" in set_field_description
+    assert "Null is a valid resolved value when the declared field type is null" in set_field_description
+    assert "Do not use status failed just because value is null" in set_field_description
+    assert "needs human review" in set_field_description
     assert "read_blocks" in set_field_description
     assert "read_block_range" in set_field_description
     assert "preview_inline_evidence" in set_field_description

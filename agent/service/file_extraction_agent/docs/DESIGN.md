@@ -15,7 +15,7 @@
   -> html_tools 提供 update_soft_plan / overview / read_section / read_blocks / read_block_range / read_list / query_table / preview_inline_evidence / set_field / finish
   -> 模型先用 update_soft_plan 按可能的证据主题、文档区域或字段关系给字段分组，把相同类型或共享部分证据、可一起判断的字段放进同一个 plan item
   -> 模型后续更新 stage-like 软计划，说明当前局部工作单元、已完成步骤和待处理步骤
-  -> 模型围绕当前软计划读取证据，证据足够后直接 set_field 写入 resolved 或 failed
+  -> 模型围绕当前软计划读取证据，证据足够后直接 set_field 写入 resolved；只有无法可靠自动完成且需要人工 review 时才写 failed
   -> finish 校验字段完成度和证据一致性
   -> graph 映射成 ExtractionResult(status, result, failure_reason, trace)
 ```
@@ -193,8 +193,8 @@ task_spec + document outline
 
 resolution 的目标是让每个字段恰好通过一次 `set_field` 进入最终状态：
 
-- `resolved`：字段值已找到，并且 evidence ids 来自本轮读取、查表或 inline 证据预览结果。
-- `failed`：字段无法可靠抽取，需要给出 `failure_reason`。
+- `resolved`：字段值已可靠设置，并且 evidence ids 来自本轮读取、查表或 inline 证据预览结果。字段类型或 enum variant payload 声明为 `null` 时，`null` 是合法的 resolved 值，不代表失败。
+- `failed`：字段无法可靠自动完成，需要人工 review，并且必须给出 `failure_reason`。不能因为值是 `null`、缺席、否定语义，或某个 enum variant 表示“未提及/无值”就写 failed；这些应按字段 schema 写成 resolved。
 
 resolution 会在必要时调用 `update_soft_plan` 来记录当前局部工作单元，但它仍然直接从字段语义和文档 outline 选择工具：
 
@@ -263,6 +263,7 @@ preview_inline_evidence(source_id, start_index, count, reason)
 set_field(name, value, evidence_ids, reason, status, failure_reason)
   -> 校验字段存在、状态合法、值类型匹配
   -> enum 字段校验 value.variant 属于字段 variants，value.value 匹配该 variant 的基础类型
+  -> 如果字段类型或 enum variant payload 类型是 null，value=null 可以作为 status=resolved 写入
   -> 校验证据 id 已经被本轮工具观察到
   -> resolved 字段强制证据粒度：文本必须用 inline id，表格必须包含 row id，列表必须包含 item id
   -> 写入 state.field_states

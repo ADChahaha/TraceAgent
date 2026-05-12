@@ -72,6 +72,9 @@ def test_resolution_messages_embed_compact_document_outline():
     assert "These plan rules are soft guidance for memory and replay clarity" in content
     assert "broad-plan" not in content
     assert "broad plan" not in content.lower()
+    assert "Null is a normal resolved value for fields or enum variants whose declared type is null" in content
+    assert "Do not use status failed just because the value is null" in content
+    assert "Use status failed only when the field cannot be completed reliably and needs human review" in content
     assert "Once evidence for a field is sufficient, the next related tool call must be set_field" in content
     assert "Call overview first when the outline is not enough" in content
     assert "Document outline may include section containers and block items in document order" in content
