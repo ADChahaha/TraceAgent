@@ -128,6 +128,25 @@ def test_normalize_model_config_rejects_broad_model_name():
         normalize_model_config({"broad_model_name": "broad", "resolution_model_name": "resolution"})
 
 
+def test_normalize_model_config_allows_disabling_reasoning_effort(monkeypatch, tmp_path):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "\n".join(
+            [
+                'RESOLUTION_MODEL="resolution"',
+                'REASONING_EFFORT="none"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(model_factory_module, "_candidate_env_paths", lambda: [env_path])
+    monkeypatch.delenv("REASONING_EFFORT", raising=False)
+
+    config = normalize_model_config(None)
+
+    assert config.reasoning_effort is None
+
+
 def test_build_chat_model_passes_retry_and_timeout(monkeypatch):
     captured = {}
 
