@@ -1,27 +1,30 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+from service.file_extraction_agent.impl.broad_new import BroadPlan
 from service.file_extraction_agent.impl.graph import build_failed_result, map_state_to_result, run_extraction_graph
 from service.file_extraction_agent.impl.html_state import build_graph_state
 from service.file_extraction_agent.input_adapter import build_graph_input
+
+
+class FakeBroadModel:
+    def bind_tools(self, tools, tool_choice=None):
+        raise AssertionError("broad model should not be bound in no-plan mode")
+
+    def invoke(self, messages):
+        raise AssertionError("broad model should not be invoked in no-plan mode")
 
 
 class FakeResolutionModel:
     def __init__(self):
         self.calls = [
             {
-                "tool_name": "start_stage",
+                "tool_name": "update_plan",
                 "arguments": {
-                    "title": "理解名单来源",
-                    "focus": "查看名单表并确认学生姓名来源",
-                    "basis": "学生姓名可能来自名单表，表格列名可先确认。",
-                },
-            },
-            {
-                "tool_name": "append_stage_progress",
-                "arguments": {
-                    "stage_id": "stage-1",
-                    "type": "investigate",
-                    "summary": "准备读取名单表并查询学生姓名行。",
+                    "plan_index": 1,
+                    "status": "in_progress",
+                    "reason": "开始读取名单表",
                 },
             },
             {
@@ -42,31 +45,15 @@ class FakeResolutionModel:
                 },
             },
             {
-                "tool_name": "record_stage_evidence",
+                "tool_name": "set_field",
                 "arguments": {
-                    "stage_id": "stage-1",
-                    "field_name": "student_name",
+                    "name": "student_name",
+                    "value": "张三",
                     "evidence_ids": ["dp-table-1", "dp-tr-2"],
-                    "observation": "名单表中计算机学院对应的姓名是张三。",
+                    "reason": "dp-table-1 和 dp-tr-2 支持学生姓名为张三",
                 },
             },
-            {
-                "tool_name": "complete_stage",
-                "arguments": {
-                    "stage_id": "stage-1",
-                    "finding": "名单表行证据已经足以写学生姓名字段。",
-                    "fields": [
-                        {
-                            "name": "student_name",
-                            "value": "张三",
-                            "evidence_ids": ["dp-table-1", "dp-tr-2"],
-                            "status": "resolved",
-                            "rationale": "查询到的表格行直接覆盖学生姓名。",
-                        }
-                    ],
-                },
-            },
-            {"tool_name": "finish", "arguments": {"confirm": "finish"}},
+            {"tool_name": "finish", "arguments": {}},
         ]
 
     def invoke(self, messages):
@@ -76,22 +63,6 @@ class FakeResolutionModel:
 class FakeResolutionModelWithScan:
     def __init__(self):
         self.calls = [
-            {
-                "tool_name": "start_stage",
-                "arguments": {
-                    "title": "理解姓名段落",
-                    "focus": "读取姓名段落并细化 inline 证据",
-                    "basis": "姓名字段可能直接来自通知正文。",
-                },
-            },
-            {
-                "tool_name": "append_stage_progress",
-                "arguments": {
-                    "stage_id": "stage-1",
-                    "type": "investigate",
-                    "summary": "准备读取姓名段落并细化 inline 证据。",
-                },
-            },
             {
                 "tool_name": "read_blocks",
                 "arguments": {
@@ -110,35 +81,33 @@ class FakeResolutionModelWithScan:
                 },
             },
             {
-                "tool_name": "record_stage_evidence",
+                "tool_name": "set_field",
                 "arguments": {
-                    "stage_id": "stage-1",
-                    "field_name": "student_name",
+                    "name": "student_name",
+                    "value": "张三",
                     "evidence_ids": ["dp-p-1::inline-0"],
-                    "observation": "姓名段落直接写明学生姓名是张三。",
+                    "reason": "dp-p-1::inline-0 支持学生姓名为张三",
                 },
             },
-            {
-                "tool_name": "complete_stage",
-                "arguments": {
-                    "stage_id": "stage-1",
-                    "finding": "姓名段落 inline 证据已经足以写字段。",
-                    "fields": [
-                        {
-                            "name": "student_name",
-                            "value": "张三",
-                            "evidence_ids": ["dp-p-1::inline-0"],
-                            "status": "resolved",
-                            "rationale": "inline 证据直接覆盖学生姓名。",
-                        }
-                    ],
-                },
-            },
-            {"tool_name": "finish", "arguments": {"confirm": "finish"}},
+            {"tool_name": "finish", "arguments": {}},
         ]
 
     def invoke(self, messages):
         return self.calls.pop(0)
+
+
+class FakeDocumentScanModel:
+    def __init__(self):
+        self.invoked = False
+
+    def bind_tools(self, tools, tool_choice=None):
+        raise AssertionError("document scan model must not receive tools")
+
+    def invoke(self, messages):
+        self.invoked = True
+        return {
+            "content": '{"candidates": [{"element_id": "dp-p-1", "reason": "姓名段落"}]}'
+        }
 
 
 def _input():
@@ -158,18 +127,7 @@ def _input():
 
 def test_map_state_to_result_returns_completed_payload():
     state = build_graph_state(_input())
-    state.reading_stages = [
-        {
-            "stage_id": "stage-1",
-            "title": "检查名单表",
-            "focus": "确认学生姓名来源",
-            "basis": "姓名字段可能来自名单表。",
-            "status": "completed",
-            "progress": [],
-            "evidence_notes": [],
-            "finding": "表格给出姓名。",
-        }
-    ]
+    state.broad_plan = BroadPlan(summary="Extract", plan=["Extract"], risks=[])
     state.field_states["student_name"] = {
         "name": "student_name",
         "status": "resolved",
@@ -181,56 +139,48 @@ def test_map_state_to_result_returns_completed_payload():
 
     assert result.status == "completed"
     assert result.result["student_name"] == "张三"
-    assert result.trace["reading_stages"][0]["title"] == "检查名单表"
-    assert "broad_plan" not in result.trace
-    assert "plan_statuses" not in result.trace
-    assert "soft_plan" not in result.trace
+    assert result.trace["broad_plan"]["summary"] == "Extract"
 
 
 def test_build_failed_result_preserves_trace():
     state = build_graph_state(_input())
 
-    result = build_failed_result(state=state, stage="resolution", exc=RuntimeError("boom"))
+    result = build_failed_result(state=state, stage="broad", exc=RuntimeError("boom"))
 
     assert result.status == "failed"
     assert result.failure_reason == "boom"
-    assert result.trace["failed_stage"] == "resolution"
+    assert result.trace["failed_stage"] == "broad"
 
 
-def test_run_extraction_graph_runs_resolution_without_broad_stage():
+def test_run_extraction_graph_skips_broad_plan_then_runs_resolution():
     result = run_extraction_graph(
         extraction_input=_input(),
+        broad_model=FakeBroadModel(),
         resolution_model=FakeResolutionModel(),
     )
 
     assert result.status == "completed"
     assert result.result["student_name"] == "张三"
-    assert [action["tool_name"] for action in result.trace["actions"]] == [
-        "start_stage",
-        "append_stage_progress",
-        "read_blocks",
-        "query_table",
-        "record_stage_evidence",
-        "complete_stage",
-        "finish",
-    ]
-    assert result.trace["reading_stages"][0]["title"] == "理解名单来源"
+    assert result.trace["broad_plan"]["summary"] == "Default document navigation plan"
+    assert result.trace["broad_plan"]["plan"]
+    assert len(result.trace["actions"]) >= 1
 
 
 def test_run_extraction_graph_runs_new_read_tools_without_document_scan_model():
+    scan_model = FakeDocumentScanModel()
+
     result = run_extraction_graph(
         extraction_input=_input(),
+        broad_model=scan_model,
         resolution_model=FakeResolutionModelWithScan(),
     )
 
     assert result.status == "completed"
     assert result.result["student_name"] == "张三"
+    assert scan_model.invoked is False
     assert [action["tool_name"] for action in result.trace["actions"]] == [
-        "start_stage",
-        "append_stage_progress",
         "read_blocks",
         "preview_inline_evidence",
-        "record_stage_evidence",
-        "complete_stage",
+        "set_field",
         "finish",
     ]

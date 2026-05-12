@@ -23,8 +23,9 @@ class GraphState:
     document: HtmlDocument
     task_spec: TaskSpec
     run_options: RunOptions
+    broad_plan: Any = None
     document_scan_model: Any = None
-    reading_stages: list[dict[str, Any]] = field(default_factory=list)
+    plan_statuses: dict[int, dict[str, Any]] = field(default_factory=dict)
     field_states: dict[str, dict[str, Any]] = field(default_factory=dict)
     actions: list[dict[str, Any]] = field(default_factory=list)
     observed_evidence_ids: set[str] = field(default_factory=set)
