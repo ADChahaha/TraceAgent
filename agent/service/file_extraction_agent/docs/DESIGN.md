@@ -13,7 +13,8 @@
   -> model_factory 从显式 model_config 或环境变量构造 resolution ChatOpenAI，并注入重试和超时配置
   -> resolution_new 把 task fields 和 document outline 交给 LangGraph tool-calling loop
   -> html_tools 提供 update_soft_plan / overview / read_section / read_blocks / read_block_range / read_list / query_table / preview_inline_evidence / set_field / finish
-  -> 模型用 update_soft_plan 写入 stage-like 软计划，说明当前局部工作单元、已完成步骤和待处理步骤
+  -> 模型先用 update_soft_plan 按可能的证据主题、文档区域或字段关系给字段分组，把相同类型或共享部分证据、可一起判断的字段放进同一个 plan item
+  -> 模型后续更新 stage-like 软计划，说明当前局部工作单元、已完成步骤和待处理步骤
   -> 模型围绕当前软计划读取证据，证据足够后直接 set_field 写入 resolved 或 failed
   -> finish 校验字段完成度和证据一致性
   -> graph 映射成 ExtractionResult(status, result, failure_reason, trace)
@@ -146,6 +147,11 @@ string / number / boolean / list[string] / list[number]
 推荐 prompt 纪律：
 
 - `update_soft_plan(plan=[...])` 应提交一组 stage-like 步骤，每步包含 `step` 和 `status`。
+- 第一次 `update_soft_plan` 应优先按可能的证据主题、合同区域或字段关系做粗分组，而不是马上逐字段散开。
+- 相同类型，或者共享部分证据、可一起判断的字段，应放在同一个 plan item 里，作为一个工作单元展示。
+- plan step 如果提到任务字段，必须逐个写出 `Task fields` 里的真实字段名；不应用范围、`through`、全部字段、剩余字段等缩写概括。
+- 当一个分组的相关字段都 `set_field` 后，模型应把同一个 plan item 更新为 `completed`，再进入下一个分组。
+- 如果后续阅读发现分组不准，可以刷新软计划修正，但应保持和证据主题接近。
 - 软计划步骤应描述局部工作单元，而不是整份文档或全部字段。
 - 软计划应写出本段可能相关的字段或字段组，让后续读取和写入有明确范围。
 - 本段内的读取、预览和 `set_field` 应尽量围绕当前 `in_progress` 步骤展开。

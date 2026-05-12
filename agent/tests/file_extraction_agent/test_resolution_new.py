@@ -57,6 +57,14 @@ def test_resolution_messages_embed_compact_document_outline():
     assert "Use the task field descriptions and document outline as the primary guide" in content
     assert "Each plan item should read like a compact stage title" in content
     assert "which related field group may be resolved" in content
+    assert "Start by using update_soft_plan to group fields by likely evidence topic" in content
+    assert "Group fields of the same kind or fields that share part of the same evidence" in content
+    assert "can be judged together" in content
+    assert "If a plan item mentions task fields, write each field name separately exactly as it appears in Task fields" in content
+    assert "Do not use ranges, through, all fields, remaining fields, or similar shorthand" in content
+    assert "Do not mention task-specific field families such as choice/status plus evidence" not in content
+    assert "same entity, event, condition, amount, date, table row, or evidence source" not in content
+    assert "Update that same plan item from in_progress to completed after the related fields are set" in content
     assert "Treat each soft-plan item as a local work unit" in content
     assert "Before moving to a materially different topic, clause area, or field group, refresh update_soft_plan" in content
     assert "prefer evidence observed or previewed after the latest update_soft_plan" in content
