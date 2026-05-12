@@ -866,6 +866,7 @@ def _set_field(
         return {"ok": False, "errors": [{"field": name, "message": "failure_reason is required"}]}
     if name not in _field_defs_by_name(state):
         return {"ok": False, "errors": [{"field": name, "message": "unknown field"}]}
+    field_def = _field_defs_by_name(state)[name]
 
     invalid_ids = [evidence_id for evidence_id in evidence_ids if not _evidence_exists(state, evidence_id)]
     if invalid_ids:
@@ -892,18 +893,9 @@ def _set_field(
     granularity_errors = _resolved_evidence_granularity_errors(state, evidence_ids) if status == "resolved" else []
     if granularity_errors:
         return {"ok": False, "errors": [{"field": name, **error} for error in granularity_errors]}
-    expected_type = _read(_field_defs_by_name(state)[name], "type", "string")
-    if status == "resolved" and not _value_matches_type(value, expected_type):
-        return {
-            "ok": False,
-            "errors": [
-                {
-                    "field": name,
-                    "message": "field value does not match type",
-                    "expected_type": expected_type,
-                }
-            ],
-        }
+    value_error = _field_value_error(field_def, value) if status == "resolved" else None
+    if value_error:
+        return {"ok": False, "errors": [{"field": name, **value_error}]}
 
     field_state = {
         "name": name,
@@ -1018,10 +1010,11 @@ def _finish(state: Any) -> dict[str, Any]:
         if field_state is None:
             continue
         if field_state.get("status") == "resolved":
-            if not field_state.get("evidence_ids"):
+            if not field_state.get("evidence_ids") and not _allows_empty_resolved_evidence(field_def, field_state.get("value")):
                 errors.append({"field": name, "message": "resolved field requires evidence"})
-            if not _value_matches_type(field_state.get("value"), _read(field_def, "type", "string")):
-                errors.append({"field": name, "message": "field value does not match type"})
+            value_error = _field_value_error(field_def, field_state.get("value"))
+            if value_error:
+                errors.append({"field": name, **value_error})
     result = {"ok": not errors, "errors": errors}
     _record_action(state, "finish", {}, result)
     return result
@@ -1742,7 +1735,56 @@ def _value_matches_type(value: Any, field_type: str) -> bool:
         return isinstance(value, list) and all(isinstance(item, str) for item in value)
     if field_type == "list[number]":
         return isinstance(value, list) and all(isinstance(item, int | float) and not isinstance(item, bool) for item in value)
+    if field_type == "null":
+        return value is None
     return False
+
+
+def _field_value_error(field_def: Any, value: Any) -> dict[str, Any] | None:
+    field_type = _read(field_def, "type", "string")
+    if field_type == "enum":
+        return _enum_value_error(field_def, value)
+    if not _value_matches_type(value, field_type):
+        return {
+            "message": "field value does not match type",
+            "expected_type": field_type,
+        }
+    return None
+
+
+def _enum_value_error(field_def: Any, value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict) or not isinstance(value.get("variant"), str) or "value" not in value:
+        return {"message": "enum value must be an object with variant and value"}
+    variant_name = value["variant"]
+    variant = _enum_variant_by_name(field_def).get(variant_name)
+    if variant is None:
+        return {
+            "message": "enum variant is not declared",
+            "variant": variant_name,
+        }
+    variant_type = _read(variant, "type", "null")
+    if not _value_matches_type(value.get("value"), variant_type):
+        return {
+            "message": "enum payload does not match variant type",
+            "variant": variant_name,
+            "expected_type": variant_type,
+        }
+    return None
+
+
+def _enum_variant_by_name(field_def: Any) -> dict[str, Any]:
+    return {
+        str(_read(variant, "name")): variant
+        for variant in (_read(field_def, "variants", []) or [])
+        if _read(variant, "name")
+    }
+
+
+def _allows_empty_resolved_evidence(field_def: Any, value: Any) -> bool:
+    if _read(field_def, "type", "string") != "enum" or not isinstance(value, dict):
+        return False
+    variant = _enum_variant_by_name(field_def).get(str(value.get("variant")))
+    return variant is not None and _read(variant, "type", "null") == "null" and value.get("value") is None
 
 
 def _args_with_reason(args: dict[str, Any], reason: str | None) -> dict[str, Any]:

@@ -54,6 +54,9 @@
 - `test_paragraph_extraction_returns_all_regex_matches`：确认段落正则抽取返回所有匹配文本及对应证据。
 - `test_set_field_records_value_and_finish_validates_required_fields`：确认字段写入后保存值和证据，必填字段齐全时 `finish` 成功。
 - `test_set_field_rejects_value_that_does_not_match_field_type`：确认字段值类型不匹配时返回错误且不污染 `field_states`。
+- `test_set_field_accepts_enum_variant_payload_matching_declared_variant_type`：确认 enum 字段可以写入 `{"variant": ..., "value": ...}` 形式的 tagged payload，并按声明的 variant 类型保存。
+- `test_set_field_rejects_enum_payload_with_unknown_variant_or_bad_payload_type`：确认 enum 字段会拒绝未声明 variant，以及 payload 类型和该 variant 声明不一致的值。
+- `test_finish_allows_enum_null_payload_without_evidence`：确认 `null` payload 的 enum 分类值可以作为 resolved 字段完成，不强制要求 evidence ids。
 - `test_update_soft_plan_replaces_plan_statuses_and_records_action`：确认 `update_soft_plan(plan=[...])` 会替换 `soft_plan`，同步 `plan_statuses`，并写入 replay action。
 - `test_update_soft_plan_rejects_invalid_plan_items`：确认软计划条目必须是包含 `step` 和合法 `status` 的对象。
 - `test_set_field_rejects_unobserved_evidence_ids`：确认未被读取或查询观察到的 evidence id 不能用于 resolved 字段。

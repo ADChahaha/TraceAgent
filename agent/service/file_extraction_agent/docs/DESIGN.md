@@ -92,8 +92,16 @@ html + task_spec + run_options
 字段类型只允许：
 
 ```text
-string / number / boolean / list[string] / list[number]
+string / number / boolean / list[string] / list[number] / enum
 ```
+
+`enum` 字段使用 Rust-like tagged payload：
+
+```json
+{"variant": "Entailment", "value": null}
+```
+
+字段定义必须声明 `variants`，每个 variant 有 `name` 和基础 payload 类型。runtime 写入时会校验 `variant` 已声明，`value` 符合该 variant 的 payload 类型；`null` payload variant 可用于纯分类值，允许 resolved 字段没有 evidence ids。
 
 `FieldDefinition` 兼容旧入参里的 `field_name`，但规范化后统一使用 `name`。
 
@@ -254,6 +262,7 @@ preview_inline_evidence(source_id, start_index, count, reason)
 
 set_field(name, value, evidence_ids, reason, status, failure_reason)
   -> 校验字段存在、状态合法、值类型匹配
+  -> enum 字段校验 value.variant 属于字段 variants，value.value 匹配该 variant 的基础类型
   -> 校验证据 id 已经被本轮工具观察到
   -> resolved 字段强制证据粒度：文本必须用 inline id，表格必须包含 row id，列表必须包含 item id
   -> 写入 state.field_states

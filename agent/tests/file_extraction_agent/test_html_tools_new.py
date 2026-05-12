@@ -100,6 +100,24 @@ def _list_state():
     return state
 
 
+def _enum_state():
+    state = _state()
+    state.task_spec.fields.append(
+        SimpleNamespace(
+            name="decision",
+            type="enum",
+            required=True,
+            variants=[
+                SimpleNamespace(name="Entailment", type="null"),
+                SimpleNamespace(name="Contradiction", type="null"),
+                SimpleNamespace(name="Missing", type="null"),
+                SimpleNamespace(name="Rationale", type="string"),
+            ],
+        )
+    )
+    return state
+
+
 def _mark_list_evidence_observed(state):
     _table_extraction(
         state,
@@ -971,6 +989,91 @@ def test_set_field_rejects_value_that_does_not_match_field_type():
         ],
     }
     assert "student_names" not in state.field_states
+
+
+def test_set_field_accepts_enum_variant_payload_matching_declared_variant_type():
+    state = _enum_state()
+    _mark_list_evidence_observed(state)
+
+    result = _set_field(
+        state,
+        "decision",
+        {"variant": "Entailment", "value": None},
+        ["dp-table-1", "dp-tr-2"],
+        "resolved",
+        None,
+    )
+
+    assert result["ok"] is True
+    assert state.field_states["decision"]["value"] == {
+        "variant": "Entailment",
+        "value": None,
+    }
+
+
+def test_set_field_rejects_enum_payload_with_unknown_variant_or_bad_payload_type():
+    state = _enum_state()
+    _mark_list_evidence_observed(state)
+
+    unknown_variant = _set_field(
+        state,
+        "decision",
+        {"variant": "NotMentioned", "value": None},
+        ["dp-table-1", "dp-tr-2"],
+        "resolved",
+        None,
+    )
+    bad_payload = _set_field(
+        state,
+        "decision",
+        {"variant": "Rationale", "value": 123},
+        ["dp-table-1", "dp-tr-2"],
+        "resolved",
+        None,
+    )
+
+    assert unknown_variant == {
+        "ok": False,
+        "errors": [
+            {
+                "field": "decision",
+                "message": "enum variant is not declared",
+                "variant": "NotMentioned",
+            }
+        ],
+    }
+    assert bad_payload == {
+        "ok": False,
+        "errors": [
+            {
+                "field": "decision",
+                "message": "enum payload does not match variant type",
+                "variant": "Rationale",
+                "expected_type": "string",
+            }
+        ],
+    }
+    assert "decision" not in state.field_states
+
+
+def test_finish_allows_enum_null_payload_without_evidence():
+    state = _enum_state()
+    state.task_spec.fields = [
+        field for field in state.task_spec.fields if field.name == "decision"
+    ]
+
+    set_result = _set_field(
+        state,
+        "decision",
+        {"variant": "Missing", "value": None},
+        [],
+        "resolved",
+        None,
+    )
+    finish_result = _finish(state)
+
+    assert set_result["ok"] is True
+    assert finish_result == {"ok": True, "errors": []}
 
 
 def test_update_soft_plan_replaces_plan_statuses_and_records_action():
