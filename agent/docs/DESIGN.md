@@ -115,26 +115,26 @@ agent/
 - `service.file_extraction_agent.processor.extract(...)`
 - HTTP 入口：`routes/file_extraction_agent.py`
 
-当前 `file_extraction_agent` 没有 broad 阶段，resolution 直接根据字段语义和文档 outline 调用 HTML 工具读取证据，并在需要时用轻量 `update_plan` 声明当前局部工作单元。resolution 必须让每个字段通过 `set_field` 进入 `resolved` 或 `failed`：
+当前 `file_extraction_agent` 只有 resolution 阶段。它直接根据字段语义和文档 outline 调用 HTML 工具读取证据，并在需要时用 `update_soft_plan` 写入 stage-like 软计划。resolution 必须让每个字段通过 `set_field` 进入 `resolved` 或 `failed`：
 
 ```text
 backend 聚合后的 html + task_spec
   -> input_adapter.py 校验 html/task_spec/run_options 并组装 HtmlExtractionInput
   -> html_index.py 基于已有 HTML id 构建 document tree、elements、tables 和 row_index；tree 按 DOM/section 容器语义保留 section、heading 和同层 block items 的顺序与预览
   -> resolution_new.py 把 task fields 和 document outline 交给 LangGraph tool-calling loop
-  -> resolution model 在必要时先调用 update_plan 声明当前局部工作单元，再调用 overview / read_section / read_blocks / read_block_range / read_list / query_table 读取证据
+  -> resolution model 在必要时先调用 update_soft_plan 写入软计划，再调用 overview / read_section / read_blocks / read_block_range / read_list / query_table 读取证据
   -> 如果文本块将作为最终证据，先调用 preview_inline_evidence 细化到 inline id
   -> 证据足够或失败明确后调用 set_field 写入字段状态、值、证据 id 和原因；resolved 字段强制文本 inline、表格 row、列表 item 粒度
   -> 所有字段 set_field 后调用 finish 做完整性校验
   -> graph 映射成 ExtractionResult(result + trace)
-  -> trace 保留 plan_statuses、document_tree、field_states 和 actions
+  -> trace 保留 soft_plan、plan_statuses、document_tree、field_states 和 actions
 ```
 
 这个设计不承诺 100% 召回。它的目标是让抽取过程变成可回放的“计划、读取、查表、写字段、完成”动作链路；证据不足或工具诊断提示风险时，字段可以先 `failed`，后续由 route policy 和人工 review 接住。所有读取、查表、计划推进、字段写入和 finish 都必须进入 trace，方便后续审核和调试。
 
 工具边界保持精简：
 
-- `update_plan(plan_index, status, reason)`：轻量工作记忆和 replay 标题；prompt 鼓励它描述当前局部工作单元和可能相关字段。
+- `update_soft_plan(plan)`：轻量工作记忆和 replay 标题；prompt 鼓励它提交 stage-like 的局部工作步骤和状态。
 - `overview()`：返回 section container、heading 和同层 block items 的混排 outline；heading 不会默认拥有后续平级块。
 - `read_section(section_id, reason)`：只读取 heading 元素真实后代的章节预览；平级段落、列表和表格由 overview 直接暴露。
 - `read_blocks(section_id, indexes, reason)`：按 scope id 和模型选择的 index 列表读取块；section 容器按真实 DOM 后代读，heading 只按真实后代读，叶子块用 `indexes=[0]` 读。
@@ -155,12 +155,12 @@ backend 聚合后的 html + task_spec
 section / heading / text / list / table
 ```
 
-OCR 或表格结构质量提示不参与 broad、resolution 或 route policy 的自动判断。它只在 backend 组装 review handoff 时作为人工审核辅助信息展示，例如提示某个表格 block 行列错位、空 cell 比例高、文本异常字符多或 block 过长。主抽取链路仍以证据召回、字段定案和 route policy 为准。
+OCR 或表格结构质量提示不参与 resolution 或 route policy 的自动判断。它只在 backend 组装 review handoff 时作为人工审核辅助信息展示，例如提示某个表格 block 行列错位、空 cell 比例高、文本异常字符多或 block 过长。主抽取链路仍以证据召回、字段定案和 route policy 为准。
 
-抽取阶段使用 LangGraph 工具调用。`impl/graph.py` 负责编排 resolution，模型调用层当前由 `service/file_extraction_agent/impl/model_factory.py` 统一处理：
+两阶段都使用 LangGraph 工具调用。`impl/graph.py` 负责编排阶段流转，模型调用层当前由 `service/file_extraction_agent/impl/model_factory.py` 统一处理：
 
 ```text
-调用方显式传入 model_config，或部署环境提供 BASE_URL / OPENAI_API_KEY / RESOLUTION_MODEL / MODEL / REASONING_EFFORT / THINKING_TYPE
+调用方显式传入 model_config，或部署环境提供 BASE_URL / OPENAI_API_KEY / RESOLUTION_MODEL / MODEL
   -> 如果 resolution 模型名为空，build_chat_model 直接拒绝
   -> 用连接配置创建 langchain_openai.ChatOpenAI(...)
   -> resolution_new 通过 LangGraph tool-calling 执行
@@ -169,13 +169,13 @@ OCR 或表格结构质量提示不参与 broad、resolution 或 route policy 的
 
 这样把“连哪个模型服务”和“结构化输出协议怎么选”拆开管理：
 
-- 环境变量负责连接信息、密钥和可选 resolution 模型名
+- 环境变量负责连接信息、密钥和可选模型名
 - HTTP 入参或 `processor.extract(...)` 的 `model_config` 负责显式覆盖模型连接配置
 - `model_factory.py` 负责把连接配置合并成 resolution `ChatOpenAI` runnable
 
-动作边界由工具 schema 控制：
+两阶段的动作边界由工具 schema 控制：
 
-- `resolution_new.py` 负责执行 `update_plan`、`overview`、`read_section`、`read_blocks`、`read_list`、`query_table`、`set_field` 和 `finish`。精确工具参数和读取行为以绑定工具时注入的函数 docstring / schema 为准，resolution system prompt 只保留通用执行策略和轻量 plan 软约束。
+- `resolution_new.py` 负责执行 `update_soft_plan`、`overview`、`read_section`、`read_blocks`、`read_list`、`query_table`、`set_field` 和 `finish`。精确工具参数和读取行为以绑定工具时注入的函数 docstring / schema 为准，resolution system prompt 只保留通用执行策略和轻量 plan 软约束。
 
 更具体的 schema、校验和任务配置，建议直接查看：
 
@@ -199,7 +199,7 @@ OCR 或表格结构质量提示不参与 broad、resolution 或 route policy 的
 - Python 入口：`service.route_policy_agent.processor.evaluate(...)`
 - HTTP 入口：`routes/route_policy_agent.py`
 
-这一层只看任务/字段定义、字段输出、refs 中携带的证据文本与来源位置，以及每个字段 broad / resolution 两阶段的过程摘要。过程摘要来自 backend 对 `actions` 的归一化：会保留读取、查表、计划推进、字段写入、finish、表格诊断摘要和失败原因等事实，不包含完整原文、表格原始行、cell 列表、action refs 或模型原始推理。更具体的设计见：
+这一层只看任务/字段定义、字段输出、refs 中携带的证据文本与来源位置，以及 resolution 过程摘要。过程摘要来自 backend 对 `actions` 的归一化：会保留读取、查表、计划推进、字段写入、finish、表格诊断摘要和失败原因等事实，不包含完整原文、表格原始行、cell 列表、action refs 或模型原始推理。更具体的设计见：
 
 对于由其他字段派生的字段，`route_policy_agent` 会按 `validation_rules.source_field/source_fields` 把来源字段的过程摘要作为 `related_field_processes` 注入 prompt。这样数量字段或复制候选字段能看到源字段执行过哪些读取、查表、写字段和定案动作，但仍不会看到工具返回正文或表格行。
 

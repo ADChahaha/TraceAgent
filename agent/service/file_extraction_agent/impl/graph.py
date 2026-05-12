@@ -13,11 +13,7 @@ from service.file_extraction_agent.schemas import ExtractionResult
 def run_extraction_graph(
     extraction_input: HtmlExtractionInput,
     resolution_model: Any = None,
-    **legacy_kwargs: Any,
 ) -> ExtractionResult:
-    resolution_model = (
-        resolution_model if resolution_model is not None else legacy_kwargs.get("resolution_client")
-    )
     state = build_graph_state(extraction_input)
 
     try:
@@ -44,10 +40,10 @@ def map_state_to_result(
         if field_state.get("status") == "resolved"
     }
     trace: dict[str, Any] = {
+        "soft_plan": _plain(state.soft_plan),
         "plan_statuses": _plain(state.plan_statuses),
         "document_tree": _plain(state.document.tree),
         "field_states": _plain(state.field_states),
-        "notes": _plain(getattr(state, "notes", [])),
         "actions": _plain(state.actions),
     }
     failed_stage = getattr(state, "failed_stage", None)

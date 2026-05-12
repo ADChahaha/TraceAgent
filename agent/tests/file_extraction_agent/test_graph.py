@@ -9,11 +9,12 @@ class FakeResolutionModel:
     def __init__(self):
         self.calls = [
             {
-                "tool_name": "update_plan",
+                "tool_name": "update_soft_plan",
                 "arguments": {
-                    "plan_index": 1,
-                    "status": "in_progress",
-                    "reason": "开始读取名单表",
+                    "plan": [
+                        {"step": "读取名单表并确认学生姓名", "status": "in_progress"},
+                        {"step": "写入 student_name 字段", "status": "pending"},
+                    ],
                 },
             },
             {
@@ -49,7 +50,7 @@ class FakeResolutionModel:
         return self.calls.pop(0)
 
 
-class FakeResolutionModelWithScan:
+class FakeResolutionModelWithInlineEvidence:
     def __init__(self):
         self.calls = [
             {
@@ -114,6 +115,7 @@ def test_map_state_to_result_returns_completed_payload():
     assert result.status == "completed"
     assert result.result["student_name"] == "张三"
     assert "broad_plan" not in result.trace
+    assert result.trace["soft_plan"] == []
 
 
 def test_build_failed_result_preserves_trace():
@@ -126,7 +128,7 @@ def test_build_failed_result_preserves_trace():
     assert result.trace["failed_stage"] == "resolution"
 
 
-def test_run_extraction_graph_runs_resolution_without_broad_plan_trace():
+def test_run_extraction_graph_runs_resolution_with_soft_plan():
     result = run_extraction_graph(
         extraction_input=_input(),
         resolution_model=FakeResolutionModel(),
@@ -135,13 +137,14 @@ def test_run_extraction_graph_runs_resolution_without_broad_plan_trace():
     assert result.status == "completed"
     assert result.result["student_name"] == "张三"
     assert "broad_plan" not in result.trace
+    assert result.trace["soft_plan"][0]["step"] == "读取名单表并确认学生姓名"
     assert len(result.trace["actions"]) >= 1
 
 
-def test_run_extraction_graph_runs_new_read_tools_without_document_scan_model():
+def test_run_extraction_graph_runs_new_read_tools_without_scan_model():
     result = run_extraction_graph(
         extraction_input=_input(),
-        resolution_model=FakeResolutionModelWithScan(),
+        resolution_model=FakeResolutionModelWithInlineEvidence(),
     )
 
     assert result.status == "completed"

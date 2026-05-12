@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-import json
 
 from service.file_extraction_agent.impl.html_index import build_html_document
 from service.file_extraction_agent.impl.html_tools import (
@@ -16,12 +15,10 @@ from service.file_extraction_agent.impl.html_tools import (
     _read_element,
     _read_list,
     _read_section,
-    _record_note,
-    _scan_document,
     _search_elements,
     _set_field,
     _table_extraction,
-    _update_plan,
+    _update_soft_plan,
 )
 
 
@@ -56,8 +53,8 @@ def _state():
         ),
         field_states={},
         actions=[],
-        notes=[],
         observed_evidence_ids=set(),
+        soft_plan=[],
         plan_statuses={},
     )
 
@@ -89,8 +86,8 @@ def _mixed_outline_state():
         ),
         field_states={},
         actions=[],
-        notes=[],
         observed_evidence_ids=set(),
+        soft_plan=[],
         plan_statuses={},
     )
 
@@ -507,129 +504,6 @@ def test_search_elements_result_can_be_used_as_evidence():
     ]
 
 
-def test_scan_document_uses_isolated_model_on_scope_without_tools_and_observes_blocks():
-    state = _state()
-    html = """
-        <p id="page_001">Page 1 联系人：整页聚合文本，不应作为证据。</p>
-        <section id="p001_sec">
-          <h2 id="p001_h001">联系方式</h2>
-          <p id="p001_b001">联系人：李老师 电话：12345</p>
-          <h3 id="p001_h002">补充联系方式</h3>
-          <p id="p001_b002">邮箱：teacher@example.com</p>
-        </section>
-        <h2 id="p002_h001">其他安排</h2>
-        <p id="p002_b001">联系人：王老师 电话：67890</p>
-        """
-    state.document = build_html_document(html)
-    state.extraction_input = SimpleNamespace(html=html)
-
-    class FakeScanModel:
-        def __init__(self):
-            self.messages = None
-
-        def bind_tools(self, tools, tool_choice=None):
-            raise AssertionError("isolated document scan must not bind tools")
-
-        def invoke(self, messages):
-            self.messages = messages
-            return SimpleNamespace(
-                content=json.dumps(
-                    {
-                        "candidates": [
-                            {"element_id": "page_001", "reason": "整页聚合命中"},
-                            {"element_id": "missing", "reason": "不存在的 id"},
-                            {"element_id": "p002_b001", "reason": "scope 外命中"},
-                            {"element_id": "p001_b001", "reason": "联系人和电话在同一段"},
-                            {"id": "p001_h002", "reason": "scope 内子标题"},
-                        ]
-                    },
-                    ensure_ascii=False,
-                )
-            )
-
-    scan_model = FakeScanModel()
-    state.document_scan_model = scan_model
-
-    result = _scan_document(state, "p001_sec", "联系人", limit=5, reason="搜索联系人字段")
-
-    assert result["scope_id"] == "p001_sec"
-    assert result["query"] == "联系人"
-    assert result["candidate_count"] == 2
-    assert [candidate["element_id"] for candidate in result["candidates"]] == [
-        "p001_b001",
-        "p001_h002",
-    ]
-    assert result["candidates"][0]["html"] == '<text id="p001_b001">联系人：李老师 电话：12345</text>'
-    assert result["candidates"][0]["evidence_ids"] == ["p001_b001"]
-    assert result["candidates"][0]["selection_basis"] == "联系人和电话在同一段"
-    assert "subagent_reason" not in result["candidates"][0]
-    assert state.observed_evidence_ids == {"p001_b001", "p001_h002"}
-    assert "scan_document" not in scan_model.messages[0].content
-    assert "You have no tools" in scan_model.messages[0].content
-    assert "Do not judge which candidate supports an answer choice" in scan_model.messages[0].content
-    assert "Scope id: p001_sec" in scan_model.messages[-1].content
-    assert "Scope HTML" in scan_model.messages[-1].content
-    assert '"selection_basis"' in scan_model.messages[-1].content
-    assert '"reason"' not in scan_model.messages[-1].content
-    assert "联系人：李老师 电话：12345" in scan_model.messages[-1].content
-    assert "联系人：王老师 电话：67890" not in scan_model.messages[-1].content
-    assert state.actions[-1]["tool_name"] == "scan_document"
-
-
-def test_scan_document_result_can_be_used_as_evidence():
-    state = _state()
-
-    class FakeScanModel:
-        def invoke(self, messages):
-            return SimpleNamespace(
-                content=json.dumps(
-                    {"candidates": [{"element_id": "dp-p-1", "reason": "联系人段落"}]},
-                    ensure_ascii=False,
-                )
-            )
-
-    state.document_scan_model = FakeScanModel()
-    _scan_document(state, "dp-p-1", "联系人", limit=3, reason="搜索联系人字段")
-    preview = _preview_inline_evidence(
-        state,
-        "dp-p-1",
-        start_index=0,
-        count=5,
-        reason="把 scoped reader 候选细化为字段证据",
-    )
-
-    result = _set_field(
-        state,
-        "contact_phone",
-        "12345",
-        [preview["inline_evidence"][0]["inline_id"]],
-        "resolved",
-        None,
-    )
-
-    assert result["ok"] is True
-    assert state.field_states["contact_phone"]["evidence_ids"] == [
-        "dp-p-1::inline-0"
-    ]
-
-
-def test_scan_document_returns_error_without_scan_model():
-    result = _scan_document(_state(), "dp-h2-1", "联系人", limit=3, reason="搜索联系人字段")
-
-    assert result["ok"] is False
-    assert result["error"] == "document_scan_model is not configured"
-
-
-def test_scan_document_returns_error_for_unknown_scope_id():
-    state = _state()
-    state.document_scan_model = SimpleNamespace(invoke=lambda messages: SimpleNamespace(content="{}"))
-
-    result = _scan_document(state, "missing", "联系人", limit=3, reason="搜索联系人字段")
-
-    assert result["ok"] is False
-    assert result["error"] == "unknown scope id: missing"
-
-
 def test_table_extraction_selects_rows_with_evidence_ids():
     result = _table_extraction(
         _state(),
@@ -874,69 +748,6 @@ def test_preview_inline_evidence_returns_sentence_candidates_and_observes_inline
     assert state.actions[-1]["tool_name"] == "preview_inline_evidence"
 
 
-def test_record_note_records_related_fields_and_evidence_for_trace():
-    state = _state()
-    _read_blocks(state, "dp-p-1", indexes=[0], reason="读取联系人段落")
-    preview = _preview_inline_evidence(
-        state,
-        "dp-p-1",
-        start_index=0,
-        count=5,
-        reason="准备给联系人电话和学生姓名字段确认证据",
-    )
-    result = _record_note(
-        state,
-        field_names=["contact_phone", "student_name"],
-        evidence_ids=preview["evidence_ids"],
-        note="联系人段落同时包含联系人和电话信息。",
-        reason="记录当前证据服务的字段",
-    )
-
-    assert result == {
-        "ok": True,
-        "note": {
-            "field_names": ["contact_phone", "student_name"],
-            "evidence_ids": ["dp-p-1::inline-0"],
-            "note": "联系人段落同时包含联系人和电话信息。",
-        },
-    }
-    assert state.notes == [result["note"]]
-    assert state.actions[-1]["tool_name"] == "record_note"
-    assert state.actions[-1]["args"]["field_names"] == ["contact_phone", "student_name"]
-    assert state.actions[-1]["result"]["note"] == result["note"]
-
-
-def test_record_note_rejects_unknown_fields_and_unobserved_evidence():
-    state = _state()
-    _read_blocks(state, "dp-p-1", indexes=[0], reason="读取联系人段落")
-
-    unknown_field = _record_note(
-        state,
-        field_names=["missing_field"],
-        evidence_ids=["dp-p-1"],
-        note="字段不存在。",
-        reason="尝试绑定不存在的字段",
-    )
-    unobserved_evidence = _record_note(
-        state,
-        field_names=["contact_phone"],
-        evidence_ids=["dp-p-1::inline-0"],
-        note="证据还没有被 preview。",
-        reason="尝试绑定未观察证据",
-    )
-
-    assert unknown_field == {
-        "ok": False,
-        "error": "unknown field_names",
-        "field_names": ["missing_field"],
-    }
-    assert unobserved_evidence == {
-        "ok": False,
-        "error": "unknown evidence ids",
-        "evidence_ids": ["dp-p-1::inline-0"],
-    }
-
-
 def test_preview_inline_evidence_keeps_long_sentence_as_one_inline_candidate():
     state = _state()
     long_sentence = "This definition contains many coordinated legal clauses, " + "additional words " * 45 + "and ends here."
@@ -1162,49 +973,57 @@ def test_set_field_rejects_value_that_does_not_match_field_type():
     assert "student_names" not in state.field_states
 
 
-def test_update_plan_records_plan_status_and_action():
+def test_update_soft_plan_replaces_plan_statuses_and_records_action():
     state = _state()
 
-    result = _update_plan(state, 1, "in_progress", reason="开始读取名单表")
-    completed = _update_plan(state, 1, "completed", reason="名单表已产生字段证据")
+    result = _update_soft_plan(
+        state,
+        [
+            {"step": "读取名单表并确认学生姓名", "status": "in_progress"},
+            {"step": "写入 student_name 字段", "status": "pending"},
+        ],
+    )
+    completed = _update_soft_plan(
+        state,
+        [
+            {"step": "读取名单表并确认学生姓名", "status": "completed"},
+            {"step": "写入 student_name 字段", "status": "in_progress"},
+        ],
+    )
 
     assert result["ok"] is True
     assert completed["ok"] is True
+    assert state.soft_plan == [
+        {"plan_index": 1, "step": "读取名单表并确认学生姓名", "status": "completed"},
+        {"plan_index": 2, "step": "写入 student_name 字段", "status": "in_progress"},
+    ]
     assert state.plan_statuses[1]["status"] == "completed"
-    assert state.plan_statuses[1]["step"] == "名单表已产生字段证据"
-    assert state.actions[-1]["tool_name"] == "update_plan"
+    assert state.plan_statuses[2]["step"] == "写入 student_name 字段"
+    assert state.actions[-1]["tool_name"] == "update_soft_plan"
     assert state.actions[-1]["args"] == {
-        "plan_index": 1,
-        "status": "completed",
-        "reason": "名单表已产生字段证据",
+        "plan": [
+            {"step": "读取名单表并确认学生姓名", "status": "completed"},
+            {"step": "写入 student_name 字段", "status": "in_progress"},
+        ],
     }
 
 
-def test_update_plan_allows_non_sequential_local_plan_indexes():
-    state = _state()
-
-    _update_plan(state, 1, "in_progress", reason="开始读取名单表")
-    _update_plan(state, 1, "completed", reason="名单表已产生字段证据")
-    result = _update_plan(state, 4, "in_progress", reason="跳到写字段")
-
-    assert result["ok"] is True
-    assert state.plan_statuses[4]["status"] == "in_progress"
-    assert state.plan_statuses[4]["step"] == "跳到写字段"
-
-
-def test_update_plan_rejects_completing_plan_that_is_not_in_progress():
-    result = _update_plan(_state(), 1, "completed", reason="直接完成")
+def test_update_soft_plan_rejects_invalid_plan_items():
+    result = _update_soft_plan(
+        _state(),
+        [
+            {"step": "", "status": "in_progress"},
+            {"step": "写入字段", "status": "done"},
+            "bad item",
+        ],
+    )
 
     assert result["ok"] is False
-    assert result["errors"][0]["message"] == "plan must be in_progress before completed"
-    assert result["errors"][0]["plan_index"] == 1
-
-
-def test_update_plan_accepts_new_local_plan_index():
-    result = _update_plan(_state(), 99, "completed", reason="不存在")
-
-    assert result["ok"] is False
-    assert result["errors"][0]["message"] == "plan must be in_progress before completed"
+    assert [error["message"] for error in result["errors"]] == [
+        "plan item step is required",
+        "plan item status must be pending, in_progress, or completed",
+        "plan item must be an object",
+    ]
 
 
 def test_set_field_rejects_unobserved_evidence_ids():
@@ -1235,7 +1054,7 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
     names = [_tool_name(tool) for tool in tools]
 
     assert names == [
-        "update_plan",
+        "update_soft_plan",
         "overview",
         "read_section",
         "read_blocks",
@@ -1243,16 +1062,14 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
         "read_list",
         "query_table",
         "preview_inline_evidence",
-        "record_note",
         "set_field",
         "finish",
     ]
-    update_plan = tools[names.index("update_plan")]
-    update_schema = getattr(update_plan, "args_schema", None)
+    update_soft_plan = tools[names.index("update_soft_plan")]
+    update_schema = getattr(update_soft_plan, "args_schema", None)
     update_fields = getattr(update_schema, "model_fields", None) or getattr(update_schema, "__fields__", {})
     assert "state" not in update_fields
-    assert "plan_index" in update_fields
-    assert "status" in update_fields
+    assert "plan" in update_fields
     overview = tools[names.index("overview")]
     overview_description = _tool_description(overview)
     assert "section headers" in overview_description
@@ -1311,15 +1128,6 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
     assert "Only use this after reading a text block" in preview_description
     assert "inline_id" in preview_description
     assert "set_field" in preview_description
-    record_note = tools[names.index("record_note")]
-    note_schema = getattr(record_note, "args_schema", None)
-    note_fields = getattr(note_schema, "model_fields", None) or getattr(note_schema, "__fields__", {})
-    assert "field_names" in note_fields
-    assert "evidence_ids" in note_fields
-    assert "note" in note_fields
-    note_description = _tool_description(record_note)
-    assert "human-readable note" in note_description
-    assert "does not set field values" in note_description
     set_field = tools[names.index("set_field")]
     set_field_schema = getattr(set_field, "args_schema", None)
     set_field_fields = getattr(set_field_schema, "model_fields", None) or getattr(set_field_schema, "__fields__", {})

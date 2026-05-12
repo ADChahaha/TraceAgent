@@ -47,8 +47,6 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
                 'TEMPERATURE="0.1"',
                 'TOP_P="0.9"',
                 'TOP_K="40"',
-                'REASONING_EFFORT="high"',
-                'THINKING_TYPE="disabled"',
                 'MODEL_MAX_RETRIES="8"',
                 'MODEL_REQUEST_TIMEOUT="120"',
             ]
@@ -68,8 +66,6 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
         "TEMPERATURE",
         "TOP_P",
         "TOP_K",
-        "REASONING_EFFORT",
-        "THINKING_TYPE",
         "MODEL_MAX_RETRIES",
         "MODEL_REQUEST_TIMEOUT",
     ):
@@ -83,8 +79,6 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
     assert config.temperature == 0.1
     assert config.top_p == 0.9
     assert config.top_k == 40
-    assert config.reasoning_effort == "high"
-    assert config.thinking_type == "disabled"
     assert config.max_retries == 8
     assert config.request_timeout == 120.0
 
@@ -111,8 +105,6 @@ def test_normalize_model_config_ignores_generic_api_key_env(monkeypatch, tmp_pat
         "TEMPERATURE",
         "TOP_P",
         "TOP_K",
-        "REASONING_EFFORT",
-        "THINKING_TYPE",
         "MODEL_MAX_RETRIES",
         "MODEL_REQUEST_TIMEOUT",
     ):
@@ -127,28 +119,9 @@ def test_normalize_model_config_ignores_generic_api_key_env(monkeypatch, tmp_pat
     assert config.request_timeout is None
 
 
-def test_normalize_model_config_rejects_broad_model_name():
-    with pytest.raises(ValueError, match="broad_model_name is not supported"):
+def test_normalize_model_config_rejects_unknown_model_fields():
+    with pytest.raises(TypeError, match="unexpected keyword argument 'broad_model_name'"):
         normalize_model_config({"broad_model_name": "broad", "resolution_model_name": "resolution"})
-
-
-def test_normalize_model_config_allows_disabling_reasoning_effort(monkeypatch, tmp_path):
-    env_path = tmp_path / ".env"
-    env_path.write_text(
-        "\n".join(
-            [
-                'RESOLUTION_MODEL="resolution"',
-                'REASONING_EFFORT="none"',
-            ]
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(model_factory_module, "_candidate_env_paths", lambda: [env_path])
-    monkeypatch.delenv("REASONING_EFFORT", raising=False)
-
-    config = normalize_model_config(None)
-
-    assert config.reasoning_effort is None
 
 
 def test_build_chat_model_passes_retry_and_timeout(monkeypatch):
@@ -195,25 +168,5 @@ def test_build_chat_model_passes_sampling_parameters_without_model_kwargs(monkey
     )
 
     assert captured["top_p"] == 1.0
-    assert captured["extra_body"] == {
-        "top_k": 1,
-        "thinking": {"type": "disabled"},
-    }
+    assert captured["extra_body"] == {"top_k": 1}
     assert "model_kwargs" not in captured
-
-
-def test_build_chat_model_passes_reasoning_effort(monkeypatch):
-    captured = {}
-
-    class FakeChatOpenAI:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-    monkeypatch.setattr(model_factory_module, "ChatOpenAI", FakeChatOpenAI)
-
-    model_factory_module.build_chat_model(
-        ModelConfig(reasoning_effort="high"),
-        "resolution",
-    )
-
-    assert captured["reasoning_effort"] == "high"

@@ -8,13 +8,10 @@ they remain straightforward to unit test.
 
 from __future__ import annotations
 
-import json
 import re
 import sqlite3
 from html import escape
 from typing import Any
-
-from langchain_core.messages import HumanMessage, SystemMessage
 
 LARGE_TABLE_SELECT_STAR_ROW_LIMIT = 30
 LARGE_TABLE_SELECT_STAR_CELL_LIMIT = 300
@@ -22,7 +19,6 @@ MAX_LARGE_TABLE_SELECT_STAR_LIMIT = 50
 MAX_READ_SECTION_HTML_CHARS = 12_000
 MAX_INLINE_EVIDENCE_PREVIEW = 40
 TABLE_AUDIT_BLANK_ROW_ID_LIMIT = 10
-SCAN_DOCUMENT_ALLOWED_TYPES = {"TITLE", "SECTION_HEADER", "TEXT", "LIST_ITEM", "CAPTION", "TABLE"}
 INLINE_TEXT_TYPES = {"TITLE", "SECTION_HEADER", "TEXT", "CAPTION"}
 
 try:
@@ -38,28 +34,34 @@ def build_tools(state: Any) -> list[Any]:
     """Build model-facing resolution tools bound to the current graph state."""
 
     @tool
-    def update_plan(plan_index: int, status: str, reason: str) -> dict[str, Any]:
+    def update_soft_plan(plan: list[dict[str, str]]) -> dict[str, Any]:
         """
-        Mark one local work unit as in progress or completed.
+        Replace the soft replay plan with the model's current local work plan.
 
-        Use this as a local work log for frontend replay.
-        Call ``update_plan(plan_index, "in_progress", reason)`` before starting
-        a local field or field-group step, and call ``update_plan(plan_index,
-        "completed", reason)`` immediately after the step has produced its
-        field value, evidence, or routing decision. ``plan_index`` is a
-        model-chosen local log number, not a reference to a broad plan.
+        Use this as a lightweight, human-readable work log. A soft plan is not
+        a field checklist, a hard state machine, or an evidence ledger. It
+        should show the current document-understanding stages: what evidence
+        area is being read, which related field group may be resolved, and what
+        remains pending. Call it before starting a new local work unit and when
+        plan status changes enough to help frontend replay.
+
+        Each item must contain:
+        - ``step``: a compact stage-like title.
+        - ``status``: ``pending``, ``in_progress``, or ``completed``.
+
+        The full list you pass replaces the previous soft plan. Keep useful
+        completed steps when they help the reader understand the path, but
+        avoid growing the plan into a long transcript.
 
         Args:
-            plan_index: 1-based local log number chosen by the model.
-            status: ``in_progress`` or ``completed``.
-            reason: Short explanation of why this plan step now has that
-                status.
+            plan: Ordered soft-plan items. Each item needs ``step`` and
+                ``status``.
 
         Returns:
-            The stored plan status, or validation errors.
+            The stored soft plan, with 1-based ``plan_index`` values added.
         """
 
-        return _update_plan(state, plan_index, status, reason=reason)
+        return _update_soft_plan(state, plan)
 
     @tool
     def overview() -> dict[str, Any]:
@@ -205,12 +207,7 @@ def build_tools(state: Any) -> list[Any]:
         return _query_table(state, section_id, block_offset, sql, reason=reason)
 
     @tool
-    def preview_inline_evidence(
-        source_id: str,
-        start_index: int,
-        count: int,
-        reason: str,
-    ) -> dict[str, Any]:
+    def preview_inline_evidence(source_id: str, start_index: int, count: int, reason: str) -> dict[str, Any]:
         """
         Preview inline evidence ids from an already-read text block.
 
@@ -234,30 +231,6 @@ def build_tools(state: Any) -> list[Any]:
         """
 
         return _preview_inline_evidence(state, source_id, start_index, count, reason=reason)
-
-    @tool
-    def record_note(field_names: list[str], evidence_ids: list[str], note: str, reason: str) -> dict[str, Any]:
-        """
-        Record a human-readable note about evidence for one or more fields.
-
-        Use this after reading/querying/previewing evidence and before set_field
-        when the evidence matters to the current field or tightly related field
-        group. field_names may contain multiple fields when they share the same
-        evidence. evidence_ids must already have been observed by this run.
-        This tool only records memory for replay and review; it does not set field values
-        and does not replace set_field.
-
-        Args:
-            field_names: Task field names this note is about.
-            evidence_ids: Observed evidence ids the note is based on.
-            note: Short user-readable statement of what the evidence shows.
-            reason: Why this note is useful for the current field step.
-
-        Returns:
-            The recorded note or validation errors.
-        """
-
-        return _record_note(state, field_names, evidence_ids, note, reason=reason)
 
     @tool
     def set_field(
@@ -323,7 +296,7 @@ def build_tools(state: Any) -> list[Any]:
         return _finish(state)
 
     return [
-        update_plan,
+        update_soft_plan,
         overview,
         read_section,
         read_blocks,
@@ -331,7 +304,6 @@ def build_tools(state: Any) -> list[Any]:
         read_list,
         query_table,
         preview_inline_evidence,
-        record_note,
         set_field,
         finish,
     ]
@@ -347,116 +319,47 @@ def _overview(state: Any) -> dict[str, Any]:
     return result
 
 
-def _update_plan(state: Any, plan_index: int, status: str, *, reason: str | None = None) -> dict[str, Any]:
-    try:
-        index = int(plan_index)
-    except (TypeError, ValueError):
-        result = {"ok": False, "errors": [{"message": "plan_index must be an integer"}]}
-        _record_action(state, "update_plan", _args_with_reason({"plan_index": plan_index, "status": status}, reason), result)
-        return result
-
-    if index < 1:
-        result = {
-            "ok": False,
-            "errors": [
-                {
-                    "message": "plan_index must be positive",
-                    "plan_index": index,
-                }
-            ],
-        }
-        _record_action(state, "update_plan", _args_with_reason({"plan_index": index, "status": status}, reason), result)
-        return result
-    if status not in {"in_progress", "completed"}:
-        result = {"ok": False, "errors": [{"message": "status must be in_progress or completed"}]}
-        _record_action(state, "update_plan", _args_with_reason({"plan_index": index, "status": status}, reason), result)
-        return result
-
-    statuses = _read(state, "plan_statuses", None)
-    if not isinstance(statuses, dict):
-        statuses = {}
-        setattr(state, "plan_statuses", statuses)
-    current_status = _plan_status_at(statuses, index)
-    if status == "in_progress" and current_status == "completed":
-        result = {"ok": False, "errors": [{"message": "plan is already completed", "plan_index": index}]}
-        _record_action(state, "update_plan", _args_with_reason({"plan_index": index, "status": status}, reason), result)
-        return result
-    if status == "completed" and current_status != "in_progress":
-        result = {
-            "ok": False,
-            "errors": [
-                {
-                    "message": "plan must be in_progress before completed",
-                    "plan_index": index,
-                    "current_status": current_status,
-                }
-            ],
-        }
-        _record_action(state, "update_plan", _args_with_reason({"plan_index": index, "status": status}, reason), result)
-        return result
-
-    plan_state = {
-        "plan_index": index,
-        "status": status,
-        "step": str(reason or f"local plan {index}"),
-        "reason": reason,
-    }
-    if isinstance(statuses, dict):
-        statuses[index] = plan_state
-    _record_action(
-        state,
-        "update_plan",
-        _args_with_reason({"plan_index": index, "status": status}, reason),
-        {"ok": True, "plan": plan_state},
-    )
-    return {"ok": True, "plan": plan_state}
-
-
-def _validate_plan_sequence(
-    statuses: dict[Any, Any],
-    index: int,
-    status: str,
-    plan_count: int,
-) -> dict[str, Any] | None:
-    current_status = _plan_status_at(statuses, index)
-    next_index = _next_unfinished_plan_index(statuses, plan_count)
-    if status == "in_progress":
-        if current_status == "completed":
-            return {
-                "message": "plan is already completed",
-                "plan_index": index,
-            }
-        if index != next_index:
-            return {
-                "message": "plan_index must advance sequentially",
-                "requested_plan_index": index,
-                "next_plan_index": next_index,
-            }
-        return None
-
-    if current_status != "in_progress":
-        return {
-            "message": "plan must be in_progress before completed",
-            "plan_index": index,
-            "current_status": current_status,
-        }
-    return None
-
-
-def _next_unfinished_plan_index(statuses: dict[Any, Any], plan_count: int) -> int:
-    for index in range(1, plan_count + 1):
-        if _plan_status_at(statuses, index) != "completed":
-            return index
-    return plan_count
-
-
-def _plan_status_at(statuses: dict[Any, Any], index: int) -> str | None:
-    raw = statuses.get(index, statuses.get(str(index)))
-    if isinstance(raw, dict):
-        value = raw.get("status")
+def _update_soft_plan(state: Any, plan: Any) -> dict[str, Any]:
+    errors: list[dict[str, Any]] = []
+    normalized_plan: list[dict[str, Any]] = []
+    if not isinstance(plan, list):
+        errors.append({"message": "plan must be a list"})
     else:
-        value = getattr(raw, "status", None)
-    return value if value in {"in_progress", "completed"} else None
+        for index, item in enumerate(plan, start=1):
+            if not isinstance(item, dict):
+                errors.append({"message": "plan item must be an object", "plan_index": index})
+                continue
+            step = str(item.get("step") or "").strip()
+            status = str(item.get("status") or "").strip()
+            if not step:
+                errors.append({"message": "plan item step is required", "plan_index": index})
+            if status not in {"pending", "in_progress", "completed"}:
+                errors.append(
+                    {
+                        "message": "plan item status must be pending, in_progress, or completed",
+                        "plan_index": index,
+                        "status": status,
+                    }
+                )
+            if step and status in {"pending", "in_progress", "completed"}:
+                normalized_plan.append(
+                    {
+                        "plan_index": index,
+                        "step": step,
+                        "status": status,
+                    }
+                )
+    if errors:
+        result = {"ok": False, "errors": errors}
+        _record_action(state, "update_soft_plan", {"plan": plan}, result)
+        return result
+
+    setattr(state, "soft_plan", normalized_plan)
+    statuses = {item["plan_index"]: dict(item) for item in normalized_plan}
+    setattr(state, "plan_statuses", statuses)
+    result = {"ok": True, "plan": normalized_plan}
+    _record_action(state, "update_soft_plan", {"plan": plan}, result)
+    return result
 
 
 def _read_element(state: Any, element_id: str, *, reason: str | None = None) -> dict[str, Any]:
@@ -548,165 +451,8 @@ def _search_elements(state: Any, query: str, limit: int = 10, *, reason: str | N
     return result
 
 
-def _scan_document(state: Any, scope_id: str, query: str, limit: int = 10, *, reason: str | None = None) -> dict[str, Any]:
-    document = _read(state, "document")
-    normalized_scope_id = str(scope_id or "").strip()
-    normalized_query = " ".join(str(query or "").split())
-    try:
-        max_results = max(1, min(int(limit), 50))
-    except (TypeError, ValueError):
-        max_results = 10
-    if not normalized_scope_id:
-        result = {"ok": False, "error": "scope_id must be a non-empty string"}
-        _record_action(
-            state,
-            "scan_document",
-            _args_with_reason({"scope_id": scope_id, "query": query, "limit": limit}, reason),
-            result,
-        )
-        return result
-    scan_scope = _scan_scope(document, normalized_scope_id)
-    if scan_scope.get("ok") is False:
-        result = {"ok": False, "error": scan_scope["error"], "scope_id": normalized_scope_id}
-        _record_action(
-            state,
-            "scan_document",
-            _args_with_reason({"scope_id": normalized_scope_id, "query": query, "limit": limit}, reason),
-            result,
-        )
-        return result
-    if not normalized_query:
-        result = {"ok": False, "error": "query must be a non-empty string"}
-        _record_action(
-            state,
-            "scan_document",
-            _args_with_reason({"scope_id": normalized_scope_id, "query": query, "limit": limit}, reason),
-            result,
-        )
-        return result
-
-    scan_model = _read(state, "document_scan_model", None)
-    if scan_model is None:
-        result = {"ok": False, "error": "document_scan_model is not configured"}
-        _record_action(
-            state,
-            "scan_document",
-            _args_with_reason({"scope_id": normalized_scope_id, "query": normalized_query, "limit": max_results}, reason),
-            result,
-        )
-        return result
-
-    messages = _build_scan_document_messages(
-        state,
-        normalized_scope_id,
-        str(scan_scope["scope_type"]),
-        normalized_query,
-        reason,
-        max_results,
-        str(scan_scope["html"]),
-    )
-    try:
-        message = scan_model.invoke(messages)
-    except Exception as exc:
-        result = {"ok": False, "error": f"document scan model failed: {exc}"}
-        _record_action(
-            state,
-            "scan_document",
-            _args_with_reason({"scope_id": normalized_scope_id, "query": normalized_query, "limit": max_results}, reason),
-            result,
-        )
-        return result
-
-    raw_candidates = _parse_scan_document_candidates(message)
-    candidates = _normalize_scan_document_candidates(
-        document,
-        raw_candidates,
-        normalized_query,
-        max_results,
-        allowed_ids=set(scan_scope["element_ids"]),
-    )
-    _mark_observed(state, [evidence_id for candidate in candidates for evidence_id in candidate["evidence_ids"]])
-    result = {
-        "scope_id": normalized_scope_id,
-        "scope_type": scan_scope["scope_type"],
-        "query": normalized_query,
-        "limit": max_results,
-        "candidates": candidates,
-        "candidate_count": len(candidates),
-        "note": (
-            "Candidates are observed block evidence from an isolated scoped scan. "
-            "Use read_element/read_section/table_extraction only if more context is needed."
-        ),
-    }
-    _record_action(
-        state,
-        "scan_document",
-        _args_with_reason({"scope_id": normalized_scope_id, "query": normalized_query, "limit": max_results}, reason),
-        result,
-    )
-    return result
-
-
 def _is_page_level_aggregate_id(element_id: str) -> bool:
     return re.fullmatch(r"page_\d+", str(element_id or "")) is not None
-
-
-def _scan_scope(document: Any, scope_id: str) -> dict[str, Any]:
-    scope = document.elements_by_id.get(scope_id)
-    if scope is None:
-        return {"ok": False, "error": f"unknown scope id: {scope_id}"}
-    if _heading_level(scope.tag) is not None:
-        return _heading_scan_scope(document, scope)
-    return _element_scan_scope(document, scope)
-
-
-def _heading_scan_scope(document: Any, scope: Any) -> dict[str, Any]:
-    ordered = list(document.elements_by_id.values())
-    items: list[dict[str, Any]] = []
-    element_ids: list[str] = []
-    for element in ordered:
-        if element.id == scope.id:
-            element_ids.append(element.id)
-            continue
-        if not _has_ancestor(document, element, scope.id):
-            continue
-        element_ids.append(element.id)
-        if element.tag in {"tr", "caption"} or _is_list_child(document, element):
-            continue
-        items.append(_section_item(document, element))
-    return {
-        "ok": True,
-        "scope_type": "SECTION",
-        "html": _section_html(document, scope, items, "all"),
-        "element_ids": element_ids,
-    }
-
-
-def _element_scan_scope(document: Any, scope: Any) -> dict[str, Any]:
-    ordered = list(document.elements_by_id.values())
-    element_ids = [
-        element.id
-        for element in ordered
-        if element.id == scope.id or _has_ancestor(document, element, scope.id)
-    ]
-    lines = [f'<scope id="{_attr(scope.id)}" type="{_attr(scope.type)}">']
-    if scope.type == "TABLE":
-        lines.append("  " + _element_html(document, scope))
-    elif scope.tag in {"ul", "ol"}:
-        lines.extend(_section_item_html_lines(document, {"id": scope.id, "type": scope.type}, indent="  "))
-    else:
-        for element_id in element_ids:
-            element = document.elements_by_id[element_id]
-            if element.tag in {"tr", "caption"}:
-                continue
-            lines.append("  " + _element_html(document, element))
-    lines.append("</scope>")
-    return {
-        "ok": True,
-        "scope_type": scope.type,
-        "html": "\n".join(lines),
-        "element_ids": element_ids,
-    }
 
 
 def _has_ancestor(document: Any, element: Any, ancestor_id: str) -> bool:
@@ -721,154 +467,6 @@ def _has_ancestor(document: Any, element: Any, ancestor_id: str) -> bool:
     return False
 
 
-def _build_scan_document_messages(
-    state: Any,
-    scope_id: str,
-    scope_type: str,
-    query: str,
-    reason: str | None,
-    limit: int,
-    scope_html: str,
-) -> list[Any]:
-    system = SystemMessage(
-        content=(
-            "You are an isolated document-reading subagent for an extraction workflow. "
-            "You have no tools. You must not request tools, call agents, call subagents, "
-            "or create a plan for the main agent. "
-            "Read only the provided HTML scope and return JSON only. "
-            "Return only candidate block evidence under that scope: existing element ids for titles, "
-            "headings, paragraphs, list items, captions, or table elements. "
-            "Do not return page-level aggregate ids such as page_001. "
-            "Do not return table row values, final field values, normalized values, or answers. "
-            "Do not judge which candidate supports an answer choice or final value. "
-            "For each candidate, write only a neutral selection_basis naming the local text feature, "
-            "such as a mentioned entity, date, topic, plot event, or clause. "
-            "The main resolution agent will decide whether the candidates are sufficient."
-        )
-    )
-    human = HumanMessage(
-        content="\n\n".join(
-            [
-                "Task fields:\n" + _task_fields_for_scan(state),
-                f"Scope id: {scope_id}",
-                f"Scope type: {scope_type}",
-                f"Scan request: {query}",
-                f"Reason: {reason or ''}",
-                f"Maximum candidates: {limit}",
-                (
-                    "Return JSON in this exact shape: "
-                    '{"candidates":[{"element_id":"existing-id","selection_basis":"neutral local text feature"}]}'
-                ),
-                "Scope HTML:\n" + scope_html,
-            ]
-        )
-    )
-    return [system, human]
-
-
-def _task_fields_for_scan(state: Any) -> str:
-    lines = []
-    task_spec = _read(state, "task_spec")
-    for field in _read(task_spec, "fields", []) or []:
-        lines.append(
-            f"- {_read(field, 'name')}: type={_read(field, 'type', 'string')}, "
-            f"required={_read(field, 'required', False)}, description={_read(field, 'description', '') or ''}"
-        )
-    instructions = _read(task_spec, "instructions", None)
-    if instructions:
-        lines.append("Instructions: " + str(instructions))
-    return "\n".join(lines)
-
-
-def _parse_scan_document_candidates(message: Any) -> list[dict[str, Any]]:
-    content = _message_content(message)
-    if isinstance(content, list):
-        content = "\n".join(str(item) for item in content)
-    if not isinstance(content, str):
-        return []
-    parsed = _loads_json_object(content)
-    if isinstance(parsed, list):
-        return [item for item in parsed if isinstance(item, dict)]
-    if not isinstance(parsed, dict):
-        return []
-    candidates = parsed.get("candidates", parsed.get("matches", []))
-    if not isinstance(candidates, list):
-        return []
-    return [item for item in candidates if isinstance(item, dict)]
-
-
-def _message_content(message: Any) -> Any:
-    if isinstance(message, dict):
-        return message.get("content", "")
-    return getattr(message, "content", "")
-
-
-def _loads_json_object(content: str) -> Any:
-    stripped = content.strip()
-    if stripped.startswith("```"):
-        stripped = re.sub(r"^```(?:json)?\s*", "", stripped, flags=re.IGNORECASE)
-        stripped = re.sub(r"\s*```$", "", stripped)
-    try:
-        return json.loads(stripped)
-    except json.JSONDecodeError:
-        start = stripped.find("{")
-        end = stripped.rfind("}")
-        if start < 0 or end <= start:
-            return None
-        try:
-            return json.loads(stripped[start : end + 1])
-        except json.JSONDecodeError:
-            return None
-
-
-def _normalize_scan_document_candidates(
-    document: Any,
-    raw_candidates: list[dict[str, Any]],
-    query: str,
-    limit: int,
-    *,
-    allowed_ids: set[str],
-) -> list[dict[str, Any]]:
-    candidates: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for raw in raw_candidates:
-        element_id = str(raw.get("element_id") or raw.get("id") or "").strip()
-        if not element_id or element_id in seen or _is_page_level_aggregate_id(element_id):
-            continue
-        if element_id not in allowed_ids:
-            continue
-        element = document.elements_by_id.get(element_id)
-        if element is None or element.type not in SCAN_DOCUMENT_ALLOWED_TYPES:
-            continue
-        text = str(element.text or "")
-        candidates.append(
-            {
-                "element_id": element.id,
-                "type": element.type,
-                "html": _element_html(document, element),
-                "evidence_ids": [element.id],
-                "snippet": _scan_candidate_snippet(text, query),
-                "selection_basis": str(
-                    raw.get("selection_basis")
-                    or raw.get("basis")
-                    or raw.get("reason")
-                    or raw.get("relevance")
-                    or ""
-                ),
-                "text_chars": len(text),
-            }
-        )
-        seen.add(element_id)
-        if len(candidates) >= limit:
-            break
-    return candidates
-
-
-def _scan_candidate_snippet(text: str, query: str) -> str:
-    index = text.casefold().find(query.casefold())
-    if index >= 0:
-        return _snippet(text, index, len(query))
-    return _snippet(text, 0, min(len(text), 1)) if text else ""
 
 
 def _read_section(state: Any, section_id: str, *, reason: str | None = None) -> dict[str, Any]:
@@ -1112,69 +710,6 @@ def _preview_inline_evidence(
         _args_with_reason({"source_id": normalized_source_id, "start_index": start, "count": len(selected)}, reason),
         _summarize_tool_result(result),
     )
-    return result
-
-
-def _record_note(
-    state: Any,
-    field_names: list[str],
-    evidence_ids: list[str],
-    note: str,
-    *,
-    reason: str | None = None,
-) -> dict[str, Any]:
-    normalized_field_names = _normalize_field_names(field_names)
-    normalized_evidence_ids = _normalize_evidence_ids(evidence_ids)
-    normalized_note = str(note or "").strip()
-    args = {
-        "field_names": normalized_field_names,
-        "evidence_ids": normalized_evidence_ids,
-        "note": normalized_note,
-    }
-    unknown_field_names = _unknown_field_names(state, normalized_field_names)
-    if unknown_field_names:
-        result = {
-            "ok": False,
-            "error": "unknown field_names",
-            "field_names": unknown_field_names,
-        }
-        _record_action(state, "record_note", _args_with_reason(args, reason), result)
-        return result
-    unknown_evidence_ids = [
-        evidence_id
-        for evidence_id in normalized_evidence_ids
-        if evidence_id not in _read(state, "observed_evidence_ids", set())
-    ]
-    if unknown_evidence_ids:
-        result = {
-            "ok": False,
-            "error": "unknown evidence ids",
-            "evidence_ids": unknown_evidence_ids,
-        }
-        _record_action(state, "record_note", _args_with_reason(args, reason), result)
-        return result
-    if not normalized_field_names:
-        result = {"ok": False, "error": "field_names is required"}
-        _record_action(state, "record_note", _args_with_reason(args, reason), result)
-        return result
-    if not normalized_evidence_ids:
-        result = {"ok": False, "error": "evidence_ids is required"}
-        _record_action(state, "record_note", _args_with_reason(args, reason), result)
-        return result
-    if not normalized_note:
-        result = {"ok": False, "error": "note is required"}
-        _record_action(state, "record_note", _args_with_reason(args, reason), result)
-        return result
-    recorded_note = {
-        "field_names": normalized_field_names,
-        "evidence_ids": normalized_evidence_ids,
-        "note": normalized_note,
-    }
-    notes = _read(state, "notes", None)
-    if isinstance(notes, list):
-        notes.append(recorded_note)
-    result = {"ok": True, "note": recorded_note}
-    _record_action(state, "record_note", _args_with_reason(args, reason), result)
     return result
 
 
@@ -1502,41 +1037,6 @@ def _field_defs_by_name(state: Any) -> dict[str, Any]:
     task_spec = _read(state, "task_spec")
     fields = _read(task_spec, "fields", []) or []
     return {str(_read(field, "name")): field for field in fields if _read(field, "name")}
-
-
-def _normalize_field_names(field_names: list[str] | None) -> list[str]:
-    if field_names is None:
-        return []
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for field_name in field_names:
-        name = str(field_name or "").strip()
-        if not name or name in seen:
-            continue
-        normalized.append(name)
-        seen.add(name)
-    return normalized
-
-
-def _normalize_evidence_ids(evidence_ids: list[str] | None) -> list[str]:
-    if evidence_ids is None:
-        return []
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for evidence_id in evidence_ids:
-        evidence_id_text = str(evidence_id or "").strip()
-        if not evidence_id_text or evidence_id_text in seen:
-            continue
-        normalized.append(evidence_id_text)
-        seen.add(evidence_id_text)
-    return normalized
-
-
-def _unknown_field_names(state: Any, field_names: list[str]) -> list[str]:
-    if not field_names:
-        return []
-    known = _field_defs_by_name(state)
-    return [field_name for field_name in field_names if field_name not in known]
 
 
 def _evidence_exists(state: Any, evidence_id: str) -> bool:
@@ -2254,9 +1754,8 @@ def _args_with_reason(args: dict[str, Any], reason: str | None) -> dict[str, Any
 __all__ = [
     "build_tools",
     "_overview",
-    "_update_plan",
+    "_update_soft_plan",
     "_search_elements",
-    "_scan_document",
     "_read_element",
     "_read_section",
     "_read_blocks",
@@ -2264,7 +1763,6 @@ __all__ = [
     "_read_list",
     "_query_table",
     "_preview_inline_evidence",
-    "_record_note",
     "_table_extraction",
     "_paragraph_extraction",
     "_set_field",

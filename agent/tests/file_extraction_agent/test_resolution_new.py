@@ -53,28 +53,21 @@ def test_resolution_messages_embed_compact_document_outline():
     assert "You are the field-writing agent" in content
     assert "Each field must be finalized exactly once with set_field" in content
     assert "Write reasons in the same language as the document whenever possible" in content
-    assert "Use update_plan as a local work log for frontend replay" in content
+    assert "Use update_soft_plan(plan) as a soft local work log" in content
     assert "Use the task field descriptions and document outline as the primary guide" in content
-    assert "update_plan(plan_index" in content
-    assert "Treat each update_plan as a local work unit" in content
-    assert "name the related fields or field group you expect this plan may resolve" in content
-    assert "Stay close to the fields named in the current plan" in content
-    assert "do not let one plan expand into the entire task" in content
-    assert "A plan may expand to a few adjacent fields that share the same evidence" in content
-    assert "must not drift into a broad catch-all plan" in content
-    assert "Always collect or refresh complete final evidence for the named fields within the current plan" in content
-    assert "When switching to a new plan, always reread or preview the needed evidence under the new plan" in content
-    assert "Before moving to a materially different topic, clause area, or field group, call update_plan again" in content
-    assert "always use evidence observed or previewed after the latest update_plan" in content
-    assert "always reread or preview that evidence again in the current plan" in content
-    assert "These plan rules are guidance for memory and replay clarity, not tool validation rules" in content
-    assert "1-5" not in content
+    assert "Each plan item should read like a compact stage title" in content
+    assert "which related field group may be resolved" in content
+    assert "Treat each soft-plan item as a local work unit" in content
+    assert "Before moving to a materially different topic, clause area, or field group, refresh update_soft_plan" in content
+    assert "prefer evidence observed or previewed after the latest update_soft_plan" in content
+    assert "reread or preview that evidence again in the current plan" in content
+    assert "These plan rules are soft guidance for memory and replay clarity" in content
+    assert "broad-plan" not in content
+    assert "broad plan" not in content.lower()
     assert "Once evidence for a field is sufficient, the next related tool call must be set_field" in content
     assert "Call overview first when the outline is not enough" in content
     assert "Document outline may include section containers and block items in document order" in content
     assert "Use the bound tool descriptions as the source of truth for exact arguments and reading behavior" in content
-    assert "Do not write fields using only the overview." in content
-    assert "broad plan" not in content
     assert "All SQL column names must be wrapped in double quotes" in content
     assert "query_table returns rows, table_audit, and summary" in content
     assert "Explain query_table summary and table_audit only when they affect the current field" in content
@@ -84,7 +77,6 @@ def test_resolution_messages_embed_compact_document_outline():
     assert "Example 2" not in content
     assert "\"category\"='target'" not in content
     assert "Use preview_inline_evidence before set_field when final text evidence is still a whole text block" in content
-    assert "After previewing final evidence, call record_note" in content
     assert "set_field evidence_ids for resolved fields must be precise" in content
     assert "text values need inline ids" in content
     assert "tables need row ids" in content
@@ -170,7 +162,7 @@ def test_resolution_nudge_counts_new_read_tools_as_observed_evidence():
 
     instruction = _continue_instruction(state)
 
-    assert "Stop browsing broadly" in instruction
+    assert "Stop browsing across unrelated areas" in instruction
     assert "the next tool call must be set_field" in instruction
 
 
@@ -180,7 +172,7 @@ def test_resolution_graph_exposes_plan_and_new_read_tools():
     tool_names = [getattr(tool, "name", getattr(tool, "__name__", "")) for tool in tools]
 
     assert tool_names == [
-        "update_plan",
+        "update_soft_plan",
         "overview",
         "read_section",
         "read_blocks",
@@ -188,7 +180,6 @@ def test_resolution_graph_exposes_plan_and_new_read_tools():
         "read_list",
         "query_table",
         "preview_inline_evidence",
-        "record_note",
         "set_field",
         "finish",
     ]

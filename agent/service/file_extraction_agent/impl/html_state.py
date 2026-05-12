@@ -23,10 +23,9 @@ class GraphState:
     document: HtmlDocument
     task_spec: TaskSpec
     run_options: RunOptions
-    document_scan_model: Any = None
+    soft_plan: list[dict[str, Any]] = field(default_factory=list)
     plan_statuses: dict[int, dict[str, Any]] = field(default_factory=dict)
     field_states: dict[str, dict[str, Any]] = field(default_factory=dict)
-    notes: list[dict[str, Any]] = field(default_factory=list)
     actions: list[dict[str, Any]] = field(default_factory=list)
     observed_evidence_ids: set[str] = field(default_factory=set)
     inline_evidence_by_id: dict[str, dict[str, Any]] = field(default_factory=dict)

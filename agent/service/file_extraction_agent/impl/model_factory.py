@@ -21,8 +21,6 @@ def normalize_model_config(config: ModelConfig | dict | None) -> ModelConfig:
         return _model_config_from_env()
     if isinstance(config, ModelConfig):
         return config
-    if "broad_model_name" in config:
-        raise ValueError("broad_model_name is not supported")
     return ModelConfig(**config)
 
 
@@ -45,15 +43,8 @@ def build_chat_model(config: ModelConfig, model_name: str) -> Any:
         kwargs["api_key"] = config.api_key
     if config.top_p is not None:
         kwargs["top_p"] = config.top_p
-    if config.reasoning_effort:
-        kwargs["reasoning_effort"] = config.reasoning_effort
-    extra_body: dict[str, Any] = {}
     if config.top_k is not None:
-        extra_body["top_k"] = config.top_k
-    if config.thinking_type:
-        extra_body["thinking"] = {"type": config.thinking_type}
-    if extra_body:
-        kwargs["extra_body"] = extra_body
+        kwargs["extra_body"] = {"top_k": config.top_k}
 
     return ChatOpenAI(**kwargs)
 
@@ -72,8 +63,6 @@ def _model_config_from_env() -> ModelConfig:
         temperature=_float_env(values.get("TEMPERATURE"), 0.0),
         top_p=_optional_float_env(values.get("TOP_P")),
         top_k=_optional_int_env(values.get("TOP_K")),
-        reasoning_effort=_reasoning_effort_env(values.get("REASONING_EFFORT")),
-        thinking_type=values.get("THINKING_TYPE") or "disabled",
         max_retries=_int_env(values.get("MODEL_MAX_RETRIES"), 6),
         request_timeout=_optional_float_env(values.get("MODEL_REQUEST_TIMEOUT")),
     )
@@ -116,15 +105,6 @@ def _optional_int_env(value: str | None) -> int | None:
     if value in {None, ""}:
         return None
     return int(value)
-
-
-def _reasoning_effort_env(value: str | None) -> str | None:
-    if value in {None, ""}:
-        return "high"
-    normalized = value.strip().lower()
-    if normalized in {"none", "off", "disabled", "false", "0"}:
-        return None
-    return value
 
 
 def _int_env(value: str | None, default: int) -> int:

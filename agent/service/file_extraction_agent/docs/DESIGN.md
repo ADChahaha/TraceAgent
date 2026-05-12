@@ -4,7 +4,7 @@
 
 ## 基本实现思路
 
-当前实现是“HTML 索引 + resolution 直接工具执行 + 轻量 update_plan 记忆”：
+当前实现是“HTML 索引 + resolution 直接工具执行 + `update_soft_plan` 软计划回放”：
 
 ```text
 调用方传入 html、task_spec、run_options、model_config
@@ -12,15 +12,17 @@
   -> html_index 解析 HTML，基于已有 id 构建 document.tree、elements_by_id、tables_by_id、row_index；tree 按 DOM/section 容器语义保留 section、heading 和同层 block items 的顺序与预览
   -> model_factory 从显式 model_config 或环境变量构造 resolution ChatOpenAI，并注入重试和超时配置
   -> resolution_new 把 task fields 和 document outline 交给 LangGraph tool-calling loop
-  -> html_tools 提供 update_plan / overview / read_section / read_blocks / read_block_range / read_list / query_table / preview_inline_evidence / set_field / finish
-  -> 模型用 update_plan 声明当前局部工作单元和相关字段，读取对应证据后直接 set_field 写入 resolved 或 failed
+  -> html_tools 提供 update_soft_plan / overview / read_section / read_blocks / read_block_range / read_list / query_table / preview_inline_evidence / set_field / finish
+  -> 模型用 update_soft_plan 写入 stage-like 软计划，说明当前局部工作单元、已完成步骤和待处理步骤
+  -> 模型围绕当前软计划读取证据，证据足够后直接 set_field 写入 resolved 或 failed
   -> finish 校验字段完成度和证据一致性
   -> graph 映射成 ExtractionResult(status, result, failure_reason, trace)
 ```
 
 `trace` 是前端 replay 和 backend route policy 的共同来源。它包含：
 
-- `plan_statuses`：resolution 的轻量计划进度和当前工作单元状态。
+- `soft_plan`：模型最近一次提交的 stage-like 软计划，按 `plan_index/step/status` 展示。
+- `plan_statuses`：`soft_plan` 的 index 映射，方便前端或测试按步骤读取当前状态。
 - `document_tree`：从 HTML 推出的混排 outline，包含 section container、heading 和同层 block items 的摘要。
 - `field_states`：每个字段的值、状态、证据 id、原因或失败原因。
 - `actions`：resolution 工具调用轨迹，包含读取、查表、写字段、完成等动作。
@@ -101,12 +103,12 @@ string / number / boolean / list[string] / list[number]
 ```text
 显式 model_config 或 .env / 进程环境
   -> 读取 BASE_URL / OPENAI_API_KEY / RESOLUTION_MODEL / MODEL
-  -> 读取 TEMPERATURE / TOP_P / TOP_K / REASONING_EFFORT / THINKING_TYPE
+  -> 读取 TEMPERATURE / TOP_P / TOP_K
   -> 读取 MODEL_MAX_RETRIES / MODEL_REQUEST_TIMEOUT
   -> 创建 resolution_model
 ```
 
-`REASONING_EFFORT` 未设置时默认是 `high`，用于需要显式思考强度的 OpenAI-compatible 模型源；如果设为 `none/off/disabled/false/0`，则不传该参数。`THINKING_TYPE` 未设置时默认是 `disabled`，会通过 `extra_body.thinking.type` 显式关闭 DeepSeek thinking mode，避免 tool-calling 多轮回放缺少 `reasoning_content`。`MODEL_MAX_RETRIES` 未设置时默认是 `6`，用于减少模型服务短暂连接错误导致的整份文档失败。`MODEL_REQUEST_TIMEOUT` 未设置时不显式传入超时，保持底层客户端默认行为。
+`MODEL_MAX_RETRIES` 未设置时默认是 `6`，用于减少模型服务短暂连接错误导致的整份文档失败。`MODEL_REQUEST_TIMEOUT` 未设置时不显式传入超时，保持底层客户端默认行为。
 
 ## HTML 索引
 
@@ -138,26 +140,26 @@ string / number / boolean / list[string] / list[number]
 
 ## 轻量 Plan 记忆
 
-`update_plan` 不是 stage 状态机，也不是字段证据账本。它只是轻量工作记忆和 replay 标题，用来让模型和用户看清“这一段准备解决哪些相关字段、为什么读这些条款、最后写了哪些字段”。最终字段仍由 `set_field` 写入；`update_plan` 不参与 scorer，不替代字段 rationale，也不绑定 broad plan 或做 plan 级硬校验。
+`update_soft_plan` 不是 stage 状态机，也不是字段证据账本。它只是轻量工作记忆和 replay 标题，用来让模型和用户看清“当前在读什么、已完成什么、接下来准备读什么”。最终字段仍由 `set_field` 写入；`update_soft_plan` 不参与 scorer，不替代字段 rationale，也不做 plan 级硬校验。
 
 推荐 prompt 纪律：
 
-- 每次 `update_plan` 都应描述一个局部工作单元，而不是整份文档或全部字段。
-- `update_plan` 应写出本段可能相关的字段或字段组，让后续读取和写入有明确范围。
-- 本段内的读取、预览和 `set_field` 应尽量围绕 `update_plan` 中声明的相关字段展开。
-- 如果模型发现少量相邻字段和当前证据路径确实相关，可以顺手处理；但不应让一个 plan 漫延成全字段填表，或者变成兜底处理剩余字段的大 plan。
-- 一个 plan 内必须把其声明字段需要的最终证据读全、preview 全，再写这些字段，避免只凭前文印象补字段。
-- 当要切换到不同主题、不同条款区域或明显不同的字段组时，应先开启新的 `update_plan`。
-- 为了增强模型记忆并改善前端 replay，`set_field.evidence_ids` 应始终使用当前 `update_plan` 之后读到或重新 preview 过的证据。
-- 如果某个字段需要复用更早 plan 里读过的相关证据，prompt 应要求模型在当前 plan 内重新读取或重新 `preview_inline_evidence`，而不是只凭长上下文记忆直接写字段；切换到新 plan 后也应把新 plan 需要的证据重新读入当前上下文。
+- `update_soft_plan(plan=[...])` 应提交一组 stage-like 步骤，每步包含 `step` 和 `status`。
+- 软计划步骤应描述局部工作单元，而不是整份文档或全部字段。
+- 软计划应写出本段可能相关的字段或字段组，让后续读取和写入有明确范围。
+- 本段内的读取、预览和 `set_field` 应尽量围绕当前 `in_progress` 步骤展开。
+- 如果模型发现另一个字段和当前证据路径确实相关，可以顺手处理；但不应让一个 plan 漫延成全字段填表。
+- 当要切换到不同主题、不同条款区域或明显不同的字段组时，应先刷新 `update_soft_plan`。
+- 为了增强模型记忆并改善前端 replay，可鼓励 `set_field.evidence_ids` 优先使用最近一次 `update_soft_plan` 之后读到或重新 preview 过的证据。
+- 如果某个字段需要复用更早 plan 里读过的相关证据，prompt 应鼓励模型在当前 plan 内重新读取或重新 `preview_inline_evidence`，而不是只凭长上下文记忆直接写字段。
 - 这些规则只放在 prompt 中作为软约束，不在 `set_field`、`finish` 或 scorer 中加入 plan 级硬校验。
 
 ```text
-update_plan 声明当前局部工作单元
+update_soft_plan 写入当前 stage-like 软计划
   -> read_section / read_blocks / read_block_range / read_list / query_table 读取相关证据
   -> preview_inline_evidence 细化文本证据
   -> set_field 直接写字段值和 evidence_ids
-  -> 换到明显不同的主题或字段组前，再调用 update_plan
+  -> 换到明显不同的主题或字段组前，再调用 update_soft_plan
 ```
 
 ## Resolution 阶段
@@ -179,19 +181,19 @@ resolution 的目标是让每个字段恰好通过一次 `set_field` 进入最�
 - `resolved`：字段值已找到，并且 evidence ids 来自本轮读取、查表或 inline 证据预览结果。
 - `failed`：字段无法可靠抽取，需要给出 `failure_reason`。
 
-resolution 会在必要时调用 `update_plan` 来记录当前局部工作单元，但它仍然直接从字段语义和文档 outline 选择工具：
+resolution 会在必要时调用 `update_soft_plan` 来记录当前局部工作单元，但它仍然直接从字段语义和文档 outline 选择工具：
 
 ```text
 Task fields + document outline
   -> 选择下一个未完成字段或相关字段组
-  -> 用 update_plan 声明当前局部工作单元和可能相关字段
+  -> 用 update_soft_plan 写入当前局部工作单元和可能相关字段组
   -> 用 overview / read_section / read_blocks / read_block_range / read_list / query_table 定位和读取证据
   -> 文本证据在写字段前用 preview_inline_evidence 细化到 inline id
   -> 证据足够就立即 set_field
   -> 所有字段完成后 finish
 ```
 
-resolution system prompt 使用英文表达 replay、表格查询、plan 软记忆和证据校验等通用约束；精确工具参数和读取行为只写在 `html_tools.py` 的工具函数 docstring 里，并由 LangGraph 绑定工具时注入模型上下文，避免系统 prompt 和工具 schema 漂移。除 `update_plan`、`set_field` 和 `finish` 外，每个工具调用都需要 `reason`，并要求 reason 尽量使用文档语言；字段值本身也应跟随任务定义和文档语言输出。
+resolution system prompt 使用英文表达 replay、表格查询、plan 软记忆和证据校验等通用约束；精确工具参数和读取行为只写在 `html_tools.py` 的工具函数 docstring 里，并由 LangGraph 绑定工具时注入模型上下文，避免系统 prompt 和工具 schema 漂移。除 `update_soft_plan`、`set_field` 和 `finish` 外，每个工具调用都需要 `reason`，并要求 reason 尽量使用文档语言；字段值本身也应跟随任务定义和文档语言输出。
 
 ## 工具边界
 
@@ -200,10 +202,11 @@ resolution system prompt 使用英文表达 replay、表格查询、plan 软记�
 工具链路：
 
 ```text
-update_plan(plan_index, status, reason)
-  -> 记录当前局部工作单元、相关字段和 replay 标题
-  -> plan_index 是模型自选的本地日志编号，不引用 broad plan
-  -> 只更新 plan_statuses，不写字段、不绑定证据、不参与最终校验
+update_soft_plan(plan)
+  -> 校验 plan 是由 step/status 组成的列表
+  -> 给每个步骤补上 1-based plan_index
+  -> 替换 state.soft_plan，并同步 plan_statuses
+  -> 不写字段、不绑定证据、不参与最终校验
 
 overview()
   -> 返回 section container、heading 和同层 block items 的混排 outline
@@ -215,7 +218,6 @@ read_section(section_id, reason)
   -> 只读取 heading
   -> 只返回该 heading 元素真实后代的 block offsets 和 first-sentence preview
   -> 不把后续平级 p/list/table 隐式算进前一个 heading；这些平级块由 overview 直接暴露
-  -> 章节过长时在工具内部触发隔离 scoped reader
 
 read_blocks(section_id, indexes, reason)
   -> 对 section container、heading 真实后代 scope 或 leaf block scope 做 index 列表查询
@@ -238,17 +240,10 @@ query_table(section_id, block_offset, sql, reason)
   -> 返回 rows、evidence_ids、轻量 table_audit 和查询 summary；不返回逐行空值展开
 
 preview_inline_evidence(source_id, start_index, count, reason)
-  -> 只接受本轮已经被读取或扫描观察到的文本类 source_id
+  -> 只接受本轮已经被读取观察到的文本类 source_id
   -> 把 source 文本按句子边界切成 inline 候选；长合同句保持完整，不按固定字符数二次截断
   -> 返回 inline_id、source_id、inline_index、文本和字符范围，并把 inline_id 标记为 observed
   -> 只用于写字段前把文本证据细化；表格证据用 query_table 的 row id，列表证据用 read_list 的 item id
-
-record_note(field_names, evidence_ids, note, reason)
-  -> 在读到或 preview 到证据后，记录一条面向人类 replay 的字段笔记
-  -> field_names 必须来自 task_spec.fields；允许一次 note 绑定多个共享同一证据的相关字段
-  -> evidence_ids 必须已经被本轮 read/query/preview 工具观察到；支持多个 evidence id
-  -> note 写清楚这些证据说明了什么，但不写字段值、不替代 set_field、不参与 scorer
-  -> 写入 state.notes，并同步进入 actions，方便前端显示“模型为什么认为这些证据和这些字段相关”
 
 set_field(name, value, evidence_ids, reason, status, failure_reason)
   -> 校验字段存在、状态合法、值类型匹配
@@ -290,13 +285,13 @@ table_id + SQL
 state.field_states 中 status=resolved 的字段
   -> result[field_name] = value
 
-plan_statuses / document.tree / field_states / actions
+state.soft_plan / plan_statuses / document.tree / field_states / actions
   -> trace
 
-broad 或 resolution 抛异常
+resolution 抛异常
   -> status=failed
   -> failure_reason=str(exc)
-  -> trace.failed_stage = broad 或 resolution
+  -> trace.failed_stage = resolution
 ```
 
 如果 resolution 调用 `finish` 返回 `ok=false`，整体结果也会是 `failed`，失败原因来自 `finish` 错误列表。

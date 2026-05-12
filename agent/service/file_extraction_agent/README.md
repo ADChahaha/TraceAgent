@@ -11,7 +11,7 @@ html + task_spec + run_options
   -> input_adapter 校验输入并构造 HtmlExtractionInput
   -> html_index 基于已有 id 构建 document.tree / elements_by_id / tables_by_id / row_index
   -> resolution_new 生成任务提示并挂载工具
-  -> update_plan 声明当前局部工作单元和可能相关的字段组
+  -> update_soft_plan 写入 stage-like 软计划
   -> overview 先给出混排 outline
   -> read_section / read_blocks / read_block_range / read_list / query_table 读取证据
   -> preview_inline_evidence 把已读文本块细化成 inline 证据 id
@@ -26,7 +26,7 @@ html + task_spec + run_options
 
 | Tool | 作用 |
 | --- | --- |
-| `update_plan(plan_index, status, reason)` | 轻量工作记忆和 replay 标题；prompt 鼓励在 reason 中说明当前局部工作单元和相关字段。 |
+| `update_soft_plan(plan)` | 轻量工作记忆和 replay 标题；提交由 `step/status` 组成的 stage-like 软计划。 |
 | `overview()` | 返回混排 outline，包含 `section`、heading、`p`、list、table 的可读摘要。 |
 | `read_section(section_id, reason)` | 只读 heading 自身真实后代的 block previews；平级块由 overview 直接暴露。 |
 | `read_blocks(section_id, indexes, reason)` | 按模型选择的 index 列表读取离散块；scope 可以是 `section` 容器、heading 真实后代，或单个叶子块 id。 |
@@ -41,7 +41,7 @@ html + task_spec + run_options
 
 | 内容类型 | 定位 / 读取工具 | 最终 `set_field` 证据 |
 | --- | --- | --- |
-| 普通文本、标题、caption | 先用 `read_blocks` / `read_block_range` / scoped scan 读到文本块，再用 `preview_inline_evidence` 预览候选片段。 | 使用 `preview_inline_evidence` 返回的 `inline_id`，例如 `p001_b004::inline-0`。 |
+| 普通文本、标题、caption | 先用 `read_blocks` / `read_block_range` 读到文本块，再用 `preview_inline_evidence` 预览候选片段。 | 使用 `preview_inline_evidence` 返回的 `inline_id`，例如 `p001_b004::inline-0`。 |
 | 列表 | `read_list` 按 `item_offset` 分页读取 list items；顶层 list id 配 `block_offset=0`。 | 至少包含对应 `li` item id；只给 `ul` / `ol` 容器 id 会被拒绝。 |
 | 表格 | `query_table` 用安全 SELECT 查询 table rows；顶层 table id 配 `block_offset=0`。 | 至少包含对应 `tr` row id；只给 table id 会被拒绝。 |
 
@@ -49,16 +49,15 @@ html + task_spec + run_options
 
 ## 轻量 plan 纪律
 
-`update_plan` 不是 stage，也不是证据账本；它只帮助模型和用户看清当前这段工作在解决什么。prompt 鼓励模型在建立 plan 时写出可能相关的字段或字段组，后续读取、preview 和 `set_field` 尽量围绕这些字段展开。如果切换到不同主题、不同条款区域或明显不同的字段组，应先开启新的 `update_plan`。
+`update_soft_plan` 不是硬 stage 状态机，也不是证据账本；它只帮助模型和用户看清当前这段工作在解决什么。prompt 鼓励模型把软计划写成 stage-like 的局部阅读步骤，标出当前正在理解的文档区域、可能相关的字段组和后续待读范围。后续读取、preview 和 `set_field` 尽量围绕当前 `in_progress` 步骤展开。如果切换到不同主题、不同条款区域或明显不同的字段组，应先刷新 `update_soft_plan`。
 
-为了增强模型记忆并让 replay 更清楚，`set_field.evidence_ids` 优先使用当前 `update_plan` 之后读到或重新 `preview_inline_evidence` 过的证据。如果需要复用更早 plan 里读过的相关证据，prompt 鼓励在当前 plan 里重新读取或重新 preview。这里没有工具层硬限制，也不设置固定字段数量上限。
+为了增强模型记忆并让 replay 更清楚，`set_field.evidence_ids` 优先使用最近一次 `update_soft_plan` 之后读到或重新 `preview_inline_evidence` 过的证据。如果需要复用更早 plan 里读过的相关证据，prompt 鼓励在当前 plan 里重新读取或重新 preview。这里没有工具层硬限制，也不设置固定字段数量上限。
 
 ## 读取规则
 
 `read_section`
   -> 只接受 heading 节点
   -> 只读该 heading 元素真实包含的后代块，不把后面的平级 `p` / list / table 算进去
-  -> 如果章节太长，工具内部会触发隔离 scoped reader
 
 `read_blocks`
   -> 接受 section 容器、heading、或叶子块 id
@@ -74,7 +73,7 @@ html + task_spec + run_options
   -> 返回结构仍包含实际 `indexes`，方便 replay 看清模型读了哪些块
 
 `preview_inline_evidence`
-  -> 只接受已经被本轮读取或扫描观察到的文本类元素 id，例如 `p`、heading 或 caption
+  -> 只接受已经被本轮读取观察到的文本类元素 id，例如 `p`、heading 或 caption
   -> 把文本按句子边界切成 inline 候选；长合同句保持完整，不按固定字符数二次截断
   -> 返回 `inline_id`、原始 `source_id`、文本和字符范围，并把这些 inline id 标记为已观察
   -> 只在准备写字段证据时使用；table 证据走 `query_table` 的 row id，list 证据走 `read_list` 的 item id
