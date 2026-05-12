@@ -43,8 +43,13 @@ def build_chat_model(config: ModelConfig, model_name: str) -> Any:
         kwargs["api_key"] = config.api_key
     if config.top_p is not None:
         kwargs["top_p"] = config.top_p
+    extra_body: dict[str, Any] = {}
     if config.top_k is not None:
-        kwargs["extra_body"] = {"top_k": config.top_k}
+        extra_body["top_k"] = config.top_k
+    if _should_disable_deepseek_thinking(config, model_name):
+        extra_body["thinking"] = {"type": "disabled"}
+    if extra_body:
+        kwargs["extra_body"] = extra_body
 
     return ChatOpenAI(**kwargs)
 
@@ -111,6 +116,12 @@ def _int_env(value: str | None, default: int) -> int:
     if value in {None, ""}:
         return default
     return int(value)
+
+
+def _should_disable_deepseek_thinking(config: ModelConfig, model_name: str) -> bool:
+    base_url = (config.base_url or "").lower()
+    model = (model_name or "").lower()
+    return "api.deepseek.com" in base_url or "deepseek" in model
 
 
 __all__ = ["build_resolution_model", "normalize_model_config", "build_chat_model"]

@@ -170,3 +170,27 @@ def test_build_chat_model_passes_sampling_parameters_without_model_kwargs(monkey
     assert captured["top_p"] == 1.0
     assert captured["extra_body"] == {"top_k": 1}
     assert "model_kwargs" not in captured
+
+
+def test_build_chat_model_disables_deepseek_thinking_by_default(monkeypatch):
+    captured = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(model_factory_module, "ChatOpenAI", FakeChatOpenAI)
+
+    model_factory_module.build_chat_model(
+        ModelConfig(
+            base_url="https://api.deepseek.com",
+            temperature=0.0,
+            top_k=1,
+        ),
+        "deepseek-v4-flash",
+    )
+
+    assert captured["extra_body"] == {
+        "top_k": 1,
+        "thinking": {"type": "disabled"},
+    }

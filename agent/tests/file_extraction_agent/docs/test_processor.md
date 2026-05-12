@@ -10,3 +10,4 @@
 - `test_normalize_model_config_rejects_unknown_model_fields`：确认模型配置会拒绝未知字段，避免旧 broad 兼容字段重新进入抽取链路。
 - `test_build_chat_model_passes_retry_and_timeout`：确认 `model_factory` 创建 `ChatOpenAI` 时会传入 `max_retries` 和 `request_timeout`。
 - `test_build_chat_model_passes_sampling_parameters_without_model_kwargs`：确认 `top_p` 作为 `ChatOpenAI` 显式参数传入，`top_k` 放进兼容接口使用的 `extra_body`，避免通过 `model_kwargs` 变成不被服务端接受的请求参数。
+- `test_build_chat_model_disables_deepseek_thinking_by_default`：确认 DeepSeek 官方源或 DeepSeek 模型会在 `extra_body` 中显式关闭 thinking，避免多轮 tool-calling 因缺少 `reasoning_content` 回传而失败。

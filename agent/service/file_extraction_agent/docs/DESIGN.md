@@ -105,10 +105,11 @@ string / number / boolean / list[string] / list[number]
   -> 读取 BASE_URL / OPENAI_API_KEY / RESOLUTION_MODEL / MODEL
   -> 读取 TEMPERATURE / TOP_P / TOP_K
   -> 读取 MODEL_MAX_RETRIES / MODEL_REQUEST_TIMEOUT
+  -> 如果连接 DeepSeek 官方源或模型名包含 deepseek，在 extra_body 中关闭 thinking
   -> 创建 resolution_model
 ```
 
-`MODEL_MAX_RETRIES` 未设置时默认是 `6`，用于减少模型服务短暂连接错误导致的整份文档失败。`MODEL_REQUEST_TIMEOUT` 未设置时不显式传入超时，保持底层客户端默认行为。
+`MODEL_MAX_RETRIES` 未设置时默认是 `6`，用于减少模型服务短暂连接错误导致的整份文档失败。`MODEL_REQUEST_TIMEOUT` 未设置时不显式传入超时，保持底层客户端默认行为。DeepSeek 官方源在 thinking mode 下的多轮 tool-calling 需要回传 `reasoning_content`，当前 LangChain 回放链路不保存这个字段，因此 `model_factory` 会对 DeepSeek 请求显式传入 `thinking.type=disabled`，避免第二轮工具调用被服务端拒绝。
 
 ## HTML 索引
 
