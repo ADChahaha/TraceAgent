@@ -56,7 +56,6 @@ def _state():
         field_states={},
         actions=[],
         observed_evidence_ids=set(),
-        broad_plan=None,
         plan_statuses={},
     )
 
@@ -89,7 +88,6 @@ def _mixed_outline_state():
         field_states={},
         actions=[],
         observed_evidence_ids=set(),
-        broad_plan=None,
         plan_statuses={},
     )
 
@@ -1136,7 +1134,7 @@ def test_update_plan_rejects_completing_plan_that_is_not_in_progress():
     assert result["errors"][0]["plan_index"] == 1
 
 
-def test_update_plan_accepts_new_local_plan_index_without_broad_plan():
+def test_update_plan_accepts_new_local_plan_index():
     result = _update_plan(_state(), 99, "completed", reason="不存在")
 
     assert result["ok"] is False

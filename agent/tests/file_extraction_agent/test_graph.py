@@ -1,19 +1,8 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
-from service.file_extraction_agent.impl.broad_new import BroadPlan
 from service.file_extraction_agent.impl.graph import build_failed_result, map_state_to_result, run_extraction_graph
 from service.file_extraction_agent.impl.html_state import build_graph_state
 from service.file_extraction_agent.input_adapter import build_graph_input
-
-
-class FakeBroadModel:
-    def bind_tools(self, tools, tool_choice=None):
-        raise AssertionError("broad model should not be bound in no-plan mode")
-
-    def invoke(self, messages):
-        raise AssertionError("broad model should not be invoked in no-plan mode")
 
 
 class FakeResolutionModel:
@@ -96,20 +85,6 @@ class FakeResolutionModelWithScan:
         return self.calls.pop(0)
 
 
-class FakeDocumentScanModel:
-    def __init__(self):
-        self.invoked = False
-
-    def bind_tools(self, tools, tool_choice=None):
-        raise AssertionError("document scan model must not receive tools")
-
-    def invoke(self, messages):
-        self.invoked = True
-        return {
-            "content": '{"candidates": [{"element_id": "dp-p-1", "reason": "姓名段落"}]}'
-        }
-
-
 def _input():
     html = """
     <h2 id="dp-h2-1">通知</h2>
@@ -127,7 +102,6 @@ def _input():
 
 def test_map_state_to_result_returns_completed_payload():
     state = build_graph_state(_input())
-    state.broad_plan = BroadPlan(summary="Extract", plan=["Extract"], risks=[])
     state.field_states["student_name"] = {
         "name": "student_name",
         "status": "resolved",
@@ -139,44 +113,39 @@ def test_map_state_to_result_returns_completed_payload():
 
     assert result.status == "completed"
     assert result.result["student_name"] == "张三"
-    assert result.trace["broad_plan"]["summary"] == "Extract"
+    assert "broad_plan" not in result.trace
 
 
 def test_build_failed_result_preserves_trace():
     state = build_graph_state(_input())
 
-    result = build_failed_result(state=state, stage="broad", exc=RuntimeError("boom"))
+    result = build_failed_result(state=state, stage="resolution", exc=RuntimeError("boom"))
 
     assert result.status == "failed"
     assert result.failure_reason == "boom"
-    assert result.trace["failed_stage"] == "broad"
+    assert result.trace["failed_stage"] == "resolution"
 
 
-def test_run_extraction_graph_skips_broad_plan_then_runs_resolution():
+def test_run_extraction_graph_runs_resolution_without_broad_plan_trace():
     result = run_extraction_graph(
         extraction_input=_input(),
-        broad_model=FakeBroadModel(),
         resolution_model=FakeResolutionModel(),
     )
 
     assert result.status == "completed"
     assert result.result["student_name"] == "张三"
-    assert result.trace["broad_plan"] is None
+    assert "broad_plan" not in result.trace
     assert len(result.trace["actions"]) >= 1
 
 
 def test_run_extraction_graph_runs_new_read_tools_without_document_scan_model():
-    scan_model = FakeDocumentScanModel()
-
     result = run_extraction_graph(
         extraction_input=_input(),
-        broad_model=scan_model,
         resolution_model=FakeResolutionModelWithScan(),
     )
 
     assert result.status == "completed"
     assert result.result["student_name"] == "张三"
-    assert scan_model.invoked is False
     assert [action["tool_name"] for action in result.trace["actions"]] == [
         "read_blocks",
         "preview_inline_evidence",

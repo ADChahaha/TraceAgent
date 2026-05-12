@@ -73,6 +73,8 @@ def test_resolution_messages_embed_compact_document_outline():
     assert "Call overview first when the outline is not enough" in content
     assert "Document outline may include section containers and block items in document order" in content
     assert "Use the bound tool descriptions as the source of truth for exact arguments and reading behavior" in content
+    assert "Do not write fields using only the overview." in content
+    assert "broad plan" not in content
     assert "All SQL column names must be wrapped in double quotes" in content
     assert "query_table returns rows, table_audit, and summary" in content
     assert "Explain query_table summary and table_audit only when they affect the current field" in content

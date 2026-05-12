@@ -4,15 +4,13 @@
 
 ## 基本实现思路
 
-当前实现是“HTML 索引 + 无 broad plan + resolution 直接工具执行 + 轻量 update_plan 记忆”：
+当前实现是“HTML 索引 + resolution 直接工具执行 + 轻量 update_plan 记忆”：
 
 ```text
 调用方传入 html、task_spec、run_options、model_config
   -> input_adapter 校验 html 非空、task_spec.fields 非空、max_tool_calls > 0
   -> html_index 解析 HTML，基于已有 id 构建 document.tree、elements_by_id、tables_by_id、row_index；tree 按 DOM/section 容器语义保留 section、heading 和同层 block items 的顺序与预览
-  -> model_factory 从显式 model_config 或环境变量构造 broad / resolution 两个 ChatOpenAI，并注入重试和超时配置
-  -> broad_new 不调用模型，也不生成兼容 broad plan；state.broad_plan 保持为 None
-  -> graph 把 broad_model 挂到 state.document_scan_model，作为可选隔离全文扫描模型
+  -> model_factory 从显式 model_config 或环境变量构造 resolution ChatOpenAI，并注入重试和超时配置
   -> resolution_new 把 task fields 和 document outline 交给 LangGraph tool-calling loop
   -> html_tools 提供 update_plan / overview / read_section / read_blocks / read_block_range / read_list / query_table / preview_inline_evidence / set_field / finish
   -> 模型用 update_plan 声明当前局部工作单元和相关字段，读取对应证据后直接 set_field 写入 resolved 或 failed
@@ -22,7 +20,6 @@
 
 `trace` 是前端 replay 和 backend route policy 的共同来源。它包含：
 
-- `broad_plan`：保留 trace 字段用于兼容旧消费者，但当前恒为 `None`，不再提供默认三步计划。
 - `plan_statuses`：resolution 的轻量计划进度和当前工作单元状态。
 - `document_tree`：从 HTML 推出的混排 outline，包含 section container、heading 和同层 block items 的摘要。
 - `field_states`：每个字段的值、状态、证据 id、原因或失败原因。
@@ -36,7 +33,6 @@ service/file_extraction_agent/
 ├── input_adapter.py
 ├── schemas.py
 └── impl/
-    ├── broad_new.py
     ├── graph.py
     ├── html_index.py
     ├── html_state.py
@@ -100,14 +96,14 @@ string / number / boolean / list[string] / list[number]
 
 ## 模型连接配置
 
-`model_factory.py` 负责把显式 `model_config` 或环境变量归一化成 broad / resolution 两个 `ChatOpenAI`：
+`model_factory.py` 负责把显式 `model_config` 或环境变量归一化成 resolution `ChatOpenAI`：
 
 ```text
 显式 model_config 或 .env / 进程环境
-  -> 读取 BASE_URL / OPENAI_API_KEY / BROAD_MODEL / RESOLUTION_MODEL / MODEL
+  -> 读取 BASE_URL / OPENAI_API_KEY / RESOLUTION_MODEL / MODEL
   -> 读取 TEMPERATURE / TOP_P / TOP_K
   -> 读取 MODEL_MAX_RETRIES / MODEL_REQUEST_TIMEOUT
-  -> 分别创建 broad_model 和 resolution_model
+  -> 创建 resolution_model
 ```
 
 `MODEL_MAX_RETRIES` 未设置时默认是 `6`，用于减少模型服务短暂连接错误导致的整份文档失败。`MODEL_REQUEST_TIMEOUT` 未设置时不显式传入超时，保持底层客户端默认行为。
@@ -139,23 +135,6 @@ string / number / boolean / list[string] / list[number]
 | `ul` / `ol` | `LIST` |
 | `table` | `TABLE` |
 | `caption` | `CAPTION` |
-
-## Broad 阶段
-
-`broad_new.py` 在当前实现中不再调用模型，也不再生成路线计划或默认三步兼容计划。它只把 `state.broad_plan` 置为 `None`，让 resolution 直接从字段语义和 document outline 开始工作。
-
-```text
-GraphState
-  -> run_broad_planner(...)
-  -> state.broad_plan = None
-```
-
-约束：
-
-- broad 不调用模型，不读取完整 HTML 来制定路线。
-- broad 不写最终字段值，也不写候选章节、元素、关键词、风险或默认计划。
-- broad_model 只会在 resolution 主 agent 显式调用 `scan_document`，或 `read_section` 因章节过长自动触发 scoped scan 时，作为隔离 reader 被调用；它不会获得工具，也不能递归调用其他 agent。
-- `build_broad_messages`、`return_broad_plan` 和解析函数暂时保留，方便和旧 plan 模式对比或回滚。
 
 ## 轻量 Plan 记忆
 
@@ -304,7 +283,7 @@ table_id + SQL
 state.field_states 中 status=resolved 的字段
   -> result[field_name] = value
 
-state.broad_plan / plan_statuses / document.tree / field_states / actions
+plan_statuses / document.tree / field_states / actions
   -> trace
 
 broad 或 resolution 抛异常

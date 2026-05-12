@@ -23,7 +23,6 @@ class GraphState:
     document: HtmlDocument
     task_spec: TaskSpec
     run_options: RunOptions
-    broad_plan: Any = None
     document_scan_model: Any = None
     plan_statuses: dict[int, dict[str, Any]] = field(default_factory=dict)
     field_states: dict[str, dict[str, Any]] = field(default_factory=dict)

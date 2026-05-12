@@ -61,7 +61,7 @@ def build_resolution_messages(state: Any) -> list[Any]:
             "continue querying, use a safer query, or set_field(status='failed') to request human review. "
             "If a tool returns ok=false or error, do not quit. Read the error, fix parameters, and retry. "
             "set_field evidence_ids must come from this run's read_blocks/read_block_range/read_list/query_table/preview_inline_evidence results. "
-            "Do not write fields using only the overview or broad plan."
+            "Do not write fields using only the overview."
         )
     )
     human = HumanMessage(
