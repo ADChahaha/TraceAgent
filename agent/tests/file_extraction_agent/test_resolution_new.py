@@ -60,6 +60,10 @@ def test_resolution_messages_embed_compact_document_outline():
     assert "name the related fields or field group you expect this plan may resolve" in content
     assert "Stay close to the fields named in the current plan" in content
     assert "do not let one plan expand into the entire task" in content
+    assert "A plan may expand to a few adjacent fields that share the same evidence" in content
+    assert "must not drift into a broad catch-all plan" in content
+    assert "Try to collect complete final evidence for the named fields within the current plan" in content
+    assert "When switching to a new plan, reread or preview the needed evidence under the new plan" in content
     assert "Before moving to a materially different topic, clause area, or field group, call update_plan again" in content
     assert "prefer evidence observed or previewed after the latest update_plan" in content
     assert "reread or preview that evidence again in the current plan" in content

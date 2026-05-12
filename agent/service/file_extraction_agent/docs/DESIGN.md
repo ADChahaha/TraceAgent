@@ -166,10 +166,11 @@ GraphState
 - 每次 `update_plan` 都应描述一个局部工作单元，而不是整份文档或全部字段。
 - `update_plan` 应写出本段可能相关的字段或字段组，让后续读取和写入有明确范围。
 - 本段内的读取、预览和 `set_field` 应尽量围绕 `update_plan` 中声明的相关字段展开。
-- 如果模型发现另一个字段和当前证据路径确实相关，可以顺手处理；但不应让一个 plan 漫延成全字段填表。
+- 如果模型发现少量相邻字段和当前证据路径确实相关，可以顺手处理；但不应让一个 plan 漫延成全字段填表，或者变成兜底处理剩余字段的大 plan。
+- 一个 plan 内应尽量把其声明字段需要的最终证据读全、preview 全，再写这些字段，避免只凭前文印象补字段。
 - 当要切换到不同主题、不同条款区域或明显不同的字段组时，应先开启新的 `update_plan`。
 - 为了增强模型记忆并改善前端 replay，可鼓励 `set_field.evidence_ids` 优先使用当前 `update_plan` 之后读到或重新 preview 过的证据。
-- 如果某个字段需要复用更早 plan 里读过的相关证据，prompt 应鼓励模型在当前 plan 内重新读取或重新 `preview_inline_evidence`，而不是只凭长上下文记忆直接写字段。
+- 如果某个字段需要复用更早 plan 里读过的相关证据，prompt 应鼓励模型在当前 plan 内重新读取或重新 `preview_inline_evidence`，而不是只凭长上下文记忆直接写字段；切换到新 plan 后也应把新 plan 需要的证据重新读入当前上下文。
 - 这些规则只放在 prompt 中作为软约束，不在 `set_field`、`finish` 或 scorer 中加入 plan 级硬校验。
 
 ```text
