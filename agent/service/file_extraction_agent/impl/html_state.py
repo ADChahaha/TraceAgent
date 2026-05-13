@@ -23,6 +23,8 @@ class GraphState:
     document: HtmlDocument
     task_spec: TaskSpec
     run_options: RunOptions
+    evidence_states: dict[str, dict[str, Any]] = field(default_factory=dict)
+    review_states: dict[str, dict[str, Any]] = field(default_factory=dict)
     field_states: dict[str, dict[str, Any]] = field(default_factory=dict)
     actions: list[dict[str, Any]] = field(default_factory=list)
     events: list[dict[str, Any]] = field(default_factory=list)

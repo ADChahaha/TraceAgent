@@ -138,7 +138,7 @@ documents + task_spec
   -> processor.extract_stream(...)
   -> input_adapter 校验 documents 非空、filename/html 非空、task_spec.fields 非空、run_options 合法
   -> html_index 生成 /001-filename-title/... 虚拟文件树、path 索引、list item 编号和 table row 编号
-  -> resolution_new 通过 tree / read / anchors / query_table / write_field / submit_result 定案字段
+  -> resolution_new 通过 tree / read / anchors / query_table / bind_evidence / review_field / write_field(final_evidence) / submit_result 定案字段
   -> graph 按顺序输出 NDJSON 工具事件，最后输出 result_completed
 ```
 
@@ -147,6 +147,7 @@ NDJSON 事件：
 - `tool_started`：工具开始执行，包含 `seq`、`tool`、`reason` 和工具参数。
 - `tool_completed`：工具成功完成，包含摘要化工具结果。
 - `tool_failed`：工具失败或校验失败，包含结构化错误。
+- `evidence_bound`：`bind_evidence` 成功给字段绑定 evidence selector。
 - `field_written`：`write_field` 成功写入或覆盖字段。
 - `result_completed`：最终结果事件，包含 `result.fields[]` 和 `trace`。
 

@@ -9,9 +9,11 @@ documents + task_spec + run_options
   -> input_adapter 校验 documents 非空、每个 document 有 filename/html、task_spec.fields 非空
   -> html_index 解析 HTML，生成 /001-filename-title/... 虚拟树和 path -> node 索引
   -> paragraph/list/table 分别建成 .md/.list/.table 文件，section header 建成目录
-  -> resolution_new 生成抽取提示并挂载 tree/read/anchors/query_table/write_field/submit_result
+  -> resolution_new 生成抽取提示并挂载 tree/read/anchors/query_table/bind_evidence/review_field/write_field/submit_result
   -> 模型按 schema 浏览材料、读取文件、查询表格，并用 reason 说明每次用户可见动作
-  -> write_field 覆盖写入字段值、状态和 evidence selector
+  -> bind_evidence 先绑定字段候选证据 selector
+  -> 如果字段有候选证据，review_field 复看字段描述、当前值和已绑定证据
+  -> write_field 覆盖写入字段值、状态和 final_evidence
   -> submit_result 校验必填字段、类型和 evidence selector
   -> graph 按顺序输出 NDJSON 工具事件，最后输出 result_completed
 ```
@@ -40,10 +42,12 @@ paragraph 文件名只是预览，不代表截断正文。完整正文由 `read(
 | `read(path, offset, limit, reason)` | 读取 `.md/.list/.table` 文件；paragraph 返回纯正文，list/table 返回 Markdown。 |
 | `anchors(path, reason)` | 只用于 `.md`，返回 `Sxxx` 句子编号和短 preview。 |
 | `query_table(path, sql, offset, limit, reason)` | 只用于 `.table`，在内存表 `data` 上执行单条安全 SELECT。 |
-| `write_field(field_id, value, evidence, status, reason)` | 写入或覆盖一个 schema 字段的最终值。 |
+| `bind_evidence(field_id, evidence, reason)` | 给一个 schema 字段绑定 selector 候选证据，不提交字段值。 |
+| `review_field(field_id, reason)` | 只读复看字段描述、当前值和已绑定候选证据文本；有候选证据时写字段前必须调用。 |
+| `write_field(field_id, value, final_evidence, status, reason)` | 写入或覆盖一个 schema 字段的最终值和最终证据。 |
 | `submit_result(reason)` | 校验当前字段缓冲区，成功返回最终 `fields[]`，失败返回结构化错误。 |
 
-`reason` 是用户可见动作说明，不是证据，也不是模型推理链。工具 wrapper 会为每次调用写入 `tool_started`、`tool_completed` 或 `tool_failed`，字段写入另有 `field_written`，最终提交另有 `result_completed`。
+`reason` 是用户可见动作说明，不是证据，也不是模型推理链。工具 wrapper 会为每次调用写入 `tool_started`、`tool_completed` 或 `tool_failed`，证据绑定另有 `evidence_bound`，字段写入另有 `field_written`，最终提交另有 `result_completed`。
 
 ## 读取与证据
 
@@ -54,7 +58,7 @@ read("/001-file/001-概况/001-公司成立于2020年.md")
   -> 返回完整 paragraph 正文，不带句子号
 anchors("/001-file/001-概况/001-公司成立于2020年.md")
   -> [{"id": "S001", "preview": "..."}]
-write_field(..., evidence=[{"path": "...md", "sentences": ["S001"]}])
+bind_evidence(..., evidence=[{"path": "...md", "sentences": ["S001"]}])
 ```
 
 list：
@@ -63,7 +67,7 @@ list：
 read("/001-file/002-条款/001-服务范围.list")
   -> frontmatter metadata + Markdown list
   -> - [I001] ...
-write_field(..., evidence=[{"path": "...list", "items": ["I001"]}])
+bind_evidence(..., evidence=[{"path": "...list", "items": ["I001"]}])
 ```
 
 table：
@@ -74,7 +78,7 @@ read("/001-file/003-费用/001-费用明细.table", offset=0, limit=30)
   -> | R001 | ... |
 query_table("/001-file/003-费用/001-费用明细.table", "SELECT * FROM data WHERE ...")
   -> 查询结果仍保留原始 Rxxx 行号
-write_field(..., evidence=[{"path": "...table", "rows": ["R001"]}])
+bind_evidence(..., evidence=[{"path": "...table", "rows": ["R001"]}])
 ```
 
 `submit_result` 会校验 selector 类型和编号是否存在：`.md` 只能用 `sentences`，`.list` 只能用 `items`，`.table` 只能用 `rows`。

@@ -32,13 +32,21 @@ def test_resolution_messages_describe_virtual_tree_tools_without_plan():
     assert "read(path, offset, limit, reason)" in content
     assert "anchors(path, reason)" in content
     assert "query_table(path, sql, offset, limit, reason)" in content
-    assert "write_field(field_id, value, evidence, status, reason)" in content
+    assert "bind_evidence(field_id, evidence, reason)" in content
+    assert "review_field(field_id, reason)" in content
+    assert "write_field(field_id, value, final_evidence, status, reason)" in content
     assert "submit_result(reason)" in content
     assert "reason is a user-visible action explanation" in content
     assert "Use evidence selectors" in content
-    assert "Once you have enough evidence for a field" in content
-    assert "write_field for that field" in content
-    assert "before continuing to unrelated fields" in content
+    assert "as soon as you see text, list items, or table rows that you think may be evidence for a field" in content
+    assert "call bind_evidence immediately" in content
+    assert "Do not wait until the field value or enum decision is final before binding evidence" in content
+    assert "If a field has any bound candidate evidence, call review_field for that field before write_field" in content
+    assert "Do not call review_field for fields that have no bound candidate evidence" in content
+    assert "write_field submits a field value with final_evidence" in content
+    assert "final_evidence should include only selectors that are genuinely useful for the submitted value" in content
+    assert "drop merely topical, background, duplicate, or weakly related candidate evidence" in content
+    assert "once the value or enum decision is ready" not in content
     assert "maximum number of reads" not in content.lower()
     assert "read budget" not in content.lower()
     assert "Do not create or update a plan" not in content
@@ -91,6 +99,8 @@ def test_resolution_graph_exposes_new_tools_only():
         "read",
         "anchors",
         "query_table",
+        "bind_evidence",
+        "review_field",
         "write_field",
         "submit_result",
     ]

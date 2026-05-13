@@ -41,16 +41,28 @@ def build_tools(state: Any) -> list[Any]:
         return _query_table(state, path, sql, offset=offset, limit=limit, reason=reason)
 
     @tool
+    def bind_evidence(field_id: str, evidence: list[dict[str, Any]], reason: str = "") -> dict[str, Any]:
+        """Bind evidence selectors to one schema field without submitting its value."""
+
+        return _bind_evidence(state, field_id, evidence, reason=reason)
+
+    @tool
+    def review_field(field_id: str, reason: str = "") -> dict[str, Any]:
+        """Return one field's description, current value, and bound evidence texts for reassessment."""
+
+        return _review_field(state, field_id, reason=reason)
+
+    @tool
     def write_field(
         field_id: str,
         value: Any,
-        evidence: list[dict[str, Any]],
+        final_evidence: list[dict[str, Any]] | None = None,
         status: str = "resolved",
         reason: str = "",
     ) -> dict[str, Any]:
-        """Write or overwrite one schema field with value and evidence selectors."""
+        """Write or overwrite one schema field value with reviewed final evidence."""
 
-        return _write_field(state, field_id, value, evidence, status=status, reason=reason)
+        return _write_field(state, field_id, value, final_evidence=final_evidence, status=status, reason=reason)
 
     @tool
     def submit_result(reason: str = "") -> dict[str, Any]:
@@ -58,7 +70,7 @@ def build_tools(state: Any) -> list[Any]:
 
         return _submit_result(state, reason=reason)
 
-    return [tree, read, anchors, query_table, write_field, submit_result]
+    return [tree, read, anchors, query_table, bind_evidence, review_field, write_field, submit_result]
 
 
 def _tree(state: Any, path: str = "/", *, depth: int = 3, reason: str = "") -> dict[str, Any]:
@@ -121,25 +133,86 @@ def _query_table(
     )
 
 
+def _bind_evidence(
+    state: Any,
+    field_id: str,
+    evidence: list[dict[str, Any]] | None,
+    *,
+    reason: str = "",
+) -> dict[str, Any]:
+    evidence = evidence or []
+
+    def execute() -> dict[str, Any]:
+        field = field_definition(state, field_id)
+        if field is None:
+            return {"ok": False, "errors": [{"field_id": field_id, "code": "UNKNOWN_FIELD", "message": "unknown field_id"}]}
+        errors = [{"field_id": field_id, **error} for error in state.document.validate_evidence(evidence)]
+        if errors:
+            return {"ok": False, "errors": errors}
+        existing = state.evidence_states.get(field_id, {})
+        combined = [*(existing.get("evidence") or []), *evidence]
+        evidence_texts = state.document.evidence_texts(combined)
+        state.evidence_states[field_id] = {
+            "field_id": field_id,
+            "evidence": combined,
+            "evidence_texts": evidence_texts,
+            "reason": reason,
+        }
+        state.review_states.pop(field_id, None)
+        return {
+            "ok": True,
+            "field_id": field_id,
+            "evidence": combined,
+            "evidence_texts": evidence_texts,
+        }
+
+    result = _run_tool(
+        state,
+        "bind_evidence",
+        {"field_id": field_id, "evidence": evidence},
+        reason,
+        execute,
+    )
+    if result.get("ok") is True:
+        _emit_event(
+            state,
+            {
+                "type": "evidence_bound",
+                "tool": "bind_evidence",
+                "reason": reason,
+                "field_id": field_id,
+                "evidence": result["evidence"],
+                "evidence_texts": result["evidence_texts"],
+            },
+        )
+    return result
+
+
 def _write_field(
     state: Any,
     field_id: str,
     value: Any,
-    evidence: list[dict[str, Any]] | None,
     *,
+    final_evidence: list[dict[str, Any]] | None = None,
     status: str = "resolved",
     reason: str = "",
 ) -> dict[str, Any]:
+    final_evidence = final_evidence or []
+
     def execute() -> dict[str, Any]:
-        errors = validate_field_write(state, field_id, value, evidence or [], status)
+        evidence_state = state.evidence_states.get(field_id, {})
+        candidate_evidence = evidence_state.get("evidence") or []
+        errors = validate_field_write(state, field_id, value, status)
+        errors.extend(validate_final_evidence_write(state, field_id, candidate_evidence, final_evidence))
         if errors:
             return {"ok": False, "errors": errors}
+        evidence_texts = state.document.evidence_texts(final_evidence)
         field = {
             "field_id": field_id,
             "status": status,
             "value": value,
-            "evidence": evidence or [],
-            "evidence_texts": state.document.evidence_texts(evidence or []),
+            "evidence": final_evidence,
+            "evidence_texts": evidence_texts,
             "reason": reason,
         }
         state.field_states[field_id] = field
@@ -148,7 +221,7 @@ def _write_field(
     result = _run_tool(
         state,
         "write_field",
-        {"field_id": field_id, "value": value, "evidence": evidence or [], "status": status},
+        {"field_id": field_id, "value": value, "final_evidence": final_evidence, "status": status},
         reason,
         execute,
     )
@@ -163,6 +236,46 @@ def _write_field(
             },
         )
     return result
+
+
+def _review_field(state: Any, field_id: str, *, reason: str = "") -> dict[str, Any]:
+    def execute() -> dict[str, Any]:
+        field = field_definition(state, field_id)
+        if field is None:
+            return {"ok": False, "errors": [{"field_id": field_id, "code": "UNKNOWN_FIELD", "message": "unknown field_id"}]}
+        evidence_state = state.evidence_states.get(field_id, {})
+        field_state = state.field_states.get(field_id, {})
+        evidence = evidence_state.get("evidence") or field_state.get("evidence") or []
+        evidence_texts = evidence_state.get("evidence_texts") or field_state.get("evidence_texts")
+        if evidence_texts is None:
+            evidence_texts = state.document.evidence_texts(evidence)
+        state.review_states[field_id] = {
+            "field_id": field_id,
+            "evidence": evidence,
+            "evidence_units": sorted(_selector_units(evidence)),
+            "reason": reason,
+        }
+        return {
+            "ok": True,
+            "field_id": field_id,
+            "field_description": getattr(field, "description", "") or "",
+            "field": field_state or None,
+            "evidence": evidence,
+            "evidence_texts": evidence_texts,
+            "guidance": (
+                "This tool does not judge correctness. Re-read the field description, current value, "
+                "and bound evidence, then decide whether to keep the value, overwrite it with write_field, "
+                "or bind additional evidence."
+            ),
+        }
+
+    return _run_tool(
+        state,
+        "review_field",
+        {"field_id": field_id},
+        reason,
+        execute,
+    )
 
 
 def _submit_result(state: Any, *, reason: str = "") -> dict[str, Any]:
@@ -193,7 +306,6 @@ def validate_field_write(
     state: Any,
     field_id: str,
     value: Any,
-    evidence: list[dict[str, Any]],
     status: str,
 ) -> list[dict[str, Any]]:
     errors: list[dict[str, Any]] = []
@@ -206,7 +318,41 @@ def validate_field_write(
         type_error = validate_value_type(field, value)
         if type_error:
             errors.append({"field_id": field_id, "code": "TYPE_MISMATCH", "message": type_error, "current_value": value})
-        errors.extend({"field_id": field_id, **error} for error in state.document.validate_evidence(evidence))
+    return errors
+
+
+def validate_final_evidence_write(
+    state: Any,
+    field_id: str,
+    candidate_evidence: list[dict[str, Any]],
+    final_evidence: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    errors: list[dict[str, Any]] = []
+    candidate_units = _selector_units(candidate_evidence)
+    final_units = _selector_units(final_evidence)
+    if final_evidence:
+        errors.extend({"field_id": field_id, **error} for error in state.document.validate_evidence(final_evidence))
+    if errors:
+        return errors
+    if candidate_units:
+        review_state = state.review_states.get(field_id)
+        reviewed_units = set(tuple(item) for item in review_state.get("evidence_units", [])) if review_state else set()
+        if reviewed_units != candidate_units:
+            return [
+                {
+                    "field_id": field_id,
+                    "code": "REVIEW_REQUIRED",
+                    "message": "bound candidate evidence must be reviewed before write_field",
+                }
+            ]
+    if final_units and not final_units.issubset(candidate_units):
+        errors.append(
+            {
+                "field_id": field_id,
+                "code": "UNBOUND_FINAL_EVIDENCE",
+                "message": "final_evidence must be selected from evidence already bound to this field",
+            }
+        )
     return errors
 
 
@@ -274,6 +420,19 @@ def validate_enum_value(field: Any, value: Any) -> str | None:
     return validate_value_type(fake_field, value.get("value"))
 
 
+def _selector_units(evidence: list[dict[str, Any]] | None) -> set[tuple[str, str, str]]:
+    units: set[tuple[str, str, str]] = set()
+    for selector in evidence or []:
+        path = selector.get("path")
+        if not isinstance(path, str):
+            continue
+        for key in ("sentences", "items", "rows"):
+            values = selector.get(key)
+            if isinstance(values, list):
+                units.update((path, key, str(value)) for value in values)
+    return units
+
+
 def _run_tool(
     state: Any,
     tool_name: str,
@@ -337,6 +496,8 @@ __all__ = [
     "_read",
     "_anchors",
     "_query_table",
+    "_bind_evidence",
+    "_review_field",
     "_write_field",
     "_submit_result",
 ]

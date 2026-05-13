@@ -124,7 +124,9 @@ documents(filename + html) + task_spec
   -> section header 变成目录，paragraph/list/table 分别变成 .md/.list/.table 文件
   -> resolution_new.py 把 task fields、schema 说明和虚拟树工具交给 LangGraph tool-calling loop
   -> 模型用 tree/read/anchors/query_table 定位材料，并在每次主动动作里写用户可见 reason
-  -> 模型用 write_field(field_id, value, evidence, status, reason) 覆盖写入字段结果
+  -> 模型用 bind_evidence(field_id, evidence, reason) 先绑定字段候选证据
+  -> 如果字段有候选证据，模型必须先用 review_field(field_id, reason) 复看候选证据
+  -> 模型用 write_field(field_id, value, final_evidence, status, reason) 覆盖写入字段值和最终证据
   -> submit_result 内部做 schema、类型和 evidence selector 校验
   -> graph.py 按工具调用顺序输出 NDJSON 事件，最终用 result_completed 返回 fields[] 和 trace
 ```
@@ -137,7 +139,9 @@ documents(filename + html) + task_spec
 - `read(path, offset, limit, reason)`：读取 `.md/.list/.table` 文件；paragraph 返回纯正文，list/table 返回带 metadata 和编号的 Markdown。
 - `anchors(path, reason)`：只用于 `.md` paragraph，返回 `Sxxx` 句子编号和短 preview。
 - `query_table(path, sql, offset, limit, reason)`：只用于 `.table` 文件，在内存 SQLite 表 `data` 上执行安全 SELECT，并保留原始 `Rxxx` 行号。
-- `write_field(field_id, value, evidence, status, reason)`：对一个 schema 字段做可覆盖定案；数组字段也一次写入完整数组。
+- `bind_evidence(field_id, evidence, reason)`：给一个 schema 字段绑定 selector 候选证据，不提交字段值。
+- `review_field(field_id, reason)`：只读复看一个字段的 schema 描述、当前值和已绑定候选证据文本；有候选证据时写字段前必须调用。
+- `write_field(field_id, value, final_evidence, status, reason)`：对一个 schema 字段做可覆盖定案；`final_evidence` 必须从该字段候选证据中选择，数组字段也一次写入完整数组。
 - `submit_result(reason)`：内部校验当前字段缓冲区，成功返回最终结果，失败返回结构化错误供模型继续修正。
 
 paragraph 的证据 selector 使用 `{path, sentences:["S001"]}`，list 使用 `{path, items:["I001"]}`，table 使用 `{path, rows:["R001"]}`。`reason` 是用户可见动作说明，不是证据；证据文本必须能通过虚拟路径和文件内编号反查回原文。

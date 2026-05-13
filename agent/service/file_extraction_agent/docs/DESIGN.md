@@ -13,7 +13,9 @@
   -> 构建只读 semantic HTML virtual tree
   -> 模型用 tree/read 浏览文件、章节和段落
   -> 模型用 anchors 给 paragraph 取得句子编号，用 read/query_table 中的编号引用 list item 和 table row
-  -> 模型用 write_field 增量写入字段结果
+  -> 模型看到自己认为可能是字段证据的文本、列表项或表格行时，立刻用 bind_evidence 绑定 selector
+  -> 只要字段存在候选 evidence，模型写字段前必须用 review_field 复看候选证据
+  -> 模型用 write_field 提交字段值或 enum decision，并用 final_evidence 只保留真正有用的最终证据
   -> submit_result 内部按 schema 校验并返回最终结果或错误
 ```
 
@@ -76,7 +78,9 @@ tree(path="/", depth=3, reason)
 read(path, offset?, limit?, reason)
 anchors(path, reason)
 query_table(path, sql, offset?, limit?, reason)
-write_field(field_id, value, evidence, status?, reason)
+bind_evidence(field_id, evidence, reason)
+review_field(field_id, reason)
+write_field(field_id, value, final_evidence, status?, reason)
 submit_result(reason?)
 ```
 
@@ -202,15 +206,48 @@ showing: 1-2
 
 字段证据可以直接引用 query 结果里出现的 `Rxxx` 行编号。`query_table` 不是最终提交入口；它只帮助模型定位和阅读表格行。
 
-### `write_field`
+### `bind_evidence`
 
-用户 schema 放在模型上下文里。模型按照 schema 从材料中抽取字段，并通过结果缓冲区增量写入：
+`bind_evidence` 用来把已经读到的证据 selector 绑定到某个 schema 字段，但不提交字段值：
 
 ```text
-write_field(field_id, value, evidence, status?, reason)
+bind_evidence(field_id, evidence, reason)
 ```
 
-`write_field` 的语义是“用 value + evidence 对某个 schema 字段做一次可覆盖的字段定案”。它不是候选记录工具，也不是数组追加工具；如果同一字段被再次写入，最终以最后一次为准。数组字段也通过 `write_field` 一次写入完整数组。
+它解决的是“模型看到了可能有用的证据，但还没完全决定字段值或 enum 分类”的场景。模型读取 paragraph/list/table 后，只要认为当前文本、列表项或表格行可能是某个字段的证据，就应立刻调用 `bind_evidence` 记录 selector，不等字段值或 enum decision 最终确定；后续读到同一字段的更多证据时，再次调用会追加到该字段的 evidence buffer。
+
+`bind_evidence` 做即时校验：
+
+- `field_id` 必须存在于用户 schema。
+- `evidence` 必须使用合法的虚拟路径和文件内编号。
+- 校验通过后，工具会保存原始 selector，并同步生成只读的 `evidence_texts`。
+
+如果字段值已经通过 `write_field` 写过，后续 `bind_evidence` 只会更新该字段的候选 evidence buffer，并让已有 review snapshot 失效；它不会自动改写字段结果里的最终 evidence。模型需要重新 `review_field`，再用 `write_field` 覆盖字段值和 `final_evidence`。
+
+### `review_field`
+
+`review_field` 是只读的字段复核工具。它返回一个字段的 schema 描述、当前字段值、已绑定候选 evidence selector 和系统反查的 `evidence_texts`，帮助模型在写字段前重新判断“候选证据里哪些应该进入最终 evidence”。
+
+```text
+review_field(field_id, reason)
+  -> 校验 field_id 是否存在
+  -> 读取该字段当前 field buffer 和 evidence buffer
+  -> 返回 field description、current value/status、evidence、evidence_texts 和简短 guidance
+```
+
+`review_field` 不做自动判决，也不替模型打分。它只把模型自己已经绑定/写入的状态重新展示出来；模型复核后可以用 `write_field(... final_evidence ...)` 覆盖字段值，或继续 `bind_evidence` 补充候选证据。代码层面只使用一个通用规则：如果某字段有候选 evidence buffer，`write_field` 前必须先 `review_field`；如果没有候选 evidence，则不需要为了空证据机械 review。
+
+### `write_field`
+
+用户 schema 放在模型上下文里。模型按照 schema 从材料中抽取字段，并通过结果缓冲区增量写入字段值：
+
+```text
+write_field(field_id, value, final_evidence, status?, reason)
+```
+
+`write_field` 的语义是“用 value 和 final_evidence 对某个 schema 字段做一次可覆盖的字段定案”。它不是候选记录工具，也不是数组追加工具；如果同一字段被再次写入，最终以最后一次为准。数组字段也通过 `write_field` 一次写入完整数组。
+
+`final_evidence` 必须是该字段候选 evidence buffer 的子集。它让模型可以先用 `bind_evidence` 记录宽一点的候选证据，再在 `review_field` 之后只提交真正保留的 selector。真正保留指的是直接支撑提交值的 selector；只是同主题、背景、重复或弱相关的候选证据应当丢弃。没有最终证据时传 `final_evidence=[]`。
 
 `status` 默认为 `resolved`。字段确实无法从材料中抽到时，可以写成 `missing`，并让 `submit_result` 根据 schema 判断是否允许缺失。`failed` 只用于系统或工具层失败，不应用来表达文档未提及。
 
@@ -218,7 +255,8 @@ write_field(field_id, value, evidence, status?, reason)
 
 - `field_id` 必须存在于用户 schema。
 - `value` 必须是 JSON 可表示值。
-- `evidence` 必须使用合法的虚拟路径和文件内编号。
+- 如果字段有候选 evidence，必须已经对同一份候选 evidence 调过 `review_field`。
+- `final_evidence` 必须能反查到原文，并且不能包含未绑定到该字段的 selector。
 
 完整 schema 校验不在写入阶段完成，而是在 `submit_result` 内部统一执行。
 
@@ -343,11 +381,11 @@ tree/read
 anchors/read/query_table
   -> 给出 paragraph 句子编号、list item 编号和 table row 编号，说明字段凭什么成立
 
-write_field/submit_result
-  -> 让模型按 schema 写入并提交结果
+bind_evidence/review_field/write_field/submit_result
+  -> 让模型先绑定候选证据，有候选证据时先复看，再按 schema 写入字段值和 final_evidence 并提交结果
 ```
 
-resolution prompt 只要求模型在某个字段已有足够证据后及时 `write_field`，再继续处理无关字段；它不设置固定读写次数、读量预算或“读几次必须写一次”的工具节奏硬约束。
+resolution prompt 要求模型看到自己认为可能是字段证据的文本、列表项或表格行时立刻 `bind_evidence`，不要等字段值或 enum decision 最终确定后再绑定。只要某字段有候选 evidence，模型必须先 `review_field` 再 `write_field`；没有候选 evidence 的字段不需要空 review。`write_field` 只作为提交字段值和 `final_evidence` 的工具语义出现，不再用 prompt 催促模型“值够了就立刻提交”；它不设置固定读写次数、读量预算或“读几次必须写一次”的工具节奏硬约束。
 
 ## 证据归因
 
@@ -366,9 +404,15 @@ read(list_path)
 read(table_path) 或 query_table(table_path, sql)
   -> Markdown table 中直接显示 Rxxx row 编号
 
-write_field(field_id, value, evidence)
-  -> 字段值绑定到可反查的 path + Sxxx/Ixxx/Rxxx
+bind_evidence(field_id, evidence)
+  -> 候选证据绑定到可反查的 path + Sxxx/Ixxx/Rxxx
   -> 工具同步生成 evidence_texts，供回放和评测直接使用
+
+review_field(field_id)
+  -> 有候选证据时复看字段描述、当前字段值和 evidence_texts
+
+write_field(field_id, value, final_evidence)
+  -> 字段值使用筛选后的 final_evidence 完成定案
 ```
 
 这样可以避免三类问题：
@@ -379,7 +423,7 @@ write_field(field_id, value, evidence)
 
 证据文本必须能从 selector 反查回原文。模型可以用 `reason` 解释为什么使用该证据，但字段证据只能引用 `.md` 的 `Sxxx`、`.list` 的 `Ixxx` 或 `.table` 的 `Rxxx`。
 
-`write_field` 会在字段对象中保留原始 `evidence` selector，同时用 `HtmlDocument.evidence_texts()` 生成 `evidence_texts`。`evidence_texts` 是系统从 selector 反查出的只读文本，方便前端回放和实验 scorer 使用；它不是模型手写证据，也不作为模型可编辑输入。
+`bind_evidence` 会在字段候选 evidence buffer 中保留原始 `evidence` selector，同时用 `HtmlDocument.evidence_texts()` 生成 `evidence_texts`。`write_field` 输出字段对象时只带上 `final_evidence` 和对应的 `evidence_texts`。`evidence_texts` 是系统从 selector 反查出的只读文本，方便前端回放和实验 scorer 使用；它不是模型手写证据，也不作为模型可编辑输入。
 
 ## 结果形态
 

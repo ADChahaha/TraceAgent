@@ -29,17 +29,37 @@ class FakeStreamingModel:
                 },
             },
             {
-                "tool_name": "write_field",
+                "tool_name": "bind_evidence",
                 "arguments": {
                     "field_id": "founded_year",
-                    "value": 2020,
                     "evidence": [
                         {
                             "path": "/001-company-公司资料/001-概况/001-公司成立于2020年.md",
                             "sentences": ["S001"],
                         }
                     ],
-                    "reason": "S001 写明公司成立于2020年。",
+                    "reason": "看到 S001 写明公司成立年份，先绑定证据。",
+                },
+            },
+            {
+                "tool_name": "review_field",
+                "arguments": {
+                    "field_id": "founded_year",
+                    "reason": "复看成立年份候选证据。",
+                },
+            },
+            {
+                "tool_name": "write_field",
+                "arguments": {
+                    "field_id": "founded_year",
+                    "value": 2020,
+                    "final_evidence": [
+                        {
+                            "path": "/001-company-公司资料/001-概况/001-公司成立于2020年.md",
+                            "sentences": ["S001"],
+                        }
+                    ],
+                    "reason": "证据已绑定，提交成立年份。",
                 },
             },
             {
@@ -99,7 +119,7 @@ def test_run_extraction_graph_stream_yields_ndjson_events_and_final_result():
                     "text": "公司成立于2020年。",
                 }
             ],
-            "reason": "S001 写明公司成立于2020年。",
+            "reason": "证据已绑定，提交成立年份。",
         }
     ]
     assert [payload["seq"] for payload in payloads] == list(range(1, len(payloads) + 1))
@@ -113,7 +133,7 @@ def test_run_extraction_graph_stream_flushes_events_after_each_tool_call():
 
     assert first_event["type"] == "tool_started"
     assert first_event["tool"] == "tree"
-    assert len(model.calls) == 4
+    assert len(model.calls) == 6
 
 
 def test_map_state_to_result_returns_new_field_result_shape():
