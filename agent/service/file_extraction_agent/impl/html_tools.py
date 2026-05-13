@@ -79,12 +79,7 @@ def _tree(state: Any, path: str = "/", *, depth: int = 3, reason: str = "") -> d
         "tree",
         {"path": path, "depth": depth},
         reason,
-        lambda: {
-            "ok": True,
-            "path": path,
-            "depth": depth,
-            "text": state.document.tree_text(path, depth=depth),
-        },
+        lambda: _tree_result(state, path, depth),
     )
 
 
@@ -111,7 +106,11 @@ def _anchors(state: Any, path: str, *, reason: str = "") -> dict[str, Any]:
         "anchors",
         {"path": path},
         reason,
-        lambda: {"ok": True, "path": path, "anchors": state.document.paragraph_anchors(path)},
+        lambda: {
+            "ok": True,
+            "path": state.document.resolve_path(path),
+            "anchors": state.document.paragraph_anchors(path),
+        },
     )
 
 
@@ -149,8 +148,9 @@ def _bind_evidence(
         errors = [{"field_id": field_id, **error} for error in state.document.validate_evidence(evidence)]
         if errors:
             return {"ok": False, "errors": errors}
+        canonical_evidence = state.document.canonicalize_evidence(evidence)
         existing = state.evidence_states.get(field_id, {})
-        combined = [*(existing.get("evidence") or []), *evidence]
+        combined = [*(existing.get("evidence") or []), *canonical_evidence]
         evidence_texts = state.document.evidence_texts(combined)
         state.evidence_states[field_id] = {
             "field_id": field_id,
@@ -202,16 +202,17 @@ def _write_field(
     def execute() -> dict[str, Any]:
         evidence_state = state.evidence_states.get(field_id, {})
         candidate_evidence = evidence_state.get("evidence") or []
+        canonical_final_evidence = state.document.canonicalize_evidence(final_evidence)
         errors = validate_field_write(state, field_id, value, status)
-        errors.extend(validate_final_evidence_write(state, field_id, candidate_evidence, final_evidence))
+        errors.extend(validate_final_evidence_write(state, field_id, candidate_evidence, canonical_final_evidence))
         if errors:
             return {"ok": False, "errors": errors}
-        evidence_texts = state.document.evidence_texts(final_evidence)
+        evidence_texts = state.document.evidence_texts(canonical_final_evidence)
         field = {
             "field_id": field_id,
             "status": status,
             "value": value,
-            "evidence": final_evidence,
+            "evidence": canonical_final_evidence,
             "evidence_texts": evidence_texts,
             "reason": reason,
         }
@@ -302,6 +303,16 @@ def _submit_result(state: Any, *, reason: str = "") -> dict[str, Any]:
     return result
 
 
+def _tree_result(state: Any, path: str, depth: int) -> dict[str, Any]:
+    canonical_path = state.document.resolve_path(path)
+    return {
+        "ok": True,
+        "path": canonical_path,
+        "depth": depth,
+        "text": state.document.tree_text(canonical_path, depth=depth),
+    }
+
+
 def validate_field_write(
     state: Any,
     field_id: str,
@@ -365,6 +376,16 @@ def validate_and_build_result(state: Any) -> dict[str, Any]:
             continue
         if field.required and field_state.get("status") != "resolved":
             errors.append({"field_id": field.name, "code": "REQUIRED_MISSING", "message": "required field is not resolved"})
+            continue
+        if field_state.get("status") == "resolved" and not empty_evidence_allowed(field, field_state.get("value")):
+            if not _selector_units(field_state.get("evidence") or []):
+                errors.append(
+                    {
+                        "field_id": field.name,
+                        "code": "MISSING_FINAL_EVIDENCE",
+                        "message": "resolved non-null field must include final evidence",
+                    }
+                )
     if errors:
         return {"ok": False, "errors": errors}
     fields = [_field_with_evidence_texts(state, state.field_states[field.name]) for field in state.task_spec.fields if field.name in state.field_states]
@@ -418,6 +439,18 @@ def validate_enum_value(field: Any, value: Any) -> str | None:
         return "unknown enum variant"
     fake_field = type("Field", (), {"type": variant.type})()
     return validate_value_type(fake_field, value.get("value"))
+
+
+def empty_evidence_allowed(field: Any, value: Any) -> bool:
+    field_type = getattr(field, "type", "string")
+    if field_type == "null":
+        return True
+    if field_type != "enum" or not isinstance(value, dict):
+        return False
+    variant_name = value.get("variant")
+    variants = {variant.name: variant for variant in getattr(field, "variants", []) or []}
+    variant = variants.get(variant_name)
+    return getattr(variant, "type", None) == "null"
 
 
 def _selector_units(evidence: list[dict[str, Any]] | None) -> set[tuple[str, str, str]]:

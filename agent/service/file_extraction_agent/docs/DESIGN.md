@@ -69,6 +69,8 @@
 
 路径是模型可读的定位界面，不是内部唯一主键。内部仍应保存 `node_id`、源 HTML 节点、原始文件信息和必要的 source range，便于工具从路径反查原文。
 
+工具输入路径需要做轻量归一化：模型可能把树中显示的空格、中文或符号按 URL 规则写成 `%20`、`%E2%80%93` 这类 percent-encoded 片段。`tree/read/anchors/query_table/bind_evidence/write_field` 在查节点前先按原始路径查找，找不到时再 percent-decode 后查找；工具返回和结果 buffer 中保存的 evidence path 始终使用虚拟树里的 canonical raw path。
+
 ## 工具边界
 
 面向模型的最小工具集合：
@@ -247,7 +249,7 @@ write_field(field_id, value, final_evidence, status?, reason)
 
 `write_field` 的语义是“用 value 和 final_evidence 对某个 schema 字段做一次可覆盖的字段定案”。它不是候选记录工具，也不是数组追加工具；如果同一字段被再次写入，最终以最后一次为准。数组字段也通过 `write_field` 一次写入完整数组。
 
-`final_evidence` 必须是该字段候选 evidence buffer 的子集。它让模型可以先用 `bind_evidence` 记录宽一点的候选证据，再在 `review_field` 之后只提交真正保留的 selector。真正保留指的是直接支撑提交值的 selector；只是同主题、背景、重复或弱相关的候选证据应当丢弃。没有最终证据时传 `final_evidence=[]`。
+`final_evidence` 必须是该字段候选 evidence buffer 的子集。它让模型可以先用 `bind_evidence` 记录宽一点的候选证据，再在 `review_field` 之后只提交真正保留的 selector。真正保留指的是直接支撑提交值的 selector；只是同主题、背景、重复或弱相关的候选证据应当丢弃。只有 `null` 类型字段或 `null` enum variant 可以用 `final_evidence=[]` 表示“文档未提及/无最终证据”；非 `null` resolved 值必须在最终提交时带非空 `final_evidence`。
 
 `status` 默认为 `resolved`。字段确实无法从材料中抽到时，可以写成 `missing`，并让 `submit_result` 根据 schema 判断是否允许缺失。`failed` 只用于系统或工具层失败，不应用来表达文档未提及。
 
@@ -258,7 +260,7 @@ write_field(field_id, value, final_evidence, status?, reason)
 - 如果字段有候选 evidence，必须已经对同一份候选 evidence 调过 `review_field`。
 - `final_evidence` 必须能反查到原文，并且不能包含未绑定到该字段的 selector。
 
-完整 schema 校验不在写入阶段完成，而是在 `submit_result` 内部统一执行。
+完整 schema 校验不在写入阶段完成，而是在 `submit_result` 内部统一执行。`submit_result` 会读取最后一次 `write_field` 写入的字段值和 enum variant：如果字段是 `null` 类型或 enum variant 的 payload 类型是 `null`，允许空 `final_evidence`；其他 resolved 字段没有最终证据会返回 `MISSING_FINAL_EVIDENCE`，要求模型补证据或改成合法的空值/缺失表达。
 
 证据 selector 统一使用：
 

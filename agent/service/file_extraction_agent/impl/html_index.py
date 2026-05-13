@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 
 HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
@@ -51,6 +52,9 @@ class HtmlDocument:
     virtual_root: VirtualNode
     nodes_by_path: dict[str, VirtualNode]
     source_documents: list[SourceDocument]
+
+    def resolve_path(self, path: str) -> str:
+        return self._node(path).path
 
     def tree_text(self, path: str = "/", depth: int = 3) -> str:
         node = self._node(path)
@@ -130,12 +134,16 @@ class HtmlDocument:
                 errors.append({"index": index, "message": "evidence selector must be an object"})
                 continue
             path = selector.get("path")
-            if not isinstance(path, str) or path not in self.nodes_by_path:
+            if not isinstance(path, str):
                 errors.append({"index": index, "message": "unknown evidence path"})
                 continue
-            node = self.nodes_by_path[path]
+            try:
+                node = self._node(path)
+            except ValueError:
+                errors.append({"index": index, "message": "unknown evidence path"})
+                continue
             if node.kind == "paragraph":
-                errors.extend(validate_selector_values(index, selector, "sentences", [a["id"] for a in self.paragraph_anchors(path)]))
+                errors.extend(validate_selector_values(index, selector, "sentences", [a["id"] for a in self.paragraph_anchors(node.path)]))
             elif node.kind == "list":
                 errors.extend(validate_selector_values(index, selector, "items", [item["id"] for item in node.list_items]))
             elif node.kind == "table":
@@ -145,10 +153,28 @@ class HtmlDocument:
                 errors.append({"index": index, "message": "evidence path must point to a file"})
         return errors
 
+    def canonicalize_evidence(self, evidence: Any) -> Any:
+        if not isinstance(evidence, list):
+            return evidence
+        canonicalized: list[Any] = []
+        for selector in evidence:
+            if not isinstance(selector, dict):
+                canonicalized.append(selector)
+                continue
+            path = selector.get("path")
+            if not isinstance(path, str):
+                canonicalized.append(selector)
+                continue
+            try:
+                canonicalized.append({**selector, "path": self.resolve_path(path)})
+            except ValueError:
+                canonicalized.append(selector)
+        return canonicalized
+
     def evidence_texts(self, evidence: list[dict[str, Any]]) -> list[dict[str, str]]:
         texts: list[dict[str, str]] = []
         for selector in evidence:
-            node = self.nodes_by_path[selector["path"]]
+            node = self._node(selector["path"])
             if node.kind == "paragraph":
                 sentences = {item["id"]: item["preview"] for item in self.paragraph_anchors(node.path)}
                 for sentence_id in selector.get("sentences", []) or []:
@@ -164,10 +190,15 @@ class HtmlDocument:
         return texts
 
     def _node(self, path: str) -> VirtualNode:
-        try:
-            return self.nodes_by_path[normalize_path(path)]
-        except KeyError as exc:
-            raise ValueError(f"unknown path: {path}") from exc
+        normalized = normalize_path(path)
+        node = self.nodes_by_path.get(normalized)
+        if node is not None:
+            return node
+        decoded = normalize_path(unquote(normalized))
+        node = self.nodes_by_path.get(decoded)
+        if node is not None:
+            return node
+        raise ValueError(f"unknown path: {path}")
 
     def _append_tree_lines(
         self,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from service.file_extraction_agent.impl.html_index import build_html_document
 from service.file_extraction_agent.impl.html_state import build_graph_state
 from service.file_extraction_agent.impl.html_tools import (
@@ -44,6 +46,55 @@ def _state():
                 {"name": "service_items", "type": "list[string]", "required": False},
                 {"name": "deposit", "type": "number", "required": False},
                 {"name": "missing_required", "type": "string", "required": True},
+            ]
+        },
+    )
+    return build_graph_state(extraction_input)
+
+
+def _enum_state():
+    extraction_input = build_graph_input(
+        documents=[
+            {
+                "filename": "contract.html",
+                "html": """
+                <h1>合同</h1>
+                <h2>保密条款</h2>
+                <p>接收方只能为项目目的使用保密信息。协议未提及反向工程。</p>
+                """,
+            }
+        ],
+        task_spec={
+            "fields": [
+                {
+                    "name": "limited_use_decision",
+                    "type": "enum",
+                    "required": True,
+                    "variants": [
+                        {"name": "Entailment", "type": "list[string]"},
+                        {"name": "NotMentioned", "type": "null"},
+                    ],
+                }
+            ]
+        },
+    )
+    return build_graph_state(extraction_input)
+
+
+def _number_state():
+    extraction_input = build_graph_input(
+        documents=[
+            {
+                "filename": "company.html",
+                "html": """
+                <h1>公司资料</h1>
+                <p>公司成立于2020年。</p>
+                """,
+            }
+        ],
+        task_spec={
+            "fields": [
+                {"name": "founded_year", "type": "number", "required": True},
             ]
         },
     )
@@ -105,6 +156,49 @@ def test_tree_read_anchors_and_query_record_reasoned_events():
         "tool_completed",
     ]
     assert state.events[0]["reason"] == "先查看输入文档。"
+
+
+def test_virtual_tree_tools_accept_percent_encoded_paths_and_return_canonical_paths():
+    state = _state()
+    paths = _paths(state)
+    encoded_section = quote("/001-company-公司资料/001-概况", safe="/")
+    encoded_paragraph = quote(paths["paragraph"], safe="/")
+    encoded_table = quote(paths["table"], safe="/")
+
+    tree_result = _tree(state, encoded_section, depth=1, reason="展开被 URL 编码过的章节路径。")
+    read_result = _read(state, encoded_paragraph, reason="读取被 URL 编码过的段落路径。")
+    anchors_result = _anchors(state, encoded_paragraph, reason="给被 URL 编码过的段落路径取句子编号。")
+    query_result = _query_table(
+        state,
+        encoded_table,
+        'SELECT "项目", "金额" FROM data WHERE "项目" = \'押金\'',
+        reason="查询被 URL 编码过的表格路径。",
+    )
+    bound = _bind_evidence(
+        state,
+        "founded_year",
+        [{"path": encoded_paragraph, "sentences": ["S001"]}],
+        reason="用被 URL 编码过的路径绑定证据。",
+    )
+    _review_field(state, "founded_year", reason="复看 canonical 化后的证据。")
+    written = _write_field(
+        state,
+        "founded_year",
+        2020,
+        final_evidence=[{"path": encoded_paragraph, "sentences": ["S001"]}],
+        status="resolved",
+        reason="用被 URL 编码过的路径提交最终证据。",
+    )
+
+    assert tree_result["ok"] is True
+    assert tree_result["path"] == "/001-company-公司资料/001-概况"
+    assert "001-公司成立于2020年。总部位于上海.md" in tree_result["text"]
+    assert read_result["path"] == paths["paragraph"]
+    assert anchors_result["path"] == paths["paragraph"]
+    assert query_result["path"] == paths["table"]
+    assert "| R002 | 押金 | 500 |" in query_result["text"]
+    assert bound["evidence"] == [{"path": paths["paragraph"], "sentences": ["S001"]}]
+    assert written["field"]["evidence"] == [{"path": paths["paragraph"], "sentences": ["S001"]}]
 
 
 def test_bind_evidence_accumulates_selectors_and_write_field_submits_value():
@@ -245,6 +339,54 @@ def test_write_field_without_candidate_evidence_does_not_require_review():
     assert written["ok"] is True
     assert written["field"]["evidence"] == []
     assert written["field"]["evidence_texts"] == []
+
+
+def test_submit_result_requires_final_evidence_for_resolved_non_null_values():
+    state = _number_state()
+
+    written = _write_field(
+        state,
+        "founded_year",
+        2020,
+        final_evidence=[],
+        status="resolved",
+        reason="先允许写入草稿，最终提交时再校验证据。",
+    )
+    result = _submit_result(state, reason="提交时拒绝非 null 字段空证据。")
+
+    assert written["ok"] is True
+    assert result["ok"] is False
+    assert result["errors"][0]["code"] == "MISSING_FINAL_EVIDENCE"
+
+
+def test_submit_result_allows_empty_final_evidence_for_null_enum_variant_only():
+    state = _enum_state()
+
+    non_null_written = _write_field(
+        state,
+        "limited_use_decision",
+        {"variant": "Entailment", "value": ["接收方只能为项目目的使用保密信息。"]},
+        final_evidence=[],
+        status="resolved",
+        reason="先写入非 null enum 草稿。",
+    )
+    blocked = _submit_result(state, reason="提交时拒绝非 null enum 空证据。")
+    written = _write_field(
+        state,
+        "limited_use_decision",
+        {"variant": "NotMentioned", "value": None},
+        final_evidence=[],
+        status="resolved",
+        reason="null enum variant 表示未提及，可以空证据提交。",
+    )
+    completed = _submit_result(state, reason="null enum variant 可以空证据提交。")
+
+    assert non_null_written["ok"] is True
+    assert blocked["ok"] is False
+    assert blocked["errors"][0]["code"] == "MISSING_FINAL_EVIDENCE"
+    assert written["ok"] is True
+    assert written["field"]["evidence"] == []
+    assert completed["ok"] is True
 
 
 def test_review_field_returns_current_value_description_and_bound_evidence():

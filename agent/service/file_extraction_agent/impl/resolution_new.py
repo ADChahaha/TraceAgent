@@ -35,7 +35,8 @@ def build_resolution_messages(state: Any) -> list[Any]:
             "write_field submits a field value with final_evidence selected from that field's bound candidate evidence. "
             "final_evidence should include only selectors that are genuinely useful for the submitted value; "
             "drop merely topical, background, duplicate, or weakly related candidate evidence. "
-            "If there is no final evidence for the field, pass final_evidence=[]. "
+            "Only null-typed fields or null enum variants may submit final_evidence=[]. "
+            "For any resolved non-null value or non-null enum variant, submit_result requires non-empty final_evidence. "
             "Mark a field missing with write_field when the document does not mention it. "
             "Call submit_result after all fields have been written. If submit_result returns errors, fix fields and submit again."
         )

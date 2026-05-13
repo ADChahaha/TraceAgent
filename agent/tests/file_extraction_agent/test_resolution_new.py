@@ -46,6 +46,8 @@ def test_resolution_messages_describe_virtual_tree_tools_without_plan():
     assert "write_field submits a field value with final_evidence" in content
     assert "final_evidence should include only selectors that are genuinely useful for the submitted value" in content
     assert "drop merely topical, background, duplicate, or weakly related candidate evidence" in content
+    assert "Only null-typed fields or null enum variants may submit final_evidence=[]" in content
+    assert "submit_result requires non-empty final_evidence" in content
     assert "once the value or enum decision is ready" not in content
     assert "maximum number of reads" not in content.lower()
     assert "read budget" not in content.lower()
