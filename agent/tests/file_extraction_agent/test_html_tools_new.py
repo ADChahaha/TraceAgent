@@ -1,1361 +1,201 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from service.file_extraction_agent.impl.html_index import build_html_document
+from service.file_extraction_agent.impl.html_state import build_graph_state
 from service.file_extraction_agent.impl.html_tools import (
-    build_tools,
-    _finish,
-    _overview,
-    _paragraph_extraction,
-    _preview_inline_evidence,
-    _read_block_range,
+    _anchors,
     _query_table,
-    _read_blocks,
-    _read_element,
-    _read_list,
-    _read_section,
-    _search_elements,
-    _set_field,
-    _table_extraction,
-    _update_soft_plan,
+    _read,
+    _submit_result,
+    _tree,
+    _write_field,
+    build_tools,
 )
+from service.file_extraction_agent.input_adapter import build_graph_input
 
 
 def _state():
-    long_notice = "这是完整通知正文，" + "需要保留全部文字用于模型判断。" * 12
-    html = """
-    <h2 id="dp-h2-1">通知</h2>
-    <p id="dp-p-1">联系人：李老师 电话：12345</p>
-    <p id="dp-p-long">{long_notice}</p>
-    <h3 id="dp-h3-1">名单</h3>
-    <p id="dp-p-2">名单如下。</p>
-    <ul id="dp-ul-1">
-      <li id="dp-li-1">第一条很长很长很长很长很长很长很长很长很长很长很长很长</li>
-      <li id="dp-li-2">第二条</li>
-      <li id="dp-li-3">第三条</li>
-      <li id="dp-li-4">第四条</li>
-    </ul>
-    <table id="dp-table-1">
-      <caption id="dp-caption-1">学生名单</caption>
-      <tr id="dp-tr-1"><th>姓名</th><th>学院</th></tr>
-      <tr id="dp-tr-2"><td>张三</td><td>计算机学院</td></tr>
-      <tr id="dp-tr-3"><td>李四</td><td>自动化学院</td></tr>
-    </table>
-    """.format(long_notice=long_notice)
-    return SimpleNamespace(
-        document=build_html_document(html),
-        task_spec=SimpleNamespace(
-            fields=[
-                SimpleNamespace(name="student_name", type="string", required=True),
-                SimpleNamespace(name="contact_phone", type="string", required=False),
+    extraction_input = build_graph_input(
+        documents=[
+            {
+                "filename": "company.html",
+                "html": """
+                <h1 id="title">公司资料</h1>
+                <h2 id="summary">概况</h2>
+                <p id="p1">公司成立于2020年。总部位于上海。</p>
+                <ul id="list1">
+                  <li id="li1">提供系统维护</li>
+                  <li id="li2">提供数据备份</li>
+                </ul>
+                <table id="table1">
+                  <caption id="cap1">费用明细</caption>
+                  <tr id="tr0"><th>项目</th><th>金额</th></tr>
+                  <tr id="tr1"><td>服务费</td><td>1000</td></tr>
+                  <tr id="tr2"><td>押金</td><td>500</td></tr>
+                </table>
+                """,
+            }
+        ],
+        task_spec={
+            "fields": [
+                {"name": "founded_year", "type": "number", "required": True},
+                {"name": "service_items", "type": "list[string]", "required": False},
+                {"name": "deposit", "type": "number", "required": False},
+                {"name": "missing_required", "type": "string", "required": True},
             ]
-        ),
-        field_states={},
-        actions=[],
-        observed_evidence_ids=set(),
-        soft_plan=[],
-        plan_statuses={},
-    )
-
-
-def _mixed_outline_state():
-    html = """
-    <section id="dp-page-1">
-      <h1 id="dp-h1-1">合同总则</h1>
-      <p id="dp-p-1">前言段落，说明合同背景。</p>
-      <table id="dp-table-1">
-        <caption id="dp-caption-1">学生名单</caption>
-        <tr id="dp-tr-1"><th>姓名</th><th>学院</th></tr>
-        <tr id="dp-tr-2"><td>张三</td><td>计算机学院</td></tr>
-      </table>
-      <p id="dp-p-2">第二段正文，继续说明条款。</p>
-      <ul id="dp-ul-1">
-        <li id="dp-li-1">第一项</li>
-        <li id="dp-li-2">第二项</li>
-        <li id="dp-li-3">第三项</li>
-      </ul>
-      <h2 id="dp-h2-1">1. 定义</h2>
-      <p id="dp-p-3">定义条款正文。</p>
-    </section>
-    """
-    return SimpleNamespace(
-        document=build_html_document(html),
-        task_spec=SimpleNamespace(
-            fields=[SimpleNamespace(name="student_name", type="string", required=True)]
-        ),
-        field_states={},
-        actions=[],
-        observed_evidence_ids=set(),
-        soft_plan=[],
-        plan_statuses={},
-    )
-
-
-def _list_state():
-    state = _state()
-    state.task_spec.fields.append(
-        SimpleNamespace(name="student_names", type="list[string]", required=True)
-    )
-    return state
-
-
-def _enum_state():
-    state = _state()
-    state.task_spec.fields.append(
-        SimpleNamespace(
-            name="decision",
-            type="enum",
-            required=True,
-            variants=[
-                SimpleNamespace(name="Entailment", type="null"),
-                SimpleNamespace(name="Contradiction", type="null"),
-                SimpleNamespace(name="Missing", type="null"),
-                SimpleNamespace(name="Rationale", type="string"),
-            ],
-        )
-    )
-    return state
-
-
-def _mark_list_evidence_observed(state):
-    _table_extraction(
-        state,
-        "dp-table-1",
-        "SELECT 姓名 FROM data WHERE 学院 = '计算机学院'",
-    )
-
-
-def _large_table_state(row_count: int = 40):
-    rows = "\n".join(
-        f'<tr id="dp-big-tr-{index}"><td>学生{index}</td><td>学院{index % 3}</td></tr>'
-        for index in range(1, row_count + 1)
-    )
-    html = f"""
-    <h2 id="dp-big-h2-1">大表</h2>
-    <table id="dp-big-table-1">
-      <caption id="dp-big-caption-1">大名单</caption>
-      <tr id="dp-big-tr-0"><th>姓名</th><th>学院</th></tr>
-      {rows}
-    </table>
-    """
-    state = _state()
-    state.document = build_html_document(html)
-    return state
-
-
-def _long_section_state():
-    paragraphs = "\n".join(
-        f'<p id="dp-long-p-{index}">{"超长章节正文" * 120}</p>'
-        for index in range(1, 90)
-    )
-    html = f"""
-    <h2 id="dp-long-h2-1">超长章节</h2>
-    {paragraphs}
-    """
-    state = _state()
-    state.document = build_html_document(html)
-    return state
-
-
-def _risky_table_state():
-    html = """
-    <h2 id="dp-risk-h2-1">作品名单</h2>
-    <table id="dp-risk-table-1">
-      <caption id="dp-risk-caption-1">作品替代名单</caption>
-      <tr id="dp-risk-tr-0"><th>序号</th><th>作品类型</th><th>论文题目</th></tr>
-      <tr id="dp-risk-tr-1"><td>1</td><td>学术论文</td><td>论文 A</td></tr>
-      <tr id="dp-risk-tr-2"><td>2</td><td></td><td>论文 B</td></tr>
-      <tr id="dp-risk-tr-3"><td>3</td><td>学术 论文</td><td>论文 C</td></tr>
-      <tr id="dp-risk-tr-4"><td>4</td><td>大学生创新创业项目成果</td><td>项目 D</td></tr>
-    </table>
-    """
-    state = _state()
-    state.document = build_html_document(html)
-    return state
-
-
-def _sparse_label_table_state():
-    html = """
-    <h2 id="dp-dorm-h2-1">文明模范寝室</h2>
-    <table id="dp-dorm-table-1">
-      <caption id="dp-dorm-caption-1">文明模范寝室</caption>
-      <tr id="dp-dorm-tr-0"><th>楼栋</th><th>房间</th><th>模范/文明</th></tr>
-      <tr id="dp-dorm-tr-1"><td>18栋</td><td>101</td><td></td></tr>
-      <tr id="dp-dorm-tr-2"><td>18栋</td><td>106</td><td>模范寝室</td></tr>
-      <tr id="dp-dorm-tr-3"><td>18栋</td><td>212</td><td>文明寝室</td></tr>
-      <tr id="dp-dorm-tr-4"><td>18栋</td><td>214</td><td>文明寝室</td></tr>
-      <tr id="dp-dorm-tr-5"><td>18栋</td><td>215</td><td></td></tr>
-    </table>
-    """
-    state = _state()
-    state.document = build_html_document(html)
-    return state
-
-
-def _many_blank_table_state():
-    blank_rows = "\n".join(
-        f'<tr id="dp-many-blank-tr-{index}"><td>{index}</td><td></td></tr>'
-        for index in range(1, 13)
-    )
-    html = f"""
-    <h2 id="dp-many-blank-h2-1">空值表</h2>
-    <table id="dp-many-blank-table-1">
-      <tr id="dp-many-blank-tr-0"><th>序号</th><th>标签</th></tr>
-      {blank_rows}
-      <tr id="dp-many-blank-tr-13"><td>13</td><td>有效</td></tr>
-    </table>
-    """
-    state = _state()
-    state.document = build_html_document(html)
-    return state
-
-
-def test_overview_returns_document_tree():
-    state = _state()
-    result = _overview(state)
-
-    assert result["sections"] == [
-        {
-            "section_id": "dp-h2-1",
-            "title": "通知",
-            "level": 2,
-            "block_count": 0,
-            "subsections": [],
         },
-        {
-            "section_id": "dp-h3-1",
-            "title": "名单",
-            "level": 3,
-            "block_count": 0,
-            "subsections": [],
-        },
-    ]
-    assert "tree" not in result
-    assert state.actions[-1]["tool_name"] == "overview"
-
-
-def test_overview_exposes_mixed_dom_items_in_dom_order():
-    state = _mixed_outline_state()
-    result = _overview(state)
-
-    items = result["items"]
-    assert [item["item_id"] for item in items] == [
-        "dp-page-1",
-        "dp-h1-1",
-        "dp-p-1",
-        "dp-table-1",
-        "dp-p-2",
-        "dp-ul-1",
-        "dp-h2-1",
-        "dp-p-3",
-    ]
-    assert items[0]["type"] == "SECTION"
-    assert items[0]["tag"] == "section"
-    assert items[0]["read_with"] == "read_blocks"
-    assert items[0]["parent_section_id"] == ""
-    assert items[1]["type"] == "TITLE"
-    assert items[1]["read_with"] == "read_section"
-    assert items[2]["type"] == "TEXT"
-    assert items[2]["read_with"] == "read_blocks"
-    assert items[2]["parent_section_id"] == ""
-    assert items[2]["preview"] == "前言段落，说明合同背景。"
-    assert items[3]["type"] == "TABLE"
-    assert items[3]["read_with"] == "query_table"
-    assert items[3]["block_offset"] == 0
-    assert items[3]["columns"] == ["姓名", "学院"]
-    assert items[3]["row_count"] == 1
-    assert items[5]["type"] == "LIST"
-    assert items[5]["read_with"] == "read_list"
-    assert items[5]["block_offset"] == 0
-    assert items[5]["item_count"] == 3
-    assert items[5]["preview"] == ["第一项", "第二项", "第三项"]
-    assert items[6]["type"] == "SECTION_HEADER"
-    assert items[6]["read_with"] == "read_section"
-    assert items[7]["preview"] == "定义条款正文。"
-
-
-def test_read_element_returns_text_element():
-    result = _read_element(_state(), "dp-p-1")
-
-    assert result["id"] == "dp-p-1"
-    assert result["type"] == "TEXT"
-    assert result["html"] == '<text id="dp-p-1">联系人：李老师 电话：12345</text>'
-    assert result["evidence_ids"] == ["dp-p-1"]
-
-
-def test_read_element_table_returns_header_only():
-    result = _read_element(_state(), "dp-table-1")
-
-    assert result["id"] == "dp-table-1"
-    assert result["type"] == "TABLE"
-    assert result["html"] == (
-        '<table-ref id="dp-table-1" label="学生名单" rows="2" header-row-id="dp-tr-1" '
-        'columns="姓名 | 学院" />'
     )
-    assert "double quotes" in result["sql_hint"]
-    assert "论文题目" not in result["sql_hint"]
-    assert "作品类型" not in result["sql_hint"]
-    assert "学术论文" not in result["sql_hint"]
-    assert result["evidence_ids"] == ["dp-table-1"]
-    assert "rows" not in result
+    return build_graph_state(extraction_input)
 
 
-def test_read_section_does_not_read_sibling_blocks():
-    result = _read_section(_state(), "dp-h2-1")
-
-    assert result["section_id"] == "dp-h2-1"
-    assert result["title"] == "通知"
-    assert result["blocks"] == []
-    assert result["evidence_ids"] == []
-
-
-def test_read_blocks_reads_leaf_block_by_selected_index():
-    state = _state()
-
-    result = _read_blocks(state, "dp-p-1", indexes=[0], reason="读取联系人段落")
-
-    assert result["section_id"] == "dp-p-1"
-    assert result["indexes"] == [0]
-    assert [block["offset"] for block in result["blocks"]] == [0]
-    assert result["blocks"][0]["html"] == '<text id="dp-p-1">联系人：李老师 电话：12345</text>'
-    assert result["evidence_ids"] == ["dp-p-1"]
-    assert state.observed_evidence_ids == {"dp-p-1"}
-    assert state.actions[-1]["args"]["indexes"] == [0]
-
-
-def test_read_blocks_returns_list_and_table_refs_without_expanding_rows():
-    state = _mixed_outline_state()
-
-    result = _read_blocks(state, "dp-page-1", indexes=[2, 4], reason="查看名单结构")
-
-    assert result["blocks"][0]["html"] == (
-        '<table-ref id="dp-table-1" label="学生名单" rows="1" header-row-id="dp-tr-1" columns="姓名 | 学院" />'
-    )
-    assert result["blocks"][1]["html"].startswith('<list-ref id="dp-ul-1" items="3">')
-    assert '<item-ref id="dp-li-1">' in result["blocks"][1]["html"]
-    assert result["evidence_ids"] == ["dp-table-1", "dp-ul-1"]
-
-
-def test_read_blocks_supports_section_scopes_and_leaf_block_ids():
-    state = _mixed_outline_state()
-
-    section_scope = _read_blocks(state, "dp-page-1", indexes=[1, 2, 3], reason="读取页面正文")
-    assert [block["block_id"] for block in section_scope["blocks"]] == ["dp-p-1", "dp-table-1", "dp-p-2"]
-    assert section_scope["blocks"][0]["html"] == '<text id="dp-p-1">前言段落，说明合同背景。</text>'
-    assert section_scope["blocks"][1]["html"].startswith('<table-ref id="dp-table-1"')
-    assert section_scope["blocks"][2]["html"] == '<text id="dp-p-2">第二段正文，继续说明条款。</text>'
-    assert section_scope["evidence_ids"] == ["dp-p-1", "dp-table-1", "dp-p-2"]
-
-    leaf_scope = _read_blocks(state, "dp-p-3", indexes=[0], reason="读取单段正文")
-    assert leaf_scope["section_id"] == "dp-p-3"
-    assert leaf_scope["indexes"] == [0]
-    assert [block["block_id"] for block in leaf_scope["blocks"]] == ["dp-p-3"]
-    assert leaf_scope["blocks"][0]["html"] == '<text id="dp-p-3">定义条款正文。</text>'
-    assert leaf_scope["evidence_ids"] == ["dp-p-3"]
-
-
-def test_read_blocks_reads_non_contiguous_selected_indexes():
-    state = _mixed_outline_state()
-
-    result = _read_blocks(state, "dp-page-1", indexes=[1, 3], reason="只读取两个非连续正文块")
-
-    assert result["section_id"] == "dp-page-1"
-    assert result["indexes"] == [1, 3]
-    assert [block["block_id"] for block in result["blocks"]] == ["dp-p-1", "dp-p-2"]
-    assert result["evidence_ids"] == ["dp-p-1", "dp-p-2"]
-    assert state.actions[-1]["tool_name"] == "read_blocks"
-    assert state.actions[-1]["args"]["indexes"] == [1, 3]
-
-
-def test_read_block_range_reads_contiguous_window():
-    state = _mixed_outline_state()
-
-    result = _read_block_range(
-        state,
-        "dp-page-1",
-        start_index=1,
-        count=3,
-        reason="连续阅读前言、表格和第二段",
-    )
-
-    assert result["section_id"] == "dp-page-1"
-    assert result["start_index"] == 1
-    assert result["count"] == 3
-    assert result["indexes"] == [1, 2, 3]
-    assert [block["block_id"] for block in result["blocks"]] == ["dp-p-1", "dp-table-1", "dp-p-2"]
-    assert result["blocks"][1]["html"].startswith('<table-ref id="dp-table-1"')
-    assert result["evidence_ids"] == ["dp-p-1", "dp-table-1", "dp-p-2"]
-    assert state.observed_evidence_ids == {"dp-p-1", "dp-table-1", "dp-p-2"}
-    assert state.actions[-1]["tool_name"] == "read_block_range"
-    assert state.actions[-1]["args"] == {
-        "section_id": "dp-page-1",
-        "start_index": 1,
-        "count": 3,
-        "reason": "连续阅读前言、表格和第二段",
+def _paths(state):
+    return {
+        "paragraph": "/001-company-公司资料/001-概况/001-公司成立于2020年。总部位于上海.md",
+        "list": "/001-company-公司资料/001-概况/002-提供系统维护.list",
+        "table": "/001-company-公司资料/001-概况/003-费用明细.table",
     }
 
 
-def test_read_block_range_rejects_invalid_range_arguments():
-    state = _mixed_outline_state()
-
-    bad_start = _read_block_range(state, "dp-page-1", start_index=-1, count=2, reason="负 start")
-    bad_count = _read_block_range(state, "dp-page-1", start_index=1, count=0, reason="零 count")
-    out_of_range = _read_block_range(state, "dp-page-1", start_index=99, count=2, reason="越界 start")
-
-    assert bad_start == {"ok": False, "error": "start_index must be a non-negative integer"}
-    assert bad_count == {"ok": False, "error": "count must be a positive integer"}
-    assert out_of_range == {"ok": False, "error": "start_index outside scope: 99", "block_count": 7}
-    assert state.actions[-3]["tool_name"] == "read_block_range"
-    assert state.actions[-3]["args"]["start_index"] == -1
-    assert state.actions[-1]["args"]["start_index"] == 99
-
-
-def test_read_blocks_rejects_invalid_indexes():
-    state = _state()
-
-    empty = _read_blocks(state, "dp-h2-1", indexes=[], reason="空 index")
-    negative = _read_blocks(state, "dp-h2-1", indexes=[-1], reason="负 index")
-    out_of_range = _read_blocks(state, "dp-h2-1", indexes=[99], reason="越界 index")
-    non_integer = _read_blocks(state, "dp-h2-1", indexes=["abc"], reason="非整数 index")
-
-    assert empty == {"ok": False, "error": "indexes must be a non-empty list"}
-    assert negative == {"ok": False, "error": "index outside scope: -1", "block_count": 0}
-    assert out_of_range == {"ok": False, "error": "index outside scope: 99", "block_count": 0}
-    assert non_integer == {"ok": False, "error": "indexes must contain integers"}
-    assert state.actions[-4]["args"]["indexes"] == []
-    assert state.actions[-1]["args"]["indexes"] == ["abc"]
-
-
-def test_read_list_paginates_list_items():
-    state = _mixed_outline_state()
-
-    result = _read_list(state, "dp-page-1", block_offset=4, item_offset=1, number=2, reason="读取名单列表")
-
-    assert result["section_id"] == "dp-page-1"
-    assert result["block_offset"] == 4
-    assert result["list_id"] == "dp-ul-1"
-    assert [item["item_offset"] for item in result["items"]] == [1, 2]
-    assert result["items"][0]["item_id"] == "dp-li-2"
-    assert result["items"][0]["html"] == '<item id="dp-li-2">第二项</item>'
-    assert result["evidence_ids"] == ["dp-ul-1", "dp-li-2", "dp-li-3"]
-    assert state.observed_evidence_ids == {"dp-ul-1", "dp-li-2", "dp-li-3"}
-
-
-def test_read_list_uses_leaf_list_id_with_zero_offset():
-    state = _mixed_outline_state()
-
-    result = _read_list(
-        state,
-        "dp-ul-1",
-        block_offset=0,
-        item_offset=1,
-        number=2,
-        reason="直接读取 overview 暴露的顶层列表 id",
-    )
-
-    assert result["section_id"] == "dp-ul-1"
-    assert result["block_offset"] == 0
-    assert result["list_id"] == "dp-ul-1"
-    assert [item["item_id"] for item in result["items"]] == ["dp-li-2", "dp-li-3"]
-    assert result["evidence_ids"] == ["dp-ul-1", "dp-li-2", "dp-li-3"]
-    assert state.observed_evidence_ids == {"dp-ul-1", "dp-li-2", "dp-li-3"}
-
-
-def test_search_elements_returns_paragraphs_and_observes_evidence():
-    state = _state()
-
-    result = _search_elements(state, "联系人", limit=5, reason="定位联系人字段")
-
-    assert result["query"] == "联系人"
-    assert result["match_count"] == 1
-    assert result["matches"][0]["element_id"] == "dp-p-1"
-    assert result["matches"][0]["type"] == "TEXT"
-    assert result["matches"][0]["html"] == '<text id="dp-p-1">联系人：李老师 电话：12345</text>'
-    assert result["matches"][0]["evidence_ids"] == ["dp-p-1"]
-    assert result["matches"][0]["text_chars"] == len("联系人：李老师 电话：12345")
-    assert state.observed_evidence_ids == {"dp-p-1"}
-    assert state.actions[-1]["tool_name"] == "search_elements"
-
-
-def test_search_elements_excludes_page_level_aggregate_text():
-    state = _state()
-    state.document = build_html_document(
-        """
-        <p id="page_001">Page 1 联系人：整页聚合文本，不应被 search_elements 返回。</p>
-        <p id="p001_b001">联系人：李老师 电话：12345</p>
-        <h2 id="p001_h001">联系人安排</h2>
-        """
-    )
-
-    result = _search_elements(state, "联系人", limit=10, reason="定位联系人字段")
-
-    element_ids = [match["element_id"] for match in result["matches"]]
-    assert "page_001" not in element_ids
-    assert element_ids == ["p001_b001", "p001_h001"]
-    assert state.observed_evidence_ids == {"p001_b001", "p001_h001"}
-
-
-def test_search_elements_result_can_be_used_as_evidence():
-    state = _state()
-    _search_elements(state, "联系人", limit=5, reason="定位联系人字段")
-    preview = _preview_inline_evidence(
-        state,
-        "dp-p-1",
-        start_index=0,
-        count=5,
-        reason="把联系人段落细化为字段证据",
-    )
-
-    result = _set_field(
-        state,
-        "contact_phone",
-        "12345",
-        [preview["inline_evidence"][0]["inline_id"]],
-        "resolved",
-        None,
-    )
-
-    assert result["ok"] is True
-    assert state.field_states["contact_phone"]["evidence_ids"] == [
-        "dp-p-1::inline-0"
-    ]
-
-
-def test_table_extraction_selects_rows_with_evidence_ids():
-    result = _table_extraction(
-        _state(),
-        "dp-table-1",
-        "SELECT 姓名 FROM data WHERE 学院 = '计算机学院'",
-    )
-
-    assert result["rows"] == [
-        {
-            "row_id": "dp-tr-2",
-            "values": {"姓名": "张三"},
-            "evidence_ids": ["dp-table-1", "dp-tr-2"],
-        }
-    ]
-
-
-def test_query_table_uses_section_block_offset_for_sql():
-    state = _mixed_outline_state()
-
-    result = _query_table(
-        state,
-        "dp-page-1",
-        block_offset=2,
-        sql="SELECT 姓名 FROM data WHERE 学院 = '计算机学院'",
-        reason="查询表格 block 中的计算机学院学生",
-    )
-
-    assert result["section_id"] == "dp-page-1"
-    assert result["block_offset"] == 2
-    assert result["table_id"] == "dp-table-1"
-    assert result["rows"][0]["row_id"] == "dp-tr-2"
-    assert result["rows"][0]["values"] == {"姓名": "张三"}
-    assert state.actions[-1]["tool_name"] == "query_table"
-    assert state.actions[-1]["args"]["section_id"] == "dp-page-1"
-    assert state.actions[-1]["args"]["block_offset"] == 2
-
-
-def test_query_table_uses_leaf_table_id_with_zero_offset():
-    state = _mixed_outline_state()
-
-    result = _query_table(
-        state,
-        "dp-table-1",
-        block_offset=0,
-        sql="SELECT 姓名 FROM data WHERE 学院 = '计算机学院'",
-        reason="直接查询 overview 暴露的顶层表格 id",
-    )
-
-    assert result["section_id"] == "dp-table-1"
-    assert result["block_offset"] == 0
-    assert result["table_id"] == "dp-table-1"
-    assert result["rows"][0]["row_id"] == "dp-tr-2"
-    assert result["rows"][0]["values"] == {"姓名": "张三"}
-    assert state.actions[-1]["tool_name"] == "query_table"
-    assert state.actions[-1]["args"]["section_id"] == "dp-table-1"
-    assert state.actions[-1]["args"]["block_offset"] == 0
-
-
-def test_table_extraction_all_columns_allowed_for_small_tables():
-    result = _table_extraction(_state(), "dp-table-1", "SELECT * FROM data")
-
-    assert result["columns"] == ["姓名", "学院"]
-    assert [row["row_id"] for row in result["rows"]] == ["dp-tr-2", "dp-tr-3"]
-    assert result["rows"][0]["values"] == {"姓名": "张三", "学院": "计算机学院"}
-
-
-def test_table_extraction_rejects_select_star_for_large_tables():
-    result = _table_extraction(_large_table_state(), "dp-big-table-1", "SELECT * FROM data")
-
-    assert result["ok"] is False
-    assert result["error"] == "table is too large for unbounded SELECT *"
-    assert result["row_count"] == 40
-    assert result["column_count"] == 2
-    assert "Select only the needed columns" in result["sql_hint"]
-    assert "LIMIT 50 OFFSET 0" in result["sql_hint"]
-
-
-def test_table_extraction_large_tables_allow_select_star_with_bounded_limit():
-    result = _table_extraction(_large_table_state(80), "dp-big-table-1", "SELECT * FROM data LIMIT 50 OFFSET 50")
-
-    assert result["columns"] == ["姓名", "学院"]
-    assert len(result["rows"]) == 30
-    assert result["rows"][0]["values"] == {"姓名": "学生51", "学院": "学院0"}
-
-
-def test_table_extraction_large_tables_reject_select_star_above_limit():
-    result = _table_extraction(_large_table_state(80), "dp-big-table-1", "SELECT * FROM data LIMIT 51")
-
-    assert result["ok"] is False
-    assert result["error"] == "table is too large for unbounded SELECT *"
-    assert result["max_select_star_limit"] == 50
-
-
-def test_table_extraction_large_tables_allow_specific_columns_without_truncating_rows():
-    result = _table_extraction(_large_table_state(), "dp-big-table-1", 'SELECT "姓名" FROM data')
-
-    assert result["columns"] == ["姓名"]
-    assert len(result["rows"]) == 40
-    assert result["rows"][0]["values"] == {"姓名": "学生1"}
-    assert result["rows"][-1]["values"] == {"姓名": "学生40"}
-
-
-def test_table_extraction_reports_table_audit_for_empty_cells():
-    result = _table_extraction(
-        _risky_table_state(),
-        "dp-risk-table-1",
-        'SELECT "论文题目" FROM data WHERE "作品类型" = "学术论文"',
-        reason="抽取作品类型为学术论文的论文题目",
-    )
-
-    assert result["table_audit"]["blank_cells"]["total_blank_cell_count"] == 1
-    assert result["table_audit"]["blank_cells"]["by_column"] == [
-        {
-            "column": "作品类型",
-            "blank_count": 1,
-            "blank_row_ids": ["dp-risk-tr-2"],
-        }
-    ]
-
-
-def test_table_extraction_table_audit_keeps_first_ten_blank_row_ids_without_truncated_label():
-    result = _table_extraction(
-        _many_blank_table_state(),
-        "dp-many-blank-table-1",
-        'SELECT "序号", "标签" FROM data',
-        reason="读取空值表",
-    )
-
-    blank_column = result["table_audit"]["blank_cells"]["by_column"][0]
-    assert blank_column == {
-        "column": "标签",
-        "blank_count": 12,
-        "blank_row_ids": [
-            "dp-many-blank-tr-1",
-            "dp-many-blank-tr-2",
-            "dp-many-blank-tr-3",
-            "dp-many-blank-tr-4",
-            "dp-many-blank-tr-5",
-            "dp-many-blank-tr-6",
-            "dp-many-blank-tr-7",
-            "dp-many-blank-tr-8",
-            "dp-many-blank-tr-9",
-            "dp-many-blank-tr-10",
-        ],
-    }
-    assert "truncated" not in blank_column
-    assert "by_column_truncated" not in result["table_audit"]["blank_cells"]
-
-
-def test_table_extraction_returns_summary_without_query_audit():
-    result = _table_extraction(
-        _risky_table_state(),
-        "dp-risk-table-1",
-        'SELECT "论文题目" FROM data WHERE "作品类型" = "学术论文"',
-        reason="抽取作品类型为学术论文的论文题目",
-    )
-
-    assert "query_audit" not in result
-    assert result["summary"] == "返回 1 行；输出列“论文题目”空值 0/1 行。"
-
-
-def test_table_extraction_summary_summarizes_selected_output_empty_cells_without_warning():
-    result = _table_extraction(
-        _sparse_label_table_state(),
-        "dp-dorm-table-1",
-        'SELECT "房间" FROM data WHERE "模范/文明" = "文明寝室"',
-        reason="抽取文明寝室名称字段，筛选类别为文明寝室的行",
-    )
-
-    assert result["summary"] == "返回 2 行；输出列“房间”空值 0/2 行。"
-    assert "query_audit" not in result
-    assert "非空分布" not in result["summary"]
-
-
-def test_table_extraction_returns_lightweight_audit_without_status():
-    result = _table_extraction(
-        _risky_table_state(),
-        "dp-risk-table-1",
-        'SELECT "论文题目" FROM data WHERE "作品类型" = "学术论文"',
-        reason="抽取作品类型为学术论文的论文题目",
-    )
-
-    assert "query_quality" not in result
-    assert "query_audit" not in result
-    assert "status" not in result["table_audit"]
-
-
-def test_table_extraction_row_evidence_ids_can_be_used_by_set_field():
-    state = _state()
-    result = _table_extraction(
-        state,
-        "dp-table-1",
-        "SELECT 姓名 FROM data WHERE 学院 = '自动化学院'",
-    )
-
-    row = result["rows"][0]
-    set_result = _set_field(
-        state,
-        "student_name",
-        row["values"]["姓名"],
-        row["evidence_ids"],
-        "resolved",
-        None,
-    )
-
-    assert row["row_id"] == "dp-tr-3"
-    assert row["evidence_ids"] == ["dp-table-1", "dp-tr-3"]
-    assert set_result["ok"] is True
-    assert state.field_states["student_name"]["evidence_ids"] == [
-        "dp-table-1",
-        "dp-tr-3",
-    ]
-
-
-def test_preview_inline_evidence_returns_sentence_candidates_and_observes_inline_ids():
-    state = _state()
-    _read_blocks(state, "dp-p-1", indexes=[0], reason="读取联系人段落")
-
-    result = _preview_inline_evidence(
-        state,
-        "dp-p-1",
-        start_index=0,
-        count=5,
-        reason="准备写联系人电话证据",
-    )
-
-    assert result["source_id"] == "dp-p-1"
-    assert result["total_inline_count"] == 1
-    assert result["inline_evidence"] == [
-        {
-            "inline_id": "dp-p-1::inline-0",
-            "inline_index": 0,
-            "source_id": "dp-p-1",
-            "text": "联系人：李老师 电话：12345",
-            "char_start": 0,
-            "char_end": len("联系人：李老师 电话：12345"),
-        }
-    ]
-    assert result["evidence_ids"] == ["dp-p-1::inline-0"]
-    assert state.observed_evidence_ids == {"dp-p-1", "dp-p-1::inline-0"}
-    assert state.inline_evidence_by_id["dp-p-1::inline-0"]["source_id"] == "dp-p-1"
-    assert state.actions[-1]["tool_name"] == "preview_inline_evidence"
-
-
-def test_preview_inline_evidence_keeps_long_sentence_as_one_inline_candidate():
-    state = _state()
-    long_sentence = "This definition contains many coordinated legal clauses, " + "additional words " * 45 + "and ends here."
-    state.document = build_html_document(
-        f'<p id="dp-long-sentence">{long_sentence}</p>'
-    )
-    _read_blocks(state, "dp-long-sentence", indexes=[0], reason="读取长定义句")
-
-    result = _preview_inline_evidence(
-        state,
-        "dp-long-sentence",
-        start_index=0,
-        count=5,
-        reason="长句作为一个 inline 证据锚点",
-    )
-
-    assert len(long_sentence) > 280
-    assert result["total_inline_count"] == 1
-    assert result["inline_evidence"][0]["text"] == long_sentence
-    assert result["inline_evidence"][0]["inline_id"] == "dp-long-sentence::inline-0"
-
-
-def test_preview_inline_evidence_requires_observed_text_source():
-    state = _state()
-
-    unobserved = _preview_inline_evidence(
-        state,
-        "dp-p-1",
-        start_index=0,
-        count=5,
-        reason="未先读取段落",
-    )
-    table = _preview_inline_evidence(
-        state,
-        "dp-table-1",
-        start_index=0,
-        count=5,
-        reason="表格不能转 inline",
-    )
-
-    assert unobserved == {
-        "ok": False,
-        "error": "source_id must be observed before preview_inline_evidence",
-        "source_id": "dp-p-1",
-    }
-    assert table == {
-        "ok": False,
-        "error": "source_id must be a text-like element; use query_table for tables and read_list for lists",
-        "source_id": "dp-table-1",
-    }
-
-
-def test_set_field_requires_inline_evidence_for_text_blocks():
-    state = _state()
-    _read_blocks(state, "dp-p-1", indexes=[0], reason="读取联系人段落")
-
-    coarse = _set_field(
-        state,
-        "contact_phone",
-        "12345",
-        ["dp-p-1"],
-        "resolved",
-        None,
-    )
-    preview = _preview_inline_evidence(
-        state,
-        "dp-p-1",
-        start_index=0,
-        count=5,
-        reason="细化联系人电话证据",
-    )
-    precise = _set_field(
-        state,
-        "contact_phone",
-        "12345",
-        [preview["inline_evidence"][0]["inline_id"]],
-        "resolved",
-        None,
-    )
-
-    assert coarse["ok"] is False
-    assert coarse["errors"][0]["message"] == (
-        "text evidence must use inline evidence ids from preview_inline_evidence"
-    )
-    assert coarse["errors"][0]["ids"] == ["dp-p-1"]
-    assert precise["ok"] is True
-    assert state.field_states["contact_phone"]["evidence_ids"] == [
-        "dp-p-1::inline-0"
-    ]
-
-
-def test_set_field_requires_row_or_item_level_evidence_for_tables_and_lists():
-    state = _mixed_outline_state()
-    _read_blocks(state, "dp-page-1", indexes=[2, 4], reason="读取表格和列表引用")
-
-    table_only = _set_field(
-        state,
-        "student_name",
-        "张三",
-        ["dp-table-1"],
-        "resolved",
-        None,
-    )
-    list_only = _set_field(
-        state,
-        "student_name",
-        "第一项",
-        ["dp-ul-1"],
-        "resolved",
-        None,
-    )
-    table_rows = _query_table(
-        state,
-        "dp-table-1",
-        block_offset=0,
-        sql="SELECT 姓名 FROM data WHERE 学院 = '计算机学院'",
-        reason="读取表格行",
-    )
-    table_precise = _set_field(
-        state,
-        "student_name",
-        "张三",
-        table_rows["rows"][0]["evidence_ids"],
-        "resolved",
-        None,
-    )
-    list_items = _read_list(
-        state,
-        "dp-ul-1",
-        block_offset=0,
-        item_offset=0,
-        number=1,
-        reason="读取列表项",
-    )
-    list_precise = _set_field(
-        state,
-        "student_name",
-        "第一项",
-        list_items["evidence_ids"],
-        "resolved",
-        None,
-    )
-
-    assert table_only["ok"] is False
-    assert table_only["errors"][0]["message"] == "table evidence must include row ids from query_table"
-    assert table_only["errors"][0]["ids"] == ["dp-table-1"]
-    assert list_only["ok"] is False
-    assert list_only["errors"][0]["message"] == "list evidence must include item ids from read_list"
-    assert list_only["errors"][0]["ids"] == ["dp-ul-1"]
-    assert table_precise["ok"] is True
-    assert list_precise["ok"] is True
-
-
-def test_table_extraction_returns_sql_errors_for_model_retry():
-    result = _table_extraction(
-        _state(),
-        "dp-table-1",
-        "SELECT 不存在 FROM data",
-    )
-
-    assert result["ok"] is False
-    assert "no such column" in result["error"]
-    assert result["columns"] == ["姓名", "学院"]
-    assert "double quotes" in result["sql_hint"]
-    assert "论文题目" not in result["sql_hint"]
-    assert "作品类型" not in result["sql_hint"]
-    assert "学术论文" not in result["sql_hint"]
-
-
-def test_paragraph_extraction_returns_all_regex_matches():
-    result = _paragraph_extraction(_state(), "dp-p-1", r"\d+")
-
-    assert result["matches"][0]["text"] == "12345"
-    assert result["matches"][0]["evidence_ids"] == ["dp-p-1"]
-
-
-def test_set_field_records_value_and_finish_validates_required_fields():
-    state = _state()
-    _table_extraction(
-        state,
-        "dp-table-1",
-        "SELECT 姓名 FROM data WHERE 学院 = '计算机学院'",
-    )
-
-    set_result = _set_field(
-        state,
-        "student_name",
-        "张三",
-        ["dp-table-1", "dp-tr-2"],
-        "resolved",
-        None,
-    )
-    finish_result = _finish(state)
-
-    assert set_result["ok"] is True
-    assert state.field_states["student_name"]["value"] == "张三"
-    assert finish_result == {"ok": True, "errors": []}
-
-
-def test_set_field_rejects_value_that_does_not_match_field_type():
-    state = _list_state()
-    _mark_list_evidence_observed(state)
-
-    result = _set_field(
-        state,
-        "student_names",
-        "张三",
-        ["dp-table-1", "dp-tr-2"],
-        "resolved",
-        None,
-    )
-
-    assert result == {
-        "ok": False,
-        "errors": [
-            {
-                "field": "student_names",
-                "message": "field value does not match type",
-                "expected_type": "list[string]",
-            }
-        ],
-    }
-    assert "student_names" not in state.field_states
-
-
-def test_set_field_accepts_enum_variant_payload_matching_declared_variant_type():
-    state = _enum_state()
-    _mark_list_evidence_observed(state)
-
-    result = _set_field(
-        state,
-        "decision",
-        {"variant": "Entailment", "value": None},
-        ["dp-table-1", "dp-tr-2"],
-        "resolved",
-        None,
-    )
-
-    assert result["ok"] is True
-    assert state.field_states["decision"]["value"] == {
-        "variant": "Entailment",
-        "value": None,
-    }
-
-
-def test_set_field_rejects_enum_payload_with_unknown_variant_or_bad_payload_type():
-    state = _enum_state()
-    _mark_list_evidence_observed(state)
-
-    unknown_variant = _set_field(
-        state,
-        "decision",
-        {"variant": "NotMentioned", "value": None},
-        ["dp-table-1", "dp-tr-2"],
-        "resolved",
-        None,
-    )
-    bad_payload = _set_field(
-        state,
-        "decision",
-        {"variant": "Rationale", "value": 123},
-        ["dp-table-1", "dp-tr-2"],
-        "resolved",
-        None,
-    )
-
-    assert unknown_variant == {
-        "ok": False,
-        "errors": [
-            {
-                "field": "decision",
-                "message": "enum variant is not declared",
-                "variant": "NotMentioned",
-            }
-        ],
-    }
-    assert bad_payload == {
-        "ok": False,
-        "errors": [
-            {
-                "field": "decision",
-                "message": "enum payload does not match variant type",
-                "variant": "Rationale",
-                "expected_type": "string",
-            }
-        ],
-    }
-    assert "decision" not in state.field_states
-
-
-def test_finish_allows_enum_null_payload_without_evidence():
-    state = _enum_state()
-    state.task_spec.fields = [
-        field for field in state.task_spec.fields if field.name == "decision"
-    ]
-
-    set_result = _set_field(
-        state,
-        "decision",
-        {"variant": "Missing", "value": None},
-        [],
-        "resolved",
-        None,
-    )
-    finish_result = _finish(state)
-
-    assert set_result["ok"] is True
-    assert finish_result == {"ok": True, "errors": []}
-
-
-def test_update_soft_plan_replaces_plan_statuses_and_records_action():
-    state = _state()
-
-    result = _update_soft_plan(
-        state,
-        [
-            {"step": "读取名单表并确认学生姓名", "status": "in_progress"},
-            {"step": "写入 student_name 字段", "status": "pending"},
-        ],
-    )
-    completed = _update_soft_plan(
-        state,
-        [
-            {"step": "读取名单表并确认学生姓名", "status": "completed"},
-            {"step": "写入 student_name 字段", "status": "in_progress"},
-        ],
-    )
-
-    assert result["ok"] is True
-    assert completed["ok"] is True
-    assert state.soft_plan == [
-        {"plan_index": 1, "step": "读取名单表并确认学生姓名", "status": "completed"},
-        {"plan_index": 2, "step": "写入 student_name 字段", "status": "in_progress"},
-    ]
-    assert state.plan_statuses[1]["status"] == "completed"
-    assert state.plan_statuses[2]["step"] == "写入 student_name 字段"
-    assert state.actions[-1]["tool_name"] == "update_soft_plan"
-    assert state.actions[-1]["args"] == {
-        "plan": [
-            {"step": "读取名单表并确认学生姓名", "status": "completed"},
-            {"step": "写入 student_name 字段", "status": "in_progress"},
-        ],
-    }
-
-
-def test_update_soft_plan_rejects_invalid_plan_items():
-    result = _update_soft_plan(
-        _state(),
-        [
-            {"step": "", "status": "in_progress"},
-            {"step": "写入字段", "status": "done"},
-            "bad item",
-        ],
-    )
-
-    assert result["ok"] is False
-    assert [error["message"] for error in result["errors"]] == [
-        "plan item step is required",
-        "plan item status must be pending, in_progress, or completed",
-        "plan item must be an object",
-    ]
-
-
-def test_record_note_records_field_evidence_memory_for_replay():
-    state = _state()
-    tools = {_tool_name(tool): tool for tool in build_tools(state)}
-    _read_blocks(state, "dp-p-1", [0], reason="读取联系人段落")
-    inline = _preview_inline_evidence(
-        state,
-        "dp-p-1",
-        0,
-        2,
-        reason="细化联系人段落为字段证据",
-    )
-
-    result = tools["record_note"].invoke(
-        {
-            "field_names": ["contact_phone"],
-            "evidence_ids": [inline["evidence_ids"][0]],
-            "note": "联系人段落给出了联系电话。",
-            "reason": "在写入 contact_phone 前记录证据说明",
-        }
-    )
-
-    assert result == {
-        "ok": True,
-        "note": {
-            "field_names": ["contact_phone"],
-            "evidence_ids": [inline["evidence_ids"][0]],
-            "note": "联系人段落给出了联系电话。",
-        },
-    }
-    assert state.notes == [result["note"]]
-    assert state.actions[-1]["tool_name"] == "record_note"
-    assert state.actions[-1]["args"]["reason"] == "在写入 contact_phone 前记录证据说明"
-
-
-def test_set_field_rejects_unobserved_evidence_ids():
-    state = _state()
-
-    result = _set_field(
-        state,
-        "student_name",
-        "张三",
-        ["dp-table-1", "dp-tr-2"],
-        "resolved",
-        None,
-    )
-
-    assert result["ok"] is False
-    assert "observed" in result["errors"][0]["message"]
-
-
-def test_finish_fails_missing_required_field():
-    result = _finish(_state())
-
-    assert result["ok"] is False
-    assert result["errors"][0]["field"] == "student_name"
-
-
-def test_finish_requires_soft_plan_items_to_be_completed():
-    state = _state()
-    _update_soft_plan(
-        state,
-        [
-            {"step": "读取联系人段落", "status": "completed"},
-            {"step": "写入 contact_phone 字段", "status": "in_progress"},
-            {"step": "核对补充字段", "status": "pending"},
-        ],
-    )
-    _read_blocks(state, "dp-p-1", [0], reason="读取联系人段落")
-    inline = _preview_inline_evidence(state, "dp-p-1", 0, 1, reason="细化联系人证据")
-    _set_field(
-        state,
-        "student_name",
-        "张三",
-        [inline["evidence_ids"][0]],
-        "resolved",
-        None,
-        reason="联系人段落支持 student_name 字段",
-    )
-
-    result = _finish(state)
-
-    assert result["ok"] is False
-    assert result["errors"] == [
-        {
-            "message": "soft plan items must be completed before finish",
-            "plan_items": [
-                {
-                    "plan_index": 2,
-                    "step": "写入 contact_phone 字段",
-                    "status": "in_progress",
-                },
-                {
-                    "plan_index": 3,
-                    "step": "核对补充字段",
-                    "status": "pending",
-                },
-            ],
-        }
-    ]
-
-
-def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
+def test_build_tools_exposes_virtual_tree_tools_only():
     tools = build_tools(_state())
-    names = [_tool_name(tool) for tool in tools]
+    tool_names = [getattr(tool, "name", getattr(tool, "__name__", "")) for tool in tools]
 
-    assert names == [
-        "update_soft_plan",
-        "overview",
-        "read_section",
-        "read_blocks",
-        "read_block_range",
-        "read_list",
+    assert tool_names == [
+        "tree",
+        "read",
+        "anchors",
         "query_table",
-        "preview_inline_evidence",
-        "record_note",
-        "set_field",
-        "finish",
+        "write_field",
+        "submit_result",
     ]
-    update_soft_plan = tools[names.index("update_soft_plan")]
-    update_schema = getattr(update_soft_plan, "args_schema", None)
-    update_fields = getattr(update_schema, "model_fields", None) or getattr(update_schema, "__fields__", {})
-    assert "state" not in update_fields
-    assert "plan" in update_fields
-    overview = tools[names.index("overview")]
-    overview_description = _tool_description(overview)
-    assert "section headers" in overview_description
-    assert "same-level block items" in overview_description
-    read_section = tools[names.index("read_section")]
-    read_section_schema = getattr(read_section, "args_schema", None)
-    read_section_fields = getattr(read_section_schema, "model_fields", None) or getattr(read_section_schema, "__fields__", {})
-    assert "state" not in read_section_fields
-    assert "section_id" in read_section_fields
-    assert "reason" in read_section_fields
-    assert "actual DOM descendants" in _tool_description(read_section)
-    read_blocks = tools[names.index("read_blocks")]
-    blocks_schema = getattr(read_blocks, "args_schema", None)
-    blocks_fields = getattr(blocks_schema, "model_fields", None) or getattr(blocks_schema, "__fields__", {})
-    assert "indexes" in blocks_fields
-    assert "offset" not in blocks_fields
-    assert "number" not in blocks_fields
-    blocks_description = _tool_description(read_blocks)
-    assert "section container, heading, or leaf block id" in blocks_description
-    assert "selected block indexes" in blocks_description
-    assert "not following siblings" in blocks_description
-    assert "leaf block id" in blocks_description
-    read_block_range = tools[names.index("read_block_range")]
-    range_schema = getattr(read_block_range, "args_schema", None)
-    range_fields = getattr(range_schema, "model_fields", None) or getattr(range_schema, "__fields__", {})
-    assert "start_index" in range_fields
-    assert "count" in range_fields
-    assert "indexes" not in range_fields
-    range_description = _tool_description(read_block_range)
-    assert "contiguous range" in range_description
-    assert "Use read_blocks" in range_description
-    read_list = tools[names.index("read_list")]
-    list_schema = getattr(read_list, "args_schema", None)
-    list_fields = getattr(list_schema, "model_fields", None) or getattr(list_schema, "__fields__", {})
-    assert "item_offset" in list_fields
-    list_description = _tool_description(read_list)
-    assert "Read list items" in list_description
-    assert "top-level list id" in list_description
-    assert "block_offset=0" in list_description
-    query_table = tools[names.index("query_table")]
-    table_schema = getattr(query_table, "args_schema", None)
-    table_fields = getattr(table_schema, "model_fields", None) or getattr(table_schema, "__fields__", {})
-    assert "block_offset" in table_fields
-    assert "sql" in table_fields
-    query_table_description = _tool_description(query_table)
-    assert "top-level table id" in query_table_description
-    assert "block_offset=0" in query_table_description
-    assert "double quotes" in query_table_description
-    preview_inline = tools[names.index("preview_inline_evidence")]
-    preview_schema = getattr(preview_inline, "args_schema", None)
-    preview_fields = getattr(preview_schema, "model_fields", None) or getattr(preview_schema, "__fields__", {})
-    assert "source_id" in preview_fields
-    assert "start_index" in preview_fields
-    assert "count" in preview_fields
-    preview_description = _tool_description(preview_inline)
-    assert "Only use this after reading a text block" in preview_description
-    assert "inline_id" in preview_description
-    assert "set_field" in preview_description
-    record_note = tools[names.index("record_note")]
-    record_note_schema = getattr(record_note, "args_schema", None)
-    record_note_fields = getattr(record_note_schema, "model_fields", None) or getattr(record_note_schema, "__fields__", {})
-    assert "field_names" in record_note_fields
-    assert "evidence_ids" in record_note_fields
-    assert "note" in record_note_fields
-    assert "reason" in record_note_fields
-    record_note_description = " ".join(_tool_description(record_note).split())
-    assert "Record a human-readable note" in record_note_description
-    assert "does not set field values" in record_note_description
-    set_field = tools[names.index("set_field")]
-    set_field_schema = getattr(set_field, "args_schema", None)
-    set_field_fields = getattr(set_field_schema, "model_fields", None) or getattr(set_field_schema, "__fields__", {})
-    assert "reason" in set_field_fields
-    set_field_description = " ".join(_tool_description(set_field).split())
-    assert "for each task field exactly once" in set_field_description
-    assert "unrelated elements" in set_field_description
-    assert "Null is a valid resolved value when the declared field type is null" in set_field_description
-    assert "Do not use status failed just because value is null" in set_field_description
-    assert "needs human review" in set_field_description
-    assert "read_blocks" in set_field_description
-    assert "read_block_range" in set_field_description
-    assert "preview_inline_evidence" in set_field_description
-    assert "inline ids" in set_field_description
-    assert "row ids" in set_field_description
-    assert "item ids" in set_field_description
-    assert "query_table" in set_field_description
-    finish = tools[names.index("finish")]
-    finish_description = " ".join(_tool_description(finish).split())
-    assert "every current soft-plan item has status ``completed``" in finish_description
-    assert "update_soft_plan" in finish_description
 
 
-def _tool_name(tool):
-    return getattr(tool, "name", getattr(tool, "__name__", ""))
+def test_tree_read_anchors_and_query_record_reasoned_events():
+    state = _state()
+    paths = _paths(state)
+
+    tree_result = _tree(state, "/", depth=2, reason="先查看输入文档。")
+    read_result = _read(state, paths["table"], offset=0, limit=1, reason="读取费用表。")
+    anchors_result = _anchors(state, paths["paragraph"], reason="定位成立年份句子。")
+    query_result = _query_table(
+        state,
+        paths["table"],
+        'SELECT "项目", "金额" FROM data WHERE "项目" = \'押金\'',
+        offset=0,
+        limit=10,
+        reason="查询押金行。",
+    )
+
+    assert "001-company-公司资料/" in tree_result["text"]
+    assert "| R001 | 服务费 | 1000 |" in read_result["text"]
+    assert anchors_result["anchors"][0]["id"] == "S001"
+    assert "| R002 | 押金 | 500 |" in query_result["text"]
+    assert [event["type"] for event in state.events] == [
+        "tool_started",
+        "tool_completed",
+        "tool_started",
+        "tool_completed",
+        "tool_started",
+        "tool_completed",
+        "tool_started",
+        "tool_completed",
+    ]
+    assert state.events[0]["reason"] == "先查看输入文档。"
 
 
-def _tool_description(tool):
-    return getattr(tool, "description", getattr(tool, "__doc__", "") or "")
+def test_write_field_overwrites_result_buffer_and_validates_selectors():
+    state = _state()
+    paths = _paths(state)
+
+    first = _write_field(
+        state,
+        "founded_year",
+        2020,
+        [{"path": paths["paragraph"], "sentences": ["S001"]}],
+        status="resolved",
+        reason="S001 写明公司成立于2020年。",
+    )
+    second = _write_field(
+        state,
+        "founded_year",
+        2021,
+        [{"path": paths["paragraph"], "sentences": ["S001"]}],
+        status="resolved",
+        reason="覆盖上一版字段值。",
+    )
+    bad = _write_field(
+        state,
+        "deposit",
+        500,
+        [{"path": paths["table"], "sentences": ["S001"]}],
+        status="resolved",
+        reason="错误地用句子引用表格。",
+    )
+
+    assert first["ok"] is True
+    assert second["field"]["value"] == 2021
+    assert state.field_states["founded_year"]["value"] == 2021
+    assert bad["ok"] is False
+    assert "rows" in bad["errors"][0]["message"]
+    assert state.events[-1]["type"] == "tool_failed"
 
 
-def _find_tree_node(nodes, node_id):
-    for node in nodes:
-        if node["id"] == node_id:
-            return node
-        found = _find_tree_node(node.get("children", []), node_id)
-        if found is not None:
-            return found
-    return None
+def test_submit_result_validates_required_fields_and_returns_new_field_shape():
+    state = _state()
+    paths = _paths(state)
+    _write_field(
+        state,
+        "founded_year",
+        2020,
+        [{"path": paths["paragraph"], "sentences": ["S001"]}],
+        status="resolved",
+        reason="写入成立年份。",
+    )
+    _write_field(
+        state,
+        "service_items",
+        ["提供系统维护", "提供数据备份"],
+        [{"path": paths["list"], "items": ["I001", "I002"]}],
+        status="resolved",
+        reason="写入服务列表。",
+    )
+    _write_field(
+        state,
+        "deposit",
+        500,
+        [{"path": paths["table"], "rows": ["R002"]}],
+        status="resolved",
+        reason="写入押金金额。",
+    )
+
+    failed = _submit_result(state, reason="先提交检查必填字段。")
+    assert failed["ok"] is False
+    assert failed["errors"][0]["field_id"] == "missing_required"
+
+    _write_field(
+        state,
+        "missing_required",
+        None,
+        [],
+        status="missing",
+        reason="文档未提及该字段。",
+    )
+    completed = _submit_result(state, reason="字段都已处理，提交最终结果。")
+
+    assert completed["ok"] is False
+    assert completed["errors"][0]["code"] == "REQUIRED_MISSING"
+
+    _write_field(
+        state,
+        "missing_required",
+        "已补齐",
+        [{"path": paths["paragraph"], "sentences": ["S002"]}],
+        status="resolved",
+        reason="S002 提供补齐字段的测试证据。",
+    )
+    completed = _submit_result(state, reason="再次提交最终结果。")
+
+    assert completed["ok"] is True
+    assert completed["result"]["fields"][0]["field_id"] == "founded_year"
+    assert completed["result"]["fields"][0]["evidence"][0]["sentences"] == ["S001"]
+    assert state.events[-1]["type"] == "result_completed"

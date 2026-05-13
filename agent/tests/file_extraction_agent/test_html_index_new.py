@@ -5,130 +5,160 @@ import pytest
 from service.file_extraction_agent.impl.html_index import build_html_document
 
 
-def test_build_html_document_indexes_existing_ids_and_tree():
-    html = """
-    <h2 id="dp-h2-1">通知</h2>
-    <p id="dp-p-1">正文</p>
-    <table id="dp-table-1">
-      <caption id="dp-caption-1">学生名单</caption>
-      <tr id="dp-tr-1"><th>姓名</th><th>学院</th></tr>
-      <tr id="dp-tr-2"><td>张三</td><td>计算机学院</td></tr>
-    </table>
-    """
-
-    document = build_html_document(html)
-
-    assert "dp-p-1" in document.elements_by_id
-    assert document.elements_by_id["dp-h2-1"].type == "SECTION_HEADER"
-    assert [node["id"] for node in document.tree] == ["dp-h2-1", "dp-p-1", "dp-table-1"]
-    assert document.tree[0]["children"] == []
-    assert document.tree[1]["type"] == "TEXT"
-    assert document.tree[1]["preview"] == "正文"
-    assert document.tree[2]["label"] == "学生名单"
-    assert "text" not in document.tree[2]
-    assert document.tables_by_id["dp-table-1"].columns == ["姓名", "学院"]
-    assert document.tables_by_id["dp-table-1"].rows == [{"姓名": "张三", "学院": "计算机学院"}]
-    assert document.tables_by_id["dp-table-1"].row_ids == ["dp-tr-2"]
-    assert document.row_index["dp-tr-2"]["table_id"] == "dp-table-1"
-
-
-def test_mineru_figure_table_uses_block_id_and_caption_label():
-    html = """
-    <figure id="p001_b000" data-type="table">
-      <div class="caption">文明模范寝室</div>
-      <div class="table-wrap">
-        <table>
-          <tr><td>楼栋</td><td>房间</td><td>平均分</td><td>模范/文明</td></tr>
-          <tr><td>18栋</td><td>106</td><td>94.18</td><td>模范寝室</td></tr>
-        </table>
-      </div>
-    </figure>
-    """
-
-    document = build_html_document(html)
-
-    assert document.tree == [
+def _documents():
+    return [
         {
-            "id": "p001_b000",
-            "type": "TABLE",
-            "children": [],
-            "label": "文明模范寝室",
-            "columns": ["楼栋", "房间", "平均分", "模范/文明"],
-            "row_count": 1,
-        }
-    ]
-    assert document.elements_by_id["p001_b000"].type == "TABLE"
-    assert document.tables_by_id["p001_b000"].columns == ["楼栋", "房间", "平均分", "模范/文明"]
-    assert document.row_index["dp-tr-2"]["table_id"] == "p001_b000"
-
-
-def test_build_html_document_generates_and_indexes_missing_table_row_ids():
-    html = """
-    <h2 id="dp-h2-1">通知</h2>
-    <table>
-      <tr><th>姓名</th><th>学院</th></tr>
-      <tr><td>张三</td><td>计算机学院</td></tr>
-      <tr id="dp-tr-2"><td>李四</td><td>自动化学院</td></tr>
-      <tr><td>王五</td><td>数学学院</td></tr>
-    </table>
-    """
-
-    document = build_html_document(html)
-    table = document.tables_by_id["dp-table-1"]
-
-    assert table.header_row_id == "dp-tr-1"
-    assert table.row_ids == ["dp-tr-3", "dp-tr-2", "dp-tr-4"]
-    assert document.row_index["dp-tr-3"]["row"] == {"姓名": "张三", "学院": "计算机学院"}
-    assert document.elements_by_id["dp-tr-4"].parent_id == "dp-table-1"
-
-
-def test_build_html_document_rejects_missing_required_id():
-    html = "<p>正文</p>"
-
-    with pytest.raises(ValueError, match="missing id"):
-        build_html_document(html)
-
-
-def test_build_html_document_rejects_duplicate_id():
-    html = '<p id="dup">一</p><p id="dup">二</p>'
-
-    with pytest.raises(ValueError, match="duplicate id"):
-        build_html_document(html)
-
-
-def test_heading_levels_do_not_create_implicit_nested_sections():
-    html = """
-    <h2 id="h2">一级</h2>
-    <h3 id="h3">二级</h3>
-    <p id="p1">正文</p>
-    """
-
-    document = build_html_document(html)
-
-    assert [node["id"] for node in document.tree] == ["h2", "h3", "p1"]
-    assert document.tree[0]["text"] == "一级"
-    assert document.tree[1]["text"] == "二级"
-    assert document.tree[2] == {"id": "p1", "type": "TEXT", "children": [], "preview": "正文"}
-
-
-def test_section_container_keeps_its_dom_children():
-    html = """
-    <section id="sec">
-      <h2 id="h2">一级</h2>
-      <p id="p1">正文</p>
-    </section>
-    """
-
-    document = build_html_document(html)
-
-    assert document.tree == [
+            "filename": "contract.html",
+            "html": """
+            <h1 id="t1">项目设计说明</h1>
+            <h2 id="h1">背景</h2>
+            <p id="p1">这个项目最初是为了抽取字段。</p>
+            <p id="p2">这个项目最初是为了验证重名段落。</p>
+            <h2 id="h2">背景</h2>
+            <ul id="l1">
+              <li id="li1">第一项</li>
+              <li id="li2">第二项<ul id="l2"><li id="li3">子项</li></ul></li>
+            </ul>
+            <table id="tbl1">
+              <caption id="cap1">费用明细</caption>
+              <tr id="tr0"><th>项目</th><th>金额</th></tr>
+              <tr id="tr1"><td>服务费</td><td>1000</td></tr>
+              <tr id="tr2"><td>押金</td><td>500</td></tr>
+            </table>
+            """,
+        },
         {
-            "id": "sec",
-            "type": "SECTION",
-            "children": [
-                {"id": "h2", "type": "SECTION_HEADER", "children": [], "text": "一级"},
-                {"id": "p1", "type": "TEXT", "children": [], "preview": "正文"},
-            ],
-            "preview": "一级 正文",
-        }
+            "filename": "contract.html",
+            "html": """
+            <h1 id="t2">项目设计说明</h1>
+            <h2 id="h3">摘要</h2>
+            <p id="p3">第二个文件。</p>
+            """,
+        },
     ]
+
+
+def test_build_html_document_builds_virtual_tree_for_multiple_documents():
+    document = build_html_document(_documents())
+
+    root = document.virtual_root
+    assert root.path == "/"
+    assert [child.name for child in root.children] == [
+        "001-contract-项目设计说明",
+        "002-contract-项目设计说明",
+    ]
+    assert "/001-contract-项目设计说明/001-背景" in document.nodes_by_path
+    assert "/001-contract-项目设计说明/002-背景" in document.nodes_by_path
+    assert (
+        "/001-contract-项目设计说明/001-背景/001-这个项目最初是为了抽取字段.md"
+        in document.nodes_by_path
+    )
+    assert (
+        "/001-contract-项目设计说明/001-背景/002-这个项目最初是为了验证重名段落.md"
+        in document.nodes_by_path
+    )
+    assert "/001-contract-项目设计说明/002-背景/001-第一项.list" in document.nodes_by_path
+    assert "/001-contract-项目设计说明/002-背景/002-费用明细.table" in document.nodes_by_path
+
+
+def test_tree_view_respects_depth_and_file_kinds():
+    document = build_html_document(_documents())
+
+    depth_one = document.tree_text("/", depth=1)
+    assert "001-contract-项目设计说明/" in depth_one
+    assert "001-背景/" not in depth_one
+
+    depth_three = document.tree_text("/001-contract-项目设计说明", depth=3)
+    assert "001-背景/" in depth_three
+    assert "001-这个项目最初是为了抽取字段.md" in depth_three
+    assert "001-第一项.list" in depth_three
+    assert "002-费用明细.table" in depth_three
+
+
+def test_paragraph_anchors_use_sentence_ids_without_polluting_read():
+    document = build_html_document(_documents())
+    path = "/001-contract-项目设计说明/001-背景/001-这个项目最初是为了抽取字段.md"
+
+    assert document.read_markdown(path)["text"] == "这个项目最初是为了抽取字段。"
+    anchors = document.paragraph_anchors(path)
+
+    assert anchors == [{"id": "S001", "preview": "这个项目最初是为了抽取字段。"}]
+
+
+def test_list_markdown_uses_item_numbers_and_nested_numbers():
+    document = build_html_document(_documents())
+
+    result = document.read_markdown("/001-contract-项目设计说明/002-背景/001-第一项.list")
+
+    assert result["kind"] == "list"
+    assert "kind: list" in result["text"]
+    assert "- [I001] 第一项" in result["text"]
+    assert "- [I002] 第二项 子项" in result["text"]
+    assert "  - [I002.001] 子项" in result["text"]
+    assert document.validate_evidence(
+        [{"path": result["path"], "items": ["I002", "I002.001"]}]
+    ) == []
+
+
+def test_list_markdown_reports_has_more_against_top_level_items():
+    document = build_html_document(
+        [
+            {
+                "filename": "items.html",
+                "html": """
+                <h1>列表</h1>
+                <ul>
+                  <li>第一项</li>
+                  <li>第二项</li>
+                  <li>第三项</li>
+                </ul>
+                """,
+            }
+        ]
+    )
+    path = "/001-items-列表/001-第一项.list"
+
+    first_page = document.read_markdown(path, offset=0, limit=1)
+    second_page = document.read_markdown(path, offset=1, limit=1)
+    last_page = document.read_markdown(path, offset=2, limit=1)
+
+    assert first_page["has_more"] is True
+    assert second_page["has_more"] is True
+    assert last_page["has_more"] is False
+
+
+def test_table_markdown_uses_row_numbers_and_supports_pagination():
+    document = build_html_document(_documents())
+    path = "/001-contract-项目设计说明/002-背景/002-费用明细.table"
+
+    first_row = document.read_markdown(path, offset=0, limit=1)
+
+    assert first_row["kind"] == "table"
+    assert "kind: table" in first_row["text"]
+    assert "showing: 1-1" in first_row["text"]
+    assert "| R001 | 服务费 | 1000 |" in first_row["text"]
+    assert "| R002 | 押金 | 500 |" not in first_row["text"]
+    assert document.validate_evidence([{"path": path, "rows": ["R002"]}]) == []
+
+
+def test_query_table_only_accepts_table_paths_and_keeps_original_row_numbers():
+    document = build_html_document(_documents())
+    path = "/001-contract-项目设计说明/002-背景/002-费用明细.table"
+
+    result = document.query_table(
+        path,
+        'SELECT "项目", "金额" FROM data WHERE "项目" = \'押金\'',
+        offset=0,
+        limit=20,
+    )
+
+    assert result["kind"] == "table_query"
+    assert "kind: table_query" in result["text"]
+    assert "| R002 | 押金 | 500 |" in result["text"]
+    assert "| R001 | 服务费 | 1000 |" not in result["text"]
+
+    with pytest.raises(ValueError, match=".table"):
+        document.query_table(
+            "/001-contract-项目设计说明/001-背景/001-这个项目最初是为了抽取字段.md",
+            'SELECT "项目" FROM data',
+        )

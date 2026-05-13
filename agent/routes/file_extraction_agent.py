@@ -1,17 +1,16 @@
-"""HTTP route for the HTML file extraction agent."""
+"""HTTP route for the streaming file extraction agent."""
 
 from __future__ import annotations
 
-from dataclasses import asdict, is_dataclass
 from importlib import import_module
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
-from starlette.concurrency import run_in_threadpool
 
 from service.file_extraction_agent.schemas import (
-    ExtractionResult,
+    InputDocument,
     ModelConfig,
     RunOptions,
     TaskSpec,
@@ -21,10 +20,10 @@ from service.file_extraction_agent.schemas import (
 router = APIRouter(tags=["file-extraction-agent"])
 
 
-class ExtractRequest(BaseModel):
+class ExtractStreamRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    html: str
+    documents: list[InputDocument]
     task_spec: TaskSpec | dict[str, Any]
     run_options: RunOptions | dict[str, Any] | None = None
     model_config_override: ModelConfig | dict[str, Any] | None = Field(
@@ -41,29 +40,29 @@ class ExtractRequest(BaseModel):
     top_k: int | None = None
 
 
-@router.post("/v1/file-extraction-agent/extract")
-async def extract_fields(request: ExtractRequest) -> dict[str, Any]:
+@router.post("/v1/file-extraction-agent/extract/stream")
+async def extract_fields_stream(request: ExtractStreamRequest) -> StreamingResponse:
     try:
-        result = await run_in_threadpool(_extract_fields, request)
+        stream = _extract_fields_stream(request)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
-    return _plain(result)
+    return StreamingResponse(stream, media_type="application/x-ndjson")
 
 
-def _extract_fields(request: ExtractRequest) -> ExtractionResult:
-    extract = import_module("service.file_extraction_agent.processor").extract
-    return extract(
-        html=request.html,
+def _extract_fields_stream(request: ExtractStreamRequest):
+    extract_stream = import_module("service.file_extraction_agent.processor").extract_stream
+    return extract_stream(
+        documents=request.documents,
         task_spec=request.task_spec,
         run_options=request.run_options,
         model_config=_model_config(request),
     )
 
 
-def _model_config(request: ExtractRequest) -> ModelConfig | dict[str, Any] | None:
+def _model_config(request: ExtractStreamRequest) -> ModelConfig | dict[str, Any] | None:
     if request.model_config_override is not None:
         return request.model_config_override
 
@@ -91,13 +90,3 @@ def _model_config(request: ExtractRequest) -> ModelConfig | dict[str, Any] | Non
         "top_p": request.top_p,
         "top_k": request.top_k,
     }
-
-
-def _plain(value: Any) -> Any:
-    if is_dataclass(value) and not isinstance(value, type):
-        return asdict(value)
-    if isinstance(value, dict):
-        return {key: _plain(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_plain(item) for item in value]
-    return value

@@ -1,24 +1,24 @@
 # test_html_index_new.py
 
-这份测试覆盖 `html_index.py` 对语义 HTML 的索引行为。测试输入是已经带稳定 id 的 HTML 片段，输出是 `HtmlDocument`，包括 `elements_by_id`、混排 `tree`、`tables_by_id` 和 `row_index`。
+这份测试覆盖新的 semantic HTML virtual tree 索引。输入是多个带文件名的 HTML 文档，输出是只读虚拟文件树、路径索引、Markdown 读取视图和 evidence selector 校验能力。
 
 实现链路：
 
 ```text
-HTML fragment
+documents(filename + html)
   -> build_html_document
-  -> 校验可追踪元素 id 唯一且必需
-  -> 建立 elements_by_id
-  -> 解析 table columns / rows / row_index
-  -> 构建包含 section、heading、p、list、table 的 DOM 语义 outline tree
+  -> 每个文档生成 /001-filename-title 目录
+  -> heading 生成 section 目录
+  -> paragraph/list/table 生成 .md/.list/.table 文件
+  -> read_markdown / paragraph_anchors / query_table / validate_evidence 按路径工作
 ```
 
 ## 测试函数
 
-- `test_build_html_document_indexes_existing_ids_and_tree`：确认已有 id 会进入元素索引，和 heading 平级的段落和表格会保持同层 item，表格只暴露 label、columns 和 row_count，不暴露正文行。
-- `test_mineru_figure_table_uses_block_id_and_caption_label`：确认 MinerU 风格的 `figure[data-type="table"]` 会用 figure id 作为 table id，并从 caption 类节点取得表格 label。
-- `test_build_html_document_generates_and_indexes_missing_table_row_ids`：确认缺少 id 的 `table` / `tr` 会生成稳定证据 id，并同步写入表格行索引。
-- `test_build_html_document_rejects_missing_required_id`：确认缺少必需 id 的可追踪元素会被拒绝。
-- `test_build_html_document_rejects_duplicate_id`：确认重复 id 会被拒绝。
-- `test_heading_levels_do_not_create_implicit_nested_sections`：确认 h2/h3 和段落在 flat HTML 中不会仅凭标题级别形成隐式父子关系。
-- `test_section_container_keeps_its_dom_children`：确认真实 `<section>` 容器会保留自己的 heading 和段落子节点。
+- `test_build_html_document_builds_virtual_tree_for_multiple_documents`：确认多文档会生成编号根目录，同名文件和同名 title 不冲突，同名 section、重复 paragraph snippet、list 和 table 都有稳定路径。
+- `test_tree_view_respects_depth_and_file_kinds`：确认 `tree_text(path, depth)` 会按 depth 控制展开，并显示 `.md/.list/.table` 文件。
+- `test_paragraph_anchors_use_sentence_ids_without_polluting_read`：确认 paragraph `read_markdown` 只返回正文，不带句子编号；`paragraph_anchors` 单独返回 `Sxxx`。
+- `test_list_markdown_uses_item_numbers_and_nested_numbers`：确认 list Markdown 带 `Ixxx` 编号，嵌套 item 保留层级编号，并可作为 evidence selector 校验。
+- `test_list_markdown_reports_has_more_against_top_level_items`：确认 list 分页的 `has_more` 按顶层 item 总数判断，而不是只看当前页。
+- `test_table_markdown_uses_row_numbers_and_supports_pagination`：确认 table Markdown 带 `Rxxx` 行号，并支持 offset/limit 分页。
+- `test_query_table_only_accepts_table_paths_and_keeps_original_row_numbers`：确认 SQL 查询只接受 `.table` path，返回查询命中行的原始 `Rxxx` 编号。

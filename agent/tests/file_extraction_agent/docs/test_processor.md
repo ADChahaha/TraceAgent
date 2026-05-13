@@ -1,15 +1,9 @@
 # test_processor.py
 
-这份测试覆盖 `file_extraction_agent.processor` 入口和默认模型配置读取。测试重点是确认抽取入口只负责组装输入并调用图执行器，模型连接配置由 `impl/model_factory.py` 从显式参数或 agent 进程环境中归一化。
+这份测试覆盖 `file_extraction_agent.processor` 的 stream-first 入口和模型配置读取。入口负责把 `documents`、`task_spec` 和模型配置组装成图输入，然后把图执行器产出的 NDJSON 原样向外迭代。
 
 ## 测试函数
 
-- `test_extract_builds_input_models_and_runs_graph`：用 fake model builder 和 fake graph 确认 `extract(...)` 会把 HTML、字段定义和 resolution model 正确传给抽取图。
-- `test_normalize_model_config_loads_default_env_file`：确认未显式传入 `model_config` 时，会从候选 `.env` 读取 `BASE_URL`、`OPENAI_API_KEY`、阶段模型名、采样参数、重试次数和请求超时。
-- `test_normalize_model_config_ignores_generic_api_key_env`：确认通用 `API_KEY` 不再作为环境变量 fallback，避免和其他服务密钥混用；默认密钥入口只保留 `OPENAI_API_KEY`，并使用默认重试配置。
-- `test_normalize_model_config_rejects_unknown_model_fields`：确认模型配置会拒绝未知字段，避免旧 broad 兼容字段重新进入抽取链路。
-- `test_build_chat_model_passes_retry_and_timeout`：确认 `model_factory` 创建 `ChatOpenAI` 时会传入 `max_retries` 和 `request_timeout`。
-- `test_build_chat_model_passes_sampling_parameters_without_model_kwargs`：确认 `top_p` 作为 `ChatOpenAI` 显式参数传入，`top_k` 放进兼容接口使用的 `extra_body`，避免通过 `model_kwargs` 变成不被服务端接受的请求参数。
-- `test_build_chat_model_disables_deepseek_thinking_by_default`：确认 DeepSeek 官方源或 DeepSeek 模型会在 `extra_body` 中显式关闭 thinking，避免多轮 tool-calling 因缺少 `reasoning_content` 回传而失败。
-- `test_build_chat_model_enables_deepseek_reasoning_effort_when_set`：确认显式设置 `REASONING_EFFORT` 时会把 `reasoning_effort` 传给 `ChatOpenAI`，并对 DeepSeek 请求改用 `thinking.type=enabled`，用于试验推理强度。
-- `test_deepseek_chat_model_preserves_reasoning_content_for_tool_replay`：确认 DeepSeek thinking mode 的 assistant tool-call 响应会把 `reasoning_content` 保存到 `AIMessage.additional_kwargs`，并在下一轮 OpenAI 兼容请求中写回 assistant message，让工具结果回放能继续通过 DeepSeek 校验。
+- `test_extract_stream_builds_documents_input_and_runs_stream_graph`：用 fake model builder 和 fake stream graph 确认 `extract_stream(...)` 会传递 documents、字段定义和 resolution model。
+- `test_normalize_model_config_loads_default_env_file`：确认未显式传入模型配置时，会从候选 `.env` 读取连接、模型、采样和超时配置。
+- `test_normalize_model_config_rejects_unknown_model_fields`：确认旧 broad 模型字段仍会被拒绝。

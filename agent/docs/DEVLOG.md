@@ -1,4 +1,19 @@
-last updated: 2026-05-10 04:11:05
+last updated: 2026-05-13 19:46:45
+
+## 2026-05-13 19:46:45
+
+### 已完成工作
+
+- 将 `file_extraction_agent` 改为 stream-first 只读虚拟文件树抽取器，输入从单个聚合 `html` 改为 `documents(filename + html) + task_spec`。
+- 新 HTTP 入口为 `POST /v1/file-extraction-agent/extract/stream`，返回 `application/x-ndjson`；工具事件在每次工具调用后立即流出。
+- 虚拟树把文档目录、section 目录、paragraph `.md`、list `.list` 和 table `.table` 统一到路径空间；paragraph 文件名使用编号加前 N 个可见字符预览。
+- 工具集收口为 `tree/read/anchors/query_table/write_field/submit_result`，移除 soft plan、旧 block 读取和旧字段定案工具语义。
+- 证据 selector 统一为 paragraph `sentences`、list `items`、table `rows`；`write_field` 覆盖写入字段，`submit_result` 内部做 schema/type/evidence 校验。
+- 同步更新 agent 顶层 README/API/DESIGN、`file_extraction_agent` README/DESIGN，以及对应测试说明文档。
+
+### 验证
+
+- `conda run -n agent-gate python -m pytest tests/file_extraction_agent tests/routes/test_file_extraction_agent_route.py -q`，结果 `36 passed`。
 
 ## 2026-05-10 04:11:05
 

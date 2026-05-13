@@ -6,12 +6,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from service.file_extraction_agent.impl.html_index import HtmlDocument
-from service.file_extraction_agent.schemas import RunOptions, TaskSpec
+from service.file_extraction_agent.schemas import InputDocument, RunOptions, TaskSpec
 
 
 @dataclass
 class HtmlExtractionInput:
-    html: str
+    documents: list[InputDocument]
     task_spec: TaskSpec
     document: HtmlDocument
     run_options: RunOptions = field(default_factory=RunOptions)
@@ -23,13 +23,10 @@ class GraphState:
     document: HtmlDocument
     task_spec: TaskSpec
     run_options: RunOptions
-    soft_plan: list[dict[str, Any]] = field(default_factory=list)
-    plan_statuses: dict[int, dict[str, Any]] = field(default_factory=dict)
-    notes: list[dict[str, Any]] = field(default_factory=list)
     field_states: dict[str, dict[str, Any]] = field(default_factory=dict)
     actions: list[dict[str, Any]] = field(default_factory=list)
-    observed_evidence_ids: set[str] = field(default_factory=set)
-    inline_evidence_by_id: dict[str, dict[str, Any]] = field(default_factory=dict)
+    events: list[dict[str, Any]] = field(default_factory=list)
+    next_seq: int = 1
     failed_stage: str | None = None
 
 

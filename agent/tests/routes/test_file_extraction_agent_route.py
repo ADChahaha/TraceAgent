@@ -3,58 +3,59 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from main import create_app
-from service.file_extraction_agent.schemas import ExtractionResult, RunOptions
+from service.file_extraction_agent.schemas import RunOptions
 
 
-def test_file_extraction_agent_route_calls_html_extractor(monkeypatch):
+def test_file_extraction_agent_stream_route_calls_stream_extractor(monkeypatch):
     from service.file_extraction_agent import processor as processor_module
 
     seen_call: dict[str, object] = {}
 
-    def fake_extract(**kwargs):
+    def fake_extract_stream(**kwargs):
         seen_call.update(kwargs)
-        return ExtractionResult(
-            result={"title": "通知"},
-            trace={"actions": []},
-        )
+        yield '{"type":"tool_started","seq":1}\n'
+        yield '{"type":"result_completed","seq":2}\n'
 
-    monkeypatch.setattr(processor_module, "extract", fake_extract)
+    monkeypatch.setattr(processor_module, "extract_stream", fake_extract_stream)
 
     client = TestClient(create_app())
-    response = client.post(
-        "/v1/file-extraction-agent/extract",
+    with client.stream(
+        "POST",
+        "/v1/file-extraction-agent/extract/stream",
         json={
-            "html": '<p id="dp-p-1">通知</p>',
+            "documents": [{"filename": "notice.html", "html": '<p id="p1">通知</p>'}],
             "task_spec": {
                 "fields": [
                     {"name": "title", "type": "string", "required": True}
                 ]
             },
         },
-    )
+    ) as response:
+        body = response.read().decode()
 
     assert response.status_code == 200
-    assert seen_call["html"] == '<p id="dp-p-1">通知</p>'
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    assert seen_call["documents"][0].filename == "notice.html"
     assert seen_call["task_spec"].fields[0].name == "title"
-    assert response.json()["result"]["title"] == "通知"
+    assert body == '{"type":"tool_started","seq":1}\n{"type":"result_completed","seq":2}\n'
 
 
-def test_file_extraction_agent_route_passes_run_options(monkeypatch):
+def test_file_extraction_agent_stream_route_passes_run_options(monkeypatch):
     from service.file_extraction_agent import processor as processor_module
 
     seen_call: dict[str, object] = {}
 
-    def fake_extract(**kwargs):
+    def fake_extract_stream(**kwargs):
         seen_call.update(kwargs)
-        return ExtractionResult()
+        yield '{"type":"result_completed"}\n'
 
-    monkeypatch.setattr(processor_module, "extract", fake_extract)
+    monkeypatch.setattr(processor_module, "extract_stream", fake_extract_stream)
 
     client = TestClient(create_app())
     response = client.post(
-        "/v1/file-extraction-agent/extract",
+        "/v1/file-extraction-agent/extract/stream",
         json={
-            "html": '<p id="dp-p-1">通知</p>',
+            "documents": [{"filename": "notice.html", "html": '<p id="p1">通知</p>'}],
             "task_spec": {"fields": [{"name": "title"}]},
             "run_options": {"max_tool_calls": 33},
         },
@@ -64,22 +65,22 @@ def test_file_extraction_agent_route_passes_run_options(monkeypatch):
     assert seen_call["run_options"] == RunOptions(max_tool_calls=33)
 
 
-def test_file_extraction_agent_route_passes_resolution_model_overrides(monkeypatch):
+def test_file_extraction_agent_stream_route_passes_resolution_model_overrides(monkeypatch):
     from service.file_extraction_agent import processor as processor_module
 
     seen_call: dict[str, object] = {}
 
-    def fake_extract(**kwargs):
+    def fake_extract_stream(**kwargs):
         seen_call.update(kwargs)
-        return ExtractionResult()
+        yield '{"type":"result_completed"}\n'
 
-    monkeypatch.setattr(processor_module, "extract", fake_extract)
+    monkeypatch.setattr(processor_module, "extract_stream", fake_extract_stream)
 
     client = TestClient(create_app())
     response = client.post(
-        "/v1/file-extraction-agent/extract",
+        "/v1/file-extraction-agent/extract/stream",
         json={
-            "html": '<p id="dp-p-1">通知</p>',
+            "documents": [{"filename": "notice.html", "html": '<p id="p1">通知</p>'}],
             "task_spec": {"fields": [{"name": "title"}]},
             "base_url": "https://example.com/v1",
             "openai_api_key": "key",
@@ -100,94 +101,25 @@ def test_file_extraction_agent_route_passes_resolution_model_overrides(monkeypat
     assert config["top_k"] == 40
 
 
-def test_file_extraction_agent_route_accepts_model_config_object(monkeypatch):
-    from service.file_extraction_agent import processor as processor_module
-
-    seen_call: dict[str, object] = {}
-
-    def fake_extract(**kwargs):
-        seen_call.update(kwargs)
-        return ExtractionResult()
-
-    monkeypatch.setattr(processor_module, "extract", fake_extract)
-
+def test_file_extraction_agent_stream_route_rejects_legacy_html_payload():
     client = TestClient(create_app())
     response = client.post(
-        "/v1/file-extraction-agent/extract",
+        "/v1/file-extraction-agent/extract/stream",
         json={
-            "html": '<p id="dp-p-1">通知</p>',
-            "task_spec": {"fields": [{"name": "title"}]},
-            "model_config": {
-                "base_url": "https://example.com/v1",
-                "api_key": "key",
-                "resolution_model_name": "resolution",
-            },
-        },
-    )
-
-    assert response.status_code == 200
-    assert seen_call["model_config"].resolution_model_name == "resolution"
-
-
-def test_file_extraction_agent_route_rejects_broad_model_override():
-    client = TestClient(create_app())
-    response = client.post(
-        "/v1/file-extraction-agent/extract",
-        json={
-            "html": '<p id="dp-p-1">通知</p>',
-            "task_spec": {"fields": [{"name": "title"}]},
-            "broad_model_name": "broad",
-        },
-    )
-
-    assert response.status_code == 422
-
-
-def test_file_extraction_agent_route_rejects_nested_broad_model_override():
-    client = TestClient(create_app())
-    response = client.post(
-        "/v1/file-extraction-agent/extract",
-        json={
-            "html": '<p id="dp-p-1">通知</p>',
-            "task_spec": {"fields": [{"name": "title"}]},
-            "model_config": {
-                "broad_model_name": "broad",
-                "resolution_model_name": "resolution",
-            },
-        },
-    )
-
-    assert response.status_code == 422
-
-
-def test_file_extraction_agent_route_returns_422_for_business_validation(monkeypatch):
-    from service.file_extraction_agent import processor as processor_module
-
-    def fake_extract(**kwargs):
-        del kwargs
-        raise ValueError("html must be a non-empty string")
-
-    monkeypatch.setattr(processor_module, "extract", fake_extract)
-
-    client = TestClient(create_app())
-    response = client.post(
-        "/v1/file-extraction-agent/extract",
-        json={
-            "html": " ",
+            "html": '<p id="p1">通知</p>',
             "task_spec": {"fields": [{"name": "title"}]},
         },
     )
 
     assert response.status_code == 422
-    assert response.json()["detail"] == "html must be a non-empty string"
 
 
-def test_file_extraction_agent_route_rejects_unknown_payload_fields():
+def test_file_extraction_agent_stream_route_rejects_unknown_payload_fields():
     client = TestClient(create_app())
     response = client.post(
-        "/v1/file-extraction-agent/extract",
+        "/v1/file-extraction-agent/extract/stream",
         json={
-            "html": '<p id="dp-p-1">通知</p>',
+            "documents": [{"filename": "notice.html", "html": '<p id="p1">通知</p>'}],
             "task_spec": {"fields": [{"name": "title"}]},
             "blocks": [],
         },

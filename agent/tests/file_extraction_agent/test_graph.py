@@ -1,181 +1,146 @@
 from __future__ import annotations
 
-from service.file_extraction_agent.impl.graph import build_failed_result, map_state_to_result, run_extraction_graph
+import json
+
+from service.file_extraction_agent.impl.graph import map_state_to_result, run_extraction_graph_stream
 from service.file_extraction_agent.impl.html_state import build_graph_state
 from service.file_extraction_agent.input_adapter import build_graph_input
 
 
-class FakeResolutionModel:
+class FakeStreamingModel:
     def __init__(self):
         self.calls = [
             {
-                "tool_name": "update_soft_plan",
+                "tool_name": "tree",
+                "arguments": {"path": "/", "depth": 2, "reason": "查看输入文档。"},
+            },
+            {
+                "tool_name": "read",
                 "arguments": {
-                    "plan": [
-                        {"step": "读取名单表并确认学生姓名", "status": "in_progress"},
-                        {"step": "写入 student_name 字段", "status": "pending"},
+                    "path": "/001-company-公司资料/001-概况/001-公司成立于2020年.md",
+                    "reason": "读取成立年份段落。",
+                },
+            },
+            {
+                "tool_name": "anchors",
+                "arguments": {
+                    "path": "/001-company-公司资料/001-概况/001-公司成立于2020年.md",
+                    "reason": "取得句子证据编号。",
+                },
+            },
+            {
+                "tool_name": "write_field",
+                "arguments": {
+                    "field_id": "founded_year",
+                    "value": 2020,
+                    "evidence": [
+                        {
+                            "path": "/001-company-公司资料/001-概况/001-公司成立于2020年.md",
+                            "sentences": ["S001"],
+                        }
                     ],
+                    "reason": "S001 写明公司成立于2020年。",
                 },
             },
             {
-                "tool_name": "read_blocks",
-                "arguments": {
-                    "section_id": "dp-table-1",
-                    "indexes": [0],
-                    "reason": "先确认名单表的列名",
-                },
+                "tool_name": "submit_result",
+                "arguments": {"reason": "提交最终结果。"},
             },
-            {
-                "tool_name": "query_table",
-                "arguments": {
-                    "section_id": "dp-table-1",
-                    "block_offset": 0,
-                    "sql": "SELECT \"姓名\" FROM data WHERE \"学院\" = '计算机学院'",
-                    "reason": "查询计算机学院对应的姓名行",
-                },
-            },
-            {
-                "tool_name": "set_field",
-                "arguments": {
-                    "name": "student_name",
-                    "value": "张三",
-                    "evidence_ids": ["dp-table-1", "dp-tr-2"],
-                    "reason": "dp-table-1 和 dp-tr-2 支持学生姓名为张三",
-                },
-            },
-            {
-                "tool_name": "update_soft_plan",
-                "arguments": {
-                    "plan": [
-                        {"step": "读取名单表并确认学生姓名", "status": "completed"},
-                        {"step": "写入 student_name 字段", "status": "completed"},
-                    ],
-                },
-            },
-            {"tool_name": "finish", "arguments": {}},
         ]
 
     def invoke(self, messages):
+        del messages
         return self.calls.pop(0)
 
 
-class FakeResolutionModelWithInlineEvidence:
-    def __init__(self):
-        self.calls = [
-            {
-                "tool_name": "read_blocks",
-                "arguments": {
-                    "section_id": "dp-p-1",
-                    "indexes": [0],
-                    "reason": "读取姓名字段候选证据",
-                },
-            },
-            {
-                "tool_name": "preview_inline_evidence",
-                "arguments": {
-                    "source_id": "dp-p-1",
-                    "start_index": 0,
-                    "count": 5,
-                    "reason": "把姓名段落细化为字段证据",
-                },
-            },
-            {
-                "tool_name": "set_field",
-                "arguments": {
-                    "name": "student_name",
-                    "value": "张三",
-                    "evidence_ids": ["dp-p-1::inline-0"],
-                    "reason": "dp-p-1::inline-0 支持学生姓名为张三",
-                },
-            },
-            {"tool_name": "finish", "arguments": {}},
-        ]
-
-    def invoke(self, messages):
-        return self.calls.pop(0)
+class FakeSlowModel(FakeStreamingModel):
+    pass
 
 
 def _input():
-    html = """
-    <h2 id="dp-h2-1">通知</h2>
-    <p id="dp-p-1">学生姓名：张三</p>
-    <table id="dp-table-1">
-      <tr id="dp-tr-1"><th>姓名</th><th>学院</th></tr>
-      <tr id="dp-tr-2"><td>张三</td><td>计算机学院</td></tr>
-    </table>
-    """
     return build_graph_input(
-        html=html,
-        task_spec={"fields": [{"name": "student_name", "type": "string", "required": True}]},
+        documents=[
+            {
+                "filename": "company.html",
+                "html": """
+                <h1 id="title">公司资料</h1>
+                <h2 id="summary">概况</h2>
+                <p id="p1">公司成立于2020年。</p>
+                """,
+            }
+        ],
+        task_spec={"fields": [{"name": "founded_year", "type": "number", "required": True}]},
     )
 
 
-def test_map_state_to_result_returns_completed_payload():
-    state = build_graph_state(_input())
-    state.field_states["student_name"] = {
-        "name": "student_name",
-        "status": "resolved",
-        "value": "张三",
-        "evidence_ids": ["dp-table-1", "dp-tr-2"],
-    }
-    state.notes.append(
+def test_run_extraction_graph_stream_yields_ndjson_events_and_final_result():
+    events = list(run_extraction_graph_stream(_input(), FakeStreamingModel()))
+
+    assert all(line.endswith("\n") for line in events)
+    payloads = [json.loads(line) for line in events]
+    assert payloads[0]["type"] == "tool_started"
+    assert payloads[0]["tool"] == "tree"
+    assert payloads[-1]["type"] == "result_completed"
+    assert payloads[-1]["result"]["fields"] == [
         {
-            "field_names": ["student_name"],
-            "evidence_ids": ["dp-table-1", "dp-tr-2"],
-            "note": "名单表中计算机学院对应张三。",
+            "field_id": "founded_year",
+            "status": "resolved",
+            "value": 2020,
+            "evidence": [
+                {
+                    "path": "/001-company-公司资料/001-概况/001-公司成立于2020年.md",
+                    "sentences": ["S001"],
+                }
+            ],
+            "reason": "S001 写明公司成立于2020年。",
         }
-    )
+    ]
+    assert [payload["seq"] for payload in payloads] == list(range(1, len(payloads) + 1))
+
+
+def test_run_extraction_graph_stream_flushes_events_after_each_tool_call():
+    model = FakeSlowModel()
+    stream = iter(run_extraction_graph_stream(_input(), model))
+
+    first_event = json.loads(next(stream))
+
+    assert first_event["type"] == "tool_started"
+    assert first_event["tool"] == "tree"
+    assert len(model.calls) == 4
+
+
+def test_map_state_to_result_returns_new_field_result_shape():
+    state = build_graph_state(_input())
+    state.field_states["founded_year"] = {
+        "field_id": "founded_year",
+        "status": "resolved",
+        "value": 2020,
+        "evidence": [
+            {
+                "path": "/001-company-公司资料/001-概况/001-公司成立于2020年.md",
+                "sentences": ["S001"],
+            }
+        ],
+        "reason": "S001 写明公司成立于2020年。",
+    }
 
     result = map_state_to_result(state)
 
     assert result.status == "completed"
-    assert result.result["student_name"] == "张三"
-    assert "broad_plan" not in result.trace
-    assert result.trace["soft_plan"] == []
-    assert result.trace["notes"] == [
-        {
-            "field_names": ["student_name"],
-            "evidence_ids": ["dp-table-1", "dp-tr-2"],
-            "note": "名单表中计算机学院对应张三。",
-        }
-    ]
-
-
-def test_build_failed_result_preserves_trace():
-    state = build_graph_state(_input())
-
-    result = build_failed_result(state=state, stage="resolution", exc=RuntimeError("boom"))
-
-    assert result.status == "failed"
-    assert result.failure_reason == "boom"
-    assert result.trace["failed_stage"] == "resolution"
-
-
-def test_run_extraction_graph_runs_resolution_with_soft_plan():
-    result = run_extraction_graph(
-        extraction_input=_input(),
-        resolution_model=FakeResolutionModel(),
-    )
-
-    assert result.status == "completed"
-    assert result.result["student_name"] == "张三"
-    assert "broad_plan" not in result.trace
-    assert result.trace["soft_plan"][0]["step"] == "读取名单表并确认学生姓名"
-    assert [item["status"] for item in result.trace["soft_plan"]] == ["completed", "completed"]
-    assert len(result.trace["actions"]) >= 1
-
-
-def test_run_extraction_graph_runs_new_read_tools_without_scan_model():
-    result = run_extraction_graph(
-        extraction_input=_input(),
-        resolution_model=FakeResolutionModelWithInlineEvidence(),
-    )
-
-    assert result.status == "completed"
-    assert result.result["student_name"] == "张三"
-    assert [action["tool_name"] for action in result.trace["actions"]] == [
-        "read_blocks",
-        "preview_inline_evidence",
-        "set_field",
-        "finish",
-    ]
+    assert result.result == {
+        "fields": [
+            {
+                "field_id": "founded_year",
+                "status": "resolved",
+                "value": 2020,
+                "evidence": [
+                    {
+                        "path": "/001-company-公司资料/001-概况/001-公司成立于2020年.md",
+                        "sentences": ["S001"],
+                    }
+                ],
+                "reason": "S001 写明公司成立于2020年。",
+            }
+        ]
+    }
+    assert "soft_plan" not in result.trace

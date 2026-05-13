@@ -6,26 +6,47 @@ from typing import Any
 
 from service.file_extraction_agent.impl.html_index import build_html_document
 from service.file_extraction_agent.impl.html_state import HtmlExtractionInput
-from service.file_extraction_agent.schemas import FieldDefinition, RunOptions, TaskSpec
+from service.file_extraction_agent.schemas import FieldDefinition, InputDocument, RunOptions, TaskSpec
 
 
 def build_graph_input(
     *,
-    html: str,
+    documents: Any,
     task_spec: Any,
     run_options: Any = None,
 ) -> HtmlExtractionInput:
-    if not isinstance(html, str) or not html.strip():
-        raise ValueError("html must be a non-empty string")
+    normalized_documents = normalize_documents(documents)
     normalized_task_spec = normalize_task_spec(task_spec)
     normalized_run_options = normalize_run_options(run_options)
-    document = build_html_document(html)
+    document = build_html_document([item.model_dump() for item in normalized_documents])
     return HtmlExtractionInput(
-        html=html,
+        documents=normalized_documents,
         task_spec=normalized_task_spec,
         document=document,
         run_options=normalized_run_options,
     )
+
+
+def normalize_documents(documents: Any) -> list[InputDocument]:
+    if not isinstance(documents, list) or not documents:
+        raise ValueError("documents must be a non-empty list")
+    normalized: list[InputDocument] = []
+    for index, item in enumerate(documents, start=1):
+        if isinstance(item, InputDocument):
+            document = item
+        elif isinstance(item, dict):
+            document = InputDocument(**item)
+        else:
+            document = InputDocument(
+                filename=getattr(item, "filename", ""),
+                html=getattr(item, "html", ""),
+            )
+        if not document.filename.strip():
+            raise ValueError(f"documents[{index}].filename is required")
+        if not document.html.strip():
+            raise ValueError(f"documents[{index}].html must be a non-empty string")
+        normalized.append(document)
+    return normalized
 
 
 def normalize_task_spec(task_spec: Any) -> TaskSpec:
@@ -64,4 +85,4 @@ def normalize_run_options(run_options: Any) -> RunOptions:
     return options
 
 
-__all__ = ["build_graph_input", "normalize_task_spec", "normalize_run_options"]
+__all__ = ["build_graph_input", "normalize_documents", "normalize_task_spec", "normalize_run_options"]

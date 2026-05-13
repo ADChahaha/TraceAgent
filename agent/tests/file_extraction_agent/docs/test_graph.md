@@ -1,20 +1,20 @@
 # test_graph.py
 
-这份测试覆盖 HTML 抽取图的顶层编排。它不连接真实模型，而是用 fake resolution model 验证 resolution 阶段、软计划 trace、结果映射和失败 trace 的边界行为。
+这份测试覆盖新抽取图的流式编排和最终结果映射。图执行器不再返回旧的裸字段值，而是输出 NDJSON 事件流，最后以字段对象数组完成结果。
 
 实现链路：
 
 ```text
-测试 HTML + task_spec
-  -> build_graph_input 归一化输入
-  -> run_extraction_graph 直接构造 GraphState 并进入 resolution
-  -> resolution fake model 按 update_soft_plan/read_blocks/query_table/set_field/update_soft_plan/finish 或 read_blocks/preview_inline_evidence/set_field/finish 顺序调用工具
-  -> map_state_to_result 把 soft_plan、plan_statuses、notes、field_states、actions 写入 ExtractionResult.trace
+documents + task_spec
+  -> build_graph_state
+  -> fake model 依次调用 tree/read/anchors/write_field/submit_result
+  -> 工具层写入 state.events
+  -> run_extraction_graph_stream 逐条 yield NDJSON
+  -> map_state_to_result 生成 fields 数组和 trace
 ```
 
 ## 测试函数
 
-- `test_map_state_to_result_returns_completed_payload`：确认已解析字段会进入 completed 结果，trace 不再包含 broad plan，并保留 soft plan 和 `record_note` 写入的 notes。
-- `test_build_failed_result_preserves_trace`：确认 resolution 抛异常时会返回 failed 结果，并在 trace 中保留失败阶段。
-- `test_run_extraction_graph_runs_resolution_with_soft_plan`：确认顶层流程直接进入 resolution，软计划写入 trace，然后按工具协议读取表格、写字段、把 soft plan 全部更新为 completed，并最终 finish。
-- `test_run_extraction_graph_runs_new_read_tools_without_scan_model`：确认只用读取工具和 inline 证据预览也能完成字段写入，不依赖隔离 scan 模型。
+- `test_run_extraction_graph_stream_yields_ndjson_events_and_final_result`：确认流式图会按工具调用顺序输出 NDJSON 事件，事件 `seq` 连续递增，最后一条是 `result_completed`。
+- `test_run_extraction_graph_stream_flushes_events_after_each_tool_call`：确认 graph stream 会在每次工具调用后立即产出事件，而不是等整轮 resolution 结束后批量返回。
+- `test_map_state_to_result_returns_new_field_result_shape`：确认最终结果使用 `fields[]` 字段对象结构，并且 trace 不再包含 soft plan。

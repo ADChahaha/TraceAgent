@@ -20,9 +20,9 @@
 
 - `backend` 通过 HTTP 把上传 PDF bytes 传给 `document_processor`
 - `agent service` 返回 PDF 文件名和抽取友好的语义 HTML fragment
-- 如果后续要走字段抽取，`backend` 需要聚合 `document_processor` 返回的 HTML；blocks 留在 backend 侧用于证据回填和 trace 展示
-- `backend` 通过 HTTP 把已聚合的 HTML 和外部 `task_spec` 传给 `file_extraction_agent`
-- `agent service` 返回字段级 `ExtractionResult(result + trace)`
+- 如果后续要走字段抽取，`backend` 需要把多个 `filename/html` 组织成 `documents`，并和外部 `task_spec` 一起传给 `file_extraction_agent`
+- `file_extraction_agent` 通过 NDJSON stream 返回真实工具事件，`backend` 后续负责消费、入库和转发前端
+- `agent service` 不直接写数据库；最终结果也作为 stream 中的 `result_completed` 事件返回
 - `backend` 从字段结果、trace refs 和 trace actions 组装 `field_outputs + refs_with_text + field_processes`，再通过 HTTP 调用 `route_policy_agent`
 - `route_policy_agent` 返回字段级 `accept / review / reject`，后续 review、final result 和 audit 都由 `backend` 保存和驱动
 
@@ -112,44 +112,39 @@ agent/
 
 当前业务入口包括：
 
-- `service.file_extraction_agent.processor.extract(...)`
+- `service.file_extraction_agent.processor.extract_stream(...)`
 - HTTP 入口：`routes/file_extraction_agent.py`
 
-当前 `file_extraction_agent` 只有 resolution 阶段。它直接根据字段语义和文档 outline 调用 HTML 工具读取证据，并在需要时用 `update_soft_plan` 写入 stage-like 软计划。resolution 必须让每个字段通过 `set_field` 进入 `resolved` 或 `failed`：
+当前 `file_extraction_agent` 只有 resolution 阶段。它把多个语义 HTML 文件建模成只读虚拟文件树，让模型通过真实工具事件完成阅读、证据绑定和字段提交：
 
 ```text
-backend 聚合后的 html + task_spec
-  -> input_adapter.py 校验 html/task_spec/run_options 并组装 HtmlExtractionInput
-  -> html_index.py 基于已有 HTML id 构建 document tree、elements、tables 和 row_index；tree 按 DOM/section 容器语义保留 section、heading 和同层 block items 的顺序与预览
-  -> resolution_new.py 把 task fields 和 document outline 交给 LangGraph tool-calling loop
-  -> resolution model 在必要时先调用 update_soft_plan 写入软计划，再调用 overview / read_section / read_blocks / read_block_range / read_list / query_table 读取证据
-  -> 如果文本块将作为最终证据，先调用 preview_inline_evidence 细化到 inline id
-  -> 如需保留字段与证据之间的短解释，调用 record_note 写入证据笔记
-  -> 证据足够或失败明确后调用 set_field 写入字段状态、值、证据 id 和原因；resolved 字段强制文本 inline、表格 row、列表 item 粒度
-  -> 所有字段 set_field 后先把当前 soft_plan 全部置为 completed，再调用 finish 做完整性校验
-  -> graph 映射成 ExtractionResult(result + trace)
-  -> trace 保留 soft_plan、plan_statuses、notes、document_tree、field_states 和 actions
+documents(filename + html) + task_spec
+  -> input_adapter.py 校验 documents/task_spec/run_options 并组装 HtmlExtractionInput
+  -> html_index.py 解析每个 HTML，生成 /001-filename-title/... 虚拟文件树和 path -> node 索引
+  -> section header 变成目录，paragraph/list/table 分别变成 .md/.list/.table 文件
+  -> resolution_new.py 把 task fields、schema 说明和虚拟树工具交给 LangGraph tool-calling loop
+  -> 模型用 tree/read/anchors/query_table 定位材料，并在每次主动动作里写用户可见 reason
+  -> 模型用 write_field(field_id, value, evidence, status, reason) 覆盖写入字段结果
+  -> submit_result 内部做 schema、类型和 evidence selector 校验
+  -> graph.py 按工具调用顺序输出 NDJSON 事件，最终用 result_completed 返回 fields[] 和 trace
 ```
 
-这个设计不承诺 100% 召回。它的目标是让抽取过程变成可回放的“计划、读取、查表、写字段、完成”动作链路；证据不足或工具诊断提示风险时，字段可以先 `failed`，后续由 route policy 和人工 review 接住。所有读取、查表、计划推进、字段写入和 finish 都必须进入 trace，方便后续审核和调试。
+这个设计不承诺 100% 召回。它的目标是让抽取过程变成可回放的“展开目录、读取文件、查询表格、写字段、提交结果”动作链路；证据不足时字段可以写成 `missing`，后续由 route policy 和人工 review 接住。所有工具开始、完成、失败、字段写入和最终结果都必须进入 stream 事件，方便后续审核和调试。
 
 工具边界保持精简：
 
-- `update_soft_plan(plan)`：轻量工作记忆和 replay 标题；prompt 鼓励它提交 stage-like 的局部工作步骤和状态。
-- `overview()`：返回 section container、heading 和同层 block items 的混排 outline；heading 不会默认拥有后续平级块。
-- `read_section(section_id, reason)`：只读取 heading 元素真实后代的章节预览；平级段落、列表和表格由 overview 直接暴露。
-- `read_blocks(section_id, indexes, reason)`：按 scope id 和模型选择的 index 列表读取块；section 容器按真实 DOM 后代读，heading 只按真实后代读，叶子块用 `indexes=[0]` 读。
-- `read_block_range(section_id, start_index, count, reason)`：按同一 scope 连续读取一段 block，用于顺序补上下文。
-- `read_list(section_id, block_offset, item_offset, number, reason)`：对 list block 做分页读取；overview 里的顶层 list id 可以直接配 `block_offset=0` 使用。
-- `query_table(section_id, block_offset, sql, reason)`：对 table block 执行安全 SELECT；overview 里的顶层 table id 可以直接配 `block_offset=0` 使用；返回 SQL 行、轻量 `table_audit` 和查询 `summary`。
-- `preview_inline_evidence(source_id, start_index, count, reason)`：把已观察到的文本块切成 inline 候选证据，用于写字段前细化文本证据。
-- `record_note(field_names, evidence_ids, note, reason)`：记录字段、已观察证据 id 和简短解释之间的关系；只作为 replay 与工作记忆，不替代 `set_field`。
-- `set_field(name, value, evidence_ids, reason, status, failure_reason)`：写字段值或失败状态，并校验证据 id、证据粒度与字段类型。
-- `finish()`：校验所有字段已完成、必填字段、证据一致性，以及当前 soft plan 是否全部完成。
+- `tree(path, depth, reason)`：展开虚拟文件树，只返回目录和文件名，不返回正文。
+- `read(path, offset, limit, reason)`：读取 `.md/.list/.table` 文件；paragraph 返回纯正文，list/table 返回带 metadata 和编号的 Markdown。
+- `anchors(path, reason)`：只用于 `.md` paragraph，返回 `Sxxx` 句子编号和短 preview。
+- `query_table(path, sql, offset, limit, reason)`：只用于 `.table` 文件，在内存 SQLite 表 `data` 上执行安全 SELECT，并保留原始 `Rxxx` 行号。
+- `write_field(field_id, value, evidence, status, reason)`：对一个 schema 字段做可覆盖定案；数组字段也一次写入完整数组。
+- `submit_result(reason)`：内部校验当前字段缓冲区，成功返回最终结果，失败返回结构化错误供模型继续修正。
 
-列表和表格都支持 overview 直接入口。模型应先用 document outline 定位目标块；如果 overview 已给出 list id，就直接用 `read_list(list_id, 0, item_offset, number)` 读取列表项，否则先通过 `overview/read_section` 的 block index 选择列表块，再调用 `read_blocks(section_id, [index], reason)` 确认 ref，之后用 `read_list(section_id, block_offset, item_offset, number)` 展开。
+paragraph 的证据 selector 使用 `{path, sentences:["S001"]}`，list 使用 `{path, items:["I001"]}`，table 使用 `{path, rows:["R001"]}`。`reason` 是用户可见动作说明，不是证据；证据文本必须能通过虚拟路径和文件内编号反查回原文。
 
-表格处理是 `file_extraction_agent` 内部的专用检索能力，而不是业务特例。它只理解通用表格结构和字段提示，不硬编码“学术论文”“文明寝室”等业务词。模型应先用 document outline 定位表格；如果 overview 已给出 table id，就直接用 `query_table(table_id, 0, sql)` 查询，否则再通过 `overview/read_section` 的 block index 选择表格块，必要时调用 `read_blocks(section_id, [index], reason)` 确认 ref，之后用 `query_table(section_id, block_offset, sql)` 查询。`overview` 只给 table id、行数和列名；`query_table` 的 `rows[].values` 直接显示 SQL 选中 cell 是否为空，`table_audit.blank_cells` 给整表每列空 cell 数和前 10 个空值行 id，`summary` 给本次查询返回行数和选中输出列空值数量。字段最终定案通过 `set_field` 引用已观察到的 inline id、list item id 或 table row id；只引用整段文本、list 容器或 table 容器会被拒绝。
+列表和表格都是文件内阅读对象，不拆成子文件。`read(.list)` 会返回 frontmatter metadata 和 Markdown list，列表项编号为 `I001`、`I001.001`；`read(.table)` 会返回 frontmatter metadata 和 Markdown table，行编号为 `R001`。大表需要按条件定位时，模型改用 `query_table(.table, sql)` 分页查询。
+
+paragraph 文件名使用同级编号加段落前 `n` 个清洗后的可见字符，例如 `001-公司成立于2020年.md`。这个名字只是导航预览；完整正文只能通过 `read(path)` 读取，句子级证据只能通过 `anchors(path)` 获取。
 
 当前不把 image 作为抽取对象。文档内容类型先收敛为：
 
@@ -159,30 +154,30 @@ section / heading / text / list / table
 
 OCR 或表格结构质量提示不参与 resolution 或 route policy 的自动判断。它只在 backend 组装 review handoff 时作为人工审核辅助信息展示，例如提示某个表格 block 行列错位、空 cell 比例高、文本异常字符多或 block 过长。主抽取链路仍以证据召回、字段定案和 route policy 为准。
 
-两阶段都使用 LangGraph 工具调用。`impl/graph.py` 负责编排阶段流转，模型调用层当前由 `service/file_extraction_agent/impl/model_factory.py` 统一处理：
+抽取阶段使用 LangGraph 工具调用。`impl/graph.py` 负责编排流式事件，模型调用层当前由 `service/file_extraction_agent/impl/model_factory.py` 统一处理：
 
 ```text
 调用方显式传入 model_config，或部署环境提供 BASE_URL / OPENAI_API_KEY / RESOLUTION_MODEL / MODEL
   -> 如果 resolution 模型名为空，build_chat_model 直接拒绝
   -> 用连接配置创建 langchain_openai.ChatOpenAI(...)
   -> resolution_new 通过 LangGraph tool-calling 执行
+  -> graph.py 将工具事件序列化成 NDJSON
   -> 如果构造或 invoke 阶段发生错误，不切换协议重试
 ```
 
 这样把“连哪个模型服务”和“结构化输出协议怎么选”拆开管理：
 
 - 环境变量负责连接信息、密钥和可选模型名
-- HTTP 入参或 `processor.extract(...)` 的 `model_config` 负责显式覆盖模型连接配置
+- HTTP 入参或 `processor.extract_stream(...)` 的 `model_config` 负责显式覆盖模型连接配置
 - `model_factory.py` 负责把连接配置合并成 resolution `ChatOpenAI` runnable
 
-两阶段的动作边界由工具 schema 控制：
+动作边界由工具 schema 控制：
 
-- `resolution_new.py` 负责执行 `update_soft_plan`、`overview`、`read_section`、`read_blocks`、`read_list`、`query_table`、`preview_inline_evidence`、`record_note`、`set_field` 和 `finish`。精确工具参数和读取行为以绑定工具时注入的函数 docstring / schema 为准，resolution system prompt 只保留通用执行策略、轻量 plan 软约束和证据笔记约束。
+- `resolution_new.py` 负责执行 `tree`、`read`、`anchors`、`query_table`、`write_field` 和 `submit_result`。精确工具参数和读取行为以绑定工具时注入的函数 docstring / schema 为准，resolution system prompt 只保留通用执行策略、schema 抽取要求和 evidence selector 约束。
 
 更具体的 schema、校验和任务配置，建议直接查看：
 
 - `service/document_processor/docs/API.md`
-- `service/file_extraction_agent/docs/API.md`
 - `service/file_extraction_agent/schemas.py`
 - `service/file_extraction_agent/impl/resolution_new.py`
 
@@ -201,9 +196,9 @@ OCR 或表格结构质量提示不参与 resolution 或 route policy 的自动�
 - Python 入口：`service.route_policy_agent.processor.evaluate(...)`
 - HTTP 入口：`routes/route_policy_agent.py`
 
-这一层只看任务/字段定义、字段输出、refs 中携带的证据文本与来源位置，以及 resolution 过程摘要。过程摘要来自 backend 对 `actions` 的归一化：会保留读取、查表、计划推进、字段写入、finish、表格诊断摘要和失败原因等事实，不包含完整原文、表格原始行、cell 列表、action refs 或模型原始推理。更具体的设计见：
+这一层只看任务/字段定义、字段输出、refs 中携带的证据文本与来源位置，以及 resolution 过程摘要。过程摘要来自 backend 对 `actions` 或 NDJSON 工具事件的归一化：会保留展开目录、读取、查表、字段写入、提交结果和失败原因等事实，不包含完整原文、表格原始行、cell 列表、action refs 或模型原始推理。更具体的设计见：
 
-对于由其他字段派生的字段，`route_policy_agent` 会按 `validation_rules.source_field/source_fields` 把来源字段的过程摘要作为 `related_field_processes` 注入 prompt。这样数量字段或复制候选字段能看到源字段执行过哪些读取、查表、写字段和定案动作，但仍不会看到工具返回正文或表格行。
+对于由其他字段派生的字段，`route_policy_agent` 会按 `validation_rules.source_field/source_fields` 把来源字段的过程摘要作为 `related_field_processes` 注入 prompt。这样数量字段或复制候选字段能看到源字段执行过哪些展开目录、读取、查表、写字段和定案动作，但仍不会看到工具返回正文或表格行。
 
 route policy 的结构化输出策略也固定为 `tool_call`，显式传入 `json_schema` 或 `auto` 会被拒绝。
 
@@ -214,10 +209,9 @@ route policy 的结构化输出策略也固定为 `tool_call`，显式传入 `js
 ```text
 raw file
   -> document_processor
-  -> html
-  -> backend aggregates html when needed
-  -> file_extraction_agent
-  -> extraction result + trace
+  -> documents(filename + html)
+  -> file_extraction_agent stream
+  -> result_completed(fields[] + trace)
   -> route_policy_agent
   -> accept / review / reject
 ```
@@ -227,16 +221,16 @@ raw file
 1. `backend` 创建任务，并在当前请求内读取上传文件 bytes；原始文件不持久化。
 2. `backend` 逐个 HTTP 调用 `document_processor`，把 PDF 转成语义 HTML fragment。
 3. `backend` 保存或展示 `filename/html`。
-4. 如果任务需要字段抽取，`backend` 合并多文档 HTML，文档 blocks 留在 backend 侧用于证据回填和 trace 展示。
-5. `backend` 将已校验聚合结果和外部 `task_spec` 交给 `file_extraction_agent`。
-6. `file_extraction_agent` 输出字段候选证据、工具留痕和字段最终结果。
-7. `backend` 从字段结果、证据 refs 和 trace actions 组装 `field_outputs + refs_with_text + field_processes`，交给 `route_policy_agent`。
+4. 如果任务需要字段抽取，`backend` 把多个文件整理为 `documents`；文档 blocks 留在 backend 侧用于证据回填和 trace 展示。
+5. `backend` 将已校验 `documents` 和外部 `task_spec` 交给 `file_extraction_agent` 的 stream 入口。
+6. `file_extraction_agent` 输出 NDJSON 工具事件、字段写入事件和最终 `result_completed`。
+7. `backend` 从字段结果、证据 refs 和工具事件组装 `field_outputs + refs_with_text + field_processes`，交给 `route_policy_agent`。
 8. `route_policy_agent` 先通过 `input_validator` 校验字段名、字段输出、refs 文本和两阶段过程摘要完整性，再用小 LLM 输出字段级 `accept / review / reject`。
 9. `backend` 保存抽取结果、trace 和 route 决策，并继续驱动 review、field commit 和 audit。
 
 可以理解为：
 
-`raw PDF -> document_processor -> semantic html -> backend prepared blocks -> file_extraction_agent -> extraction result + trace -> route_policy_agent -> route decisions`
+`raw PDF -> document_processor -> documents(filename + html) -> file_extraction_agent stream -> result_completed -> route_policy_agent -> route decisions`
 
 ## HTTP 出口
 
@@ -246,7 +240,7 @@ raw file
 HTTP 请求
   -> main.create_app() 挂载 document_processor / file_extraction_agent / route_policy_agent 三个 router
   -> route 层完成 multipart 或 JSON 协议适配
-  -> 调用对应业务入口 process(...) / extract(...) / evaluate(...)
+  -> 调用对应业务入口 process(...) / extract_stream(...) / evaluate(...)
   -> 把业务结果映射成 HTTP 响应
 ```
 
@@ -257,10 +251,10 @@ HTTP 请求
   - 调用 `service.document_processor.processor.process(...)`
   - 返回 `filename/html`
   - 兼容保留旧路径 `POST /v1/ocr/process`
-- `POST /v1/file-extraction-agent/extract`
-  - 接收外部已准备好的 `html`、必填 `task_spec`、可选 `run_options` 以及可选模型连接参数
-  - 调用 `service.file_extraction_agent.processor.extract(...)`
-  - 返回 `ExtractionResult`
+- `POST /v1/file-extraction-agent/extract/stream`
+  - 接收外部已准备好的 `documents`、必填 `task_spec`、可选 `run_options` 以及可选模型连接参数
+  - 调用 `service.file_extraction_agent.processor.extract_stream(...)`
+  - 返回 `application/x-ndjson`，每行是一个工具事件或最终 `result_completed`
 - `POST /v1/route-policy-agent/evaluate`
   - 接收 `TaskSpec`、`field_outputs`、`refs_with_text` 和 `field_processes`
   - 调用 `service.route_policy_agent.processor.evaluate(...)`

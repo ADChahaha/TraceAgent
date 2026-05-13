@@ -1,154 +1,103 @@
 # file_extraction_agent
 
-HTML-based document field extraction agent.
-
-输入是 `document_processor` 产出的语义 HTML。这里先为 HTML 建索引，再用 LangGraph 工具把证据读出来，最后把每个字段写成 `resolved` 或 `failed`，并把全过程放进 `trace`。
+`file_extraction_agent` 是只读语义 HTML 字段抽取器。它接收多个 `documents(filename + html)` 和用户给定 `task_spec`，把材料虚拟成文件树，再让模型通过工具事件完成阅读、证据绑定和字段提交。
 
 ## 工作链路
 
 ```text
-html + task_spec + run_options
-  -> input_adapter 校验输入并构造 HtmlExtractionInput
-  -> html_index 基于已有 id 构建 document.tree / elements_by_id / tables_by_id / row_index
-  -> resolution_new 生成任务提示并挂载工具
-  -> update_soft_plan 写入 stage-like 软计划
-  -> overview 先给出混排 outline
-  -> read_section / read_blocks / read_block_range / read_list / query_table 读取证据
-  -> preview_inline_evidence 把已读文本块细化成 inline 证据 id
-  -> set_field 写入字段值或失败原因
-  -> finish 做最终完整性校验
-  -> ExtractionResult.result + trace
+documents + task_spec + run_options
+  -> input_adapter 校验 documents 非空、每个 document 有 filename/html、task_spec.fields 非空
+  -> html_index 解析 HTML，生成 /001-filename-title/... 虚拟树和 path -> node 索引
+  -> paragraph/list/table 分别建成 .md/.list/.table 文件，section header 建成目录
+  -> resolution_new 生成抽取提示并挂载 tree/read/anchors/query_table/write_field/submit_result
+  -> 模型按 schema 浏览材料、读取文件、查询表格，并用 reason 说明每次用户可见动作
+  -> write_field 覆盖写入字段值、状态和 evidence selector
+  -> submit_result 校验必填字段、类型和 evidence selector
+  -> graph 按顺序输出 NDJSON 工具事件，最后输出 result_completed
 ```
 
-`document.tree` 不是纯标题树。它按 DOM 里的语义容器组织 outline：`section` 才拥有自己的子节点；和 heading 平级的 `p`、`ul`/`ol`、`table` 会保持同层 item，不会被默认算进前一个 heading。
+虚拟树不会落盘。路径是给模型导航和给证据反查用的稳定界面；内部仍通过 `HtmlDocument.nodes_by_path` 找回 paragraph 文本、list item 和 table row。
+
+## 虚拟文件树
+
+建树规则：
+
+- 根目录固定为 `/`。
+- 每个输入文件是根目录下的文档目录，目录名形如 `001-source-title`。
+- section header 是目录。
+- paragraph 是 `.md` 文件，文件名使用同级编号加段落前 `n` 个清洗后的可见字符，例如 `001-公司成立于2020年.md`。
+- list 是 `.list` 文件，内部 item 编号为 `I001`、`I001.001`。
+- table 是 `.table` 文件，内部 row 编号为 `R001`。
+- 同级节点都先按原文顺序编号，用编号保持排序并消除同名冲突。
+
+paragraph 文件名只是预览，不代表截断正文。完整正文由 `read(path)` 返回，句子编号由 `anchors(path)` 返回。
 
 ## 工具
 
 | Tool | 作用 |
 | --- | --- |
-| `update_soft_plan(plan)` | 轻量工作记忆和 replay 标题；提交由 `step/status` 组成的 stage-like 软计划。 |
-| `overview()` | 返回混排 outline，包含 `section`、heading、`p`、list、table 的可读摘要。 |
-| `read_section(section_id, reason)` | 只读 heading 自身真实后代的 block previews；平级块由 overview 直接暴露。 |
-| `read_blocks(section_id, indexes, reason)` | 按模型选择的 index 列表读取离散块；scope 可以是 `section` 容器、heading 真实后代，或单个叶子块 id。 |
-| `read_block_range(section_id, start_index, count, reason)` | 从 `start_index` 开始连续读取 `count` 个块，用于顺序补上下文。 |
-| `read_list(section_id, block_offset, item_offset, number, reason)` | 对 list block 分页读取 list item；overview 里的顶层 list id 可直接配 `block_offset=0` 使用。 |
-| `query_table(section_id, block_offset, sql, reason)` | 对 table block 执行安全 SELECT；overview 里的顶层 table id 可直接配 `block_offset=0` 使用；返回 SQL 行、轻量 `table_audit` 和查询 `summary`。 |
-| `preview_inline_evidence(source_id, start_index, count, reason)` | 把已读取的文本块切成 inline 证据候选，返回可用于 `set_field` 的 inline id。 |
-| `set_field(name, value, evidence_ids, reason, status, failure_reason)` | 写字段值或失败状态。 |
-| `finish()` | 校验所有字段是否已完成。 |
+| `tree(path, depth, reason)` | 展开虚拟目录，只返回目录和文件名。 |
+| `read(path, offset, limit, reason)` | 读取 `.md/.list/.table` 文件；paragraph 返回纯正文，list/table 返回 Markdown。 |
+| `anchors(path, reason)` | 只用于 `.md`，返回 `Sxxx` 句子编号和短 preview。 |
+| `query_table(path, sql, offset, limit, reason)` | 只用于 `.table`，在内存表 `data` 上执行单条安全 SELECT。 |
+| `write_field(field_id, value, evidence, status, reason)` | 写入或覆盖一个 schema 字段的最终值。 |
+| `submit_result(reason)` | 校验当前字段缓冲区，成功返回最终 `fields[]`，失败返回结构化错误。 |
 
-工具的证据粒度规则：
+`reason` 是用户可见动作说明，不是证据，也不是模型推理链。工具 wrapper 会为每次调用写入 `tool_started`、`tool_completed` 或 `tool_failed`，字段写入另有 `field_written`，最终提交另有 `result_completed`。
 
-| 内容类型 | 定位 / 读取工具 | 最终 `set_field` 证据 |
-| --- | --- | --- |
-| 普通文本、标题、caption | 先用 `read_blocks` / `read_block_range` 读到文本块，再用 `preview_inline_evidence` 预览候选片段。 | 使用 `preview_inline_evidence` 返回的 `inline_id`，例如 `p001_b004::inline-0`。 |
-| 列表 | `read_list` 按 `item_offset` 分页读取 list items；顶层 list id 配 `block_offset=0`。 | 至少包含对应 `li` item id；只给 `ul` / `ol` 容器 id 会被拒绝。 |
-| 表格 | `query_table` 用安全 SELECT 查询 table rows；顶层 table id 配 `block_offset=0`。 | 至少包含对应 `tr` row id；只给 table id 会被拒绝。 |
+## 读取与证据
 
-`preview_inline_evidence` 不负责替模型选择答案，只把已读文本块拆成可引用的 inline 候选。字段写入时由 `set_field` 强制检查证据是否已经被本轮工具观察到，以及粒度是否足够细。
-
-## 轻量 plan 纪律
-
-`update_soft_plan` 不是硬 stage 状态机，也不是证据账本；它只帮助模型和用户看清当前这段工作在解决什么。prompt 鼓励模型把软计划写成 stage-like 的局部阅读步骤，标出当前正在理解的文档区域、可能相关的字段组和后续待读范围。后续读取、preview 和 `set_field` 尽量围绕当前 `in_progress` 步骤展开。如果切换到不同主题、不同条款区域或明显不同的字段组，应先刷新 `update_soft_plan`。
-
-为了增强模型记忆并让 replay 更清楚，`set_field.evidence_ids` 优先使用最近一次 `update_soft_plan` 之后读到或重新 `preview_inline_evidence` 过的证据。如果需要复用更早 plan 里读过的相关证据，prompt 鼓励在当前 plan 里重新读取或重新 preview。这里没有工具层硬限制，也不设置固定字段数量上限。
-
-## 读取规则
-
-`read_section`
-  -> 只接受 heading 节点
-  -> 只读该 heading 元素真实包含的后代块，不把后面的平级 `p` / list / table 算进去
-
-`read_blocks`
-  -> 接受 section 容器、heading、或叶子块 id
-  -> 用 indexes 列表读取模型从 overview/read_section 预览中选中的离散块；非连续证据优先用它
-  -> 如果需要连续扫一段上下文，改用 read_block_range，避免把连续窗口塞成很长 indexes 列表
-  -> 普通 `p` 直接返回完整文本 HTML
-  -> `ul` / `ol` 可以返回 `list-ref`；如果 overview 已给出 list id，也可以直接用 `read_list`
-  -> `table` 可以返回 `table-ref`；如果 overview 已给出 table id，也可以直接用 `query_table`
-
-`read_block_range`
-  -> 接受和 `read_blocks` 相同的 scope
-  -> 用 `start_index + count` 连续读取一段上下文，最多按工具上限返回 20 个块
-  -> 返回结构仍包含实际 `indexes`，方便 replay 看清模型读了哪些块
-
-`preview_inline_evidence`
-  -> 只接受已经被本轮读取观察到的文本类元素 id，例如 `p`、heading 或 caption
-  -> 把文本按句子边界切成 inline 候选；长合同句保持完整，不按固定字符数二次截断
-  -> 返回 `inline_id`、原始 `source_id`、文本和字符范围，并把这些 inline id 标记为已观察
-  -> 只在准备写字段证据时使用；table 证据走 `query_table` 的 row id，list 证据走 `read_list` 的 item id
-
-`set_field`
-  -> `resolved` 字段必须使用足够细的证据粒度
-  -> 文本值使用 `preview_inline_evidence` 返回的 inline id，不能直接用整段 `p` 或 heading id
-  -> 表格值必须包含 `query_table` 返回的 `tr` 行 id，不能只用 table id
-  -> 列表值必须包含 `read_list` 返回的 `li` item id，不能只用 `ul` / `ol` id
-
-最上层 `p` 可以直接这样读：
+paragraph：
 
 ```text
-overview()
-  -> item_id="dp-p-1", type="TEXT", parent_section_id="", read_with="read_blocks"
-
-read_blocks("dp-p-1", [0], reason)
-  -> 返回这个 p 的完整内容
-
-preview_inline_evidence("dp-p-1", 0, 20, reason)
-  -> 返回 dp-p-1::inline-0 等 inline 证据 id
+read("/001-file/001-概况/001-公司成立于2020年.md")
+  -> 返回完整 paragraph 正文，不带句子号
+anchors("/001-file/001-概况/001-公司成立于2020年.md")
+  -> [{"id": "S001", "preview": "..."}]
+write_field(..., evidence=[{"path": "...md", "sentences": ["S001"]}])
 ```
 
-section 下面的 `p` 也一样可以直接按块 id 读取；如果想按父容器顺序读，就先看 overview 里的 section 容器 id，再用 `read_blocks(section_id, [1, 3], reason)` 读取选中的块。和 heading 平级的 `p` 不需要、也不会通过前一个 heading 来读。
-
-连续扫上下文时这样读：
+list：
 
 ```text
-read_block_range("dp-page-1", 4, 6, reason)
-  -> 返回 dp-page-1 scope 里 index 4 到 9 的块
+read("/001-file/002-条款/001-服务范围.list")
+  -> frontmatter metadata + Markdown list
+  -> - [I001] ...
+write_field(..., evidence=[{"path": "...list", "items": ["I001"]}])
 ```
 
-顶层 list 可以直接这样读：
+table：
 
 ```text
-overview()
-  -> item_id="dp-ul-1", type="LIST", read_with="read_list", block_offset=0
-
-read_list("dp-ul-1", 0, 0, 20, reason)
-  -> 返回 list items 和 evidence_ids
+read("/001-file/003-费用/001-费用明细.table", offset=0, limit=30)
+  -> frontmatter metadata + Markdown table
+  -> | R001 | ... |
+query_table("/001-file/003-费用/001-费用明细.table", "SELECT * FROM data WHERE ...")
+  -> 查询结果仍保留原始 Rxxx 行号
+write_field(..., evidence=[{"path": "...table", "rows": ["R001"]}])
 ```
 
-顶层 `table` 可以直接这样查：
-
-```text
-overview()
-  -> item_id="dp-table-1", type="TABLE", read_with="query_table", block_offset=0
-
-query_table("dp-table-1", 0, "SELECT ... FROM data", reason)
-  -> 返回匹配 rows、evidence_ids、轻量 table_audit 和查询 summary
-```
-
-表格空值读取规则：
-
-```text
-overview()
-  -> 只暴露 table id、行数和列名
-query_table(...)
-  -> rows[].values 只包含 SQL 选中的列；如果选中 cell 为空，值就是 ""
-  -> table_audit.blank_cells 按列返回整表空 cell 数和前 10 个空值行 id
-  -> summary 返回本次 SQL 的返回行数，以及选中输出列在返回行里有多少空值
-```
-
-## 追踪
-
-每次工具调用都会进入 `trace.actions`，字段最终结果会进入 `trace.field_states`。这样 backend 和 frontend 不需要猜模型到底看了什么，只需要回放 action 就行。
+`submit_result` 会校验 selector 类型和编号是否存在：`.md` 只能用 `sentences`，`.list` 只能用 `items`，`.table` 只能用 `rows`。
 
 ## 公共入口
 
-```python
-from service.file_extraction_agent.processor import extract
+Python 入口返回 NDJSON 字符串迭代器：
 
-result = extract(
-    html='<p id="dp-p-1">正文</p>',
-    task_spec={"fields": [{"name": "title", "type": "string", "required": True}]},
+```python
+from service.file_extraction_agent.processor import extract_stream
+
+stream = extract_stream(
+    documents=[
+        {
+            "filename": "company.html",
+            "html": "<h1>公司资料</h1><h2>概况</h2><p>公司成立于2020年。</p>",
+        }
+    ],
+    task_spec={
+        "fields": [
+            {"name": "founded_year", "type": "number", "required": True}
+        ]
+    },
     model_config={
         "base_url": "https://example.com/v1",
         "api_key": "...",
@@ -156,6 +105,9 @@ result = extract(
     },
     run_options={"max_tool_calls": 40},
 )
+
+for line in stream:
+    ...
 ```
 
-更完整的实现边界和设计说明见 [docs/DESIGN.md](docs/DESIGN.md)。
+HTTP 入口是 `POST /v1/file-extraction-agent/extract/stream`，返回 `application/x-ndjson`。更完整的实现边界和设计说明见 [docs/DESIGN.md](docs/DESIGN.md)。

@@ -3,7 +3,7 @@
 `agent/` 是 TraceAgent 的 AI 能力层，给 `backend` 提供三个 HTTP 阶段：
 
 - `document_processor`：把 PDF 标准化成抽取友好的 HTML、展示用 HTML、markdown、blocks 和处理元信息。
-- `file_extraction_agent`：在标准化 HTML 上按外部 `task_spec` 做字段抽取，并返回 `result + trace`。
+- `file_extraction_agent`：在多个语义 HTML 文档上按外部 `task_spec` 做字段抽取，并用 NDJSON stream 返回工具事件、字段写入和最终结果。
 - `route_policy_agent`：根据字段输出、证据文本和抽取过程摘要判断字段级 `accept / review / reject`。
 
 它不访问 backend SQLite，不保存任务状态，不执行人工复核，也不写最终结果。任务、review、audit 和字段提交都由 `backend` 负责。
@@ -14,10 +14,10 @@
 backend 上传 PDF bytes
   -> POST /v1/document-processor/process
   -> document_processor 返回 html / display_html / markdown / md_list / blocks
-  -> backend 保存文档结构，并在多文档任务中聚合 html
-  -> POST /v1/file-extraction-agent/extract
-  -> file_extraction_agent 返回 ExtractionResult(result + trace)
-  -> backend 从 result、trace refs 和 trace actions 组装 route policy 输入
+  -> backend 保存文档结构，并把多文档整理为 documents(filename + html)
+  -> POST /v1/file-extraction-agent/extract/stream
+  -> file_extraction_agent 流式返回工具事件和 result_completed
+  -> backend 从 result_completed、evidence selector 和工具事件组装 route policy 输入
   -> POST /v1/route-policy-agent/evaluate
   -> route_policy_agent 返回字段级 route 决策
   -> backend 继续驱动 review / final result / audit
@@ -78,43 +78,41 @@ UploadFile
 ```
 
 ```text
-POST /v1/file-extraction-agent/extract
+POST /v1/file-extraction-agent/extract/stream
 ```
 
-接收 backend 聚合后的 `html`、外部 `task_spec`、可选 `run_options` 和可选模型覆盖配置。
+接收 backend 准备好的 `documents(filename + html)`、外部 `task_spec`、可选 `run_options` 和可选模型覆盖配置，返回 `application/x-ndjson`。
 
 ```text
-html + task_spec
-  -> input_adapter 校验 html、task_spec.fields 和 run_options
-  -> html_index 构建 document tree、element/table/row 索引
-  -> resolution_new 按字段和 outline 调用 update_soft_plan / overview / read_section / read_blocks / read_block_range / read_list / query_table / preview_inline_evidence / set_field / finish
-  -> graph 汇总字段结果、soft_plan、document_tree、plan_statuses、field_states 和 actions
-  -> 返回 ExtractionResult(result + trace)
+documents + task_spec
+  -> input_adapter 校验 documents、task_spec.fields 和 run_options
+  -> html_index 构建 /001-filename-title/... 只读虚拟文件树
+  -> resolution_new 按字段调用 tree / read / anchors / query_table / write_field / submit_result
+  -> graph 逐行输出 tool_started / tool_completed / tool_failed / field_written / result_completed
 ```
 
-### 抽取工具和 trace 粒度
+### 抽取工具和 stream 粒度
 
-`file_extraction_agent` 的 replay 粒度来自工具调用本身。每次工具调用都会写入 `trace.actions`，backend 再把这些动作和证据 id 组装给前端。
+`file_extraction_agent` 的可解释性来自真实工具调用、用户可见 `reason` 和可反查 evidence selector。agent 不直接连接前端，也不写 DB；backend 后续负责消费 NDJSON、入库和转发。
 
-| Tool | 阶段 | trace 粒度 | trace 里保留的关键信息 | 用途 |
-| --- | --- | --- | --- | --- |
-| `update_soft_plan(plan)` | resolution | 软计划级 | `step/status/plan_index` | 同步右侧 plan 进度，说明当前在执行哪一组局部证据阅读。 |
-| `read_element(element_id, reason)` | resolution | 单个 HTML 元素级 | `element_id`、读取理由、元素 HTML 摘要、evidence id | 只读取一个指定 id 的小元素，例如一个标题、一个段落、一个列表项，或一张表的结构摘要；适合精确追踪“模型看了哪一块”。 |
-| `read_section(section_id, reason, depth)` | resolution | 文件树递归章节级 | `section_id`、`depth`、读取理由、递归读到的 evidence ids | 从一个 heading id 开始，沿文档顺序读取该标题下的内容；遇到同级或更高级标题停止，`depth` 控制读到几层子标题；适合追踪“模型读了哪一段章节范围”。 |
-| `table_extraction(table_id, sql, reason)` | resolution | 表格查询级 | 表格 id、SQL、行证据、`table_audit`、`query_audit` | 追踪表格字段来自哪张表、哪些行，以及表格质量观察。 |
-| `paragraph_extraction(element_id, pattern, reason)` | resolution | 文本匹配级 | 元素 id、正则、匹配文本、span、evidence id | 追踪字段值在文本块里的具体匹配位置。 |
-| `set_field(name, value, evidence_ids, reason, status, failure_reason)` | resolution | 字段写入级 | 字段名、字段值、状态、证据 id、写入原因或失败原因 | 追踪字段最终为什么被写入或为什么失败。 |
-| `finish()` | resolution | 运行校验级 | 完成状态和错误列表 | 追踪本轮抽取是否真正完成，或卡在哪些字段/证据校验上。 |
+| Tool / Event | 粒度 | 保留的关键信息 | 用途 |
+| --- | --- | --- | --- |
+| `tree(path, depth, reason)` | 文件树导航 | 路径、展开深度、读取理由、目录/文件名 | 追踪模型先看了哪些文档和章节。 |
+| `read(path, offset, limit, reason)` | 文件读取 | `.md/.list/.table` 路径、分页窗口、读取理由、Markdown 摘要 | 追踪模型读了哪个 paragraph、list 或 table 文件。 |
+| `anchors(path, reason)` | paragraph 证据编号 | `.md` 路径、读取理由、`Sxxx` 句子编号 | 给 paragraph 字段证据绑定句子编号。 |
+| `query_table(path, sql, offset, limit, reason)` | 表格查询 | `.table` 路径、SQL、分页窗口、`Rxxx` 行号 | 从大表中定位字段相关行。 |
+| `write_field(field_id, value, evidence, status, reason)` | 字段写入 | 字段 id、值、状态、selector 证据、写入理由 | 追踪字段最终为什么被写入或标记缺失。 |
+| `submit_result(reason)` | 结果校验 | 当前字段缓冲、校验结果或错误 | 追踪本轮抽取是否通过 schema 和证据校验。 |
+| `result_completed` | 最终收口 | `fields[]`、trace、失败原因 | 给 backend 一个完整可入库的最终事件。 |
 
 这套工具让前端可以把抽取过程回放成：
 
 ```text
-计划
-  -> 标记当前计划步骤
-  -> 读取元素或章节
-  -> 查询表格或匹配文本
-  -> 写入字段和证据
-  -> 完成抽取校验
+展开目录
+  -> 读取 paragraph/list/table
+  -> 取得句子编号或查询表格行
+  -> 写入字段和 evidence selector
+  -> 提交并校验结果
 ```
 
 ```text

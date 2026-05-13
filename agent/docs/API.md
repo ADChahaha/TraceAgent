@@ -1,6 +1,6 @@
 # Agent Service API
 
-这份文档记录 `agent` 服务对 backend 暴露的 HTTP API。更细的模块设计见 [`DESIGN.md`](DESIGN.md)，各阶段内部 Python 契约见对应 `service/*/docs/API.md`。
+这份文档记录 `agent` 服务对 backend 暴露的 HTTP API。更细的模块设计见 [`DESIGN.md`](DESIGN.md)，各阶段内部 Python 契约见对应 `service/*/schemas.py`、`service/*/processor.py` 和模块设计文档。
 
 ## 基本工作方式
 
@@ -11,11 +11,11 @@ backend 持有原始 PDF
   -> POST /v1/document-processor/process
   -> 得到 filename + html
 
-backend 持有已聚合的 HTML
-  -> POST /v1/file-extraction-agent/extract
-  -> 得到 ExtractionResult(result.fields + trace.fields)
-  -> backend 从 trace.fields[].evidence.refs 和 texts 组装 refs_with_text
-  -> backend 从 trace.fields[].actions 组装 field_processes
+backend 持有 documents(filename + html)
+  -> POST /v1/file-extraction-agent/extract/stream
+  -> 持续得到 tool_started / tool_completed / field_written / result_completed
+  -> backend 从 result_completed.result.fields 和 evidence selector 组装 refs_with_text
+  -> backend 从 NDJSON 工具事件组装 field_processes
   -> POST /v1/route-policy-agent/evaluate
   -> 得到 RoutePolicyResult(field_routes[])
 ```
@@ -23,7 +23,7 @@ backend 持有已聚合的 HTML
 route 层只做 HTTP 协议适配，业务处理分别交给：
 
 - `service.document_processor.processor.process(...)`
-- `service.file_extraction_agent.processor.extract(...)`
+- `service.file_extraction_agent.processor.extract_stream(...)`
 - `service.route_policy_agent.processor.evaluate(...)`
 
 ## 运行前提
@@ -115,14 +115,16 @@ curl -sS \
 ## 字段抽取
 
 ```text
-POST /v1/file-extraction-agent/extract
+POST /v1/file-extraction-agent/extract/stream
 ```
 
 请求类型：`application/json`
 
+响应类型：`application/x-ndjson`
+
 请求字段：
 
-- `html`：必填，backend 聚合后的 HTML 字符串，元素必须已有稳定 `id`。
+- `documents[]`：必填，每个元素包含 `filename` 和 `html`。`html` 是 `document_processor` 产出的语义 HTML fragment。
 - `task_spec`：必填，字段抽取 schema。
 - `run_options`：可选，抽取运行预算。
 - `model_config`：可选，覆盖字段抽取模型连接配置。
@@ -131,20 +133,28 @@ POST /v1/file-extraction-agent/extract
 处理流程：
 
 ```text
-html + task_spec
+documents + task_spec
   -> route 层解析 JSON
-  -> processor.extract(...)
-  -> input_adapter 校验 html 非空、task_spec.fields 非空、run_options 合法
-  -> html_index 从现有 id 构建 document tree、element/table/row 索引
-  -> resolution_new 通过 Reading Stages / read_section / read_blocks / read_block_range / read_list / query_table / preview_inline_evidence / set_field / finish 定案字段
-  -> 返回 ExtractionResult(result + trace)
+  -> processor.extract_stream(...)
+  -> input_adapter 校验 documents 非空、filename/html 非空、task_spec.fields 非空、run_options 合法
+  -> html_index 生成 /001-filename-title/... 虚拟文件树、path 索引、list item 编号和 table row 编号
+  -> resolution_new 通过 tree / read / anchors / query_table / write_field / submit_result 定案字段
+  -> graph 按顺序输出 NDJSON 工具事件，最后输出 result_completed
 ```
+
+NDJSON 事件：
+
+- `tool_started`：工具开始执行，包含 `seq`、`tool`、`reason` 和工具参数。
+- `tool_completed`：工具成功完成，包含摘要化工具结果。
+- `tool_failed`：工具失败或校验失败，包含结构化错误。
+- `field_written`：`write_field` 成功写入或覆盖字段。
+- `result_completed`：最终结果事件，包含 `result.fields[]` 和 `trace`。
 
 失败语义：
 
-- 缺少 `html`、`task_spec`、`task_spec.fields` 为空、HTML 关键元素缺少 id 或 `run_options.max_tool_calls<=0` 时返回 422。
+- 缺少 `documents`、`documents[].filename`、`documents[].html`、`task_spec`、`task_spec.fields` 为空或 `run_options.max_tool_calls<=0` 时返回 422。
 - 缺少模型连接参数时返回 422。
-- resolution 模型阶段失败时，业务结果会收口为 `status=failed` 的 `ExtractionResult`。
+- resolution 模型阶段失败时，stream 会输出失败事件，并以 `result_completed` 收口失败结果。
 
 ## Route Policy 判断
 

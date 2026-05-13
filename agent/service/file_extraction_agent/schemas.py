@@ -81,6 +81,13 @@ class TaskSpec(BaseModel):
     task_name: str | None = None
 
 
+class InputDocument(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str
+    html: str
+
+
 @dataclass
 class ModelConfig:
     provider: str = "openai"
@@ -123,6 +130,7 @@ __all__ = [
     "EnumVariantDefinition",
     "FieldDefinition",
     "TaskSpec",
+    "InputDocument",
     "ModelConfig",
     "RunOptions",
     "EvidenceRef",
