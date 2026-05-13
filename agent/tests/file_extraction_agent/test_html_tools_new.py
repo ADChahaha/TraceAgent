@@ -1186,6 +1186,50 @@ def test_finish_fails_missing_required_field():
     assert result["errors"][0]["field"] == "student_name"
 
 
+def test_finish_requires_soft_plan_items_to_be_completed():
+    state = _state()
+    _update_soft_plan(
+        state,
+        [
+            {"step": "读取联系人段落", "status": "completed"},
+            {"step": "写入 contact_phone 字段", "status": "in_progress"},
+            {"step": "核对补充字段", "status": "pending"},
+        ],
+    )
+    _read_blocks(state, "dp-p-1", [0], reason="读取联系人段落")
+    inline = _preview_inline_evidence(state, "dp-p-1", 0, 1, reason="细化联系人证据")
+    _set_field(
+        state,
+        "student_name",
+        "张三",
+        [inline["evidence_ids"][0]],
+        "resolved",
+        None,
+        reason="联系人段落支持 student_name 字段",
+    )
+
+    result = _finish(state)
+
+    assert result["ok"] is False
+    assert result["errors"] == [
+        {
+            "message": "soft plan items must be completed before finish",
+            "plan_items": [
+                {
+                    "plan_index": 2,
+                    "step": "写入 contact_phone 字段",
+                    "status": "in_progress",
+                },
+                {
+                    "plan_index": 3,
+                    "step": "核对补充字段",
+                    "status": "pending",
+                },
+            ],
+        }
+    ]
+
+
 def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
     tools = build_tools(_state())
     names = [_tool_name(tool) for tool in tools]
@@ -1293,6 +1337,10 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
     assert "row ids" in set_field_description
     assert "item ids" in set_field_description
     assert "query_table" in set_field_description
+    finish = tools[names.index("finish")]
+    finish_description = " ".join(_tool_description(finish).split())
+    assert "every current soft-plan item has status ``completed``" in finish_description
+    assert "update_soft_plan" in finish_description
 
 
 def _tool_name(tool):

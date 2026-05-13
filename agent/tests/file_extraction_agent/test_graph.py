@@ -43,6 +43,15 @@ class FakeResolutionModel:
                     "reason": "dp-table-1 和 dp-tr-2 支持学生姓名为张三",
                 },
             },
+            {
+                "tool_name": "update_soft_plan",
+                "arguments": {
+                    "plan": [
+                        {"step": "读取名单表并确认学生姓名", "status": "completed"},
+                        {"step": "写入 student_name 字段", "status": "completed"},
+                    ],
+                },
+            },
             {"tool_name": "finish", "arguments": {}},
         ]
 
@@ -152,6 +161,7 @@ def test_run_extraction_graph_runs_resolution_with_soft_plan():
     assert result.result["student_name"] == "张三"
     assert "broad_plan" not in result.trace
     assert result.trace["soft_plan"][0]["step"] == "读取名单表并确认学生姓名"
+    assert [item["status"] for item in result.trace["soft_plan"]] == ["completed", "completed"]
     assert len(result.trace["actions"]) >= 1
 
 

@@ -316,8 +316,9 @@ def build_tools(state: Any) -> list[Any]:
         Finish the extraction run.
 
         Use this only after all task fields have been set either as ``resolved``
-        or ``failed``. If this returns errors, fix the listed fields with
-        set_field and call finish again.
+        or ``failed`` and every current soft-plan item has status
+        ``completed``. If this returns errors, fix the listed fields with
+        set_field, update_soft_plan, and call finish again.
 
         Returns:
             ``{"ok": true, "errors": []}`` when validation passes. If
@@ -1095,6 +1096,14 @@ def _has_item_evidence_for_list(document: Any, list_id: str, evidence_ids: set[s
 
 def _finish(state: Any) -> dict[str, Any]:
     errors: list[dict[str, Any]] = []
+    unfinished_plan_items = _unfinished_soft_plan_items(state)
+    if unfinished_plan_items:
+        errors.append(
+            {
+                "message": "soft plan items must be completed before finish",
+                "plan_items": unfinished_plan_items,
+            }
+        )
     field_states = _read(state, "field_states")
     for name, field_def in _field_defs_by_name(state).items():
         field_state = field_states.get(name)
@@ -1112,6 +1121,23 @@ def _finish(state: Any) -> dict[str, Any]:
     result = {"ok": not errors, "errors": errors}
     _record_action(state, "finish", {}, result)
     return result
+
+
+def _unfinished_soft_plan_items(state: Any) -> list[dict[str, Any]]:
+    unfinished = []
+    for item in _read(state, "soft_plan", []) or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("status") == "completed":
+            continue
+        unfinished.append(
+            {
+                "plan_index": item.get("plan_index"),
+                "step": item.get("step"),
+                "status": item.get("status"),
+            }
+        )
+    return unfinished
 
 
 def _read(value: Any, name: str, default: Any = None) -> Any:

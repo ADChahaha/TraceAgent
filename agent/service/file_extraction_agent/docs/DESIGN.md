@@ -17,7 +17,7 @@
   -> 模型后续更新 stage-like 软计划，说明当前局部工作单元、已完成步骤和待处理步骤
   -> 模型围绕当前软计划读取证据，必要时用 record_note 记录字段、证据 id 和解释之间的短笔记
   -> 证据足够后直接 set_field 写入 resolved；只有无法可靠自动完成且需要人工 review 时才写 failed
-  -> finish 校验字段完成度和证据一致性
+  -> finish 校验字段完成度、证据一致性，以及当前 soft_plan 是否全部 completed
   -> graph 映射成 ExtractionResult(status, result, failure_reason, trace)
 ```
 
@@ -163,7 +163,7 @@ DeepSeek assistant tool-call response
 
 ## 轻量 Plan 记忆
 
-`update_soft_plan` 不是 stage 状态机，也不是字段证据账本。它只是轻量工作记忆和 replay 标题，用来让模型和用户看清“当前在读什么、已完成什么、接下来准备读什么”。最终字段仍由 `set_field` 写入；`update_soft_plan` 不参与 scorer，不替代字段 rationale，也不做 plan 级硬校验。
+`update_soft_plan` 不是 stage 状态机，也不是字段证据账本。它只是轻量工作记忆和 replay 标题，用来让模型和用户看清“当前在读什么、已完成什么、接下来准备读什么”。最终字段仍由 `set_field` 写入；`update_soft_plan` 不参与 scorer，不替代字段 rationale，也不校验证据新鲜度。不过一旦当前 run 写入了 soft plan，`finish` 会要求每个 plan item 都是 `completed`，避免 trace 在用户眼里停留在“还没做完”的状态。
 
 `record_note` 是比 plan 更贴近证据的短笔记。它记录“哪些字段、哪些已观察 evidence id、这组证据说明了什么”，用于 replay 和多轮 tool-calling 中的工作记忆；它不写字段、不改变 `plan_statuses`，也不让 `finish` 通过。
 
@@ -182,7 +182,7 @@ DeepSeek assistant tool-call response
 - 当要切换到不同主题、不同条款区域或明显不同的字段组时，应先刷新 `update_soft_plan`。
 - 为了增强模型记忆并改善前端 replay，可鼓励 `set_field.evidence_ids` 优先使用最近一次 `update_soft_plan` 之后读到或重新 preview 过的证据。
 - 如果某个字段需要复用更早 plan 里读过的相关证据，prompt 应鼓励模型在当前 plan 内重新读取或重新 `preview_inline_evidence`，而不是只凭长上下文记忆直接写字段。
-- 这些规则只放在 prompt 中作为软约束，不在 `set_field`、`finish` 或 scorer 中加入 plan 级硬校验。
+- 分组方式、证据主题贴近度和“尽量使用最近 plan 后证据”属于 prompt 软约束；最终 plan 进度不是软约束，`finish` 会拒绝仍为 `pending` 或 `in_progress` 的 soft-plan item。
 
 ```text
 update_soft_plan 写入当前 stage-like 软计划
@@ -191,6 +191,8 @@ update_soft_plan 写入当前 stage-like 软计划
   -> record_note 记录字段名、已观察证据 id 和简短解释
   -> set_field 直接写字段值和 evidence_ids
   -> 换到明显不同的主题或字段组前，再调用 update_soft_plan
+  -> 所有字段处理完后，用 update_soft_plan 把当前 soft_plan 全部置为 completed
+  -> finish 校验字段和 plan 完成状态
 ```
 
 ## Resolution 阶段
@@ -222,10 +224,11 @@ Task fields + document outline
   -> 文本证据在写字段前用 preview_inline_evidence 细化到 inline id
   -> 需要保留解释时用 record_note 记录字段、证据 id 和判断要点
   -> 证据足够就立即 set_field
-  -> 所有字段完成后 finish
+  -> 所有字段完成后把当前 soft_plan 全部置为 completed
+  -> 调用 finish 做最终校验
 ```
 
-resolution system prompt 使用英文表达 replay、表格查询、plan 软记忆和证据校验等通用约束；精确工具参数和读取行为只写在 `html_tools.py` 的工具函数 docstring 里，并由 LangGraph 绑定工具时注入模型上下文，避免系统 prompt 和工具 schema 漂移。除 `update_soft_plan`、`set_field` 和 `finish` 外，每个工具调用都需要 `reason`，并要求 reason 尽量使用文档语言；字段值本身也应跟随任务定义和文档语言输出。
+resolution system prompt 使用英文表达 replay、表格查询、plan 软记忆、`finish` 前 plan 全部完成和证据校验等通用约束；精确工具参数和读取行为只写在 `html_tools.py` 的工具函数 docstring 里，并由 LangGraph 绑定工具时注入模型上下文，避免系统 prompt 和工具 schema 漂移。除 `update_soft_plan`、`set_field` 和 `finish` 外，每个工具调用都需要 `reason`，并要求 reason 尽量使用文档语言；字段值本身也应跟随任务定义和文档语言输出。
 
 ## 工具边界
 
@@ -238,7 +241,7 @@ update_soft_plan(plan)
   -> 校验 plan 是由 step/status 组成的列表
   -> 给每个步骤补上 1-based plan_index
   -> 替换 state.soft_plan，并同步 plan_statuses
-  -> 不写字段、不绑定证据、不参与最终校验
+  -> 不写字段、不绑定证据；当前 soft_plan 的 item status 会在 finish 阶段被校验
 
 overview()
   -> 返回 section container、heading 和同层 block items 的混排 outline
@@ -294,6 +297,7 @@ set_field(name, value, evidence_ids, reason, status, failure_reason)
 
 finish()
   -> 校验所有字段都已 set_field
+  -> 校验当前 soft_plan 中没有 pending 或 in_progress item
   -> 校验必填字段、证据完整性和最终一致性
   -> 返回 ok=true 或错误列表
 ```

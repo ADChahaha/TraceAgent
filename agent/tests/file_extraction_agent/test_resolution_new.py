@@ -65,11 +65,13 @@ def test_resolution_messages_embed_compact_document_outline():
     assert "Do not mention task-specific field families such as choice/status plus evidence" not in content
     assert "same entity, event, condition, amount, date, table row, or evidence source" not in content
     assert "Update that same plan item from in_progress to completed after the related fields are set" in content
+    assert "Before calling finish, every soft-plan item must be completed" in content
+    assert "finish will reject pending or in_progress soft-plan items" in content
     assert "Treat each soft-plan item as a local work unit" in content
     assert "Before moving to a materially different topic, clause area, or field group, refresh update_soft_plan" in content
     assert "prefer evidence observed or previewed after the latest update_soft_plan" in content
     assert "reread or preview that evidence again in the current plan" in content
-    assert "These plan rules are soft guidance for memory and replay clarity" in content
+    assert "Plan grouping and evidence freshness are soft guidance for memory and replay clarity" in content
     assert "After previewing or querying final evidence, call record_note" in content
     assert "record_note is a replay memory aid and does not replace set_field" in content
     assert "broad-plan" not in content

@@ -126,7 +126,7 @@ backend 聚合后的 html + task_spec
   -> 如果文本块将作为最终证据，先调用 preview_inline_evidence 细化到 inline id
   -> 如需保留字段与证据之间的短解释，调用 record_note 写入证据笔记
   -> 证据足够或失败明确后调用 set_field 写入字段状态、值、证据 id 和原因；resolved 字段强制文本 inline、表格 row、列表 item 粒度
-  -> 所有字段 set_field 后调用 finish 做完整性校验
+  -> 所有字段 set_field 后先把当前 soft_plan 全部置为 completed，再调用 finish 做完整性校验
   -> graph 映射成 ExtractionResult(result + trace)
   -> trace 保留 soft_plan、plan_statuses、notes、document_tree、field_states 和 actions
 ```
@@ -145,7 +145,7 @@ backend 聚合后的 html + task_spec
 - `preview_inline_evidence(source_id, start_index, count, reason)`：把已观察到的文本块切成 inline 候选证据，用于写字段前细化文本证据。
 - `record_note(field_names, evidence_ids, note, reason)`：记录字段、已观察证据 id 和简短解释之间的关系；只作为 replay 与工作记忆，不替代 `set_field`。
 - `set_field(name, value, evidence_ids, reason, status, failure_reason)`：写字段值或失败状态，并校验证据 id、证据粒度与字段类型。
-- `finish()`：校验所有字段已完成、必填字段和证据一致性。
+- `finish()`：校验所有字段已完成、必填字段、证据一致性，以及当前 soft plan 是否全部完成。
 
 列表和表格都支持 overview 直接入口。模型应先用 document outline 定位目标块；如果 overview 已给出 list id，就直接用 `read_list(list_id, 0, item_offset, number)` 读取列表项，否则先通过 `overview/read_section` 的 block index 选择列表块，再调用 `read_blocks(section_id, [index], reason)` 确认 ref，之后用 `read_list(section_id, block_offset, item_offset, number)` 展开。
 

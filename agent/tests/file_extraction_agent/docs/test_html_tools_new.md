@@ -62,4 +62,5 @@
 - `test_record_note_records_field_evidence_memory_for_replay`：确认 `record_note` 只能基于已观察证据记录字段级证据笔记，写入 `state.notes`，并把调用 reason 保留在 replay action 中。
 - `test_set_field_rejects_unobserved_evidence_ids`：确认未被读取或查询观察到的 evidence id 不能用于 resolved 字段。
 - `test_finish_fails_missing_required_field`：确认缺少必填字段时 `finish` 返回字段级错误。
-- `test_build_tools_exposes_model_facing_docstrings_without_state_argument`：确认模型可见工具 schema 隐藏内部 `state`，`update_soft_plan` 只暴露 `plan`，`read_blocks` 暴露 `indexes` 而不暴露旧的 `offset/number`，`read_block_range` 暴露 `start_index/count`，并在说明中暴露 section/leaf block、顶层 list id、顶层 table id、`block_offset=0`、`preview_inline_evidence`、`record_note`、证据写入约束，以及 `null` 类型应写成 resolved、`failed` 只用于需要人工 review 的字段。
+- `test_finish_requires_soft_plan_items_to_be_completed`：确认只要当前 `soft_plan` 里还有 `pending` 或 `in_progress` 条目，即使必填字段已完成，`finish` 也会返回 plan 级错误并列出未完成 item。
+- `test_build_tools_exposes_model_facing_docstrings_without_state_argument`：确认模型可见工具 schema 隐藏内部 `state`，`update_soft_plan` 只暴露 `plan`，`read_blocks` 暴露 `indexes` 而不暴露旧的 `offset/number`，`read_block_range` 暴露 `start_index/count`，并在说明中暴露 section/leaf block、顶层 list id、顶层 table id、`block_offset=0`、`preview_inline_evidence`、`record_note`、证据写入约束、`finish` 前必须把当前 soft plan 条目置为 completed，以及 `null` 类型应写成 resolved、`failed` 只用于需要人工 review 的字段。
