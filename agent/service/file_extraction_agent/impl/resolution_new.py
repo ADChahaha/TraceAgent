@@ -48,6 +48,8 @@ def build_resolution_messages(state: Any) -> list[Any]:
             "For memory and replay clarity, prefer evidence observed or previewed after the latest update_soft_plan in set_field evidence_ids. "
             "If a field needs evidence from an earlier plan, reread or preview that evidence again in the current plan before set_field. "
             "These plan rules are soft guidance for memory and replay clarity, not tool validation rules. "
+            "After previewing or querying final evidence, call record_note before set_field when the note helps keep the field, evidence ids, and interpretation clear. "
+            "record_note is a replay memory aid and does not replace set_field, does not validate final values, and does not satisfy finish. "
             "Use the task field descriptions and document outline as the primary guide. "
             "1. Pick the next unresolved field, inspect the outline, and choose the narrowest useful read action. "
             "2. Read only the evidence needed to complete that step. "

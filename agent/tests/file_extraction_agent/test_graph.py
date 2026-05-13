@@ -109,6 +109,13 @@ def test_map_state_to_result_returns_completed_payload():
         "value": "张三",
         "evidence_ids": ["dp-table-1", "dp-tr-2"],
     }
+    state.notes.append(
+        {
+            "field_names": ["student_name"],
+            "evidence_ids": ["dp-table-1", "dp-tr-2"],
+            "note": "名单表中计算机学院对应张三。",
+        }
+    )
 
     result = map_state_to_result(state)
 
@@ -116,6 +123,13 @@ def test_map_state_to_result_returns_completed_payload():
     assert result.result["student_name"] == "张三"
     assert "broad_plan" not in result.trace
     assert result.trace["soft_plan"] == []
+    assert result.trace["notes"] == [
+        {
+            "field_names": ["student_name"],
+            "evidence_ids": ["dp-table-1", "dp-tr-2"],
+            "note": "名单表中计算机学院对应张三。",
+        }
+    ]
 
 
 def test_build_failed_result_preserves_trace():

@@ -42,6 +42,7 @@ def map_state_to_result(
     trace: dict[str, Any] = {
         "soft_plan": _plain(state.soft_plan),
         "plan_statuses": _plain(state.plan_statuses),
+        "notes": _plain(state.notes),
         "document_tree": _plain(state.document.tree),
         "field_states": _plain(state.field_states),
         "actions": _plain(state.actions),

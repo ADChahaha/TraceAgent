@@ -4,7 +4,7 @@
 
 ## 基本实现思路
 
-当前实现是“HTML 索引 + resolution 直接工具执行 + `update_soft_plan` 软计划回放”：
+当前实现是“HTML 索引 + resolution 直接工具执行 + `update_soft_plan` 软计划回放 + `record_note` 证据笔记”：
 
 ```text
 调用方传入 html、task_spec、run_options、model_config
@@ -12,10 +12,11 @@
   -> html_index 解析 HTML，基于已有 id 构建 document.tree、elements_by_id、tables_by_id、row_index；tree 按 DOM/section 容器语义保留 section、heading 和同层 block items 的顺序与预览
   -> model_factory 从显式 model_config 或环境变量构造 resolution ChatOpenAI，并注入重试和超时配置
   -> resolution_new 把 task fields 和 document outline 交给 LangGraph tool-calling loop
-  -> html_tools 提供 update_soft_plan / overview / read_section / read_blocks / read_block_range / read_list / query_table / preview_inline_evidence / set_field / finish
+  -> html_tools 提供 update_soft_plan / overview / read_section / read_blocks / read_block_range / read_list / query_table / preview_inline_evidence / record_note / set_field / finish
   -> 模型先用 update_soft_plan 按可能的证据主题、文档区域或字段关系给字段分组，把相同类型或共享部分证据、可一起判断的字段放进同一个 plan item
   -> 模型后续更新 stage-like 软计划，说明当前局部工作单元、已完成步骤和待处理步骤
-  -> 模型围绕当前软计划读取证据，证据足够后直接 set_field 写入 resolved；只有无法可靠自动完成且需要人工 review 时才写 failed
+  -> 模型围绕当前软计划读取证据，必要时用 record_note 记录字段、证据 id 和解释之间的短笔记
+  -> 证据足够后直接 set_field 写入 resolved；只有无法可靠自动完成且需要人工 review 时才写 failed
   -> finish 校验字段完成度和证据一致性
   -> graph 映射成 ExtractionResult(status, result, failure_reason, trace)
 ```
@@ -24,6 +25,7 @@
 
 - `soft_plan`：模型最近一次提交的 stage-like 软计划，按 `plan_index/step/status` 展示。
 - `plan_statuses`：`soft_plan` 的 index 映射，方便前端或测试按步骤读取当前状态。
+- `notes`：`record_note` 记录的字段级证据笔记，只帮助 replay 和模型工作记忆，不替代字段值。
 - `document_tree`：从 HTML 推出的混排 outline，包含 section container、heading 和同层 block items 的摘要。
 - `field_states`：每个字段的值、状态、证据 id、原因或失败原因。
 - `actions`：resolution 工具调用轨迹，包含读取、查表、写字段、完成等动作。
@@ -113,12 +115,23 @@ string / number / boolean / list[string] / list[number] / enum
 显式 model_config 或 .env / 进程环境
   -> 读取 BASE_URL / OPENAI_API_KEY / RESOLUTION_MODEL / MODEL
   -> 读取 TEMPERATURE / TOP_P / TOP_K
+  -> 读取可选 REASONING_EFFORT
   -> 读取 MODEL_MAX_RETRIES / MODEL_REQUEST_TIMEOUT
-  -> 如果连接 DeepSeek 官方源或模型名包含 deepseek，在 extra_body 中关闭 thinking
+  -> 如果连接 DeepSeek 官方源或模型名包含 deepseek，默认在 extra_body 中关闭 thinking
+  -> 如果显式设置 REASONING_EFFORT，则传 reasoning_effort，并对 DeepSeek 请求启用 thinking
   -> 创建 resolution_model
 ```
 
-`MODEL_MAX_RETRIES` 未设置时默认是 `6`，用于减少模型服务短暂连接错误导致的整份文档失败。`MODEL_REQUEST_TIMEOUT` 未设置时不显式传入超时，保持底层客户端默认行为。DeepSeek 官方源在 thinking mode 下的多轮 tool-calling 需要回传 `reasoning_content`，当前 LangChain 回放链路不保存这个字段，因此 `model_factory` 会对 DeepSeek 请求显式传入 `thinking.type=disabled`，避免第二轮工具调用被服务端拒绝。
+`MODEL_MAX_RETRIES` 未设置时默认是 `6`，用于减少模型服务短暂连接错误导致的整份文档失败。`MODEL_REQUEST_TIMEOUT` 未设置时不显式传入超时，保持底层客户端默认行为。DeepSeek 官方源在 thinking mode 下的多轮 tool-calling 需要回传 `reasoning_content`，因此默认会对 DeepSeek 请求显式传入 `thinking.type=disabled`，避免第二轮工具调用被服务端拒绝。需要专门试验 DeepSeek 推理强度时，可以通过 `REASONING_EFFORT=high` 这类环境变量显式传入 `reasoning_effort`；此时 DeepSeek 请求改为 `thinking.type=enabled`，并使用 `DeepSeekReasoningChatOpenAI` 在 assistant tool-call 消息中保存和回放 `reasoning_content`：
+
+```text
+DeepSeek assistant tool-call response
+  -> _create_chat_result 读取 message.reasoning_content
+  -> 保存到 AIMessage.additional_kwargs["reasoning_content"]
+  -> 下一轮 _get_request_payload 生成 assistant message
+  -> 把 reasoning_content 写回 OpenAI 兼容请求
+  -> DeepSeek 接受 tool result 后继续推理
+```
 
 ## HTML 索引
 
@@ -152,6 +165,8 @@ string / number / boolean / list[string] / list[number] / enum
 
 `update_soft_plan` 不是 stage 状态机，也不是字段证据账本。它只是轻量工作记忆和 replay 标题，用来让模型和用户看清“当前在读什么、已完成什么、接下来准备读什么”。最终字段仍由 `set_field` 写入；`update_soft_plan` 不参与 scorer，不替代字段 rationale，也不做 plan 级硬校验。
 
+`record_note` 是比 plan 更贴近证据的短笔记。它记录“哪些字段、哪些已观察 evidence id、这组证据说明了什么”，用于 replay 和多轮 tool-calling 中的工作记忆；它不写字段、不改变 `plan_statuses`，也不让 `finish` 通过。
+
 推荐 prompt 纪律：
 
 - `update_soft_plan(plan=[...])` 应提交一组 stage-like 步骤，每步包含 `step` 和 `status`。
@@ -173,6 +188,7 @@ string / number / boolean / list[string] / list[number] / enum
 update_soft_plan 写入当前 stage-like 软计划
   -> read_section / read_blocks / read_block_range / read_list / query_table 读取相关证据
   -> preview_inline_evidence 细化文本证据
+  -> record_note 记录字段名、已观察证据 id 和简短解释
   -> set_field 直接写字段值和 evidence_ids
   -> 换到明显不同的主题或字段组前，再调用 update_soft_plan
 ```
@@ -204,6 +220,7 @@ Task fields + document outline
   -> 用 update_soft_plan 写入当前局部工作单元和可能相关字段组
   -> 用 overview / read_section / read_blocks / read_block_range / read_list / query_table 定位和读取证据
   -> 文本证据在写字段前用 preview_inline_evidence 细化到 inline id
+  -> 需要保留解释时用 record_note 记录字段、证据 id 和判断要点
   -> 证据足够就立即 set_field
   -> 所有字段完成后 finish
 ```
@@ -260,6 +277,13 @@ preview_inline_evidence(source_id, start_index, count, reason)
   -> 返回 inline_id、source_id、inline_index、文本和字符范围，并把 inline_id 标记为 observed
   -> 只用于写字段前把文本证据细化；表格证据用 query_table 的 row id，列表证据用 read_list 的 item id
 
+record_note(field_names, evidence_ids, note, reason)
+  -> 校验 field_names 都来自 task_spec.fields
+  -> 校验 evidence_ids 已存在且已经被本轮读取、查表或 inline 预览观察到
+  -> 把字段名、证据 id 和简短 note 追加到 state.notes
+  -> 写入 record_note action，供 replay 展示
+  -> 不写字段、不校验最终值，也不影响 finish
+
 set_field(name, value, evidence_ids, reason, status, failure_reason)
   -> 校验字段存在、状态合法、值类型匹配
   -> enum 字段校验 value.variant 属于字段 variants，value.value 匹配该 variant 的基础类型
@@ -302,7 +326,7 @@ table_id + SQL
 state.field_states 中 status=resolved 的字段
   -> result[field_name] = value
 
-state.soft_plan / plan_statuses / document.tree / field_states / actions
+state.soft_plan / plan_statuses / notes / document.tree / field_states / actions
   -> trace
 
 resolution 抛异常

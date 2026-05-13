@@ -70,6 +70,8 @@ def test_resolution_messages_embed_compact_document_outline():
     assert "prefer evidence observed or previewed after the latest update_soft_plan" in content
     assert "reread or preview that evidence again in the current plan" in content
     assert "These plan rules are soft guidance for memory and replay clarity" in content
+    assert "After previewing or querying final evidence, call record_note" in content
+    assert "record_note is a replay memory aid and does not replace set_field" in content
     assert "broad-plan" not in content
     assert "broad plan" not in content.lower()
     assert "Null is a normal resolved value for fields or enum variants whose declared type is null" in content
@@ -191,6 +193,7 @@ def test_resolution_graph_exposes_plan_and_new_read_tools():
         "read_list",
         "query_table",
         "preview_inline_evidence",
+        "record_note",
         "set_field",
         "finish",
     ]

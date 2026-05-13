@@ -25,6 +25,7 @@ class GraphState:
     run_options: RunOptions
     soft_plan: list[dict[str, Any]] = field(default_factory=list)
     plan_statuses: dict[int, dict[str, Any]] = field(default_factory=dict)
+    notes: list[dict[str, Any]] = field(default_factory=list)
     field_states: dict[str, dict[str, Any]] = field(default_factory=dict)
     actions: list[dict[str, Any]] = field(default_factory=list)
     observed_evidence_ids: set[str] = field(default_factory=set)

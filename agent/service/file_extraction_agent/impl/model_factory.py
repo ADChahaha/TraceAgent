@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from langchain_core.messages import AIMessage
 from langchain_openai import ChatOpenAI
 
 from service.file_extraction_agent.schemas import ModelConfig
@@ -43,15 +44,63 @@ def build_chat_model(config: ModelConfig, model_name: str) -> Any:
         kwargs["api_key"] = config.api_key
     if config.top_p is not None:
         kwargs["top_p"] = config.top_p
+    if config.reasoning_effort:
+        kwargs["reasoning_effort"] = config.reasoning_effort
     extra_body: dict[str, Any] = {}
     if config.top_k is not None:
         extra_body["top_k"] = config.top_k
-    if _should_disable_deepseek_thinking(config, model_name):
+    if _should_enable_deepseek_thinking(config, model_name):
+        extra_body["thinking"] = {"type": "enabled"}
+    elif _should_disable_deepseek_thinking(config, model_name):
         extra_body["thinking"] = {"type": "disabled"}
     if extra_body:
         kwargs["extra_body"] = extra_body
 
-    return ChatOpenAI(**kwargs)
+    model_cls = (
+        DeepSeekReasoningChatOpenAI
+        if _should_enable_deepseek_thinking(config, model_name)
+        else ChatOpenAI
+    )
+    return model_cls(**kwargs)
+
+
+class DeepSeekReasoningChatOpenAI(ChatOpenAI):
+    """ChatOpenAI variant that round-trips DeepSeek thinking content for tools."""
+
+    def _create_chat_result(
+        self,
+        response: dict | Any,
+        generation_info: dict | None = None,
+    ):
+        result = super()._create_chat_result(response, generation_info)
+        response_dict = response if isinstance(response, dict) else response.model_dump()
+        choices = response_dict.get("choices") or []
+        for generation, choice in zip(result.generations, choices, strict=False):
+            message = choice.get("message") or {}
+            reasoning_content = message.get("reasoning_content")
+            if reasoning_content and isinstance(generation.message, AIMessage):
+                generation.message.additional_kwargs["reasoning_content"] = reasoning_content
+        return result
+
+    def _get_request_payload(
+        self,
+        input_: Any,
+        *,
+        stop: list[str] | None = None,
+        **kwargs: Any,
+    ) -> dict:
+        payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        messages = self._convert_input(input_).to_messages()
+        for payload_message, source_message in zip(
+            payload.get("messages", []),
+            messages,
+            strict=False,
+        ):
+            if isinstance(source_message, AIMessage):
+                reasoning_content = source_message.additional_kwargs.get("reasoning_content")
+                if reasoning_content:
+                    payload_message["reasoning_content"] = reasoning_content
+        return payload
 
 
 def _model_config_from_env() -> ModelConfig:
@@ -68,6 +117,7 @@ def _model_config_from_env() -> ModelConfig:
         temperature=_float_env(values.get("TEMPERATURE"), 0.0),
         top_p=_optional_float_env(values.get("TOP_P")),
         top_k=_optional_int_env(values.get("TOP_K")),
+        reasoning_effort=values.get("REASONING_EFFORT") or None,
         max_retries=_int_env(values.get("MODEL_MAX_RETRIES"), 6),
         request_timeout=_optional_float_env(values.get("MODEL_REQUEST_TIMEOUT")),
     )
@@ -122,6 +172,10 @@ def _should_disable_deepseek_thinking(config: ModelConfig, model_name: str) -> b
     base_url = (config.base_url or "").lower()
     model = (model_name or "").lower()
     return "api.deepseek.com" in base_url or "deepseek" in model
+
+
+def _should_enable_deepseek_thinking(config: ModelConfig, model_name: str) -> bool:
+    return bool(config.reasoning_effort) and _should_disable_deepseek_thinking(config, model_name)
 
 
 __all__ = ["build_resolution_model", "normalize_model_config", "build_chat_model"]

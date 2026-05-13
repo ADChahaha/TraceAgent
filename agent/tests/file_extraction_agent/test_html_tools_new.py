@@ -1129,6 +1129,40 @@ def test_update_soft_plan_rejects_invalid_plan_items():
     ]
 
 
+def test_record_note_records_field_evidence_memory_for_replay():
+    state = _state()
+    tools = {_tool_name(tool): tool for tool in build_tools(state)}
+    _read_blocks(state, "dp-p-1", [0], reason="读取联系人段落")
+    inline = _preview_inline_evidence(
+        state,
+        "dp-p-1",
+        0,
+        2,
+        reason="细化联系人段落为字段证据",
+    )
+
+    result = tools["record_note"].invoke(
+        {
+            "field_names": ["contact_phone"],
+            "evidence_ids": [inline["evidence_ids"][0]],
+            "note": "联系人段落给出了联系电话。",
+            "reason": "在写入 contact_phone 前记录证据说明",
+        }
+    )
+
+    assert result == {
+        "ok": True,
+        "note": {
+            "field_names": ["contact_phone"],
+            "evidence_ids": [inline["evidence_ids"][0]],
+            "note": "联系人段落给出了联系电话。",
+        },
+    }
+    assert state.notes == [result["note"]]
+    assert state.actions[-1]["tool_name"] == "record_note"
+    assert state.actions[-1]["args"]["reason"] == "在写入 contact_phone 前记录证据说明"
+
+
 def test_set_field_rejects_unobserved_evidence_ids():
     state = _state()
 
@@ -1165,6 +1199,7 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
         "read_list",
         "query_table",
         "preview_inline_evidence",
+        "record_note",
         "set_field",
         "finish",
     ]
@@ -1231,6 +1266,16 @@ def test_build_tools_exposes_model_facing_docstrings_without_state_argument():
     assert "Only use this after reading a text block" in preview_description
     assert "inline_id" in preview_description
     assert "set_field" in preview_description
+    record_note = tools[names.index("record_note")]
+    record_note_schema = getattr(record_note, "args_schema", None)
+    record_note_fields = getattr(record_note_schema, "model_fields", None) or getattr(record_note_schema, "__fields__", {})
+    assert "field_names" in record_note_fields
+    assert "evidence_ids" in record_note_fields
+    assert "note" in record_note_fields
+    assert "reason" in record_note_fields
+    record_note_description = " ".join(_tool_description(record_note).split())
+    assert "Record a human-readable note" in record_note_description
+    assert "does not set field values" in record_note_description
     set_field = tools[names.index("set_field")]
     set_field_schema = getattr(set_field, "args_schema", None)
     set_field_fields = getattr(set_field_schema, "model_fields", None) or getattr(set_field_schema, "__fields__", {})

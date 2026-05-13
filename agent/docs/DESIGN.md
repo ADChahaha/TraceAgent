@@ -124,10 +124,11 @@ backend 聚合后的 html + task_spec
   -> resolution_new.py 把 task fields 和 document outline 交给 LangGraph tool-calling loop
   -> resolution model 在必要时先调用 update_soft_plan 写入软计划，再调用 overview / read_section / read_blocks / read_block_range / read_list / query_table 读取证据
   -> 如果文本块将作为最终证据，先调用 preview_inline_evidence 细化到 inline id
+  -> 如需保留字段与证据之间的短解释，调用 record_note 写入证据笔记
   -> 证据足够或失败明确后调用 set_field 写入字段状态、值、证据 id 和原因；resolved 字段强制文本 inline、表格 row、列表 item 粒度
   -> 所有字段 set_field 后调用 finish 做完整性校验
   -> graph 映射成 ExtractionResult(result + trace)
-  -> trace 保留 soft_plan、plan_statuses、document_tree、field_states 和 actions
+  -> trace 保留 soft_plan、plan_statuses、notes、document_tree、field_states 和 actions
 ```
 
 这个设计不承诺 100% 召回。它的目标是让抽取过程变成可回放的“计划、读取、查表、写字段、完成”动作链路；证据不足或工具诊断提示风险时，字段可以先 `failed`，后续由 route policy 和人工 review 接住。所有读取、查表、计划推进、字段写入和 finish 都必须进入 trace，方便后续审核和调试。
@@ -142,6 +143,7 @@ backend 聚合后的 html + task_spec
 - `read_list(section_id, block_offset, item_offset, number, reason)`：对 list block 做分页读取；overview 里的顶层 list id 可以直接配 `block_offset=0` 使用。
 - `query_table(section_id, block_offset, sql, reason)`：对 table block 执行安全 SELECT；overview 里的顶层 table id 可以直接配 `block_offset=0` 使用；返回 SQL 行、轻量 `table_audit` 和查询 `summary`。
 - `preview_inline_evidence(source_id, start_index, count, reason)`：把已观察到的文本块切成 inline 候选证据，用于写字段前细化文本证据。
+- `record_note(field_names, evidence_ids, note, reason)`：记录字段、已观察证据 id 和简短解释之间的关系；只作为 replay 与工作记忆，不替代 `set_field`。
 - `set_field(name, value, evidence_ids, reason, status, failure_reason)`：写字段值或失败状态，并校验证据 id、证据粒度与字段类型。
 - `finish()`：校验所有字段已完成、必填字段和证据一致性。
 
@@ -175,7 +177,7 @@ OCR 或表格结构质量提示不参与 resolution 或 route policy 的自动�
 
 两阶段的动作边界由工具 schema 控制：
 
-- `resolution_new.py` 负责执行 `update_soft_plan`、`overview`、`read_section`、`read_blocks`、`read_list`、`query_table`、`set_field` 和 `finish`。精确工具参数和读取行为以绑定工具时注入的函数 docstring / schema 为准，resolution system prompt 只保留通用执行策略和轻量 plan 软约束。
+- `resolution_new.py` 负责执行 `update_soft_plan`、`overview`、`read_section`、`read_blocks`、`read_list`、`query_table`、`preview_inline_evidence`、`record_note`、`set_field` 和 `finish`。精确工具参数和读取行为以绑定工具时注入的函数 docstring / schema 为准，resolution system prompt 只保留通用执行策略、轻量 plan 软约束和证据笔记约束。
 
 更具体的 schema、校验和任务配置，建议直接查看：
 

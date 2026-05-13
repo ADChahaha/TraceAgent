@@ -59,6 +59,7 @@
 - `test_finish_allows_enum_null_payload_without_evidence`：确认 `null` payload 的 enum 分类值可以作为 resolved 字段完成，不强制要求 evidence ids。
 - `test_update_soft_plan_replaces_plan_statuses_and_records_action`：确认 `update_soft_plan(plan=[...])` 会替换 `soft_plan`，同步 `plan_statuses`，并写入 replay action。
 - `test_update_soft_plan_rejects_invalid_plan_items`：确认软计划条目必须是包含 `step` 和合法 `status` 的对象。
+- `test_record_note_records_field_evidence_memory_for_replay`：确认 `record_note` 只能基于已观察证据记录字段级证据笔记，写入 `state.notes`，并把调用 reason 保留在 replay action 中。
 - `test_set_field_rejects_unobserved_evidence_ids`：确认未被读取或查询观察到的 evidence id 不能用于 resolved 字段。
 - `test_finish_fails_missing_required_field`：确认缺少必填字段时 `finish` 返回字段级错误。
-- `test_build_tools_exposes_model_facing_docstrings_without_state_argument`：确认模型可见工具 schema 隐藏内部 `state`，`update_soft_plan` 只暴露 `plan`，`read_blocks` 暴露 `indexes` 而不暴露旧的 `offset/number`，`read_block_range` 暴露 `start_index/count`，并在说明中暴露 section/leaf block、顶层 list id、顶层 table id、`block_offset=0`、`preview_inline_evidence`、证据写入约束，以及 `null` 类型应写成 resolved、`failed` 只用于需要人工 review 的字段。
+- `test_build_tools_exposes_model_facing_docstrings_without_state_argument`：确认模型可见工具 schema 隐藏内部 `state`，`update_soft_plan` 只暴露 `plan`，`read_blocks` 暴露 `indexes` 而不暴露旧的 `offset/number`，`read_block_range` 暴露 `start_index/count`，并在说明中暴露 section/leaf block、顶层 list id、顶层 table id、`block_offset=0`、`preview_inline_evidence`、`record_note`、证据写入约束，以及 `null` 类型应写成 resolved、`failed` 只用于需要人工 review 的字段。

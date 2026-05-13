@@ -6,6 +6,7 @@ from service.file_extraction_agent.impl import model_factory as model_factory_mo
 from service.file_extraction_agent.impl.model_factory import normalize_model_config
 from service.file_extraction_agent.processor import extract
 from service.file_extraction_agent.schemas import ModelConfig
+from langchain_core.messages import AIMessage, ToolMessage
 
 
 def test_extract_builds_input_models_and_runs_graph(monkeypatch):
@@ -47,6 +48,7 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
                 'TEMPERATURE="0.1"',
                 'TOP_P="0.9"',
                 'TOP_K="40"',
+                'REASONING_EFFORT="high"',
                 'MODEL_MAX_RETRIES="8"',
                 'MODEL_REQUEST_TIMEOUT="120"',
             ]
@@ -66,6 +68,7 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
         "TEMPERATURE",
         "TOP_P",
         "TOP_K",
+        "REASONING_EFFORT",
         "MODEL_MAX_RETRIES",
         "MODEL_REQUEST_TIMEOUT",
     ):
@@ -79,6 +82,7 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
     assert config.temperature == 0.1
     assert config.top_p == 0.9
     assert config.top_k == 40
+    assert config.reasoning_effort == "high"
     assert config.max_retries == 8
     assert config.request_timeout == 120.0
 
@@ -105,6 +109,7 @@ def test_normalize_model_config_ignores_generic_api_key_env(monkeypatch, tmp_pat
         "TEMPERATURE",
         "TOP_P",
         "TOP_K",
+        "REASONING_EFFORT",
         "MODEL_MAX_RETRIES",
         "MODEL_REQUEST_TIMEOUT",
     ):
@@ -132,6 +137,7 @@ def test_build_chat_model_passes_retry_and_timeout(monkeypatch):
             captured.update(kwargs)
 
     monkeypatch.setattr(model_factory_module, "ChatOpenAI", FakeChatOpenAI)
+    monkeypatch.setattr(model_factory_module, "DeepSeekReasoningChatOpenAI", FakeChatOpenAI)
 
     model_factory_module.build_chat_model(
         ModelConfig(
@@ -180,6 +186,7 @@ def test_build_chat_model_disables_deepseek_thinking_by_default(monkeypatch):
             captured.update(kwargs)
 
     monkeypatch.setattr(model_factory_module, "ChatOpenAI", FakeChatOpenAI)
+    monkeypatch.setattr(model_factory_module, "DeepSeekReasoningChatOpenAI", FakeChatOpenAI)
 
     model_factory_module.build_chat_model(
         ModelConfig(
@@ -194,3 +201,71 @@ def test_build_chat_model_disables_deepseek_thinking_by_default(monkeypatch):
         "top_k": 1,
         "thinking": {"type": "disabled"},
     }
+
+
+def test_build_chat_model_enables_deepseek_reasoning_effort_when_set(monkeypatch):
+    captured = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(model_factory_module, "ChatOpenAI", FakeChatOpenAI)
+    monkeypatch.setattr(model_factory_module, "DeepSeekReasoningChatOpenAI", FakeChatOpenAI)
+
+    model_factory_module.build_chat_model(
+        ModelConfig(
+            base_url="https://api.deepseek.com",
+            temperature=0.0,
+            top_k=1,
+            reasoning_effort="high",
+        ),
+        "deepseek-v4-flash",
+    )
+
+    assert captured["reasoning_effort"] == "high"
+    assert captured["extra_body"] == {
+        "top_k": 1,
+        "thinking": {"type": "enabled"},
+    }
+
+
+def test_deepseek_chat_model_preserves_reasoning_content_for_tool_replay():
+    model = model_factory_module.DeepSeekReasoningChatOpenAI(
+        model="deepseek-v4-flash",
+        api_key="key",
+        base_url="https://api.deepseek.com",
+    )
+    response = {
+        "id": "chatcmpl-test",
+        "model": "deepseek-v4-flash",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning_content": "Need to inspect the outline.",
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {"name": "overview", "arguments": "{}"},
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+
+    result = model._create_chat_result(response)
+    message = result.generations[0].message
+    payload = model._get_request_payload(
+        [
+            message,
+            ToolMessage(content='{"ok": true}', tool_call_id="call-1"),
+        ]
+    )
+
+    assert message.additional_kwargs["reasoning_content"] == "Need to inspect the outline."
+    assert payload["messages"][0]["reasoning_content"] == "Need to inspect the outline."

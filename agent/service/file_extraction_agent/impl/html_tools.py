@@ -233,6 +233,30 @@ def build_tools(state: Any) -> list[Any]:
         return _preview_inline_evidence(state, source_id, start_index, count, reason=reason)
 
     @tool
+    def record_note(field_names: list[str], evidence_ids: list[str], note: str, reason: str) -> dict[str, Any]:
+        """
+        Record a human-readable note connecting fields and observed evidence.
+
+        Use this after previewing inline evidence, reading list items, or
+        querying table rows that are likely to support the next set_field call.
+        This is a replay memory aid and does not set field values, validate a
+        final answer, or replace set_field. Keep the note short and specific:
+        name the task fields involved, cite the observed evidence ids, and
+        explain what the evidence contributes.
+
+        Args:
+            field_names: Task field names this note may help resolve.
+            evidence_ids: Observed evidence ids this note summarizes.
+            note: Human-readable evidence note for replay and working memory.
+            reason: Why this note is useful before the next field write.
+
+        Returns:
+            The stored note.
+        """
+
+        return _record_note(state, field_names, evidence_ids, note, reason=reason)
+
+    @tool
     def set_field(
         name: str,
         value: Any,
@@ -311,6 +335,7 @@ def build_tools(state: Any) -> list[Any]:
         read_list,
         query_table,
         preview_inline_evidence,
+        record_note,
         set_field,
         finish,
     ]
@@ -717,6 +742,68 @@ def _preview_inline_evidence(
         _args_with_reason({"source_id": normalized_source_id, "start_index": start, "count": len(selected)}, reason),
         _summarize_tool_result(result),
     )
+    return result
+
+
+def _record_note(
+    state: Any,
+    field_names: list[str],
+    evidence_ids: list[str],
+    note: str,
+    *,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    normalized_field_names = [str(field_name).strip() for field_name in field_names or [] if str(field_name).strip()]
+    normalized_evidence_ids = [str(evidence_id).strip() for evidence_id in evidence_ids or [] if str(evidence_id).strip()]
+    normalized_note = str(note or "").strip()
+    errors: list[dict[str, Any]] = []
+
+    field_defs = _field_defs_by_name(state)
+    unknown_fields = [field_name for field_name in normalized_field_names if field_name not in field_defs]
+    if not normalized_field_names:
+        errors.append({"message": "field_names must contain at least one field"})
+    if unknown_fields:
+        errors.append({"message": "unknown field names", "field_names": unknown_fields})
+    if not normalized_note:
+        errors.append({"message": "note is required"})
+
+    invalid_ids = [evidence_id for evidence_id in normalized_evidence_ids if not _evidence_exists(state, evidence_id)]
+    if invalid_ids:
+        errors.append({"message": "unknown evidence ids", "ids": invalid_ids})
+    unobserved_ids = [
+        evidence_id
+        for evidence_id in normalized_evidence_ids
+        if evidence_id not in _read(state, "observed_evidence_ids", set())
+    ]
+    if unobserved_ids:
+        errors.append({"message": "evidence ids must be observed before record_note", "ids": unobserved_ids})
+
+    args = {
+        "field_names": field_names,
+        "evidence_ids": evidence_ids,
+        "note": note,
+    }
+    if errors:
+        result = {"ok": False, "errors": errors}
+        _record_action(state, "record_note", _args_with_reason(args, reason), result)
+        return result
+
+    stored_note = {
+        "field_names": normalized_field_names,
+        "evidence_ids": normalized_evidence_ids,
+        "note": normalized_note,
+    }
+    notes = _read(state, "notes", None)
+    if not isinstance(notes, list):
+        notes = []
+        try:
+            setattr(state, "notes", notes)
+        except Exception:
+            pass
+    if isinstance(notes, list):
+        notes.append(stored_note)
+    result = {"ok": True, "note": stored_note}
+    _record_action(state, "record_note", _args_with_reason(args, reason), result)
     return result
 
 
