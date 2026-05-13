@@ -126,7 +126,14 @@ def _supports_bind_tools(model: Any) -> bool:
 def _task_fields_text(task_spec: Any) -> str:
     lines = []
     for field in getattr(task_spec, "fields", []) or []:
-        lines.append(f"- {field.name}: type={field.type}, required={field.required}, description={field.description or ''}")
+        detail = f"- {field.name}: type={field.type}, required={field.required}"
+        variants = getattr(field, "variants", []) or []
+        if getattr(field, "type", None) == "enum" and variants:
+            variant_text = ", ".join(f"{variant.name}({variant.type})" for variant in variants)
+            detail += f", variants={variant_text}"
+            detail += ', write_field value shape: {"variant": "<variant name>", "value": <payload>}'
+        detail += f", description={field.description or ''}"
+        lines.append(detail)
     if getattr(task_spec, "instructions", None):
         lines.append("Instructions: " + task_spec.instructions)
     return "\n".join(lines)

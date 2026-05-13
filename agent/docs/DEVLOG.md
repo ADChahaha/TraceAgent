@@ -1,4 +1,21 @@
-last updated: 2026-05-13 19:46:45
+last updated: 2026-05-13 21:12:49
+
+## 2026-05-13 21:12:49
+
+### 已完成工作
+
+- `file_extraction_agent` 的 resolution prompt 现在会展开 enum variants，并提示 `write_field` 使用 tagged enum object，例如 `{"variant": "Entailment", "value": null}`。
+- `write_field` 字段结果新增系统反查的 `evidence_texts`，由 evidence selector 映射回 paragraph sentence、list item 或 table row 文本，用于前端回放和实验 scorer。
+- ContractNLI hard5 OCR runner 默认切到 `enum_decision + agent_only`，enum schema 不再使用旧 `set_field/evidence_ids` 文案。
+
+### 验证
+
+- `conda run -n agent-gate python -m pytest tests/file_extraction_agent tests/routes/test_file_extraction_agent_route.py ../experiments/contract_nli/tests/test_run_contract_nli_20.py ../experiments/contract_nli/tests/test_run_contract_nli_hard5_ocr.py ../experiments/contract_nli/tests/test_run_contract_nli_hard11.py ../experiments/contract_nli/tests/test_run_contract_nli_pdf38_ocr.py -q`，结果 `61 passed`。
+- `CONTRACT_NLI_RERUN=1 CONTRACT_NLI_RUN_TARGET=agent_only conda run -n agent-gate python experiments/contract_nli/scripts/run_contract_nli_hard5_ocr.py`，结果 `5/5 completed`，choice accuracy `0.7412`，evidence F1 `0.5746`。
+
+### 遇到的问题
+
+- enum schema 将字段数从 34 降到 17，但本轮 hard5 trace 仍主要表现为先读取较多内容再按 schema 顺序写字段。
 
 ## 2026-05-13 19:46:45
 

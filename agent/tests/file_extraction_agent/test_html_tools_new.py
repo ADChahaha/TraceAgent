@@ -133,6 +133,13 @@ def test_write_field_overwrites_result_buffer_and_validates_selectors():
     )
 
     assert first["ok"] is True
+    assert first["field"]["evidence_texts"] == [
+        {
+            "path": paths["paragraph"],
+            "selector": "S001",
+            "text": "公司成立于2020年。",
+        }
+    ]
     assert second["field"]["value"] == 2021
     assert state.field_states["founded_year"]["value"] == 2021
     assert bad["ok"] is False

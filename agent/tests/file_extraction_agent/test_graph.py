@@ -92,6 +92,13 @@ def test_run_extraction_graph_stream_yields_ndjson_events_and_final_result():
                     "sentences": ["S001"],
                 }
             ],
+            "evidence_texts": [
+                {
+                    "path": "/001-company-公司资料/001-概况/001-公司成立于2020年.md",
+                    "selector": "S001",
+                    "text": "公司成立于2020年。",
+                }
+            ],
             "reason": "S001 写明公司成立于2020年。",
         }
     ]
@@ -137,6 +144,13 @@ def test_map_state_to_result_returns_new_field_result_shape():
                     {
                         "path": "/001-company-公司资料/001-概况/001-公司成立于2020年.md",
                         "sentences": ["S001"],
+                    }
+                ],
+                "evidence_texts": [
+                    {
+                        "path": "/001-company-公司资料/001-概况/001-公司成立于2020年.md",
+                        "selector": "S001",
+                        "text": "公司成立于2020年。",
                     }
                 ],
                 "reason": "S001 写明公司成立于2020年。",

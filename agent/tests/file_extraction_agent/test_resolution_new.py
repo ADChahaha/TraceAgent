@@ -49,6 +49,39 @@ def test_resolution_messages_describe_virtual_tree_tools_without_plan():
     assert "overview" not in content
 
 
+def test_resolution_messages_expand_enum_variants():
+    extraction_input = build_graph_input(
+        documents=[
+            {
+                "filename": "contract.html",
+                "html": "<h1>合同</h1><p>接收方不得披露保密信息。</p>",
+            }
+        ],
+        task_spec={
+            "fields": [
+                {
+                    "name": "nda_1_decision",
+                    "type": "enum",
+                    "required": True,
+                    "variants": [
+                        {"name": "Entailment", "type": "null"},
+                        {"name": "Contradiction", "type": "null"},
+                        {"name": "NotMentioned", "type": "null"},
+                    ],
+                    "description": "判断合同是否支持该假设。",
+                }
+            ]
+        },
+    )
+
+    messages = build_resolution_messages(build_graph_state(extraction_input))
+    content = "\n\n".join(message.content for message in messages)
+
+    assert "- nda_1_decision: type=enum" in content
+    assert "variants=Entailment(null), Contradiction(null), NotMentioned(null)" in content
+    assert 'write_field value shape: {"variant": "<variant name>", "value": <payload>}' in content
+
+
 def test_resolution_graph_exposes_new_tools_only():
     tools = build_tools(_state())
     tool_names = [getattr(tool, "name", getattr(tool, "__name__", "")) for tool in tools]

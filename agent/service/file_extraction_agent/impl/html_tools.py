@@ -139,6 +139,7 @@ def _write_field(
             "status": status,
             "value": value,
             "evidence": evidence or [],
+            "evidence_texts": state.document.evidence_texts(evidence or []),
             "reason": reason,
         }
         state.field_states[field_id] = field
@@ -220,7 +221,7 @@ def validate_and_build_result(state: Any) -> dict[str, Any]:
             errors.append({"field_id": field.name, "code": "REQUIRED_MISSING", "message": "required field is not resolved"})
     if errors:
         return {"ok": False, "errors": errors}
-    fields = [state.field_states[field.name] for field in state.task_spec.fields if field.name in state.field_states]
+    fields = [_field_with_evidence_texts(state, state.field_states[field.name]) for field in state.task_spec.fields if field.name in state.field_states]
     result = {"fields": fields}
     trace = {"events": list(state.events), "actions": list(state.actions), "document_tree": state.document.tree_text("/", depth=3)}
     return {"ok": True, "result": result, "trace": trace}
@@ -231,6 +232,15 @@ def field_definition(state: Any, field_id: str) -> Any:
         if field.name == field_id:
             return field
     return None
+
+
+def _field_with_evidence_texts(state: Any, field_state: dict[str, Any]) -> dict[str, Any]:
+    if "evidence_texts" in field_state:
+        return field_state
+    return {
+        **field_state,
+        "evidence_texts": state.document.evidence_texts(field_state.get("evidence") or []),
+    }
 
 
 def validate_value_type(field: Any, value: Any) -> str | None:

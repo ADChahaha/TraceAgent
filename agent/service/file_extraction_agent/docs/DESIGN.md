@@ -19,6 +19,12 @@
 
 `schema` 是用户给定的抽取契约，直接放在模型上下文里，不作为虚拟文件树的一部分，也不提供写 schema 工具。虚拟文件树只表达待抽取材料；字段结果通过专门的结果写入工具提交。
 
+如果字段类型是 `enum`，resolution prompt 会把 variants 展开成 `VariantName(payload_type)`，并提示模型用 tagged enum object 写入：
+
+```json
+{"variant": "Entailment", "value": null}
+```
+
 ## 语义 HTML 虚拟文件树
 
 虚拟文件树不在磁盘上创建真实文件。它是基于 HTML AST / 语义节点索引生成的只读视图，专门给模型做导航。
@@ -362,6 +368,7 @@ read(table_path) 或 query_table(table_path, sql)
 
 write_field(field_id, value, evidence)
   -> 字段值绑定到可反查的 path + Sxxx/Ixxx/Rxxx
+  -> 工具同步生成 evidence_texts，供回放和评测直接使用
 ```
 
 这样可以避免三类问题：
@@ -371,6 +378,8 @@ write_field(field_id, value, evidence)
 - 用户看到的证据文本由模型自由改写，无法验证。
 
 证据文本必须能从 selector 反查回原文。模型可以用 `reason` 解释为什么使用该证据，但字段证据只能引用 `.md` 的 `Sxxx`、`.list` 的 `Ixxx` 或 `.table` 的 `Rxxx`。
+
+`write_field` 会在字段对象中保留原始 `evidence` selector，同时用 `HtmlDocument.evidence_texts()` 生成 `evidence_texts`。`evidence_texts` 是系统从 selector 反查出的只读文本，方便前端回放和实验 scorer 使用；它不是模型手写证据，也不作为模型可编辑输入。
 
 ## 结果形态
 
@@ -389,6 +398,13 @@ write_field(field_id, value, evidence)
           "sentences": ["S001"]
         }
       ],
+      "evidence_texts": [
+        {
+          "path": "/001-file/001-概况/001-公司名称.md",
+          "selector": "S001",
+          "text": "公司名称为 Acme Inc."
+        }
+      ],
       "reason": "S001 给出公司名称。"
     },
     {
@@ -399,6 +415,13 @@ write_field(field_id, value, evidence)
         {
           "path": "/001-file/001-概况/002-公司成立于2020年.md",
           "sentences": ["S001"]
+        }
+      ],
+      "evidence_texts": [
+        {
+          "path": "/001-file/001-概况/002-公司成立于2020年.md",
+          "selector": "S001",
+          "text": "公司成立于2020年。"
         }
       ],
       "reason": "S001 写明公司成立于2020年。"

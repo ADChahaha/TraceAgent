@@ -55,7 +55,7 @@ def map_state_to_result(
     status: str = "completed",
     failure_reason: str | None = None,
 ) -> ExtractionResult:
-    fields = [state.field_states[field.name] for field in state.task_spec.fields if field.name in state.field_states]
+    fields = [_field_with_evidence_texts(state, state.field_states[field.name]) for field in state.task_spec.fields if field.name in state.field_states]
     trace: dict[str, Any] = {
         "events": _plain(state.events),
         "actions": _plain(state.actions),
@@ -84,6 +84,15 @@ def _append_failure_event(state: GraphState, exc: Exception) -> None:
         }
     )
     state.next_seq += 1
+
+
+def _field_with_evidence_texts(state: GraphState, field_state: dict[str, Any]) -> dict[str, Any]:
+    if "evidence_texts" in field_state:
+        return field_state
+    return {
+        **field_state,
+        "evidence_texts": state.document.evidence_texts(field_state.get("evidence") or []),
+    }
 
 
 def _failure_reason(outcome: Any) -> str:

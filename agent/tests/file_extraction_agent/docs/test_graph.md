@@ -10,11 +10,11 @@ documents + task_spec
   -> fake model 依次调用 tree/read/anchors/write_field/submit_result
   -> 工具层写入 state.events
   -> run_extraction_graph_stream 逐条 yield NDJSON
-  -> map_state_to_result 生成 fields 数组和 trace
+  -> map_state_to_result 生成 fields 数组、selector 反查文本和 trace
 ```
 
 ## 测试函数
 
-- `test_run_extraction_graph_stream_yields_ndjson_events_and_final_result`：确认流式图会按工具调用顺序输出 NDJSON 事件，事件 `seq` 连续递增，最后一条是 `result_completed`。
+- `test_run_extraction_graph_stream_yields_ndjson_events_and_final_result`：确认流式图会按工具调用顺序输出 NDJSON 事件，事件 `seq` 连续递增，最后一条是 `result_completed`，字段结果里包含 `evidence_texts` 方便回放和评测。
 - `test_run_extraction_graph_stream_flushes_events_after_each_tool_call`：确认 graph stream 会在每次工具调用后立即产出事件，而不是等整轮 resolution 结束后批量返回。
-- `test_map_state_to_result_returns_new_field_result_shape`：确认最终结果使用 `fields[]` 字段对象结构，并且 trace 不再包含 soft plan。
+- `test_map_state_to_result_returns_new_field_result_shape`：确认最终结果使用 `fields[]` 字段对象结构，保留证据 selector 的反查文本，并且 trace 不再包含 soft plan。
