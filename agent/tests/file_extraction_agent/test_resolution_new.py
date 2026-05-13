@@ -23,21 +23,13 @@ def _state():
     return build_graph_state(extraction_input)
 
 
-def test_resolution_messages_describe_virtual_tree_tools_without_plan():
+def test_resolution_messages_describe_extraction_policy_without_tool_manual():
     messages = build_resolution_messages(_state())
     content = "\n\n".join(message.content for message in messages)
 
     assert "semantic HTML virtual file tree" in content
-    assert "tree(path, depth, reason)" in content
-    assert "read(path, offset, limit, reason)" in content
-    assert "anchors(path, reason)" in content
-    assert "query_table(path, sql, offset, limit, reason)" in content
-    assert "bind_evidence(field_id, evidence, reason)" in content
-    assert "review_field(field_id, reason)" in content
-    assert "write_field(field_id, value, final_evidence, status, reason)" in content
-    assert "submit_result(reason)" in content
     assert "reason is a user-visible action explanation" in content
-    assert "Use evidence selectors" in content
+    assert "Tool-specific navigation and argument rules are provided in each tool description" in content
     assert "as soon as you see text, list items, or table rows that you think may be evidence for a field" in content
     assert "call bind_evidence immediately" in content
     assert "Do not wait until the field value or enum decision is final before binding evidence" in content
@@ -48,6 +40,10 @@ def test_resolution_messages_describe_virtual_tree_tools_without_plan():
     assert "drop merely topical, background, duplicate, or weakly related candidate evidence" in content
     assert "Only null-typed fields or null enum variants may submit final_evidence=[]" in content
     assert "submit_result requires non-empty final_evidence" in content
+    assert "tree(path, depth, reason)" not in content
+    assert "read(path, offset, limit, reason)" not in content
+    assert "query_table(path, sql, offset, limit, reason)" not in content
+    assert "Use read to inspect .md/.list/.table files" not in content
     assert "once the value or enum decision is ready" not in content
     assert "maximum number of reads" not in content.lower()
     assert "read budget" not in content.lower()
@@ -57,6 +53,22 @@ def test_resolution_messages_describe_virtual_tree_tools_without_plan():
     assert "soft plan" not in content.lower()
     assert "record_note" not in content
     assert "overview" not in content
+
+
+def test_tool_descriptions_carry_navigation_and_evidence_contracts():
+    tools = {getattr(tool, "name", getattr(tool, "__name__", "")): tool for tool in build_tools(_state())}
+
+    assert "Use this for directories" in tools["tree"].description
+    assert "Directory paths are shown with a trailing slash" in tools["tree"].description
+    assert "Only read paths ending in .md, .list, or .table" in tools["read"].description
+    assert "Never call read on document or section directories" in tools["read"].description
+    assert "If tree shows a path ending with /, call tree on that directory first" in tools["read"].description
+    assert "Only call this for paragraph .md files" in tools["anchors"].description
+    assert "Only call this for .table paths" in tools["query_table"].description
+    assert "{path, sentences}" in tools["bind_evidence"].description
+    assert "Call review_field before write_field" in tools["review_field"].description
+    assert "final_evidence must be selected from bound candidate evidence" in tools["write_field"].description
+    assert "Only null-typed fields or null enum variants may use final_evidence=[]" in tools["submit_result"].description
 
 
 def test_resolution_messages_expand_enum_variants():

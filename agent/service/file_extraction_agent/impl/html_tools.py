@@ -18,37 +18,74 @@ def build_tools(state: Any) -> list[Any]:
 
     @tool
     def tree(path: str = "/", depth: int = 3, reason: str = "") -> dict[str, Any]:
-        """Expand the virtual semantic HTML file tree at path."""
+        """Expand the virtual semantic HTML file tree at a directory path.
+
+        Use this for directories: root, document directories, and section directories.
+        Directory paths are shown with a trailing slash in tree output. tree returns child
+        directories and readable .md/.list/.table file paths; it does not return file text.
+        If you need content inside a directory, call tree on that directory first, then
+        call read on one of the child file paths ending in .md, .list, or .table.
+        """
 
         return _tree(state, path, depth=depth, reason=reason)
 
     @tool
     def read(path: str, offset: int = 0, limit: int = 30, reason: str = "") -> dict[str, Any]:
-        """Read a paragraph, list, or table virtual file as Markdown/text."""
+        """Only read paths ending in .md, .list, or .table.
+
+        Never call read on document or section directories. If tree shows a path ending with /, call tree on that directory first, then read a child .md/.list/.table file.
+        Paragraph .md files return plain text without sentence ids; call anchors on the
+        same .md path when you need Sxxx sentence ids for evidence. List and table reads
+        return Markdown with Ixxx item ids or Rxxx row ids. Use offset/limit for list or
+        table pagination.
+        """
 
         return _read(state, path, offset=offset, limit=limit, reason=reason)
 
     @tool
     def anchors(path: str, reason: str = "") -> dict[str, Any]:
-        """Return Sxxx sentence ids for a paragraph .md virtual file."""
+        """Return Sxxx sentence ids for a paragraph .md virtual file.
+
+        Only call this for paragraph .md files after read has located relevant text.
+        Do not call anchors for directories, .list files, or .table files; list items use
+        Ixxx ids from read output and table rows use Rxxx ids from read/query_table output.
+        """
 
         return _anchors(state, path, reason=reason)
 
     @tool
     def query_table(path: str, sql: str, offset: int = 0, limit: int = 30, reason: str = "") -> dict[str, Any]:
-        """Run a safe SELECT over a .table virtual file and return Markdown rows."""
+        """Run a safe SELECT over one .table virtual file and return Markdown rows.
+
+        Only call this for .table paths. The SQL must be a single SELECT statement over
+        the fixed table name data. Returned rows keep their original Rxxx ids, which can
+        be used as table evidence selectors.
+        """
 
         return _query_table(state, path, sql, offset=offset, limit=limit, reason=reason)
 
     @tool
     def bind_evidence(field_id: str, evidence: list[dict[str, Any]], reason: str = "") -> dict[str, Any]:
-        """Bind evidence selectors to one schema field without submitting its value."""
+        """Bind candidate evidence selectors to one schema field without submitting its value.
+
+        Use this immediately after reading text, list items, or table rows that may support
+        a field. Selector shapes are {path, sentences} for .md Sxxx sentence ids,
+        {path, items} for .list Ixxx item ids, and {path, rows} for .table Rxxx row ids.
+        Bound evidence is only a candidate buffer; write_field later chooses final_evidence
+        from this buffer.
+        """
 
         return _bind_evidence(state, field_id, evidence, reason=reason)
 
     @tool
     def review_field(field_id: str, reason: str = "") -> dict[str, Any]:
-        """Return one field's description, current value, and bound evidence texts for reassessment."""
+        """Review one field's current value and bound candidate evidence before final writing.
+
+        Call review_field before write_field whenever that field has any bound candidate
+        evidence. This tool does not judge correctness; it shows the field description,
+        current value, candidate selectors, and evidence texts so you can keep useful
+        evidence and drop topical, duplicate, background, or weak evidence.
+        """
 
         return _review_field(state, field_id, reason=reason)
 
@@ -60,13 +97,25 @@ def build_tools(state: Any) -> list[Any]:
         status: str = "resolved",
         reason: str = "",
     ) -> dict[str, Any]:
-        """Write or overwrite one schema field value with reviewed final evidence."""
+        """Write or overwrite one schema field value with selected final evidence.
+
+        final_evidence must be selected from bound candidate evidence for the same field.
+        Use status="resolved" for extracted values and status="missing" when the document
+        does not support the field. Array fields must be written as a complete array; do
+        not append items incrementally. Rewriting the same field replaces the prior value.
+        """
 
         return _write_field(state, field_id, value, final_evidence=final_evidence, status=status, reason=reason)
 
     @tool
     def submit_result(reason: str = "") -> dict[str, Any]:
-        """Validate the current result buffer and submit the final extraction result."""
+        """Validate the current result buffer and submit the final extraction result.
+
+        submit_result checks required fields, value types, enum variants, and evidence.
+        Only null-typed fields or null enum variants may use final_evidence=[]. Resolved
+        non-null values and non-null enum variants require non-empty final_evidence. If
+        submit_result returns errors, fix the indicated fields and submit again.
+        """
 
         return _submit_result(state, reason=reason)
 

@@ -86,6 +86,8 @@ write_field(field_id, value, final_evidence, status?, reason)
 submit_result(reason?)
 ```
 
+系统 prompt 只描述 agent 角色、抽取流程、`reason` 语义和 evidence lifecycle；具体工具参数约束写在各 tool description 中，并通过 LangGraph `bind_tools` 暴露给模型。这样模型在选择某个工具时能直接看到该工具的局部规则，例如 `read` 只能读取 `.md/.list/.table` 文件，目录路径必须先用 `tree` 展开。
+
 所有模型主动浏览、读取、查询和写入工具都必须带 `reason`。`reason` 是用户可见的动作说明，用来解释“为什么现在展开这个目录、读取这个文件、查询这张表或写入这个字段”。它不是模型推理链，也不是证据本身；可信证据只来自虚拟路径和文件内编号。
 
 ### `tree`
