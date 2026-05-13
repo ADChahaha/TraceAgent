@@ -27,8 +27,7 @@ def build_resolution_messages(state: Any) -> list[Any]:
             "Use evidence selectors: {path, sentences}, {path, items}, or {path, rows}. "
             "Write each schema field with write_field when the value is supported or mark it missing when the document does not mention it. "
             "Once you have enough evidence for a field, call write_field for that field before continuing to unrelated fields. "
-            "Call submit_result after all fields have been written. If submit_result returns errors, fix fields and submit again. "
-            "Do not create or update a plan. Do not use old block-reading or field-finalization concepts."
+            "Call submit_result after all fields have been written. If submit_result returns errors, fix fields and submit again."
         )
     )
     human = HumanMessage(

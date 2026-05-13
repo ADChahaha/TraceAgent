@@ -41,6 +41,8 @@ def test_resolution_messages_describe_virtual_tree_tools_without_plan():
     assert "before continuing to unrelated fields" in content
     assert "maximum number of reads" not in content.lower()
     assert "read budget" not in content.lower()
+    assert "Do not create or update a plan" not in content
+    assert "old block-reading or field-finalization concepts" not in content
     assert "update_soft_plan" not in content
     assert "soft plan" not in content.lower()
     assert "record_note" not in content
