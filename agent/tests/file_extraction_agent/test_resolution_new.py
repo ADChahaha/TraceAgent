@@ -36,6 +36,11 @@ def test_resolution_messages_describe_virtual_tree_tools_without_plan():
     assert "submit_result(reason)" in content
     assert "reason is a user-visible action explanation" in content
     assert "Use evidence selectors" in content
+    assert "Once you have enough evidence for a field" in content
+    assert "write_field for that field" in content
+    assert "before continuing to unrelated fields" in content
+    assert "maximum number of reads" not in content.lower()
+    assert "read budget" not in content.lower()
     assert "update_soft_plan" not in content
     assert "soft plan" not in content.lower()
     assert "record_note" not in content

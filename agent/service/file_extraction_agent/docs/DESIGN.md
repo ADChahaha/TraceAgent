@@ -341,6 +341,8 @@ write_field/submit_result
   -> 让模型按 schema 写入并提交结果
 ```
 
+resolution prompt 只要求模型在某个字段已有足够证据后及时 `write_field`，再继续处理无关字段；它不设置固定读写次数、读量预算或“读几次必须写一次”的工具节奏硬约束。
+
 ## 证据归因
 
 inline 证据归因不依赖 quote 匹配、行号或列号，而依赖“虚拟路径 + 文件内编号”：
