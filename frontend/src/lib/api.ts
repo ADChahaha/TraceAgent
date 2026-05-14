@@ -1,13 +1,12 @@
 import type {
   AuditResult,
   Capabilities,
-  ContractNliHtmlProcess,
-  ContractNliExperimentSummary,
   ReviewHandoff,
   ReviewSubmitPayload,
   TaskReplay,
   TaskCreated,
   TaskDetailData,
+  TaskList,
   TaskResult,
   TaskSummary,
   TaskTrace
@@ -33,6 +32,11 @@ export async function createTask(formData: FormData): Promise<TaskCreated> {
     method: "POST",
     body: formData
   });
+}
+
+export async function listTasks(): Promise<TaskSummary[]> {
+  const payload = await requestJson<TaskList>("/api/backend/tasks");
+  return payload.tasks;
 }
 
 export async function getTaskSummary(taskId: string): Promise<TaskSummary> {
@@ -70,18 +74,6 @@ export async function submitTaskReview(
 
 export async function getTaskAudit(taskId: string): Promise<AuditResult> {
   return requestJson<AuditResult>(`/api/backend/tasks/${encodeURIComponent(taskId)}/audit`);
-}
-
-export async function getContractNliExperiment(): Promise<ContractNliExperimentSummary> {
-  return requestJson<ContractNliExperimentSummary>("/api/backend/experiments/contract-nli");
-}
-
-export async function getContractNliExperimentDetail(taskId: string): Promise<TaskDetailData> {
-  return requestJson<TaskDetailData>(`/api/backend/experiments/contract-nli/samples/${encodeURIComponent(taskId)}/detail`);
-}
-
-export async function getContractNliHtmlProcess(taskId: string): Promise<ContractNliHtmlProcess> {
-  return requestJson<ContractNliHtmlProcess>(`/api/backend/experiments/contract-nli/samples/${encodeURIComponent(taskId)}/html-process`);
 }
 
 export async function loadTaskDetail(taskId: string): Promise<TaskDetailData> {

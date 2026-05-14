@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 import uuid
 from dataclasses import dataclass
+from html import escape
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +33,98 @@ class UploadedFilePayload:
     file_bytes: bytes
     filename: str
     content_type: str | None
+
+
+class _ReplayDisplayHtmlSanitizer(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.parts: list[str] = []
+        self.skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self.skip_depth > 0:
+            self.skip_depth += 1
+            return
+        if _is_replay_chrome_attrs(attrs):
+            self.skip_depth = 1
+            return
+        self.parts.append(self.get_starttag_text() or _format_start_tag(tag, attrs))
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self.skip_depth > 0 or _is_replay_chrome_attrs(attrs):
+            return
+        self.parts.append(self.get_starttag_text() or _format_start_tag(tag, attrs, self_closing=True))
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.skip_depth > 0:
+            self.skip_depth -= 1
+            return
+        self.parts.append(f"</{tag}>")
+
+    def handle_data(self, data: str) -> None:
+        if self.skip_depth == 0:
+            self.parts.append(data)
+
+    def handle_entityref(self, name: str) -> None:
+        if self.skip_depth == 0:
+            self.parts.append(f"&{name};")
+
+    def handle_charref(self, name: str) -> None:
+        if self.skip_depth == 0:
+            self.parts.append(f"&#{name};")
+
+    def handle_comment(self, data: str) -> None:
+        if self.skip_depth == 0:
+            self.parts.append(f"<!--{data}-->")
+
+    def handle_decl(self, decl: str) -> None:
+        if self.skip_depth == 0:
+            self.parts.append(f"<!{decl}>")
+
+    def handle_pi(self, data: str) -> None:
+        if self.skip_depth == 0:
+            self.parts.append(f"<?{data}>")
+
+    def get_html(self) -> str:
+        return "".join(self.parts)
+
+
+def sanitize_replay_display_html(display_html: str) -> str:
+    parser = _ReplayDisplayHtmlSanitizer()
+    parser.feed(display_html)
+    parser.close()
+    return _sanitize_replay_display_css(parser.get_html())
+
+
+def _is_replay_chrome_attrs(attrs: list[tuple[str, str | None]]) -> bool:
+    attr_map = {name.lower(): value or "" for name, value in attrs}
+    data_type = attr_map.get("data-type", "").lower()
+    class_names = attr_map.get("class", "").lower().split()
+    element_id = attr_map.get("id", "")
+    text_type = data_type.replace("-", "_")
+    if text_type in {"page_number", "page_header", "page_footer"}:
+        return True
+    if {"page-number", "block-page_footer", "block-page_header"} & set(class_names):
+        return True
+    return bool(re.search(r"_b\d+$", element_id) and text_type in {"page_number", "page_header", "page_footer"})
+
+
+def _format_start_tag(tag: str, attrs: list[tuple[str, str | None]], *, self_closing: bool = False) -> str:
+    attr_text = "".join(
+        f" {name}" if value is None else f' {name}="{escape(value, quote=True)}"'
+        for name, value in attrs
+    )
+    closing = " /" if self_closing else ""
+    return f"<{tag}{attr_text}{closing}>"
+
+
+def _sanitize_replay_display_css(html: str) -> str:
+    return re.sub(
+        r"[^{}]*\.(?:page-number|block-page_footer|block-page_header)[^{]*\{[^{}]*\}",
+        "",
+        html,
+        flags=re.IGNORECASE,
+    )
 
 
 class TaskService:
@@ -142,12 +237,23 @@ class TaskService:
 
     def get_task_summary(self, task_id: str) -> dict[str, Any]:
         task = self.get_task_or_raise(task_id)
+        return self._serialize_task_summary(task)
+
+    def list_task_summaries(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        bounded_limit = max(1, min(limit, 100))
+        return [
+            self._serialize_task_summary(task)
+            for task in tasks_crud.list_tasks(self.connection, limit=bounded_limit)
+        ]
+
+    def _serialize_task_summary(self, task: dict[str, Any]) -> dict[str, Any]:
+        task_id = task["id"]
         fields = extraction_crud.list_extracted_fields(self.connection, task_id)
         traces = extraction_crud.list_field_traces(self.connection, task_id)
         routes = extraction_crud.list_field_routes(self.connection, task_id)
         needs_review = task["status"] == "waiting_review"
         return {
-            "task_id": task["id"],
+            "task_id": task_id,
             "status": task["status"],
             "stage": task["stage"],
             "route": task["route"],
@@ -1008,7 +1114,7 @@ class TaskService:
             response = loads_json(stage_run["response_json"], {})
             display_html = response.get("display_html") or response.get("html")
             if isinstance(display_html, str) and display_html.strip():
-                html_parts.append(display_html)
+                html_parts.append(sanitize_replay_display_html(display_html))
         return "\n\n".join(html_parts)
 
     def _serialize_trace_steps(

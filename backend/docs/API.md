@@ -34,6 +34,7 @@
 
 ```text
 POST /tasks
+GET  /tasks
 GET  /tasks/:task_id
 GET  /tasks/:task_id/result
 GET  /tasks/:task_id/trace
@@ -150,6 +151,43 @@ curl -X POST "http://localhost:8000/tasks" \
 - `waiting_review / review`：至少一个字段需要人工复核。
 - `rejected / done`：route policy 拒绝任务。
 - `failed / done`：agent 调用或后端流程失败，`error_message` 会返回失败原因。
+
+## `GET /tasks`
+
+查询最近任务摘要列表，用于前端工作台从 backend 数据库恢复已有任务，而不是只依赖浏览器本地缓存。
+
+处理步骤：
+
+```text
+GET /tasks?limit=20
+  -> backend 将 limit 限制在 1..100
+  -> 按 updated_at DESC、created_at DESC、id DESC 读取 tasks
+  -> 对每个任务复用单任务 summary 序列化
+  -> 补齐 has_result、has_trace、needs_review、route 和错误信息
+  -> 返回 { "tasks": [...] }
+```
+
+响应示例：
+
+```json
+{
+  "tasks": [
+    {
+      "task_id": "task-001",
+      "status": "waiting_review",
+      "stage": "review",
+      "route": "review",
+      "route_reason": "字段需要人工复核",
+      "error_message": null,
+      "has_result": true,
+      "has_trace": true,
+      "needs_review": true,
+      "created_at": "2026-05-14T03:36:34Z",
+      "updated_at": "2026-05-14T16:50:44Z"
+    }
+  ]
+}
+```
 
 ## `GET /tasks/:task_id`
 

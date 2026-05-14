@@ -50,11 +50,26 @@ class FakeAgentClient:
             }
         )
         text = "2-201 被列为文明寝室补充材料" if filename == "supplement.pdf" else "1-101、1-102 被列为文明寝室"
+        display_html = (
+            "<!doctype html><html><head>"
+            "<style>.page-number { color: #737373; }</style>"
+            "</head><body>"
+            '<section class="page" id="page_001" data-page="1">'
+            '<div class="page-number">Page 1</div>'
+            f'<h1 id="dp-h1-1">测试文档</h1><p id="dp-p-1">{text}</p>'
+            '<div id="dp-footer-1" class="block block-page_footer" data-type="page_footer">428249v2</div>'
+            "</section>"
+            '<section class="page" id="page_002" data-page="2">'
+            '<div class="page-number">Page 2</div>'
+            '<div id="dp-header-2" data-type="page_header">Page 2</div>'
+            "</section>"
+            "</body></html>"
+        )
         return {
             "file_type": file_type,
             "filename": filename,
             "html": f'<h1 id="dp-h1-1">测试文档</h1><p id="dp-p-1">{text}</p>',
-            "display_html": f'<h1 id="dp-h1-1">测试文档</h1><p id="dp-p-1">{text}</p>',
+            "display_html": display_html,
             "markdown": text,
             "md_list": [text],
             "blocks": [
@@ -778,6 +793,48 @@ def test_create_task_returns_pending_before_background_pipeline_finishes(tmp_pat
         assert summary_response.json()["status"] == "completed"
 
 
+def test_list_tasks_returns_latest_db_tasks_for_workspace(tmp_path: Path):
+    app, _fake_agent = build_app(tmp_path, route="review")
+
+    with TestClient(app) as client:
+        first_response = client.post(
+            "/tasks",
+            data={
+                "task_type": "contract_nli",
+                "task_spec": json.dumps(TASK_SPEC, ensure_ascii=False),
+                "metadata": json.dumps({"sample_id": "27"}, ensure_ascii=False),
+            },
+            files={"file": ("sample-27.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        )
+        second_response = client.post(
+            "/tasks",
+            data={
+                "task_type": "contract_nli",
+                "task_spec": json.dumps(TASK_SPEC, ensure_ascii=False),
+                "metadata": json.dumps({"sample_id": "72"}, ensure_ascii=False),
+            },
+            files={"file": ("sample-72.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        )
+
+        assert first_response.status_code == 200
+        assert second_response.status_code == 200
+
+        list_response = client.get("/tasks")
+        assert list_response.status_code == 200
+        payload = list_response.json()
+
+        task_ids = [task["task_id"] for task in payload["tasks"]]
+        assert task_ids[:2] == [
+            second_response.json()["task_id"],
+            first_response.json()["task_id"],
+        ]
+        assert payload["tasks"][0]["status"] == "waiting_review"
+        assert payload["tasks"][0]["route"] == "review"
+        assert payload["tasks"][0]["has_result"] is True
+        assert payload["tasks"][0]["has_trace"] is True
+        assert payload["tasks"][0]["needs_review"] is True
+
+
 def test_create_task_accept_route_commits_agent_fields(tmp_path: Path):
     app, fake_agent = build_app(tmp_path, route="accept")
 
@@ -842,6 +899,12 @@ def test_create_task_accept_route_commits_agent_fields(tmp_path: Path):
                 "children": [],
             }
         ]
+        assert "测试文档" in replay["display_html"]
+        assert "Page 1" not in replay["display_html"]
+        assert "Page 2" not in replay["display_html"]
+        assert "428249v2" not in replay["display_html"]
+        assert "page-number" not in replay["display_html"]
+        assert "page_footer" not in replay["display_html"]
 
         extract_call = fake_agent.extraction_calls[0]
         assert extract_call["task_spec"] == TASK_SPEC

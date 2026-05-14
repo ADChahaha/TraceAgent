@@ -32,7 +32,6 @@ def build_display_html_from_content_list(pages: list[list[dict[str, Any]]]) -> s
 body {{ margin: 0; background: #f3f4f6; color: #171717; font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif; }}
 main {{ max-width: 980px; margin: 0 auto; padding: 24px; }}
 .page {{ background: #fff; margin: 0 0 20px; padding: 44px 56px; box-shadow: 0 1px 4px rgba(0,0,0,.12); position: relative; }}
-.page-number {{ position: absolute; top: 12px; right: 18px; color: #737373; font-size: 12px; }}
 .block {{ scroll-margin: 80px; }}
 h1, h2, h3, h4, h5, h6 {{ line-height: 1.35; margin: 18px 0 10px; }}
 h1 {{ font-size: 24px; text-align: center; }}
@@ -228,7 +227,6 @@ def render_page(blocks: list[dict[str, Any]], page_idx: int) -> str:
     page_no = page_idx + 1
     return (
         f'<section class="page" id="page_{page_no:03d}" data-page="{page_no}">'
-        f'<div class="page-number">Page {page_no}</div>'
         + "\n".join(rendered)
         + "</section>"
     )
@@ -412,7 +410,7 @@ def should_render_block(block: dict[str, Any]) -> bool:
     """Return true only for blocks that have visible text or table structure."""
 
     block_type = str(block.get("type", "unknown"))
-    if block_type == "page_number":
+    if block_type in {"page_header", "page_number", "page_footer"}:
         return False
     if block_type == "table":
         content = block.get("content", {})
@@ -560,9 +558,10 @@ def normalize_block_kind(block_type: str) -> str:
 def is_noise_semantic_block(block: dict[str, Any]) -> bool:
     kind = block.get("kind")
     mineru_type = (block.get("meta_info") or {}).get("mineru_type")
-    return kind in {"page_header", "page_number"} or mineru_type in {
+    return kind in {"page_header", "page_number", "page_footer"} or mineru_type in {
         "page_header",
         "page_number",
+        "page_footer",
     }
 
 

@@ -6,7 +6,7 @@ from fastapi import FastAPI
 
 from backend.core.config import BackendSettings
 from backend.core.db import connect_database, initialize_database
-from backend.routes import capabilities_router, experiments_router, reviews_router, tasks_router
+from backend.routes import capabilities_router, reviews_router, tasks_router
 from backend.services.agent_client import AgentClient
 from backend.services.audit_service import AuditService
 from backend.services.review_service import ReviewService
@@ -58,8 +58,6 @@ def create_app(
     app.include_router(tasks_router)
     app.include_router(reviews_router)
     app.include_router(capabilities_router)
-    app.include_router(experiments_router)
-
     return app
 
 

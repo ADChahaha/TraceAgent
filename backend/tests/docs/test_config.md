@@ -1,6 +1,6 @@
 # `test_config.py`
 
-这组测试覆盖 `backend` 的配置边界，重点验证 task spec 不写死在 Python 代码里，也不通过默认目录兜底。
+这组测试覆盖 `backend` 的配置和接口边界，重点验证 task spec 不写死在 Python 代码里，也不暴露内置实验数据源。
 
 ## 测试链路
 
@@ -9,8 +9,13 @@ BackendSettings(...)
   -> 只管理数据库、agent service 地址和支持文件类型
   -> 不创建 task_specs / task_specs_dir 属性
   -> POST /tasks 必须从请求表单接收 task_spec
+FastAPI app 启动
+  -> 只挂任务、复核和能力接口
+  -> 路由表中不注册 /experiments/... 这类内置实验接口
+  -> 访问历史实验路径时只能得到 404
 ```
 
 ## 测试函数
 
 - `test_backend_settings_does_not_define_builtin_task_specs`：验证 `BackendSettings` 不暴露内置 task specs 或默认 task spec 目录，避免 backend 对具体业务字段 schema 做兜底。
+- `test_backend_does_not_register_builtin_experiment_routes`：验证 backend 路由表不再注册 `/experiments/...` 内置实验接口，避免缺数据时返回 404 却仍然暴露实验 route 的假阳性。

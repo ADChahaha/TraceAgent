@@ -17,6 +17,14 @@ export type TaskStage =
 
 export type RouteDecision = "accept" | "review" | "reject";
 export type ReviewDecision = "approve" | "revise_and_approve" | "reject";
+export type BasicFieldType = "string" | "number" | "boolean" | "list[string]" | "list[number]" | "null";
+export type TaskFieldType = BasicFieldType | "enum";
+
+export interface EnumVariantDefinition {
+  name: string;
+  type: BasicFieldType | string;
+  description?: string | null;
+}
 
 export interface Capabilities {
   supported_file_types: string[];
@@ -39,7 +47,11 @@ export interface TaskCreated {
   error_message?: string | null;
 }
 
-export interface TaskSummary extends TaskCreated {
+export interface TaskSummary {
+  task_id: string;
+  status: TaskStatus;
+  stage: TaskStage;
+  error_message?: string | null;
   route?: RouteDecision | null;
   route_reason?: string | null;
   has_result?: boolean;
@@ -49,9 +61,15 @@ export interface TaskSummary extends TaskCreated {
   updated_at?: string;
 }
 
+export interface TaskList {
+  tasks: TaskSummary[];
+}
+
 export interface TaskResultField {
   field_name: string;
   display_name?: string | null;
+  field_type?: TaskFieldType | string | null;
+  variants?: EnumVariantDefinition[];
   agent_value: unknown;
   review_value: unknown;
   final_value: unknown;
@@ -209,6 +227,8 @@ export interface TaskTrace {
 export interface ReviewField {
   field_name: string;
   display_name?: string | null;
+  field_type?: TaskFieldType | string | null;
+  variants?: EnumVariantDefinition[];
   agent_value: unknown;
   field_status?: string;
   needs_review: boolean;
@@ -303,6 +323,7 @@ export interface ReplayOutlineNode {
 export interface ReplayAction {
   tool_name?: string;
   action_type?: string;
+  reason?: string | null;
   args?: Record<string, unknown>;
   result?: unknown;
   message?: string;
@@ -328,60 +349,4 @@ export interface ReviewSubmitPayload {
   }>;
   comment?: string | null;
   reviewer?: string | null;
-}
-
-export interface ContractNliExperimentSummary {
-  dataset: string;
-  run_id: string;
-  default_sample_id: string | null;
-  samples: Array<{
-    sample_id: string;
-    document_id: number;
-    filename: string;
-    hypotheses: Record<string, {
-      label: string;
-      short_description: string;
-      hypothesis: string;
-      choice: string;
-      evidence: string[];
-    }>;
-    text_chars: number;
-  }>;
-  report: {
-    summary: Record<string, {
-      samples: number;
-      completed: number;
-      errors: number;
-      hypotheses: number;
-      choice_accuracy: number;
-      evidence_tp: number;
-      evidence_fp: number;
-      evidence_fn: number;
-      evidence_precision: number;
-      evidence_recall: number;
-      evidence_f1: number;
-    }>;
-  };
-}
-
-export interface ContractNliHtmlProcess {
-  sample_id: string;
-  document_id: string;
-  filename: string;
-  document_type?: string | null;
-  source_kind?: string | null;
-  raw_html_chars: number;
-  agent_html_chars: number;
-  agent_html?: string | null;
-  display_html?: string | null;
-  raw_html_excerpt: string;
-  agent_html_excerpt: string;
-  display_html_excerpt?: string | null;
-  raw_element_count: number;
-  agent_element_count: number;
-  ocr_block_count?: number | null;
-  query_checks: Array<{
-    query: string;
-    match_count: number;
-  }>;
 }

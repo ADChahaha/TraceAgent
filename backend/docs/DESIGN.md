@@ -51,7 +51,6 @@ backend/
   routes/
     tasks.py
     reviews.py
-    experiments.py
     capabilities.py
     errors.py
   crud/
@@ -64,7 +63,6 @@ backend/
   services/
     task_service.py
     agent_client.py
-    contract_nli_experiment.py
     route_policy.py
     review_service.py
     audit_service.py
@@ -89,13 +87,10 @@ backend/
 - `core/db.py` 初始化 SQLite 连接，不直接写业务查询。
 - `core/storage.py` 只保留上传文件元信息所需的哈希工具，不落盘保存原始文件。
 - `routes/` 只做 HTTP 入参出参适配，把请求转交给 `services/`。
-- `routes/experiments.py` 只暴露内置实验数据读取接口，不写任务数据库，也不触发 agent 调用。
 - `routes/reviews.py` 定义 review 提交请求模型；其他响应暂按服务层字典返回。
 - `models/schema.py` 定义 SQLite DDL。第一版没有引入 ORM，CRUD 直接使用 `sqlite3.Row` 和参数化 SQL。
 - `crud/` 封装基础数据库读写，不写业务编排。
 - `services/` 负责任务创建、agent 调用、状态流转、route policy、review 和 audit。
-- `services/contract_nli_experiment.py` 从 `backend/data/contract_nli/` 读取已完成实验输出，并组装成前端可复用的 replay/detail 结构。
-
 ## 3. 主处理链路
 
 任务创建后的处理流程如下：
@@ -110,11 +105,13 @@ POST /tasks 上传一个或多个文件
   -> FastAPI BackgroundTasks 调用 task_service.run_created_task(...)
   -> task_service 将任务置为 processing / document_processing
   -> agent_client 逐个用上传文件 bytes 通过 HTTP 调用 agent service 的文档处理接口
+  -> document_processor 输出语义 HTML 时只需保留 heading 层级和 block 阅读顺序，不需要包裹 section
   -> SQLite 为每次 document_processor 调用写入 agent_stage_runs，不保存原始文件 bytes
   -> task_service 为每个文件生成 document_id，并为 blocks 补 document_id / block_id
   -> SQLite 为每个文件写入 documents(markdown / md_list_json / blocks_json / meta_info_json / warnings_json)
   -> task_service 合并全部 html 作为字段抽取输入，同时保留 markdown、md_list 和 blocks
-  -> agent_client 再通过 HTTP 调用 agent service 的字段抽取接口，只发送聚合后的 html、task_spec 和可选 run_options
+  -> agent_client 再通过 HTTP 调用 agent service 的字段抽取接口，发送文档 html、task_spec 和可选 run_options
+  -> file_extraction_agent 按 heading stack 重建虚拟 section 树
   -> SQLite 为 file_extraction_agent 调用写入 agent_stage_runs
   -> SQLite 写入 agent_runs / extracted_fields / field_traces；task_spec 中存在但 agent 未返回的字段会补 failed/None 占位
   -> route_policy 从字段结果、trace refs 和 trace actions 组装 field_outputs + refs_with_text + field_processes
@@ -131,7 +128,35 @@ POST /tasks 上传一个或多个文件
   -> GET /tasks/{task_id} 返回当前 status/stage/route/error_message，供前端轮询
 ```
 
+工作台任务列表流程如下：
+
+```text
+GET /tasks?limit=20
+  -> routes.tasks 读取可选 limit 参数
+  -> task_service 把 limit 限制在 1..100
+  -> crud.tasks 按 updated_at DESC、created_at DESC、id DESC 读取最近任务
+  -> task_service 对每条任务复用单任务 summary 序列化
+  -> 查询 extracted_fields、field_traces、field_routes
+  -> 补齐 has_result、has_trace、needs_review、route 和错误信息
+  -> 返回 { "tasks": TaskSummary[] }
+```
+
 第一版任务执行模型是“请求内创建、后台处理”：`POST /tasks` 只保证任务已经入库并返回 `pending/uploaded`，耗时的 document processing、extraction 和 route policy 在响应发出后继续执行。调用方需要轮询 `GET /tasks/{task_id}` 获取 `completed/done`、`waiting_review/review`、`rejected/done` 或 `failed/done`；失败原因统一从 summary 的 `error_message` 读取。
+
+语义 HTML 的 section 边界由 agent 侧负责重建，backend 不需要为了 agent 把 heading 后续内容重新包进 `<section>`。后端只要求 document_processor 尽量保留 `h1/h2/h3...` 和 `p/list/table` 的阅读顺序：
+
+```text
+document_processor 产出语义 HTML
+  -> backend 原样保存 html / markdown / blocks
+  -> backend 调用 file_extraction_agent
+  -> file_extraction_agent 线性扫描 heading 与 block
+  -> h1/title 进入文档目录名
+  -> h2-h6 创建虚拟 section 目录
+  -> 后续 paragraph/list/table 归到当前 section
+  -> 遇到同级或更高级 heading 时切换 section
+```
+
+这样即使 OCR/PDF 转出的真实 `<section>` 被分页打断，或者 HTML 里只有独立的 `<h2>` header，backend 也不需要补 DOM 包裹。agent 会以“当前 heading 到下一个同级或更高级 heading 之前”为语义范围生成虚拟文件树。
 
 人工审核流程如下：
 
@@ -151,29 +176,6 @@ POST /tasks/{task_id}/review
   -> audit_service 写入 field_commits
   -> 更新 tasks.status / stage / completed_at
   -> 后续 summary 返回 completed / done / needs_review=false
-```
-
-内置实验数据读取流程如下：
-
-```text
-GET /experiments/contract-nli
-  -> routes.experiments 调用 contract_nli_experiment.load_experiment_report()
-  -> 从 backend/data/contract_nli/dev_all_document_level_official_evidence_schema/agent_vs_direct_report.json 读取摘要
-  -> 返回 dataset、run_id、样本列表、默认样本 id 和报告 summary
-
-GET /experiments/contract-nli/samples/{sample_id}/detail
-  -> 校验 sample_id 是否存在于报告 samples
-  -> 读取 backend/data/contract_nli/.../agent_runs/{sample_id}/extraction_result.json
-  -> 从 trace.actions 的 search/read 结果里收集可展示 HTML
-  -> 把 agent result、trace.actions、field_states 组装成 TaskDetailData 兼容结构
-  -> 前端可直接复用 ReplayReview 展示 search_elements、set_field 和证据高亮
-
-GET /experiments/contract-nli/samples/{sample_id}/html-process
-  -> 校验 sample_id 是否存在于报告 samples
-  -> 从 ContractNLI raw 目录读取对应的原始 HTML 文件
-  -> 清理 script/style/noscript，并按 p/li/dt/dd/heading 等块级节点生成 agent HTML
-  -> 返回 raw/agent HTML 片段、元素数量、字符数和关键词命中统计
-  -> 前端用它解释 sec-html 样本进入 agent 前的转换过程
 ```
 
 ## 4. 模块职责
@@ -732,6 +734,11 @@ documents + agent_runs + field_routes
 agent_stage_runs
   -> GET /tasks/{task_id}/trace.agent_trace
   -> 前端展示每次 agent 调用的 request / response / trace 摘要和可展开 JSON
+
+agent_stage_runs(document_processor).response.display_html/html
+  -> GET /tasks/{task_id}/replay.display_html
+  -> 只在 replay 出口清理 page_number/page_header/page_footer、`.page-number`、`.block-page_footer` 和 `.block-page_header` 这类旧任务文档 chrome
+  -> 保留 agent_stage_runs 原始 response，避免调试记录被改写
 
 field final value + route + review + trace refs
   -> field_commits

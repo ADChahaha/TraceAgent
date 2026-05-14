@@ -39,7 +39,7 @@ export function TaskDetail({
       ? { summary: initialSummary, result: null, trace: null, replay: null, review: null, audit: null }
       : null
   );
-  const [reviewValues, setReviewValues] = React.useState<Record<string, string>>({});
+  const [reviewValues, setReviewValues] = React.useState<Record<string, unknown>>({});
   const [comment, setComment] = React.useState("");
   const [isLoading, setIsLoading] = React.useState(true);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
@@ -58,7 +58,7 @@ export function TaskDetail({
         const next = { ...current };
         for (const field of loaded.review.fields) {
           if (!(field.field_name in next)) {
-            next[field.field_name] = stringifyValue(field.agent_value);
+            next[field.field_name] = getInitialReviewValue(field.agent_value);
           }
         }
         return next;
@@ -90,7 +90,7 @@ export function TaskDetail({
       .filter((field) => field.needs_review)
       .map((field) => ({
         field_name: field.field_name,
-        review_value: reviewValues[field.field_name] ?? ""
+        review_value: reviewValues[field.field_name] ?? getInitialReviewValue(field.agent_value)
       }));
     const payload: ReviewSubmitPayload = {
       decision: "revise_and_approve",
@@ -125,7 +125,7 @@ export function TaskDetail({
             className="mb-3 inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
           >
             <ArrowLeft className="h-4 w-4" />
-            返回上传工作台
+            返回首页
           </Link>
           <h1 className="text-3xl font-semibold tracking-normal text-foreground">{taskId}</h1>
           <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -201,4 +201,21 @@ function RouteBadge({ route }: { route: NonNullable<TaskSummary["route"]> }) {
     return <Badge variant="warning">route: {route}</Badge>;
   }
   return <Badge variant="destructive">route: {route}</Badge>;
+}
+
+function getInitialReviewValue(value: unknown): unknown {
+  if (isTaggedEnumValue(value)) {
+    return value;
+  }
+  return stringifyValue(value);
+}
+
+function isTaggedEnumValue(value: unknown): value is { variant: string; value: unknown } {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    "variant" in value &&
+    typeof (value as { variant?: unknown }).variant === "string"
+  );
 }

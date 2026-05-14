@@ -64,6 +64,25 @@ export function updateRecentTask(task: TaskSummary): RecentTask[] {
   return next;
 }
 
+export function syncRecentTaskSummaries(tasks: TaskSummary[]): RecentTask[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  const existing = getRecentTasks();
+  const existingById = new Map(existing.map((item) => [item.task_id, item]));
+  const syncedIds = new Set(tasks.map((task) => task.task_id));
+  const next = [
+    ...tasks.map((task) => toRecentTask(task, existingById.get(task.task_id))),
+    ...existing.filter((item) => !syncedIds.has(item.task_id)),
+  ].slice(0, MAX_RECENT_TASKS);
+  try {
+    window.localStorage.setItem(RECENT_TASKS_KEY, JSON.stringify(next));
+  } catch {
+    return next;
+  }
+  return next;
+}
+
 function toRecentTask(task: TaskCreated | TaskSummary, existing?: RecentTask): RecentTask {
   const backendCreatedAt = "created_at" in task ? task.created_at : undefined;
   const backendUpdatedAt = "updated_at" in task ? task.updated_at : undefined;

@@ -11,6 +11,14 @@ from backend.services.errors import BackendServiceError, ValidationError
 router = APIRouter(tags=["tasks"])
 
 
+@router.get("/tasks")
+def list_tasks(request: Request, limit: int = 20):
+    try:
+        return {"tasks": request.app.state.task_service.list_task_summaries(limit=limit)}
+    except BackendServiceError as exc:
+        raise_http_error(exc)
+
+
 @router.post("/tasks")
 async def create_task(
     request: Request,

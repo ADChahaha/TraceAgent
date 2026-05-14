@@ -46,6 +46,8 @@ def test_build_html_from_content_list_preserves_ids_metadata_and_tables():
     result = build_html_from_content_list(pages)
 
     assert 'id="page_001"' in result
+    assert "page-number" not in result
+    assert "Page 1" not in result
     assert 'id="p001_b000"' in result
     assert 'data-type="title"' in result
     assert "data-level=\"2\"" in result
@@ -68,6 +70,7 @@ def test_build_display_html_wraps_extraction_html_with_replay_style():
     assert 'id="p001_b000"' in result
     assert "dp-evidence-highlight" in result
     assert "正文" in result
+    assert "page-number" not in result
 
 
 def test_build_html_wraps_h2_and_h3_in_section_hierarchy():
@@ -243,6 +246,44 @@ def test_build_html_skips_pages_with_only_page_number():
     assert 'id="page_002"' in result
     assert [block["block_id"] for block in blocks] == ["p002_b000"]
     assert markdown == "正文"
+
+
+def test_build_outputs_skip_page_footer_noise():
+    pages = [
+        [
+            {
+                "type": "title",
+                "content": {"title_content": [{"type": "text", "content": "Agreement"}]},
+                "bbox": [100, 80, 400, 100],
+            },
+            {
+                "type": "page_footer",
+                "content": {"text": "428249v2"},
+                "bbox": [114, 940, 171, 950],
+            },
+        ],
+        [
+            {
+                "type": "paragraph",
+                "content": {"paragraph_content": [{"type": "text", "content": "正文"}]},
+            },
+        ],
+    ]
+
+    html = build_html_from_content_list(pages)
+    display_html = build_display_html_from_content_list(pages)
+    blocks = build_blocks_from_content_list(pages)
+    markdown = build_markdown_from_content_list(pages)
+    semantic_document = build_semantic_document_from_content_list(pages)
+
+    assert "Agreement" in html
+    assert "正文" in html
+    assert "428249v2" not in html
+    assert "428249v2" not in display_html
+    assert [block["block_id"] for block in blocks] == ["p001_b000", "p002_b000"]
+    assert all(block["text"] != "428249v2" for block in blocks)
+    assert "428249v2" not in markdown
+    assert all(block["text"] != "428249v2" for block in semantic_document["blocks"])
 
 
 def test_build_blocks_from_content_list_uses_rendered_ids_for_text_list_and_table_rows():

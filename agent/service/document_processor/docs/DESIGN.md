@@ -85,7 +85,7 @@ Owns conversion from MinerU pages to HTML.
 ```text
 MinerU content_list_v2 pages
   -> 复用 build_blocks_from_content_list(...) 生成稳定 block_id/page_no/bbox/kind
-  -> 过滤 page_header/page_number 等不适合推理的噪声
+  -> 过滤 page_header/page_number/page_footer 等不适合推理的页眉、页码和页脚版本号噪声
   -> 遇到 heading block 创建新 section
   -> section.text 收入 heading 本身和直到下一个 section 前的所有正文 block
   -> block 按 heading/lead_in/clause/paragraph/list_item/table/signature 标注类型
@@ -98,7 +98,8 @@ HTML fragment 的层级输出规则：
 
 ```text
 MinerU content_list_v2 pages
-  -> 逐页过滤不可见 block
+  -> 逐页过滤不可见 block 以及 page_header/page_number/page_footer 文档 chrome
+  -> 页面 wrapper 只保留 `section.page` 和 `data-page` 定位属性，不主动插入 `Page N` 可见页码
   -> level=2 title 打开 <section id="{block_id}_section">，标题本身保留为 <h2 id="{block_id}">
   -> level=3 title 打开 <section id="{block_id}_subsection">，标题本身保留为 <h3 id="{block_id}">
   -> level>=4 title 不再作为章节层级，降级为 <p id="{block_id}" data-type="title" data-level="N">

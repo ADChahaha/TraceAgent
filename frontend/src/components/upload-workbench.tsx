@@ -4,11 +4,16 @@ import * as React from "react";
 import { AlertCircle, FileUp, History, Loader2, SendHorizonal } from "lucide-react";
 import { toast } from "sonner";
 
-import { createTask as defaultCreateTask, getTaskSummary as defaultGetTaskSummary } from "@/lib/api";
+import {
+  createTask as defaultCreateTask,
+  getTaskSummary as defaultGetTaskSummary,
+  listTasks as defaultListTasks
+} from "@/lib/api";
 import { parseJsonObject } from "@/lib/json";
 import {
   addRecentTask,
   getRecentTasks,
+  syncRecentTaskSummaries,
   updateRecentTask,
   type RecentTask
 } from "@/lib/task-store";
@@ -25,6 +30,7 @@ export interface UploadWorkbenchProps {
   capabilities: Capabilities;
   createTask?: (formData: FormData) => Promise<TaskCreated>;
   getTaskSummary?: (taskId: string) => Promise<TaskSummary>;
+  listTasks?: () => Promise<TaskSummary[]>;
   onCreated?: (task: TaskCreated) => void;
 }
 
@@ -41,6 +47,7 @@ export function UploadWorkbench({
   capabilities,
   createTask = defaultCreateTask,
   getTaskSummary = defaultGetTaskSummary,
+  listTasks = defaultListTasks,
   onCreated
 }: UploadWorkbenchProps) {
   const [taskType, setTaskType] = React.useState("");
@@ -54,6 +61,7 @@ export function UploadWorkbench({
   const mounted = React.useRef(true);
 
   React.useEffect(() => {
+    mounted.current = true;
     const trackedTimeouts = pollTimeouts.current;
     return () => {
       mounted.current = false;
@@ -63,6 +71,22 @@ export function UploadWorkbench({
       trackedTimeouts.length = 0;
     };
   }, []);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    listTasks()
+      .then((tasks) => {
+        if (tasks.length > 0 && !cancelled && mounted.current) {
+          setRecentTasks(syncRecentTaskSummaries(tasks));
+        }
+      })
+      .catch(() => {
+        // 最近任务列表可以继续使用本地缓存；连接错误由详情页或创建流程暴露。
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [listTasks]);
 
   const refreshTaskSummary = React.useCallback(
     async (taskId: string) => {

@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import * as React from "react";
 
 import { UploadWorkbench } from "@/components/upload-workbench";
 import type { Capabilities, TaskCreated, TaskSummary } from "@/lib/types";
@@ -20,6 +21,7 @@ const capabilities: Capabilities = {
 
 type CreateTaskFn = (formData: FormData) => Promise<TaskCreated>;
 type GetTaskSummaryFn = (taskId: string) => Promise<TaskSummary>;
+type ListTasksFn = () => Promise<TaskSummary[]>;
 
 function setup(
   createTask: CreateTaskFn = jest.fn<CreateTaskFn>(),
@@ -33,20 +35,25 @@ function setup(
     has_result: true,
     has_trace: true,
     needs_review: false
-  }))
+  })),
+  listTasks: ListTasksFn = jest.fn<ListTasksFn>(async () => []),
+  options: { strict?: boolean } = {}
 ) {
   const onCreated = jest.fn();
-  render(
+  const element = (
     <UploadWorkbench
       capabilities={capabilities}
       createTask={createTask}
       getTaskSummary={getTaskSummary}
+      listTasks={listTasks}
       onCreated={onCreated}
     />
   );
+  render(options.strict ? <React.StrictMode>{element}</React.StrictMode> : element);
   return {
     createTask: createTask as jest.MockedFunction<CreateTaskFn>,
     getTaskSummary: getTaskSummary as jest.MockedFunction<GetTaskSummaryFn>,
+    listTasks: listTasks as jest.MockedFunction<ListTasksFn>,
     onCreated
   };
 }
@@ -206,6 +213,48 @@ it("创建任务后右侧列表先显示处理中，轮询完成后显示处理�
   expect(screen.getByText("accept")).toBeInTheDocument();
 });
 
+it("启动时从 backend 任务列表加载数据库任务", async () => {
+  window.localStorage.clear();
+  const listTasks = jest.fn(async () => [
+    {
+      task_id: "task_contract_nli_hard5_enum_final_evidence_72",
+      status: "waiting_review",
+      stage: "review",
+      route: "review",
+      route_reason: "需要人工复核",
+      error_message: null,
+      has_result: true,
+      has_trace: true,
+      needs_review: true,
+      created_at: "2026-05-14T03:36:34Z",
+      updated_at: "2026-05-14T16:50:44Z"
+    },
+    {
+      task_id: "task_contract_nli_hard5_enum_final_evidence_27",
+      status: "waiting_review",
+      stage: "review",
+      route: "review",
+      route_reason: "需要人工复核",
+      error_message: null,
+      has_result: true,
+      has_trace: true,
+      needs_review: true,
+      created_at: "2026-05-14T03:36:32Z",
+      updated_at: "2026-05-14T16:50:44Z"
+    }
+  ] satisfies TaskSummary[]);
+
+  setup(undefined, undefined, listTasks, { strict: true });
+
+  await waitFor(() => expect(listTasks).toHaveBeenCalled());
+  expect(await screen.findByText("task_contract_nli_hard5_enum_final_evidence_72")).toBeInTheDocument();
+  expect(screen.getByText("task_contract_nli_hard5_enum_final_evidence_27")).toBeInTheDocument();
+  expect(getRecentTaskIds()).toEqual([
+    "task_contract_nli_hard5_enum_final_evidence_72",
+    "task_contract_nli_hard5_enum_final_evidence_27"
+  ]);
+});
+
 it("轮询旧任务完成时不会把它移动到最新任务上方", async () => {
   const user = userEvent.setup();
   window.localStorage.clear();
@@ -290,5 +339,5 @@ function getRecentTaskIds(): string[] {
   return screen
     .getAllByRole("link")
     .map((link) => link.textContent ?? "")
-    .filter((text) => text.startsWith("task-"));
+    .filter((text) => text.startsWith("task"));
 }

@@ -43,6 +43,19 @@ def get_task(connection: sqlite3.Connection, task_id: str) -> dict[str, Any] | N
     return row_to_dict(row)
 
 
+def list_tasks(connection: sqlite3.Connection, *, limit: int = 20) -> list[dict[str, Any]]:
+    rows = connection.execute(
+        """
+        SELECT *
+        FROM tasks
+        ORDER BY updated_at DESC, created_at DESC, id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def update_task(
     connection: sqlite3.Connection,
     *,

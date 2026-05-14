@@ -40,11 +40,11 @@ const baseReplay: TaskReplay = {
   actions: [
     {
       tool_name: "set_field",
-      args: {
+            reason: "候选证据支持字段值",
+          args: {
         name: "room_numbers",
         value: "1-101,1-102",
         evidence_ids: ["p001_b001"],
-        reason: "候选证据支持字段值"
       },
       result: {
         ok: true,
@@ -286,7 +286,1000 @@ it("waiting_review 任务只展示 replay，并在 review 字段卡片里提交�
   expect(recentTasks[0].created_at).toBe("2026-04-29T08:00:00Z");
 });
 
-it("动作输出展示返回的诊断摘要，字段写入卡不再承接诊断文字", async () => {
+it("enum 字段复核提交 tagged payload 而不是字符串", async () => {
+  const user = userEvent.setup();
+  const enumVariants = [
+    { name: "Entailment", type: "null", description: "合同文本支持该判断" },
+    { name: "Contradiction", type: "null", description: "合同文本否定该判断" },
+    { name: "NotMentioned", type: "null", description: "合同文本没有提到该判断" }
+  ];
+  const enumValue = { variant: "Entailment", value: null };
+  const enumDetail = {
+    ...detailData,
+    result: {
+      ...reviewResult,
+      fields: [
+        {
+          ...reviewResult.fields[0],
+          field_name: "nda_disclosure",
+          display_name: "保密义务判断",
+          agent_value: enumValue,
+          field_type: "enum",
+          variants: enumVariants
+        }
+      ]
+    },
+    replay: {
+      ...baseReplay,
+      result: { nda_disclosure: enumValue },
+      actions: [
+        {
+          tool_name: "set_field",
+          reason: "合同文本支持保密义务判断",
+          args: {
+            name: "nda_disclosure",
+            value: enumValue,
+            evidence_ids: ["p001_b001"],
+          },
+          result: {
+            ok: true,
+            field: {
+              name: "nda_disclosure",
+              status: "resolved",
+              value: enumValue,
+              evidence_ids: ["p001_b001"],
+              reason: "合同文本支持保密义务判断"
+            }
+          }
+        }
+      ]
+    },
+    review: {
+      ...detailData.review,
+      fields: [
+        {
+          ...detailData.review!.fields[0],
+          field_name: "nda_disclosure",
+          display_name: "保密义务判断",
+          agent_value: enumValue,
+          field_type: "enum",
+          variants: enumVariants
+        }
+      ]
+    }
+  } as TaskDetailData;
+  const injectedLoadTaskDetail = jest.fn(async () => enumDetail);
+  const submitReview = jest.fn(async () => ({
+    ...waitingReviewSummary,
+    status: "completed",
+    stage: "done",
+    needs_review: false
+  }));
+
+  render(
+    <TaskDetail
+      taskId="task-001"
+      initialSummary={waitingReviewSummary}
+      loadTaskDetail={injectedLoadTaskDetail}
+      submitReview={submitReview}
+    />
+  );
+
+  expect(await screen.findByText("AI extraction replay")).toBeInTheDocument();
+  expect(screen.getByText("写入字段：保密义务判断")).toBeInTheDocument();
+  expect(screen.getByLabelText("保密义务判断 枚举选项")).toHaveValue("Entailment");
+  expect(within(screen.getByLabelText("字段写入内容")).getByText("Entailment", { selector: ".replay-field-write-value" })).toBeInTheDocument();
+
+  await user.selectOptions(screen.getByLabelText("保密义务判断 枚举选项"), "Contradiction");
+  await user.click(screen.getByRole("button", { name: "提交修正并通过" }));
+
+  await waitFor(() => expect(submitReview).toHaveBeenCalledTimes(1));
+  expect(submitReview).toHaveBeenCalledWith("task-001", {
+    decision: "revise_and_approve",
+    fields: [
+      {
+        field_name: "nda_disclosure",
+        review_value: { variant: "Contradiction", value: null }
+      }
+    ],
+    comment: "",
+    reviewer: "frontend"
+  });
+});
+
+it("真实 file_extraction_agent 工具以 Codex 工具行展示", async () => {
+  const toolDetail: TaskDetailData = {
+    ...detailData,
+    result: {
+      ...reviewResult,
+      fields: [
+        {
+          ...reviewResult.fields[0],
+          field_name: "nda_disclosure",
+          display_name: "保密义务判断",
+          agent_value: { variant: "Entailment", value: null },
+          field_type: "enum",
+          route: "review"
+        }
+      ]
+    },
+    review: {
+      ...detailData.review,
+      fields: [
+        {
+          ...detailData.review!.fields[0],
+          field_name: "nda_disclosure",
+          display_name: "保密义务判断",
+          agent_value: { variant: "Entailment", value: null },
+          field_type: "enum",
+          review_reason: "需要人工确认 NLI 判断"
+        }
+      ]
+    },
+    replay: {
+      ...baseReplay,
+      actions: [
+        {
+          tool_name: "tree",
+          reason: "先查看虚拟文件树",
+          args: {
+            path: "/",
+            depth: 2,
+          },
+          result: {
+            ok: true,
+            path: "/",
+            depth: 2,
+            text: "/\n└── 001-sample-合同/\n    ├── 001-定义/\n    │   └── 001-Confidential.md\n    └── 002-条款/\n        └── 001-披露.table"
+          }
+        },
+        {
+          tool_name: "read",
+          reason: "读取保密信息定义段落",
+          args: {
+            path: "/001-sample-合同/001-定义/001-Confidential.md",
+            offset: 0,
+            limit: 30,
+          },
+          result: {
+            ok: true,
+            path: "/001-sample-合同/001-定义/001-Confidential.md",
+            kind: "paragraph",
+            text: "Confidential Information includes financial information."
+          }
+        },
+        {
+          tool_name: "anchors",
+          reason: "取得句子编号",
+          args: {
+            path: "/001-sample-合同/001-定义/001-Confidential.md",
+          },
+          result: {
+            ok: true,
+            path: "/001-sample-合同/001-定义/001-Confidential.md",
+            anchors: [
+              {
+                id: "S001",
+                preview: "Confidential Information includes financial information."
+              }
+            ]
+          }
+        },
+        {
+          tool_name: "query_table",
+          reason: "查询披露限制表格行",
+          args: {
+            path: "/001-sample-合同/002-条款/001-披露.table",
+            sql: "SELECT row, clause FROM data WHERE clause LIKE '%disclose%'",
+            offset: 0,
+            limit: 30,
+          },
+          result: {
+            ok: true,
+            path: "/001-sample-合同/002-条款/001-披露.table",
+            kind: "table_query",
+            text: [
+              "---",
+              "kind: table_query",
+              "matched_rows: 1",
+              "---",
+              "",
+              "| row | clause |",
+              "| --- | --- |",
+              "| R002 | 接收方不得披露保密信息 |"
+            ].join("\n"),
+            offset: 0,
+            limit: 30,
+            total: 1,
+            has_more: false
+          }
+        },
+        {
+          tool_name: "bind_evidence",
+          reason: "把定义句绑定为候选证据",
+          args: {
+            field_id: "nda_disclosure",
+            evidence: [
+              {
+                path: "/001-sample-合同/001-定义/001-Confidential.md",
+                sentences: ["S001"]
+              }
+            ],
+          },
+          result: {
+            ok: true,
+            field_id: "nda_disclosure",
+            evidence: [
+              {
+                path: "/001-sample-合同/001-定义/001-Confidential.md",
+                sentences: ["S001"]
+              }
+            ],
+            evidence_texts: [
+              {
+                path: "/001-sample-合同/001-定义/001-Confidential.md",
+                selector: "S001",
+                text: "Confidential Information includes financial information."
+              }
+            ]
+          }
+        },
+        {
+          tool_name: "review_field",
+          reason: "复看候选证据后再写字段",
+          args: {
+            field_id: "nda_disclosure",
+          },
+          result: {
+            ok: true,
+            field_id: "nda_disclosure",
+            field_description: "判断合同是否支持保密义务",
+            field: null,
+            evidence_texts: [
+              {
+                path: "/001-sample-合同/001-定义/001-Confidential.md",
+                selector: "S001",
+                text: "Confidential Information includes financial information."
+              }
+            ],
+            guidance: "This tool does not judge correctness."
+          }
+        },
+        {
+          tool_name: "write_field",
+          reason: "最终写入 entailment 判断",
+          args: {
+            field_id: "nda_disclosure",
+            value: { variant: "Entailment", value: null },
+            final_evidence: [
+              {
+                path: "/001-sample-合同/001-定义/001-Confidential.md",
+                sentences: ["S001"]
+              }
+            ],
+            status: "resolved",
+          },
+          result: {
+            ok: true,
+            field: {
+              field_id: "nda_disclosure",
+              status: "resolved",
+              value: { variant: "Entailment", value: null },
+              evidence: [
+                {
+                  path: "/001-sample-合同/001-定义/001-Confidential.md",
+                  sentences: ["S001"]
+                }
+              ],
+              evidence_texts: [
+                {
+                  path: "/001-sample-合同/001-定义/001-Confidential.md",
+                  selector: "S001",
+                  text: "Confidential Information includes financial information."
+                }
+              ],
+              reason: "最终写入 entailment 判断"
+            }
+          }
+        },
+        {
+          tool_name: "submit_result",
+          reason: "提交字段结果",
+          args: {
+          },
+          result: {
+            ok: false,
+            errors: [
+              {
+                field_id: "governing_law",
+                code: "MISSING_FIELD",
+                message: "field was not written"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  };
+  const injectedLoadTaskDetail = jest.fn(async () => toolDetail);
+
+  render(
+    <TaskDetail
+      taskId="task-001"
+      initialSummary={waitingReviewSummary}
+      loadTaskDetail={injectedLoadTaskDetail}
+    />
+  );
+
+  expect(await screen.findByText("AI extraction replay")).toBeInTheDocument();
+  const firstReason = screen.getByText("先查看虚拟文件树");
+  expect(firstReason.tagName.toLowerCase()).toBe("span");
+  expect(firstReason).toHaveClass("replay-agent-reason-text");
+  expect(firstReason).not.toHaveClass("is-emphasized");
+  expect(within(screen.getByLabelText("Agent 文字流")).getByLabelText("tool tree")).toBeInTheDocument();
+  expect(screen.getByLabelText("tool tree")).toHaveClass("replay-agent-tool-line");
+  expect(screen.getByLabelText("tool tree")).toHaveAttribute("data-tool-icon", "terminal");
+  expect(within(screen.getByLabelText("tool tree")).getByText("Ran tree /")).toBeInTheDocument();
+  expect(within(screen.getByLabelText("tool tree")).queryByText("tree", { selector: ".replay-agent-tool-name" })).not.toBeInTheDocument();
+  expect(
+    within(screen.getByLabelText("虚拟文件树导航")).getByRole("button", { name: "001-sample-合同" })
+  ).toBeInTheDocument();
+
+  fireEvent.click(screen.getByText("先查看虚拟文件树"));
+  expect(within(screen.getByLabelText("Agent 文字流")).getByLabelText("tool read")).toBeInTheDocument();
+  expect(screen.getByLabelText("tool read")).toHaveClass("is-read-tool");
+  expect(screen.getByLabelText("tool read")).toHaveAttribute("data-tool-icon", "search");
+  expect(within(screen.getByLabelText("tool read")).getByText("Read paragraph Confidential · 30 limit")).toBeInTheDocument();
+  expect(within(screen.getByLabelText("Agent 文字流")).queryByText("Confidential Information includes financial information.")).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByText("读取保密信息定义段落"));
+  expect(within(screen.getByLabelText("Agent 文字流")).queryByLabelText("tool anchors")).not.toBeInTheDocument();
+  expect(within(screen.getByLabelText("Agent 文字流")).getByLabelText("tool query_table")).toBeInTheDocument();
+  expect(within(screen.getByLabelText("tool query_table")).getByText("Queried 001-披露.table · 1 row · 30 limit")).toBeInTheDocument();
+  expect(within(screen.getByLabelText("Agent 文字流")).queryByText("R002")).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByText("查询披露限制表格行"));
+  expect(within(screen.getByLabelText("Agent 文字流")).getByLabelText("tool bind_evidence")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByText("把定义句绑定为候选证据"));
+  expect(within(screen.getByLabelText("Agent 文字流")).getByLabelText("tool review_field")).toBeInTheDocument();
+  expect(within(screen.getByLabelText("Agent 文字流")).queryByText("判断合同是否支持保密义务")).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByText("复看候选证据后再写字段"));
+  expect(screen.getByText("写入字段：保密义务判断")).toBeInTheDocument();
+  expect(screen.getByText("需要人工确认 NLI 判断")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByText("最终写入 entailment 判断"));
+  expect(within(screen.getByLabelText("Agent 文字流")).getByLabelText("tool submit_result")).toBeInTheDocument();
+  expect(within(screen.getByLabelText("Agent 文字流")).queryByText("MISSING_FIELD")).not.toBeInTheDocument();
+  expect(within(screen.getByLabelText("Agent 文字流")).queryByText("field was not written")).not.toBeInTheDocument();
+});
+
+it("read 工具摘要按 paragraph/table/list 语义展示，不暴露虚拟文件扩展名", async () => {
+  const semanticReadDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      actions: [
+        {
+          tool_name: "read",
+          reason: "读取定义段落",
+          args: {
+            path: "/001-合同/001-Confidential.md",
+          },
+          result: {
+            ok: true,
+            path: "/001-合同/001-Confidential.md",
+            kind: "paragraph",
+            text: "Confidential Information means..."
+          }
+        },
+        {
+          tool_name: "read",
+          reason: "读取披露表",
+          args: {
+            path: "/001-合同/002-Disclosure.table",
+          },
+          result: {
+            ok: true,
+            path: "/001-合同/002-Disclosure.table",
+            kind: "table",
+            text: "| row | clause |"
+          }
+        },
+        {
+          tool_name: "read",
+          reason: "读取义务列表",
+          args: {
+            path: "/001-合同/003-Obligations.list",
+          },
+          result: {
+            ok: true,
+            path: "/001-合同/003-Obligations.list",
+            kind: "list",
+            text: "- keep confidential"
+          }
+        }
+      ]
+    }
+  };
+  const injectedLoadTaskDetail = jest.fn(async () => semanticReadDetail);
+
+  render(
+    <TaskDetail
+      taskId="task-001"
+      initialSummary={waitingReviewSummary}
+      loadTaskDetail={injectedLoadTaskDetail}
+    />
+  );
+
+  expect(await screen.findByText("AI extraction replay")).toBeInTheDocument();
+  expect(screen.getByText("Read paragraph Confidential")).toBeInTheDocument();
+  expect(screen.queryByText("Read 001-Confidential.md")).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByText("读取定义段落"));
+  expect(screen.getByText("Read table Disclosure")).toBeInTheDocument();
+  expect(screen.queryByText("Read 002-Disclosure.table")).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByText("读取披露表"));
+  expect(screen.getByText("Read list Obligations")).toBeInTheDocument();
+  expect(screen.queryByText("Read 003-Obligations.list")).not.toBeInTheDocument();
+});
+
+it("中间 HTML 直接铺满文档容器，不保留灰色边框槽位", async () => {
+  const injectedLoadTaskDetail = jest.fn(async () => detailData);
+
+  render(
+    <TaskDetail
+      taskId="task-001"
+      initialSummary={waitingReviewSummary}
+      loadTaskDetail={injectedLoadTaskDetail}
+    />
+  );
+
+  const iframe = (await screen.findByTitle("document replay")) as HTMLIFrameElement;
+  const documentPanel = iframe.closest(".replay-document-panel");
+
+  expect(documentPanel).not.toBeNull();
+  expect(documentPanel).not.toHaveClass("rounded-md");
+  expect(documentPanel).not.toHaveClass("border");
+  expect(iframe).toHaveClass("block");
+  expect(iframe).toHaveClass("border-0");
+});
+
+it("中间 HTML 使用通用专业文档画布排版", async () => {
+  const canvasDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      display_html: [
+        '<h1 id="p001_b000">Report title</h1>',
+        '<p id="p001_b001">A neutral paragraph for review.</p>',
+        '<ul id="p001_b002"><li id="p001_b002_item_001">First item</li></ul>',
+        '<figure id="p001_b003" data-type="table"><table id="p001_b003_table"><thead><tr><th>Name</th><th>Value</th></tr></thead><tbody><tr id="p001_b003_tr_001"><td>A</td><td>1</td></tr></tbody></table></figure>'
+      ].join(""),
+    },
+  };
+  const injectedLoadTaskDetail = jest.fn(async () => canvasDetail);
+
+  render(
+    <TaskDetail
+      taskId="task-001"
+      initialSummary={waitingReviewSummary}
+      loadTaskDetail={injectedLoadTaskDetail}
+    />
+  );
+
+  const iframe = (await screen.findByTitle("document replay")) as HTMLIFrameElement;
+  const srcDoc = iframe.getAttribute("srcdoc") ?? "";
+
+  expect(srcDoc).toContain("class=\"document-canvas\"");
+  expect(srcDoc).toContain("max-width: min(100%, 920px)");
+  expect(srcDoc).toContain("background: #edf2f7");
+  expect(srcDoc).toContain("border: 1px solid #cbd5e1");
+  expect(srcDoc).toContain("border-top: 4px solid #94a3b8");
+  expect(srcDoc).toContain("box-shadow: 0 26px 70px rgba(15, 23, 42, 0.18)");
+  expect(srcDoc).toContain("padding: clamp(34px, 4.8vw, 64px)");
+  expect(srcDoc).toContain("font-family: ui-serif");
+  expect(srcDoc).toContain("border-collapse: collapse");
+  expect(srcDoc).toContain("tbody tr:hover");
+  expect(srcDoc).toContain(".document-canvas ul");
+  expect(srcDoc).toContain(".document-canvas ol");
+  expect(srcDoc).toContain("data-document-canvas=\"true\"");
+});
+
+it("中间 HTML 画布不展示页码和页脚噪声", async () => {
+  const htmlDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      display_html: [
+        '<section class="page" id="page_001" data-page="1">',
+        '<div class="page-number">Page 1</div>',
+        '<h1 id="p001_b000">MUTUAL NON-DISCLOSURE AGREEMENT</h1>',
+        '<p id="p001_b001">正文内容</p>',
+        '<div id="p001_b006" class="block block-page_footer" data-type="page_footer">428249v2</div>',
+        '</section>',
+        '<section class="page" id="page_002" data-page="2">',
+        '<div class="page-number">Page 2</div>',
+        '<p id="p002_b001">第二页正文</p>',
+        '</section>'
+      ].join(""),
+    },
+  };
+  const injectedLoadTaskDetail = jest.fn(async () => htmlDetail);
+
+  render(
+    <TaskDetail
+      taskId="task-001"
+      initialSummary={waitingReviewSummary}
+      loadTaskDetail={injectedLoadTaskDetail}
+    />
+  );
+
+  const iframe = (await screen.findByTitle("document replay")) as HTMLIFrameElement;
+  const srcDoc = iframe.getAttribute("srcdoc") ?? "";
+
+  expect(srcDoc).toContain("MUTUAL NON-DISCLOSURE AGREEMENT");
+  expect(srcDoc).toContain("第二页正文");
+  expect(srcDoc).not.toContain("Page 1");
+  expect(srcDoc).not.toContain("Page 2");
+  expect(srcDoc).not.toContain("428249v2");
+  expect(srcDoc).not.toContain("page-number");
+  expect(srcDoc).not.toContain("block-page_footer");
+});
+
+it("右侧 agent 没有真实 reason 时只显示 tool 行，不灌默认占位文案", async () => {
+  const toolOnlyDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      display_html: '<h1 id="p001_b000">Contract</h1>',
+      outline_tree: [],
+      actions: [
+        {
+          tool_name: "search_elements",
+          args: {
+            query: "Confidential Information",
+            max_results: 10
+          },
+          result: {
+            query: "Confidential Information",
+            match_count: 0,
+            matches: []
+          }
+        }
+      ]
+    }
+  };
+  const injectedLoadTaskDetail = jest.fn(async () => toolOnlyDetail);
+
+  render(
+    <TaskDetail
+      taskId="task-001"
+      initialSummary={waitingReviewSummary}
+      loadTaskDetail={injectedLoadTaskDetail}
+    />
+  );
+
+  expect(await screen.findByText("AI extraction replay")).toBeInTheDocument();
+  const stream = screen.getByLabelText("Agent 文字流");
+  expect(within(stream).getByLabelText("tool search_elements")).toBeInTheDocument();
+  expect(within(stream).queryByText("模型等待下一步动作。")).not.toBeInTheDocument();
+  expect(within(stream).queryByText("等待模型执行下一步。")).not.toBeInTheDocument();
+});
+
+it("file_extraction_agent 的虚拟文件树固定在左侧并随 path action 高亮", async () => {
+  const fileTreeDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      display_html: '<h1 id="p001_b000">Contract</h1><p id="p001_b001">Confidential Information includes financial information.</p>',
+      outline_tree: [],
+      actions: [
+        {
+          tool_name: "tree",
+          reason: "查看虚拟文件树",
+          args: {
+            path: "/",
+            depth: 3,
+          },
+          result: {
+            ok: true,
+            path: "/",
+            depth: 3,
+            text: "/\n└── 001-sample-合同/\n    └── 001-定义/\n        └── 001-Confidential.md"
+          }
+        },
+        {
+          tool_name: "read",
+          reason: "读取定义文件",
+          args: {
+            path: "/001-sample-合同/001-定义/001-Confidential.md",
+          },
+          result: {
+            ok: true,
+            path: "/001-sample-合同/001-定义/001-Confidential.md",
+            kind: "paragraph",
+            text: "Confidential Information includes financial information."
+          }
+        }
+      ]
+    }
+  };
+  const injectedLoadTaskDetail = jest.fn(async () => fileTreeDetail);
+
+  render(
+    <TaskDetail
+      taskId="task-001"
+      initialSummary={waitingReviewSummary}
+      loadTaskDetail={injectedLoadTaskDetail}
+    />
+  );
+
+  expect(await screen.findByText("AI extraction replay")).toBeInTheDocument();
+  const fileTree = screen.getByLabelText("虚拟文件树导航");
+  expect(screen.queryByRole("heading", { name: "文件树" })).not.toBeInTheDocument();
+  expect(screen.queryByText("工具路径和证据会同步定位到这里")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "展开全部" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "折叠" })).not.toBeInTheDocument();
+  const closeTreeButton = screen.getByRole("button", { name: "关闭左侧文件树" });
+  const stage = document.querySelector(".replay-stage") as HTMLElement;
+  expect(stage).toHaveAttribute("data-left-panel-open", "true");
+  expect(stage.getAttribute("style")).toContain("--replay-left-panel-width: 224px");
+  expect(stage.getAttribute("style")).toContain("--replay-right-panel-width: 384px");
+  expect(within(fileTree).getByRole("button", { name: "001-sample-合同" })).toBeInTheDocument();
+  expect(within(fileTree).getByRole("button", { name: "001-定义" })).toBeInTheDocument();
+  expect(within(fileTree).getByRole("button", { name: "Confidential" })).toBeInTheDocument();
+  expect(within(fileTree).queryByRole("button", { name: "001-Confidential.md" })).not.toBeInTheDocument();
+
+  fireEvent.click(closeTreeButton);
+  expect(stage).toHaveAttribute("data-left-panel-open", "false");
+  expect(screen.queryByLabelText("虚拟文件树导航")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "打开左侧文件树" })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "打开左侧文件树" }));
+  const reopenedFileTree = screen.getByLabelText("虚拟文件树导航");
+  expect(within(reopenedFileTree).getByRole("button", { name: "001-sample-合同" })).toBeInTheDocument();
+  expect(within(reopenedFileTree).getByRole("button", { name: "Confidential" })).toBeInTheDocument();
+
+  const folderNode = within(reopenedFileTree).getByRole("button", { name: "001-定义" });
+  fireEvent.click(folderNode);
+  expect(within(reopenedFileTree).queryByRole("button", { name: "Confidential" })).not.toBeInTheDocument();
+  fireEvent.click(within(reopenedFileTree).getByRole("button", { name: "001-定义" }));
+
+  const fileNode = within(reopenedFileTree).getByRole("button", { name: "Confidential" });
+  expect(fileNode).not.toHaveClass("virtual-file-item-active");
+
+  fireEvent.click(screen.getByText("查看虚拟文件树"));
+
+  expect(within(screen.getByLabelText("Agent 文字流")).getByLabelText("tool read")).toBeInTheDocument();
+  expect(fileNode).toHaveClass("virtual-file-item-active");
+  expect(within(reopenedFileTree).getByRole("button", { name: "001-定义" })).toHaveClass("virtual-file-item-active-path");
+});
+
+it("左右侧栏可以通过分隔条手动调整宽度", async () => {
+  const fileTreeDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      display_html: '<h1 id="p001_b000">Contract</h1><p id="p001_b001">Confidential Information includes financial information.</p>',
+      outline_tree: [],
+      actions: [
+        {
+          tool_name: "tree",
+          reason: "查看虚拟文件树",
+          args: {
+            path: "/",
+            depth: 3,
+          },
+          result: {
+            ok: true,
+            path: "/",
+            depth: 3,
+            text: "/\n└── 001-sample-合同/\n    └── 001-定义/\n        └── 001-Confidential.md"
+          }
+        },
+        {
+          tool_name: "read",
+          reason: "读取定义文件",
+          args: {
+            path: "/001-sample-合同/001-定义/001-Confidential.md",
+          },
+          result: {
+            ok: true,
+            path: "/001-sample-合同/001-定义/001-Confidential.md",
+            kind: "paragraph",
+            text: "Confidential Information includes financial information."
+          }
+        }
+      ]
+    }
+  };
+  const injectedLoadTaskDetail = jest.fn(async () => fileTreeDetail);
+
+  render(
+    <TaskDetail
+      taskId="task-001"
+      initialSummary={waitingReviewSummary}
+      loadTaskDetail={injectedLoadTaskDetail}
+    />
+  );
+
+  expect(await screen.findByText("AI extraction replay")).toBeInTheDocument();
+  const stage = document.querySelector(".replay-stage") as HTMLElement;
+  const leftResizeHandle = screen.getByRole("separator", { name: "调整左侧栏宽度" });
+  const rightResizeHandle = screen.getByRole("separator", { name: "调整右侧栏宽度" });
+  expect(stage).toHaveAttribute("data-left-panel-open", "true");
+  expect(stage.getAttribute("style")).toContain("--replay-left-panel-width: 224px");
+  expect(stage.getAttribute("style")).toContain("--replay-right-panel-width: 384px");
+
+  act(() => {
+    fireEvent(leftResizeHandle, new MouseEvent("pointerdown", { clientX: 220, bubbles: true }));
+    window.dispatchEvent(new MouseEvent("pointermove", { clientX: 260, bubbles: true }));
+    window.dispatchEvent(new MouseEvent("pointerup", { clientX: 260, bubbles: true }));
+  });
+
+  expect(stage.getAttribute("style")).toContain("--replay-left-panel-width: 264px");
+
+  act(() => {
+    fireEvent(rightResizeHandle, new MouseEvent("pointerdown", { clientX: 800, bubbles: true }));
+    window.dispatchEvent(new MouseEvent("pointermove", { clientX: 760, bubbles: true }));
+    window.dispatchEvent(new MouseEvent("pointerup", { clientX: 760, bubbles: true }));
+  });
+
+  expect(stage.getAttribute("style")).toContain("--replay-right-panel-width: 424px");
+
+  fireEvent.keyDown(rightResizeHandle, { key: "ArrowRight" });
+  expect(stage.getAttribute("style")).toContain("--replay-right-panel-width: 408px");
+
+  fireEvent.click(screen.getByRole("button", { name: "关闭左侧文件树" }));
+  expect(stage).toHaveAttribute("data-left-panel-open", "false");
+  expect(screen.queryByRole("separator", { name: "调整左侧栏宽度" })).not.toBeInTheDocument();
+  expect(screen.getByRole("separator", { name: "调整右侧栏宽度" })).toBeInTheDocument();
+});
+
+it("虚拟文件树按工具返回顺序展示，不把文件夹排到文件上面", async () => {
+  const orderedTreeDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      display_html: '<h1 id="p001_b000">Contract</h1>',
+      outline_tree: [],
+      actions: [
+        {
+          tool_name: "tree",
+          reason: "查看虚拟文件树",
+          args: {
+            path: "/",
+            depth: 2,
+          },
+          result: {
+            ok: true,
+            path: "/",
+            depth: 2,
+            text: "/\n├── 001-contract.md\n├── producer/\n│   └── 001-note.md\n└── 002-summary.md"
+          }
+        }
+      ]
+    }
+  };
+  const injectedLoadTaskDetail = jest.fn(async () => orderedTreeDetail);
+
+  render(
+    <TaskDetail
+      taskId="task-001"
+      initialSummary={waitingReviewSummary}
+      loadTaskDetail={injectedLoadTaskDetail}
+    />
+  );
+
+  expect(await screen.findByText("AI extraction replay")).toBeInTheDocument();
+  const rootLabels = within(screen.getByLabelText("虚拟文件树导航"))
+    .getAllByRole("button")
+    .map((button) => button.getAttribute("aria-label"));
+  expect(rootLabels.slice(0, 3)).toEqual(["contract", "producer", "note"]);
+  expect(rootLabels).not.toContain("001-contract.md");
+  expect(rootLabels).not.toContain("001-note.md");
+});
+
+it("右侧 agent 以从上往下的文字流累积 reason 和当前 tool", async () => {
+  const streamDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      display_html: '<h1 id="p001_b000">Contract</h1><p id="p001_b001">Confidential Information includes financial information.</p>',
+      outline_tree: [],
+      actions: [
+        {
+          tool_name: "tree",
+          reason: "查看虚拟文件树",
+          args: {
+            path: "/",
+            depth: 3,
+          },
+          result: {
+            ok: true,
+            path: "/",
+            depth: 3,
+            text: "/\n└── 001-sample-合同/\n    └── 001-定义/\n        └── 001-Confidential.md"
+          }
+        },
+        {
+          tool_name: "read",
+          reason: "读取定义文件",
+          args: {
+            path: "/001-sample-合同/001-定义/001-Confidential.md",
+          },
+          result: {
+            ok: true,
+            path: "/001-sample-合同/001-定义/001-Confidential.md",
+            kind: "paragraph",
+            text: "Confidential Information includes financial information."
+          }
+        }
+      ]
+    }
+  };
+  const injectedLoadTaskDetail = jest.fn(async () => streamDetail);
+
+  render(
+    <TaskDetail
+      taskId="task-001"
+      initialSummary={waitingReviewSummary}
+      loadTaskDetail={injectedLoadTaskDetail}
+    />
+  );
+
+  expect(await screen.findByText("AI extraction replay")).toBeInTheDocument();
+  const stream = screen.getByLabelText("Agent 文字流");
+  expect(within(stream).getByText("查看虚拟文件树")).toBeInTheDocument();
+  expect(within(stream).queryByText("读取定义文件")).not.toBeInTheDocument();
+
+  fireEvent.click(within(stream).getByText("查看虚拟文件树"));
+
+  expect(within(stream).getByText("查看虚拟文件树")).toBeInTheDocument();
+  expect(within(stream).getByText("读取定义文件")).toBeInTheDocument();
+  expect(within(screen.getByLabelText("Agent 文字流")).getByLabelText("tool read")).toBeInTheDocument();
+});
+
+it("右侧 agent 条目悬浮时显示跳转和单步播放按钮，左键文字继续下一步", async () => {
+  const hoverControlDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      display_html: '<h1 id="p001_b000">Contract</h1><p id="p001_b001">Confidential Information includes financial information.</p>',
+      outline_tree: [],
+      actions: [
+        {
+          tool_name: "tree",
+          reason: "查看虚拟文件树",
+          args: {
+            path: "/",
+            depth: 3,
+          },
+          result: {
+            ok: true,
+            path: "/",
+            depth: 3,
+            text: "/\n└── 001-sample-合同/\n    └── 001-定义/\n        └── 001-Confidential.md"
+          }
+        },
+        {
+          tool_name: "read",
+          reason: "读取定义文件",
+          args: {
+            path: "/001-sample-合同/001-定义/001-Confidential.md",
+          },
+          result: {
+            ok: true,
+            path: "/001-sample-合同/001-定义/001-Confidential.md",
+            kind: "paragraph",
+            text: "Confidential Information includes financial information."
+          }
+        }
+      ]
+    }
+  };
+  const injectedLoadTaskDetail = jest.fn(async () => hoverControlDetail);
+
+  render(
+    <TaskDetail
+      taskId="task-001"
+      initialSummary={waitingReviewSummary}
+      loadTaskDetail={injectedLoadTaskDetail}
+    />
+  );
+
+  expect(await screen.findByText("AI extraction replay")).toBeInTheDocument();
+  const stream = screen.getByLabelText("Agent 文字流");
+  expect(within(stream).queryByRole("button", { name: "跳到第 1 步" })).not.toBeInTheDocument();
+  expect(within(stream).queryByRole("button", { name: "只播放第 1 步" })).not.toBeInTheDocument();
+
+  const firstStep = within(stream).getByLabelText("第 1 步 tree");
+  fireEvent.mouseEnter(firstStep);
+  expect(within(firstStep).getByRole("button", { name: "跳到第 1 步" })).toBeInTheDocument();
+  expect(within(firstStep).getByRole("button", { name: "只播放第 1 步" })).toBeInTheDocument();
+
+  fireEvent.click(within(firstStep).getByText("查看虚拟文件树"));
+  expect(screen.getByText("2/2")).toBeInTheDocument();
+
+  fireEvent.mouseEnter(within(stream).getByLabelText("第 1 步 tree"));
+  fireEvent.click(within(stream).getByRole("button", { name: "跳到第 1 步" }));
+  expect(screen.getByText("1/2")).toBeInTheDocument();
+
+  fireEvent.mouseEnter(within(stream).getByLabelText("第 1 步 tree"));
+  fireEvent.click(within(stream).getByRole("button", { name: "只播放第 1 步" }));
+  expect(screen.getByText("1/2")).toBeInTheDocument();
+});
+
+it("path + selector 证据会映射并高亮 iframe HTML", async () => {
+  const selectorDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      display_html: '<h1 id="p001_b000">Contract</h1><p id="p001_b001">Definitions. Confidential Information\n        includes <strong>financial</strong> information. The rest of this paragraph is not evidence.</p>',
+      outline_tree: [],
+      actions: [
+        {
+          tool_name: "bind_evidence",
+          reason: "绑定定义文件中的 S001",
+          args: {
+            field_id: "nda_disclosure",
+            evidence: [
+              {
+                path: "/001-sample-合同/001-定义/001-Confidential.md",
+                sentences: ["S001"]
+              }
+            ],
+          },
+          result: {
+            ok: true,
+            field_id: "nda_disclosure",
+            evidence: [
+              {
+                path: "/001-sample-合同/001-定义/001-Confidential.md",
+                sentences: ["S001"]
+              }
+            ],
+            evidence_texts: [
+              {
+                path: "/001-sample-合同/001-定义/001-Confidential.md",
+                selector: "S001",
+                text: "Confidential Information includes financial information."
+              }
+            ]
+          }
+        }
+      ]
+    }
+  };
+  const injectedLoadTaskDetail = jest.fn(async () => selectorDetail);
+
+  render(
+    <TaskDetail
+      taskId="task-001"
+      initialSummary={waitingReviewSummary}
+      loadTaskDetail={injectedLoadTaskDetail}
+    />
+  );
+
+  const iframe = (await screen.findByTitle("document replay")) as HTMLIFrameElement;
+  const iframeDocument = iframe.contentDocument;
+  expect(iframeDocument).not.toBeNull();
+  iframeDocument?.open();
+  iframeDocument?.write(iframe.getAttribute("srcdoc") ?? "");
+  iframeDocument?.close();
+  await loadReplayIframe(iframe);
+
+  const inlineEvidence = iframeDocument?.querySelector(".replay-inline-evidence.is-current-highlight");
+  expect(inlineEvidence).toHaveTextContent("Confidential Information includes financial information.");
+  expect(inlineEvidence?.id).toContain("S001");
+  expect(iframeDocument?.getElementById("p001_b001")).not.toHaveClass("is-current-highlight");
+  expect(within(screen.getByLabelText("虚拟文件树导航")).getByRole("button", { name: "Confidential" })).toHaveClass("virtual-file-item-active");
+});
+
+it("动作 result 的诊断内容不进入右侧文字流，字段写入卡也不承接诊断文字", async () => {
   const qualityDetail: TaskDetailData = {
     ...detailData,
     replay: {
@@ -304,10 +1297,10 @@ it("动作输出展示返回的诊断摘要，字段写入卡不再承接诊断�
       actions: [
         {
           tool_name: "custom_extraction",
+          reason: "抽取作品类型为学术论文的论文题目",
           args: {
             table_id: "p001_b002",
             sql: 'SELECT "论文题目" FROM data WHERE "作品类型" = "学术论文"',
-            reason: "抽取作品类型为学术论文的论文题目"
           },
           result: {
             table_id: "p001_b002",
@@ -341,11 +1334,11 @@ it("动作输出展示返回的诊断摘要，字段写入卡不再承接诊断�
         },
         {
           tool_name: "set_field",
+          reason: "使用“作品类型 = 学术论文”筛出 1 行；空白作品类型行需要结合上下文判断，本次未作为学术论文证据；选中行论文题目无空值。",
           args: {
             name: "room_numbers",
             value: "论文 A",
             evidence_ids: ["p001_b002", "p001_b002_tr_001"],
-            reason: "使用“作品类型 = 学术论文”筛出 1 行；空白作品类型行需要结合上下文判断，本次未作为学术论文证据；选中行论文题目无空值。"
           },
           result: {
             ok: true,
@@ -373,15 +1366,14 @@ it("动作输出展示返回的诊断摘要，字段写入卡不再承接诊断�
 
   expect(await screen.findByText("AI extraction replay")).toBeInTheDocument();
   expect(screen.getByText("抽取作品类型为学术论文的论文题目")).toBeInTheDocument();
-  const actionDiagnostics = screen.getByLabelText("动作诊断摘要");
-  expect(within(actionDiagnostics).getByText("表格摘要")).toBeInTheDocument();
+  const stream = screen.getByLabelText("Agent 文字流");
+  expect(within(stream).getByLabelText("tool custom_extraction")).toBeInTheDocument();
+  expect(within(stream).queryByText("表格摘要")).not.toBeInTheDocument();
+  expect(within(stream).queryByText("查表摘要")).not.toBeInTheDocument();
+  expect(within(stream).queryByText("表格 3 行；2 列；空白单元格：作品类型 空白 1 行。")).not.toBeInTheDocument();
   expect(
-    within(actionDiagnostics).getByText("表格 3 行；2 列；空白单元格：作品类型 空白 1 行。")
-  ).toBeInTheDocument();
-  expect(within(actionDiagnostics).getByText("查表摘要")).toBeInTheDocument();
-  expect(
-    within(actionDiagnostics).getByText("返回 1 行；筛选列“作品类型”空白 1 行；非空分布：学术论文 1，学术 论文 1；输出列“论文题目”无空值。")
-  ).toBeInTheDocument();
+    within(stream).queryByText("返回 1 行；筛选列“作品类型”空白 1 行；非空分布：学术论文 1，学术 论文 1；输出列“论文题目”无空值。")
+  ).not.toBeInTheDocument();
   fireEvent.click(screen.getByText("抽取作品类型为学术论文的论文题目"));
   expect(screen.getByText("写入字段：文明寝室房间号")).toBeInTheDocument();
   expect(screen.queryByLabelText("字段模型判断")).not.toBeInTheDocument();
@@ -389,7 +1381,7 @@ it("动作输出展示返回的诊断摘要，字段写入卡不再承接诊断�
   expect(screen.queryByLabelText("字段质量风险")).not.toBeInTheDocument();
 });
 
-it("search_elements 动作展示检索词和命中片段", async () => {
+it("search_elements 动作只在右侧显示工具行摘要，命中片段留给 HTML 高亮", async () => {
   const searchDetail: TaskDetailData = {
     ...detailData,
     replay: {
@@ -398,10 +1390,10 @@ it("search_elements 动作展示检索词和命中片段", async () => {
       actions: [
         {
           tool_name: "search_elements",
+          reason: "Search for Confidential Information clauses",
           args: {
             query: "Confidential Information",
             limit: 20,
-            reason: "Search for Confidential Information clauses"
           },
           result: {
             query: "Confidential Information",
@@ -433,13 +1425,9 @@ it("search_elements 动作展示检索词和命中片段", async () => {
   );
 
   expect(await screen.findByText("AI extraction replay")).toBeInTheDocument();
-  const searchCard = screen.getByLabelText("search_elements 动作结果");
-  expect(within(searchCard).getByText("search_elements")).toBeInTheDocument();
-  expect(within(searchCard).getByText("Confidential Information")).toBeInTheDocument();
-  expect(within(searchCard).getByText("1 match")).toBeInTheDocument();
-  expect(
-    within(searchCard).getByText("Confidential Information includes financial information.")
-  ).toBeInTheDocument();
+  const toolLine = screen.getByLabelText("tool search_elements");
+  expect(within(toolLine).getByText("Searched for Confidential Information · 1 match · 20 limit")).toBeInTheDocument();
+  expect(within(screen.getByLabelText("Agent 文字流")).queryByText("Confidential Information includes financial information.")).not.toBeInTheDocument();
 });
 
 it("字段证据 chip 只定位文档证据，不回跳 replay action", async () => {
@@ -452,9 +1440,9 @@ it("字段证据 chip 只定位文档证据，不回跳 replay action", async ()
       actions: [
         {
           tool_name: "search_grep",
+          reason: "先定位证据",
           args: {
             element_id: "p001_b001",
-            reason: "先定位证据"
           },
           result: {
             evidence_ids: ["p001_b001"]
@@ -500,9 +1488,9 @@ it("read_element 查询表结构时高亮表名和表头", async () => {
       actions: [
         {
           tool_name: "read_element",
+          reason: "查询表格结构",
           args: {
             element_id: "p001_b002",
-            reason: "查询表格结构"
           },
           result: {
             id: "p001_b002",
@@ -563,9 +1551,9 @@ it("read_element 查询表结构自动播放时读取表名入口", async () => 
       actions: [
         {
           tool_name: "read_element",
+          reason: "查询表格结构",
           args: {
             element_id: "p001_b002",
-            reason: "查询表格结构"
           },
           result: {
             id: "p001_b002",
@@ -637,11 +1625,11 @@ it("set_field 的整表证据高亮表名和表头并靠上滚动", async () => 
       actions: [
         {
           tool_name: "set_field",
+          reason: "整张表作为字段依据",
           args: {
             name: "room_numbers",
             value: "1-101",
             evidence_ids: ["p001_b002"],
-            reason: "整张表作为字段依据"
           },
           result: {
             ok: true,
@@ -785,9 +1773,9 @@ it("read_element 查询无 caption 表格时高亮表头而不框整表", async 
       actions: [
         {
           tool_name: "read_element",
+          reason: "查询表格结构",
           args: {
             element_id: "p001_b002",
-            reason: "查询表格结构"
           },
           result: {
             id: "p001_b002",
@@ -843,9 +1831,9 @@ it("table_extraction 只高亮返回行，不高亮整张表或列", async () =>
       actions: [
         {
           tool_name: "table_extraction",
+          reason: "抽取结论列",
           args: {
             table_id: "p001_b002",
-            reason: "抽取结论列"
           },
           result: {
             table_id: "p001_b002",
@@ -909,10 +1897,10 @@ it("table_extraction 失败或空结果时不自动读取整表", async () => {
       actions: [
         {
           tool_name: "table_extraction",
+          reason: "LIKE 查询学术论文行",
           args: {
             table_id: "p001_b002",
             sql: 'SELECT * FROM data WHERE "作品类型" LIKE \'%学术论文%\'',
-            reason: "LIKE 查询学术论文行"
           },
           result: {
             ok: false,
@@ -924,10 +1912,10 @@ it("table_extraction 失败或空结果时不自动读取整表", async () => {
         },
         {
           tool_name: "table_extraction",
+          reason: "只查询序号 112",
           args: {
             table_id: "p001_b002",
             sql: 'SELECT "序号","论文题目" FROM data WHERE "序号" = \'112\'',
-            reason: "只查询序号 112"
           },
           result: {
             ok: true,
@@ -938,10 +1926,10 @@ it("table_extraction 失败或空结果时不自动读取整表", async () => {
         },
         {
           tool_name: "update_plan",
+          reason: "继续改用姓名查询",
           args: {
             plan_index: 1,
             status: "completed",
-            reason: "继续改用姓名查询"
           },
           result: {
             ok: true
@@ -980,13 +1968,10 @@ it("table_extraction 失败或空结果时不自动读取整表", async () => {
     }
     await loadReplayIframe(iframe);
 
-    expect(screen.getByText("查询失败")).toBeInTheDocument();
-    expect(screen.getByText("table is too large for unbounded SELECT *")).toBeInTheDocument();
+    expect(screen.getByText("查询失败 · table is too large for unbounded SELECT *")).toBeInTheDocument();
     expect(screen.queryByText("未查到结果")).not.toBeInTheDocument();
     fireEvent.click(screen.getByText("LIKE 查询学术论文行"));
-    expect(await screen.findByText("未查到结果")).toBeInTheDocument();
-    expect(screen.getByText("没有查到匹配行。")).toBeInTheDocument();
-    expect(screen.queryByText("查询失败")).not.toBeInTheDocument();
+    expect(await screen.findByText("未查到结果 · 0 rows · 没有查到匹配行。")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "自动播放" }));
     await act(async () => {
@@ -1023,9 +2008,9 @@ it("table_extraction 返回具体行时会逐行动画读取", async () => {
       actions: [
         {
           tool_name: "table_extraction",
+          reason: "抽取文明寝室行",
           args: {
             table_id: "p001_b002",
-            reason: "抽取文明寝室行"
           },
           result: {
             table_id: "p001_b002",
@@ -1104,11 +2089,11 @@ it("set_field 写入证据按 HTML 顺序从上到下读取", async () => {
       actions: [
         {
           tool_name: "set_field",
+          reason: "乱序 evidence ids 也要按 HTML 顺序读取",
           args: {
             name: "room_numbers",
             value: "1-101,1-102,1-103",
             evidence_ids: ["p001_b003", "p001_b001", "p001_b002"],
-            reason: "乱序 evidence ids 也要按 HTML 顺序读取"
           },
           result: {
             ok: true,
@@ -1193,9 +2178,9 @@ it("连续 action 指向同一 block 时不重复播放 outline 鼠标路径", a
       actions: [
         {
           tool_name: "search_grep",
+          reason: "第一次读取同一证据块",
           args: {
             element_id: "p001_b001",
-            reason: "第一次读取同一证据块"
           },
           result: {
             evidence_ids: ["p001_b001"]
@@ -1203,9 +2188,9 @@ it("连续 action 指向同一 block 时不重复播放 outline 鼠标路径", a
         },
         {
           tool_name: "lookup_block",
+          reason: "继续使用同一证据块",
           args: {
             element_id: "p001_b001",
-            reason: "继续使用同一证据块"
           },
           result: {
             evidence_ids: ["p001_b001"]
@@ -1268,6 +2253,158 @@ it("连续 action 指向同一 block 时不重复播放 outline 鼠标路径", a
   }
 });
 
+it("左侧栏关闭后自动播放不再执行左侧鼠标路径动画", async () => {
+  jest.useFakeTimers();
+  const originalElementScrollTo = HTMLElement.prototype.scrollTo;
+  const outlineScrollTo = jest.fn();
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+    configurable: true,
+    value: outlineScrollTo
+  });
+  const closedPanelDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      display_html: '<h1 id="p001_b000">文明寝室名单</h1><p id="p001_b001">关闭左栏后仍读取 HTML</p>',
+      actions: [
+        {
+          tool_name: "search_grep",
+          reason: "读取证据块",
+          args: {
+            element_id: "p001_b001",
+          },
+          result: {
+            evidence_ids: ["p001_b001"]
+          }
+        }
+      ]
+    }
+  };
+  const injectedLoadTaskDetail = jest.fn(async () => closedPanelDetail);
+
+  try {
+    render(
+      <TaskDetail
+        taskId="task-001"
+        initialSummary={waitingReviewSummary}
+        loadTaskDetail={injectedLoadTaskDetail}
+      />
+    );
+
+    expect(await screen.findByText("AI extraction replay")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "关闭左侧文档结构" }));
+    const iframe = screen.getByTitle("document replay") as HTMLIFrameElement;
+    iframe.contentDocument?.open();
+    iframe.contentDocument?.write(closedPanelDetail.replay?.display_html ?? "");
+    iframe.contentDocument?.close();
+    if (iframe.contentDocument) {
+      iframe.contentDocument.createRange = jest.fn(() => ({
+        selectNodeContents: jest.fn(),
+        getClientRects: jest.fn(() => []),
+        detach: jest.fn()
+      }) as unknown as Range);
+    }
+    Object.defineProperty(iframe.contentWindow, "scrollTo", {
+      configurable: true,
+      value: jest.fn()
+    });
+    await loadReplayIframe(iframe);
+
+    fireEvent.click(screen.getByRole("button", { name: "自动播放" }));
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(4000);
+    });
+
+    expect(outlineScrollTo).not.toHaveBeenCalled();
+    expect(document.querySelector(".replay-cursor.is-visible")).not.toBeInTheDocument();
+  } finally {
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      value: originalElementScrollTo
+    });
+    jest.useRealTimers();
+  }
+});
+
+it("文档结构不显示 page_001、页码和页脚这类节点", async () => {
+  const pageOutlineDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      display_html: [
+        '<section id="page_001">',
+        '<div id="p001_b006" data-type="page_footer">428249v2</div>',
+        '<h1 id="p001_b000">第一页标题</h1>',
+        '<p id="p001_b001">第一页内容</p>',
+        '</section>',
+        '<section id="page_002">',
+        '<div id="p002_b000" data-type="page_number">Page 2</div>',
+        '<h1 id="p002_b000_title">第二页标题</h1>',
+        '<p id="p002_b001">第二页内容</p>',
+        '</section>'
+      ].join(""),
+      outline_tree: [
+        {
+          id: "page_001",
+          type: "PAGE",
+          text: "Page 1",
+          children: [
+            {
+              id: "p001_b000",
+              type: "TITLE",
+              text: "第一页标题",
+              children: []
+            }
+          ]
+        },
+        {
+          id: "p001_b006",
+          type: "PAGE_FOOTER",
+          text: "428249v2",
+          children: []
+        },
+        {
+          id: "page_002",
+          type: "PAGE",
+          text: "Page 2",
+          children: [
+            {
+              id: "p002_b000",
+              type: "PAGE_NUMBER",
+              text: "Page 2",
+              children: []
+            },
+            {
+              id: "p002_b000_title",
+              type: "TITLE",
+              text: "第二页标题",
+              children: []
+            }
+          ]
+        }
+      ],
+      actions: []
+    }
+  };
+  const injectedLoadTaskDetail = jest.fn(async () => pageOutlineDetail);
+
+  render(
+    <TaskDetail
+      taskId="task-001"
+      initialSummary={waitingReviewSummary}
+      loadTaskDetail={injectedLoadTaskDetail}
+    />
+  );
+
+  expect(await screen.findByText("AI extraction replay")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Page 1" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Page 2" })).not.toBeInTheDocument();
+  expect(screen.queryByText(/Page 2/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/428249v2/)).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Header: 第一页标题" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Header: 第二页标题" })).toBeInTheDocument();
+});
+
 it("自动读取多个证据块时优先滚到当前视口最近的 HTML block", async () => {
   jest.useFakeTimers();
   const scrolledIds: string[] = [];
@@ -1284,8 +2421,8 @@ it("自动读取多个证据块时优先滚到当前视口最近的 HTML block",
       actions: [
         {
           tool_name: "search_grep",
+          reason: "读取多个候选证据",
           args: {
-            reason: "读取多个候选证据"
           },
           result: {
             evidence_ids: ["p001_b001", "p001_b002", "p001_b003"]
@@ -1472,11 +2609,11 @@ it("长字段写入卡把字段内容和复核区分离，避免全屏时复核�
       actions: [
         {
           tool_name: "set_field",
+          reason: "长列表字段写入",
           args: {
             name: "room_numbers",
             value: longValue,
             evidence_ids: ["p001_b001"],
-            reason: "长列表字段写入"
           },
           result: {
             ok: true,
