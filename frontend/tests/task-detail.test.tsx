@@ -14,6 +14,15 @@ import {
 import { TaskDetail } from "@/components/task-detail";
 import type { TaskDetailData, TaskReplay, TaskResult, TaskSummary } from "@/lib/types";
 
+function getCssRule(css: string, selector: string): string {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = css.match(new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`, "m"));
+  if (!match) {
+    throw new Error(`Missing CSS rule for ${selector}`);
+  }
+  return match[1];
+}
+
 const waitingReviewSummary: TaskSummary = {
   task_id: "task-001",
   status: "waiting_review",
@@ -198,7 +207,7 @@ it("低层 API 仍保留 trace 和 audit 读取能力", async () => {
   });
 });
 
-it("waiting_review 任务只展示 replay，并在 review 字段卡片里提交修正", async () => {
+it("waiting_review 任务只展示 replay，并在 review 字段区里提交修正", async () => {
   const user = userEvent.setup();
   window.localStorage.clear();
   window.localStorage.setItem(
@@ -321,13 +330,14 @@ it("任务详情页使用占满视口的文档工作台布局", async () => {
   expect(screen.queryByRole("button", { name: "全屏视图" })).not.toBeInTheDocument();
 });
 
-it("replay 工作台使用中性灰和 cobalt accent 配色", async () => {
+it("replay 工作台使用 Codex 式中性配色", async () => {
   const globalsCss = readFileSync(join(process.cwd(), "src/app/globals.css"), "utf8");
-  expect(globalsCss).toContain("--primary: #2f6fed;");
-  expect(globalsCss).toContain("--accent: #eaf2ff;");
-  expect(globalsCss).toContain("--replay-panel: #fafafb;");
-  expect(globalsCss).toContain("--replay-tool-row: #f5f6f8;");
-  expect(globalsCss).not.toContain("0.55 0.13 180");
+  expect(globalsCss).toContain("--primary: #1f1f1f;");
+  expect(globalsCss).toContain("--accent: #f2f2f3;");
+  expect(globalsCss).toContain("--replay-panel: #fafafa;");
+  expect(globalsCss).toContain("--replay-tool-row: #f3f3f4;");
+  expect(globalsCss).not.toContain("#2f6fed");
+  expect(globalsCss).not.toContain("#eaf2ff");
 
   const injectedLoadTaskDetail = jest.fn(async () => detailData);
 
@@ -342,11 +352,48 @@ it("replay 工作台使用中性灰和 cobalt accent 配色", async () => {
   const iframe = (await screen.findByTitle("document replay")) as HTMLIFrameElement;
   const srcDoc = iframe.getAttribute("srcdoc") ?? "";
 
-  expect(srcDoc).toContain("background: #eaf2ff");
-  expect(srcDoc).toContain("outline: 2px solid #7aa7ff");
-  expect(srcDoc).toContain("#2f6fed");
+  expect(srcDoc).toContain("background: #f1f1f2");
+  expect(srcDoc).toContain("outline: 2px solid #d8d8da");
+  expect(srcDoc).toContain("#1f1f1f");
+  expect(srcDoc).toContain('font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif');
+  expect(srcDoc).toContain("font-size: 15px");
+  expect(srcDoc).toContain("line-height: 1.58");
+  expect(srcDoc).not.toContain("#2f6fed");
+  expect(srcDoc).not.toContain("#eaf2ff");
+  expect(srcDoc).not.toContain("font-family: Inter");
   expect(srcDoc).not.toContain("rgba(14, 165, 164");
   expect(srcDoc).not.toContain("#0ea5a4");
+});
+
+it("replay agent 文字流和字段复核区不使用块状卡片样式", () => {
+  const globalsCss = readFileSync(join(process.cwd(), "src/app/globals.css"), "utf8");
+  const reasonRule = getCssRule(globalsCss, ".replay-agent-message");
+  const toolRule = getCssRule(globalsCss, ".replay-agent-tool-line");
+  const fieldWriteRule = getCssRule(globalsCss, ".replay-field-write");
+  const fieldValueRule = getCssRule(globalsCss, ".replay-field-write-value");
+
+  expect(reasonRule).toContain("border: 0;");
+  expect(reasonRule).toContain("border-radius: 0;");
+  expect(reasonRule).toContain("background: transparent;");
+  expect(reasonRule).toContain("padding: 2px 0;");
+  expect(reasonRule).not.toContain("border: 1px");
+
+  expect(toolRule).toContain("border: 0;");
+  expect(toolRule).toContain("border-radius: 0;");
+  expect(toolRule).toContain("background: transparent;");
+  expect(toolRule).toContain("padding: 1px 0;");
+  expect(toolRule).not.toContain("var(--replay-tool-row)");
+
+  expect(fieldWriteRule).toContain("border: 0;");
+  expect(fieldWriteRule).toContain("background: transparent;");
+  expect(fieldWriteRule).toContain("max-width: none;");
+  expect(fieldWriteRule).toContain("-apple-system");
+  expect(fieldWriteRule).toContain("font-size: 13px;");
+  expect(fieldWriteRule).not.toContain("rgb(255 255 255 / 0.72)");
+
+  expect(fieldValueRule).toContain("-apple-system");
+  expect(fieldValueRule).toContain("font-size: 13px;");
+  expect(fieldValueRule).not.toContain("SFMono-Regular");
 });
 
 it("多文件任务顶部标题跟随当前选中文件", async () => {
@@ -896,12 +943,14 @@ it("中间 HTML 使用全屏白底文档排版", async () => {
 
   expect(srcDoc).toContain("class=\"document-canvas\"");
   expect(srcDoc).toContain("max-width: min(100%, 1040px)");
-  expect(srcDoc).toContain("background: #fff");
+  expect(srcDoc).toContain("background: #ffffff");
   expect(srcDoc).toContain("min-height: 100vh");
   expect(srcDoc).toContain("border: 0");
   expect(srcDoc).not.toContain("box-shadow: 0 26px 70px");
-  expect(srcDoc).toContain("padding: clamp(52px, 6.2vw, 86px)");
-  expect(srcDoc).toContain("font-family: Inter, ui-sans-serif");
+  expect(srcDoc).toContain("padding: clamp(42px, 5.2vw, 72px)");
+  expect(srcDoc).toContain('font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif');
+  expect(srcDoc).toContain("font-size: 15px");
+  expect(srcDoc).toContain("line-height: 1.58");
   expect(srcDoc).toContain("border-collapse: collapse");
   expect(srcDoc).toContain("tbody tr:hover");
   expect(srcDoc).toContain(".document-canvas ul");
@@ -1400,7 +1449,7 @@ it("path + selector 证据会映射并高亮 iframe HTML", async () => {
   expect(within(screen.getByLabelText("虚拟文件树导航")).getByRole("button", { name: "Confidential" })).toHaveClass("virtual-file-item-active");
 });
 
-it("动作 result 的诊断内容不进入右侧文字流，字段写入卡也不承接诊断文字", async () => {
+it("动作 result 的诊断内容不进入右侧文字流，字段写入区也不承接诊断文字", async () => {
   const qualityDetail: TaskDetailData = {
     ...detailData,
     replay: {
@@ -2712,7 +2761,7 @@ it("必填字段没有 agent value 时在 replay 末尾显示空复核输入", a
   });
 });
 
-it("长字段写入卡把字段内容和复核区分离，避免全屏时复核入口被撑出视口", async () => {
+it("长字段写入区把字段内容和复核区分离，避免全屏时复核入口被撑出视口", async () => {
   const longValue = Array.from({ length: 36 }, (_, index) => `论文题目 ${index + 1}`);
   const longFieldDetail: TaskDetailData = {
     ...detailData,
@@ -2770,7 +2819,7 @@ it("长字段写入卡把字段内容和复核区分离，避免全屏时复核�
   );
 
   expect(await screen.findByText("AI extraction replay")).toBeInTheDocument();
-  const fieldCard = screen.getByLabelText("字段写入卡");
+  const fieldCard = screen.getByLabelText("字段写入区");
   const fieldContent = within(fieldCard).getByLabelText("字段写入内容");
   const reviewArea = within(fieldCard).getByLabelText("字段复核区");
   const replayRoot = fieldCard.closest(".replay-review-root");

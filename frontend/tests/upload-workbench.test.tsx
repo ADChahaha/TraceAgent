@@ -76,6 +76,30 @@ it("默认 task_type 为空且不展示内置类型提示", () => {
   expect(taskType).not.toHaveAttribute("placeholder");
 });
 
+it("上传工作台用一个按钮切换 Codex light/dark 主题", async () => {
+  const user = userEvent.setup();
+  window.localStorage.clear();
+  document.documentElement.removeAttribute("data-theme");
+
+  setup();
+
+  const themeButton = screen.getByRole("button", { name: "切换主题" });
+  expect(themeButton).toHaveTextContent("Light");
+  expect(document.documentElement).toHaveAttribute("data-theme", "light");
+
+  await user.click(themeButton);
+
+  expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+  expect(window.localStorage.getItem("agent-gate.theme")).toBe("dark");
+  expect(themeButton).toHaveTextContent("Dark");
+
+  await user.click(themeButton);
+
+  expect(document.documentElement).toHaveAttribute("data-theme", "light");
+  expect(window.localStorage.getItem("agent-gate.theme")).toBe("light");
+  expect(themeButton).toHaveTextContent("Light");
+});
+
 it("非法 task_spec 会阻止提交并提示 JSON object 错误", async () => {
   const user = userEvent.setup();
   const { createTask } = setup();

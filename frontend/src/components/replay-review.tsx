@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowLeft, ChevronRight, Gauge, Loader2, MousePointerClick, PanelLeftClose, PanelLeftOpen, Pause, Play, Search, SquareTerminal } from "lucide-react";
 
 import { stringifyValue } from "@/lib/json";
+import { getStoredTheme, THEME_CHANGED_EVENT, type AppTheme } from "@/lib/theme";
 import type { EnumVariantDefinition, ReplayAction, ReplayFieldState, ReplayOutlineNode, TaskReplay, TaskResultField, TaskSummary } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -161,6 +162,7 @@ export function ReplayReview({
   const [isLeftPanelOpen, setIsLeftPanelOpen] = React.useState(true);
   const [leftPanelWidth, setLeftPanelWidth] = React.useState(DEFAULT_LEFT_PANEL_WIDTH);
   const [rightPanelWidth, setRightPanelWidth] = React.useState(DEFAULT_RIGHT_PANEL_WIDTH);
+  const [theme, setTheme] = React.useState<AppTheme>(() => getStoredTheme());
   const [animatedPathIndex, setAnimatedPathIndex] = React.useState(-1);
   const [isUserInspecting, setIsUserInspecting] = React.useState(false);
   const [iframeInteractionTick, setIframeInteractionTick] = React.useState(0);
@@ -187,8 +189,8 @@ export function ReplayReview({
     [actions],
   );
   const replayHtml = React.useMemo(
-    () => (displayHtml ? buildReplayHtml(displayHtml, bindEvidenceInlineAnchors) : ""),
-    [bindEvidenceInlineAnchors, displayHtml],
+    () => (displayHtml ? buildReplayHtml(displayHtml, bindEvidenceInlineAnchors, theme) : ""),
+    [bindEvidenceInlineAnchors, displayHtml, theme],
   );
   const stageStyle = React.useMemo(
     () => ({
@@ -197,6 +199,15 @@ export function ReplayReview({
     }) as React.CSSProperties,
     [leftPanelWidth, rightPanelWidth],
   );
+
+  React.useEffect(() => {
+    const handleThemeChange = (event: Event) => {
+      const nextTheme = event instanceof CustomEvent && event.detail === "dark" ? "dark" : getStoredTheme();
+      setTheme(nextTheme);
+    };
+    window.addEventListener(THEME_CHANGED_EVENT, handleThemeChange);
+    return () => window.removeEventListener(THEME_CHANGED_EVENT, handleThemeChange);
+  }, []);
 
   React.useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -957,7 +968,7 @@ export function ReplayReview({
           <section className="replay-agent-panel" aria-label="Agent 工具回放">
             <div className="replay-agent-header">
               <span className="replay-agent-title">AI</span>
-              <span className="font-mono text-[11px] text-muted-foreground">
+              <span className="replay-agent-step">
                 {visibleActionCount === 0 ? "step 0 of 0" : `step ${agentStreamActions.length} of ${visibleActionCount}`}
               </span>
             </div>
@@ -1384,7 +1395,7 @@ function ReplayFieldWriteCard({
   return (
     <div
       className="replay-field-write"
-      aria-label="字段写入卡"
+      aria-label="字段写入区"
       onClick={(event) => event.stopPropagation()}
       onPointerDown={(event) => event.stopPropagation()}
       onWheel={(event) => event.stopPropagation()}
@@ -3291,8 +3302,13 @@ function cssEscape(value: string) {
   return value.replace(/["\\]/g, "\\$&");
 }
 
-function buildReplayHtml(displayHtml: string, inlineAnchors: InlineEvidenceAnchor[] = []): string {
+function buildReplayHtml(
+  displayHtml: string,
+  inlineAnchors: InlineEvidenceAnchor[] = [],
+  theme: AppTheme = "light",
+): string {
   const bodyHtml = sanitizeReplayDisplayHtml(applyInlineEvidenceAnchors(displayHtml, inlineAnchors));
+  const colors = getReplayDocumentTheme(theme);
   return `<!doctype html>
 <html>
 <head>
@@ -3304,11 +3320,11 @@ body {
   min-height: 100vh;
   box-sizing: border-box;
   padding: 0;
-  background: #fff;
-  color: #20242a;
-  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-size: 18px;
-  line-height: 1.72;
+  background: ${colors.background};
+  color: ${colors.foreground};
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 15px;
+  line-height: 1.58;
   text-rendering: optimizeLegibility;
 }
 .document-canvas {
@@ -3317,8 +3333,8 @@ body {
   box-sizing: border-box;
   min-height: 100vh;
   border: 0;
-  background: #fff;
-  padding: clamp(52px, 6.2vw, 86px) clamp(34px, 6vw, 92px) 112px;
+  background: ${colors.background};
+  padding: clamp(42px, 5.2vw, 72px) clamp(32px, 5.4vw, 84px) 96px;
 }
 .document-canvas > :first-child {
   margin-top: 0;
@@ -3327,24 +3343,24 @@ body {
 .document-canvas h2,
 .document-canvas h3,
 .document-canvas h4 {
-  color: #111318;
-  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-weight: 760;
+  color: ${colors.heading};
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-weight: 650;
   letter-spacing: 0;
-  line-height: 1.18;
+  line-height: 1.22;
 }
 .document-canvas h1 {
-  margin: 0 0 1.35rem;
-  font-size: clamp(2.35rem, 4vw, 3.65rem);
-  letter-spacing: -0.01em;
+  margin: 0 0 1.1rem;
+  font-size: clamp(1.65rem, 2.2vw, 2.2rem);
+  letter-spacing: 0;
 }
 .document-canvas h2 {
-  margin: 3.1rem 0 0.85rem;
-  font-size: clamp(1.55rem, 2.15vw, 2.1rem);
+  margin: 2.4rem 0 0.75rem;
+  font-size: clamp(1.24rem, 1.55vw, 1.45rem);
 }
 .document-canvas h3 {
-  margin: 2.1rem 0 0.6rem;
-  font-size: 1.25rem;
+  margin: 1.8rem 0 0.55rem;
+  font-size: 1.05rem;
 }
 .document-canvas p {
   margin: 0.72rem 0;
@@ -3367,8 +3383,8 @@ body {
 .document-canvas caption,
 .document-canvas .caption {
   margin-bottom: 0.45rem;
-  color: #4b5563;
-  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: ${colors.muted};
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 0.82rem;
   font-weight: 620;
   text-align: left;
@@ -3377,79 +3393,79 @@ body {
   width: max-content;
   min-width: min(100%, 38rem);
   border-collapse: collapse;
-  border-top: 1px solid #9aa8b3;
-  border-bottom: 1px solid #c8d2dc;
-  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  border-top: 1px solid ${colors.tableStrongBorder};
+  border-bottom: 1px solid ${colors.tableBorder};
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 0.86rem;
   line-height: 1.45;
 }
 .document-canvas th,
 .document-canvas td {
   border: 0;
-  border-bottom: 1px solid #e1e7ec;
+  border-bottom: 1px solid ${colors.tableBorder};
   padding: 0.46rem 0.7rem;
   vertical-align: top;
   text-align: left;
 }
 .document-canvas th {
-  background: #f7fafc;
-  color: #111318;
+  background: ${colors.tableHeader};
+  color: ${colors.heading};
   font-weight: 650;
 }
 .document-canvas tbody tr:hover > td,
 .document-canvas tbody tr:hover > th {
-  background: #f8fbfb;
+  background: ${colors.tableHover};
 }
 .document-canvas blockquote {
   margin: 1rem 0;
-  border-left: 3px solid #c8d2dc;
+  border-left: 3px solid ${colors.tableBorder};
   padding-left: 0.9rem;
-  color: #4b5563;
+  color: ${colors.muted};
 }
 .reading-line {
   border-radius: 3px;
   transition: background 180ms ease, box-shadow 180ms ease;
 }
 .is-reading-line {
-  background: #eaf2ff;
-  box-shadow: inset 0 -0.42em 0 rgb(47 111 237 / 0.18);
+  background: ${colors.highlightBackground};
+  box-shadow: inset 0 -0.42em 0 ${colors.highlightShadow};
 }
 .is-current-highlight {
-  outline: 2px solid #7aa7ff !important;
-  background: #eaf2ff !important;
+  outline: 2px solid ${colors.highlightBorder} !important;
+  background: ${colors.highlightBackground} !important;
   outline-offset: 2px;
   transition: background 180ms ease, outline-color 180ms ease, box-shadow 180ms ease;
 }
 .replay-inline-evidence.is-current-highlight {
   border-radius: 3px;
   outline: none !important;
-  background: #eaf2ff !important;
-  box-shadow: inset 0 -0.38em 0 rgb(47 111 237 / 0.18), 0 0 0 1px #7aa7ff;
+  background: ${colors.highlightBackground} !important;
+  box-shadow: inset 0 -0.38em 0 ${colors.highlightShadow}, 0 0 0 1px ${colors.highlightBorder};
 }
 .is-field-write-highlight {
-  outline: 4px solid #2f6fed !important;
-  background: #eaf2ff !important;
+  outline: 3px solid ${colors.strongHighlight} !important;
+  background: ${colors.highlightBackground} !important;
   animation: fieldWriteFlash 1.4s ease-out;
 }
 tr.is-current-highlight {
   outline-offset: -2px !important;
-  box-shadow: inset 5px 0 0 #2f6fed, 0 0 0 2px rgb(47 111 237 / 0.16);
+  box-shadow: inset 5px 0 0 ${colors.strongHighlight}, 0 0 0 2px ${colors.highlightShadow};
 }
 tr.is-current-highlight > td,
 tr.is-current-highlight > th {
-  background: #eaf2ff !important;
+  background: ${colors.highlightBackground} !important;
 }
 .is-table-row-result-highlight > td,
 .is-table-row-result-highlight > th {
-  background: #eaf2ff !important;
-  box-shadow: inset 0 0 0 1px #7aa7ff;
+  background: ${colors.highlightBackground} !important;
+  box-shadow: inset 0 0 0 1px ${colors.highlightBorder};
   transition: background 180ms ease, box-shadow 180ms ease;
 }
 .is-table-reference-highlight {
   display: inline-block;
   border-radius: 4px;
-  background: #eaf2ff !important;
-  box-shadow: 0 0 0 2px #7aa7ff;
+  background: ${colors.highlightBackground} !important;
+  box-shadow: 0 0 0 2px ${colors.highlightBorder};
   transition: background 180ms ease, box-shadow 180ms ease;
 }
 tr.is-table-reference-highlight {
@@ -3457,13 +3473,13 @@ tr.is-table-reference-highlight {
 }
 tr.is-table-reference-highlight > td,
 tr.is-table-reference-highlight > th {
-  background: #eaf2ff !important;
-  box-shadow: inset 0 0 0 1px #7aa7ff;
+  background: ${colors.highlightBackground} !important;
+  box-shadow: inset 0 0 0 1px ${colors.highlightBorder};
 }
 @keyframes fieldWriteFlash {
-  0% { box-shadow: 0 0 0 0 rgb(47 111 237 / 0.36); transform: scale(1); }
-  28% { box-shadow: 0 0 0 12px rgb(47 111 237 / 0.12); transform: scale(1.01); }
-  100% { box-shadow: 0 0 0 0 rgb(47 111 237 / 0); transform: scale(1); }
+  0% { box-shadow: 0 0 0 0 ${colors.flashStart}; transform: scale(1); }
+  28% { box-shadow: 0 0 0 10px ${colors.flashMiddle}; transform: scale(1.01); }
+  100% { box-shadow: 0 0 0 0 ${colors.flashEnd}; transform: scale(1); }
 }
 </style>
 <script>
@@ -3508,8 +3524,47 @@ window.addEventListener("DOMContentLoaded", function () {
 });
 </script>
 </head>
-<body data-document-canvas="true"><main class="document-canvas">${bodyHtml}</main></body>
+<body data-document-canvas="true" data-theme="${theme}"><main class="document-canvas">${bodyHtml}</main></body>
 </html>`;
+}
+
+function getReplayDocumentTheme(theme: AppTheme) {
+  if (theme === "dark") {
+    return {
+      background: "#181818",
+      foreground: "#ffffff",
+      heading: "#ffffff",
+      muted: "#b0b0b5",
+      tableBorder: "#383838",
+      tableStrongBorder: "#4a4a4a",
+      tableHeader: "#222222",
+      tableHover: "#242424",
+      highlightBackground: "#2a2a2a",
+      highlightBorder: "#484848",
+      highlightShadow: "rgb(255 255 255 / 0.08)",
+      strongHighlight: "#ffffff",
+      flashStart: "rgb(255 255 255 / 0.22)",
+      flashMiddle: "rgb(255 255 255 / 0.08)",
+      flashEnd: "rgb(255 255 255 / 0)",
+    };
+  }
+  return {
+    background: "#ffffff",
+    foreground: "#1f1f1f",
+    heading: "#1f1f1f",
+    muted: "#717177",
+    tableBorder: "#e0e0e1",
+    tableStrongBorder: "#c8c8ca",
+    tableHeader: "#f4f4f5",
+    tableHover: "#f7f7f8",
+    highlightBackground: "#f1f1f2",
+    highlightBorder: "#d8d8da",
+    highlightShadow: "rgb(31 31 31 / 0.08)",
+    strongHighlight: "#1f1f1f",
+    flashStart: "rgb(31 31 31 / 0.24)",
+    flashMiddle: "rgb(31 31 31 / 0.08)",
+    flashEnd: "rgb(31 31 31 / 0)",
+  };
 }
 
 function sanitizeReplayDisplayHtml(displayHtml: string): string {

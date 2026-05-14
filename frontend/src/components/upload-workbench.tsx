@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { AlertCircle, FileUp, History, Loader2, SendHorizonal } from "lucide-react";
+import { AlertCircle, FileUp, History, Loader2, Moon, SendHorizonal, Sun } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -10,6 +10,7 @@ import {
   listTasks as defaultListTasks
 } from "@/lib/api";
 import { parseJsonObject } from "@/lib/json";
+import { applyStoredTheme, getStoredTheme, type AppTheme } from "@/lib/theme";
 import {
   addRecentTask,
   getRecentTasks,
@@ -57,8 +58,13 @@ export function UploadWorkbench({
   const [error, setError] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [recentTasks, setRecentTasks] = React.useState<RecentTask[]>(() => getRecentTasks());
+  const [theme, setTheme] = React.useState<AppTheme>(() => getStoredTheme());
   const pollTimeouts = React.useRef<ReturnType<typeof setTimeout>[]>([]);
   const mounted = React.useRef(true);
+
+  React.useEffect(() => {
+    applyStoredTheme(theme);
+  }, [theme]);
 
   React.useEffect(() => {
     mounted.current = true;
@@ -173,15 +179,18 @@ export function UploadWorkbench({
   return (
     <div className="grid min-h-[calc(100svh-4rem)] gap-8 lg:grid-cols-[minmax(0,1fr)_20rem]">
       <main className="min-w-0">
-        <div className="mb-6 flex flex-col gap-2">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <FileUp className="h-4 w-4 text-primary" />
-            <span>文档治理任务</span>
+        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0 space-y-2">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <FileUp className="h-4 w-4 text-muted-foreground" />
+              <span>文档治理任务</span>
+            </div>
+            <h1 className="text-3xl font-semibold tracking-normal text-foreground">上传工作台</h1>
+            <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
+              上传 PDF，显式提交字段 schema；任务创建后立即入队，右侧列表会跟随处理进度更新。
+            </p>
           </div>
-          <h1 className="text-3xl font-semibold tracking-normal text-foreground">上传工作台</h1>
-          <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
-            上传 PDF，显式提交字段 schema；任务创建后立即入队，右侧列表会跟随处理进度更新。
-          </p>
+          <ThemeModeButton theme={theme} onThemeChange={setTheme} />
         </div>
 
         <Alert className="mb-6">
@@ -315,6 +324,28 @@ export function UploadWorkbench({
         )}
       </aside>
     </div>
+  );
+}
+
+function ThemeModeButton({
+  theme,
+  onThemeChange
+}: {
+  theme: AppTheme;
+  onThemeChange: (theme: AppTheme) => void;
+}) {
+  const isDark = theme === "dark";
+  return (
+    <button
+      type="button"
+      className="theme-mode-button"
+      aria-label="切换主题"
+      title={isDark ? "切换到 Light theme" : "切换到 Dark theme"}
+      onClick={() => onThemeChange(isDark ? "light" : "dark")}
+    >
+      {isDark ? <Moon className="h-3.5 w-3.5" aria-hidden="true" /> : <Sun className="h-3.5 w-3.5" aria-hidden="true" />}
+      {isDark ? "Dark" : "Light"}
+    </button>
   );
 }
 
