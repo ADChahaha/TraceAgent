@@ -113,6 +113,7 @@ frontend/
   -> 页面不渲染 result/review/trace/audit Tabs，只渲染 ReplayReview
   -> TaskDetail 让 replay 作为整页全屏工作台渲染，跳出根布局的最大宽度和页面 padding
   -> ReplayReview 使用类似文档协作工具 / Codex 的全屏三栏：顶部工具栏、左侧 Contents、中央 iframe 文档正文、右侧从上到下的 reason/tool 文字流
+  -> 工作台配色采用中性白/灰为主、cobalt blue 作为唯一交互 accent：侧栏和右栏用浅灰面板，工具行默认灰阶弱化，当前文件、hover action、阅读线和 evidence 高亮统一使用淡蓝底与蓝色边线；任务 status badge 保留自己的状态色但不扩散到其他界面元素
   -> 顶部工具栏只保留单行任务上下文：左侧返回后展示 `task_id / 当前选中文件名`，右侧只展示一个任务 status badge；当前文件名从正在播放或用户选中的 action path 匹配 replay.documents，支持多文件任务随当前文件切换
   -> 中间 iframe 是文档主画布，直接铺满中间容器；外层不加灰色 gutter、边框卡片或额外内边距
   -> iframe 内部使用通用白底文档排版：正文区域占满视口、稳定宽版心、sans 标题和正文、克制段落/列表间距和 booktabs 风格表格；这套样式不假设法律、论文或报告等具体文档类型

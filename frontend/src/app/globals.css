@@ -26,25 +26,25 @@
 }
 
 :root {
-  --background: oklch(0.99 0.003 250);
-  --foreground: oklch(0.19 0.018 250);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.19 0.018 250);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.19 0.018 250);
-  --primary: oklch(0.55 0.13 180);
-  --primary-foreground: oklch(0.98 0.015 180);
-  --secondary: oklch(0.95 0.012 250);
-  --secondary-foreground: oklch(0.25 0.02 250);
-  --muted: oklch(0.95 0.01 250);
-  --muted-foreground: oklch(0.49 0.025 250);
-  --accent: oklch(0.93 0.025 180);
-  --accent-foreground: oklch(0.23 0.03 180);
+  --background: #fafafb;
+  --foreground: #111318;
+  --card: #ffffff;
+  --card-foreground: #111318;
+  --popover: #ffffff;
+  --popover-foreground: #111318;
+  --primary: #2f6fed;
+  --primary-foreground: #ffffff;
+  --secondary: #f5f6f8;
+  --secondary-foreground: #2d3440;
+  --muted: #f5f6f8;
+  --muted-foreground: #667085;
+  --accent: #eaf2ff;
+  --accent-foreground: #174ea6;
   --destructive: oklch(0.58 0.2 28);
   --destructive-foreground: oklch(0.98 0.02 28);
-  --border: oklch(0.9 0.012 250);
-  --input: oklch(0.88 0.012 250);
-  --ring: oklch(0.55 0.13 180);
+  --border: #e1e4ea;
+  --input: #d8dde6;
+  --ring: #2f6fed;
   --radius: 0.5rem;
 }
 
@@ -60,7 +60,7 @@ html {
 body {
   min-height: 100%;
   background:
-    linear-gradient(180deg, oklch(0.98 0.006 250), var(--background) 18rem),
+    linear-gradient(180deg, #ffffff, var(--background) 18rem),
     var(--background);
   color: var(--foreground);
   font-family:
@@ -103,6 +103,18 @@ samp,
 .replay-review-root {
   --replay-header-h: 4.5rem;
   --replay-topbar-h: 4rem;
+  --replay-surface: #ffffff;
+  --replay-panel: #fafafb;
+  --replay-tool-row: #f5f6f8;
+  --replay-border: #e1e4ea;
+  --replay-border-soft: #eceff3;
+  --replay-foreground: #111318;
+  --replay-muted: #667085;
+  --replay-muted-soft: #8a94a6;
+  --replay-accent: #2f6fed;
+  --replay-accent-soft: #eaf2ff;
+  --replay-accent-border: #7aa7ff;
+  --replay-accent-ink: #174ea6;
   position: relative;
 }
 
@@ -111,12 +123,12 @@ samp,
   min-height: 100svh;
   flex-direction: column;
   overflow: hidden;
-  background: #fff;
+  background: var(--replay-surface);
 }
 
 .replay-review-root:fullscreen {
   padding: 0;
-  background: #fff;
+  background: var(--replay-surface);
 }
 
 .replay-outline-panel,
@@ -150,7 +162,7 @@ samp,
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--replay-border);
   background: rgb(255 255 255 / 0.96);
   padding: 0 clamp(16px, 2vw, 28px);
 }
@@ -176,13 +188,13 @@ samp,
   align-items: center;
   justify-content: center;
   border-radius: 6px;
-  color: #536173;
+  color: var(--replay-muted);
 }
 
 .replay-topbar-back:hover,
 .replay-topbar-back:focus-visible {
-  background: #f3f4f6;
-  color: #111827;
+  background: var(--replay-tool-row);
+  color: var(--replay-foreground);
   outline: none;
 }
 
@@ -193,7 +205,7 @@ samp,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #111827;
+  color: var(--replay-foreground);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, ui-monospace, monospace;
   font-size: 14px;
   font-weight: 650;
@@ -214,11 +226,11 @@ samp,
   flex: 1 1 auto;
   min-height: 0;
   gap: 0;
-  background: #fff;
+  background: var(--replay-surface);
 }
 
 .replay-document-panel {
-  background: white;
+  background: var(--replay-surface);
 }
 
 .replay-panel-resize-handle {
@@ -308,19 +320,19 @@ samp,
 }
 
 .replay-review-root-fullscreen .replay-outline-panel {
-  border-right: 1px solid #e5e7eb;
-  background: #fff;
+  border-right: 1px solid var(--replay-border);
+  background: var(--replay-panel);
 }
 
 .replay-review-root-fullscreen .replay-agent-panel {
   border: 0;
-  border-left: 1px solid #e5e7eb;
+  border-left: 1px solid var(--replay-border);
   border-radius: 0;
-  background: #fff;
+  background: var(--replay-panel);
 }
 
 .replay-review-root-fullscreen .replay-agent-header {
-  border-bottom-color: #eceff3;
+  border-bottom-color: var(--replay-border-soft);
 }
 
 .replay-contents-header {
@@ -329,12 +341,12 @@ samp,
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  border-bottom: 1px solid #edf0f3;
+  border-bottom: 1px solid var(--replay-border-soft);
   padding: 0 12px 0 18px;
 }
 
 .replay-contents-label {
-  color: #5d6675;
+  color: var(--replay-muted);
   font-size: 11px;
   font-weight: 820;
   letter-spacing: 0.12em;
@@ -354,10 +366,10 @@ samp,
   min-width: 2.4rem;
   align-items: center;
   justify-content: center;
-  border: 1px solid color-mix(in oklch, var(--primary) 44%, var(--border));
+  border: 1px solid var(--replay-foreground);
   border-radius: 6px;
-  background: var(--primary);
-  color: var(--primary-foreground);
+  background: var(--replay-foreground);
+  color: var(--replay-surface);
   font-size: 12px;
   font-weight: 850;
 }
@@ -368,7 +380,7 @@ samp,
 
 .replay-agent-reason-text {
   display: block;
-  color: var(--foreground);
+  color: var(--replay-foreground);
   font-size: 14px;
   font-weight: 400;
   line-height: 1.7;
@@ -398,14 +410,14 @@ samp,
   background: transparent;
   padding: 6px 8px;
   text-align: left;
-  color: var(--foreground);
+  color: var(--replay-foreground);
   cursor: pointer;
 }
 
 .replay-agent-turn.is-current .replay-agent-message,
 .replay-agent-message:hover {
-  border-color: color-mix(in oklch, var(--primary) 24%, var(--border));
-  background: color-mix(in oklch, var(--primary) 6%, white);
+  border-color: var(--replay-accent-border);
+  background: var(--replay-accent-soft);
 }
 
 .replay-agent-message-header {
@@ -434,19 +446,19 @@ samp,
   gap: 10px;
   border: 1px solid transparent;
   border-radius: 6px;
-  background: transparent;
+  background: var(--replay-tool-row);
   padding: 4px 8px;
   text-align: left;
-  color: color-mix(in oklch, var(--muted-foreground) 84%, white);
+  color: var(--replay-muted);
   cursor: pointer;
   transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
 }
 
 .replay-agent-tool-line:hover,
 .replay-agent-tool-line:focus-visible {
-  border-color: color-mix(in oklch, var(--primary) 22%, var(--border));
-  background: color-mix(in oklch, var(--primary) 5%, white);
-  color: color-mix(in oklch, var(--foreground) 74%, var(--muted-foreground));
+  border-color: var(--replay-accent-border);
+  background: var(--replay-accent-soft);
+  color: var(--replay-foreground);
   outline: none;
 }
 
@@ -455,7 +467,7 @@ samp,
 }
 
 .replay-agent-tool-line.is-read-tool .replay-agent-tool-icon {
-  color: color-mix(in oklch, var(--primary) 58%, var(--muted-foreground));
+  color: var(--replay-accent);
 }
 
 .replay-agent-tool-icon {
@@ -1170,15 +1182,18 @@ samp,
 }
 
 .outline-item-active {
-  box-shadow: inset 3px 0 0 var(--primary);
+  background: var(--replay-accent-soft);
+  box-shadow: inset 3px 0 0 var(--replay-accent);
 }
 
 .virtual-file-item-active {
-  box-shadow: inset 3px 0 0 var(--primary);
+  background: var(--replay-accent-soft);
+  box-shadow: inset 3px 0 0 var(--replay-accent);
 }
 
 .virtual-file-item-active-path {
-  box-shadow: inset 2px 0 0 color-mix(in oklch, var(--primary) 42%, var(--border));
+  background: rgb(234 242 255 / 0.56);
+  box-shadow: inset 2px 0 0 var(--replay-accent-border);
 }
 
 .virtual-file-leaf-dot {
@@ -1204,7 +1219,7 @@ samp,
   height: 10px;
   width: 10px;
   border-radius: 999px;
-  background: var(--primary);
+  background: var(--replay-accent);
   opacity: 0.45;
   pointer-events: none;
   transform: translateY(-50%);
@@ -1213,7 +1228,7 @@ samp,
 .outline-click-target::after {
   position: absolute;
   inset: -7px;
-  border: 2px solid color-mix(in oklch, var(--primary) 70%, transparent);
+  border: 2px solid rgb(47 111 237 / 0.48);
   border-radius: inherit;
   content: "";
   animation: outline-click-ring 760ms ease-out;
@@ -1227,7 +1242,7 @@ samp,
   width: 42px;
   align-items: center;
   justify-content: center;
-  color: oklch(0.47 0.19 180);
+  color: var(--replay-accent);
   opacity: 0;
   pointer-events: none;
   transform: translate(-6px, -4px) scale(0.94);

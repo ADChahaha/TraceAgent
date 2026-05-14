@@ -3327,7 +3327,7 @@ body {
 .document-canvas h2,
 .document-canvas h3,
 .document-canvas h4 {
-  color: #111827;
+  color: #111318;
   font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-weight: 760;
   letter-spacing: 0;
@@ -3393,7 +3393,7 @@ body {
 }
 .document-canvas th {
   background: #f7fafc;
-  color: #111827;
+  color: #111318;
   font-weight: 650;
 }
 .document-canvas tbody tr:hover > td,
@@ -3411,45 +3411,45 @@ body {
   transition: background 180ms ease, box-shadow 180ms ease;
 }
 .is-reading-line {
-  background: rgba(14, 165, 164, 0.24);
-  box-shadow: inset 0 -0.42em 0 rgba(14, 165, 164, 0.24);
+  background: #eaf2ff;
+  box-shadow: inset 0 -0.42em 0 rgb(47 111 237 / 0.18);
 }
 .is-current-highlight {
-  outline: 2px solid rgba(14, 165, 164, 0.58) !important;
-  background: rgba(14, 165, 164, 0.1) !important;
+  outline: 2px solid #7aa7ff !important;
+  background: #eaf2ff !important;
   outline-offset: 2px;
   transition: background 180ms ease, outline-color 180ms ease, box-shadow 180ms ease;
 }
 .replay-inline-evidence.is-current-highlight {
   border-radius: 3px;
   outline: none !important;
-  background: rgba(14, 165, 164, 0.12) !important;
-  box-shadow: inset 0 -0.38em 0 rgba(14, 165, 164, 0.28), 0 0 0 1px rgba(14, 165, 164, 0.2);
+  background: #eaf2ff !important;
+  box-shadow: inset 0 -0.38em 0 rgb(47 111 237 / 0.18), 0 0 0 1px #7aa7ff;
 }
 .is-field-write-highlight {
-  outline: 4px solid #0ea5a4 !important;
-  background: rgba(14, 165, 164, 0.2) !important;
+  outline: 4px solid #2f6fed !important;
+  background: #eaf2ff !important;
   animation: fieldWriteFlash 1.4s ease-out;
 }
 tr.is-current-highlight {
   outline-offset: -2px !important;
-  box-shadow: inset 5px 0 0 #0ea5a4, 0 0 0 2px rgba(14, 165, 164, 0.18);
+  box-shadow: inset 5px 0 0 #2f6fed, 0 0 0 2px rgb(47 111 237 / 0.16);
 }
 tr.is-current-highlight > td,
 tr.is-current-highlight > th {
-  background: rgba(14, 165, 164, 0.18) !important;
+  background: #eaf2ff !important;
 }
 .is-table-row-result-highlight > td,
 .is-table-row-result-highlight > th {
-  background: rgba(14, 165, 164, 0.2) !important;
-  box-shadow: inset 0 0 0 1px rgba(14, 165, 164, 0.28);
+  background: #eaf2ff !important;
+  box-shadow: inset 0 0 0 1px #7aa7ff;
   transition: background 180ms ease, box-shadow 180ms ease;
 }
 .is-table-reference-highlight {
   display: inline-block;
   border-radius: 4px;
-  background: rgba(14, 165, 164, 0.16) !important;
-  box-shadow: 0 0 0 2px rgba(14, 165, 164, 0.34);
+  background: #eaf2ff !important;
+  box-shadow: 0 0 0 2px #7aa7ff;
   transition: background 180ms ease, box-shadow 180ms ease;
 }
 tr.is-table-reference-highlight {
@@ -3457,13 +3457,13 @@ tr.is-table-reference-highlight {
 }
 tr.is-table-reference-highlight > td,
 tr.is-table-reference-highlight > th {
-  background: rgba(14, 165, 164, 0.16) !important;
-  box-shadow: inset 0 0 0 1px rgba(14, 165, 164, 0.26);
+  background: #eaf2ff !important;
+  box-shadow: inset 0 0 0 1px #7aa7ff;
 }
 @keyframes fieldWriteFlash {
-  0% { box-shadow: 0 0 0 0 rgba(14, 165, 164, 0.55); transform: scale(1); }
-  28% { box-shadow: 0 0 0 12px rgba(14, 165, 164, 0.16); transform: scale(1.01); }
-  100% { box-shadow: 0 0 0 0 rgba(14, 165, 164, 0); transform: scale(1); }
+  0% { box-shadow: 0 0 0 0 rgb(47 111 237 / 0.36); transform: scale(1); }
+  28% { box-shadow: 0 0 0 12px rgb(47 111 237 / 0.12); transform: scale(1.01); }
+  100% { box-shadow: 0 0 0 0 rgb(47 111 237 / 0); transform: scale(1); }
 }
 </style>
 <script>

@@ -11,6 +11,7 @@
   -> TaskDetail 顶部只展示单个任务 status，失败原因另以错误提示展示
   -> TaskDetail 让 replay 作为占满视口的文档工作台渲染，跳出根布局最大宽度和页面 padding
   -> ReplayReview 展示全宽顶部工具栏、左侧 Contents、中央铺满容器的 iframe 文档和右侧从上到下的 reason/tool 文字流
+  -> replay 工作台配色用中性白/灰承载三栏界面，工具行默认灰阶弱化，当前文件、hover action、阅读线和 evidence 高亮统一用 cobalt blue 系列
   -> 顶部工具栏只保留单行任务上下文：左侧展示 `task_id / 当前选中文件名`，右侧只保留一个任务 status；多文件任务会按当前 action path 切换文件名
   -> iframe 内部把 backend display_html 包成白底全屏文档画布，并统一标题、段落、列表和 booktabs 风格表格排版，不引入具体行业语义
   -> iframe 包装 display_html 时删除页码、页眉、页脚版本号等文档 chrome，避免 `Page 2` 和 `428249v2` 继续显示在中间画布
@@ -47,6 +48,7 @@
 - `低层 API 仍保留 trace 和 audit 读取能力`：验证 `getTaskTrace` 和 `getTaskAudit` 这些底层 API 函数仍可单独使用，详情页收口不等于删除 backend 调试接口适配。
 - `waiting_review 任务只展示 replay，并在 review 字段卡片里提交修正`：验证详情页不再出现“结果/复核/证据/审计”tab，也不展示原始 trace/audit 文案；当前 `set_field` 卡片显示字段显示名、`review` badge 和 route 原因，并能提交 `revise_and_approve` payload，刷新后同步最近任务缓存。
 - `任务详情页使用占满视口的文档工作台布局`：验证详情页根节点会跳出普通页面容器，ReplayReview 提供全宽顶部工具栏、全屏 stage 和左侧 `CONTENTS` 目录；顶部栏只保留 `task_id / 当前文件名` 和一个 status badge，不再出现刷新、route、播放状态、step 进度或浏览器全屏按钮。
+- `replay 工作台使用中性灰和 cobalt accent 配色`：验证全局 replay palette 从旧青绿色切到白/灰/cobalt，侧栏面板和工具行有明确灰阶变量，iframe evidence 高亮使用淡蓝底、蓝色边线和 cobalt 强调，不再输出旧 teal 色值。
 - `多文件任务顶部标题跟随当前选中文件`：验证 replay.documents 有多个文件时，顶部标题会根据当前 action 的虚拟 path 从 `first.pdf` 切换到 `second.pdf`，避免多文件任务一直显示第一个文件。
 - `enum 字段复核提交 tagged payload 而不是字符串`：验证复核区遇到 `enum` tagged payload 时会显示结构化编辑器，用户可以切换枚举 variant；提交时 `review_value` 仍保持 `{variant, value}` 结构，而不是被前端压成普通字符串。
 - `真实 file_extraction_agent 工具以 Codex 工具行展示`：验证 `tree/read/query_table/bind_evidence/review_field/write_field/submit_result` 使用真实 flat action contract；右侧 reason 是普通正文，tool 行是灰色运行记录式的一行摘要，`read` 使用搜索图标标记并显示 `Read paragraph Confidential` 这类语义文案，anchors 不进入右侧文字流，read/query/submit 的返回正文、Rxxx 和校验错误不进入右侧文字流。

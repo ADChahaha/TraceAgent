@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
@@ -316,6 +319,34 @@ it("任务详情页使用占满视口的文档工作台布局", async () => {
   expect(within(toolbar).queryByText("1 / 1")).not.toBeInTheDocument();
   expect(within(toolbar).queryByRole("button", { name: "刷新" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "全屏视图" })).not.toBeInTheDocument();
+});
+
+it("replay 工作台使用中性灰和 cobalt accent 配色", async () => {
+  const globalsCss = readFileSync(join(process.cwd(), "src/app/globals.css"), "utf8");
+  expect(globalsCss).toContain("--primary: #2f6fed;");
+  expect(globalsCss).toContain("--accent: #eaf2ff;");
+  expect(globalsCss).toContain("--replay-panel: #fafafb;");
+  expect(globalsCss).toContain("--replay-tool-row: #f5f6f8;");
+  expect(globalsCss).not.toContain("0.55 0.13 180");
+
+  const injectedLoadTaskDetail = jest.fn(async () => detailData);
+
+  render(
+    <TaskDetail
+      taskId="task-001"
+      initialSummary={waitingReviewSummary}
+      loadTaskDetail={injectedLoadTaskDetail}
+    />
+  );
+
+  const iframe = (await screen.findByTitle("document replay")) as HTMLIFrameElement;
+  const srcDoc = iframe.getAttribute("srcdoc") ?? "";
+
+  expect(srcDoc).toContain("background: #eaf2ff");
+  expect(srcDoc).toContain("outline: 2px solid #7aa7ff");
+  expect(srcDoc).toContain("#2f6fed");
+  expect(srcDoc).not.toContain("rgba(14, 165, 164");
+  expect(srcDoc).not.toContain("#0ea5a4");
 });
 
 it("多文件任务顶部标题跟随当前选中文件", async () => {
