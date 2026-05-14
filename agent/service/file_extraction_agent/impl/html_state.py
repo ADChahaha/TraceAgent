@@ -26,6 +26,9 @@ class GraphState:
     evidence_states: dict[str, dict[str, Any]] = field(default_factory=dict)
     review_states: dict[str, dict[str, Any]] = field(default_factory=dict)
     field_states: dict[str, dict[str, Any]] = field(default_factory=dict)
+    last_read: dict[str, Any] | None = None
+    last_inline_source: dict[str, Any] | None = None
+    last_tool_name: str | None = None
     actions: list[dict[str, Any]] = field(default_factory=list)
     events: list[dict[str, Any]] = field(default_factory=list)
     next_seq: int = 1

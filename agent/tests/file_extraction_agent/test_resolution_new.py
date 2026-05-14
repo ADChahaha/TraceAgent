@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from langchain_core.messages import AIMessage
+
 from service.file_extraction_agent.impl.html_state import build_graph_state
 from service.file_extraction_agent.impl.html_tools import build_tools
-from service.file_extraction_agent.impl.resolution_new import build_resolution_messages
+from service.file_extraction_agent.impl.resolution_new import _single_tool_call_message, build_resolution_messages
 from service.file_extraction_agent.input_adapter import build_graph_input
 
 
@@ -28,7 +30,18 @@ def test_resolution_messages_describe_extraction_policy_without_tool_manual():
     content = "\n\n".join(message.content for message in messages)
 
     assert "semantic HTML virtual file tree" in content
+    assert "Call exactly one tool in each assistant turn" in content
+    assert "Never emit multiple or parallel tool calls in one turn" in content
+    assert "Wait for that tool result before deciding the next tool call" in content
     assert "reason is a user-visible action explanation" in content
+    assert "Every reason must connect the previous action to the next action" in content
+    assert "First summarize what the previous action showed" in content
+    assert "then state the tool action you are about to take" in content
+    assert "After a read, say whether the read content appears to support any schema field" in content
+    assert "if it may support a field, get inline ids before binding evidence" in content
+    assert "Candidate evidence binding is provisional collection, not final classification" in content
+    assert "Do not read another path before binding candidate evidence from the current read" in content
+    assert "Continue checking supporting, qualifying, and contrary clauses after binding candidate evidence" in content
     assert "Tool-specific navigation and argument rules are provided in each tool description" in content
     assert "as soon as you see text, list items, or table rows that you think may be evidence for a field" in content
     assert "call bind_evidence immediately" in content
@@ -64,8 +77,14 @@ def test_tool_descriptions_carry_navigation_and_evidence_contracts():
     assert "Never call read on document or section directories" in tools["read"].description
     assert "If tree shows a path ending with /, call tree on that directory first" in tools["read"].description
     assert "Only call this for paragraph .md files" in tools["anchors"].description
+    assert "inline id" in tools["anchors"].description
+    assert "immediately after read" in tools["anchors"].description
     assert "Only call this for .table paths" in tools["query_table"].description
     assert "{path, sentences}" in tools["bind_evidence"].description
+    assert "Only call bind_evidence after the immediately preceding inline-producing tool result" in tools["bind_evidence"].description
+    assert "paragraph sentences require anchors first" in tools["bind_evidence"].description
+    assert "You may call bind_evidence multiple times in a row from the same inline source" in tools["bind_evidence"].description
+    assert "Any non-bind_evidence tool call makes that inline source stale" in tools["bind_evidence"].description
     assert "Call review_field before write_field" in tools["review_field"].description
     assert "final_evidence must be selected from bound candidate evidence" in tools["write_field"].description
     assert "Only null-typed fields or null enum variants may use final_evidence=[]" in tools["submit_result"].description
@@ -118,3 +137,18 @@ def test_resolution_graph_exposes_new_tools_only():
         "write_field",
         "submit_result",
     ]
+
+
+def test_resolution_limits_model_to_one_tool_call_per_turn():
+    message = AIMessage(
+        content="",
+        tool_calls=[
+            {"id": "call-1", "name": "read", "args": {"path": "/a.md"}},
+            {"id": "call-2", "name": "read", "args": {"path": "/b.md"}},
+        ],
+    )
+
+    limited = _single_tool_call_message(message)
+
+    assert limited is not message
+    assert [call["id"] for call in limited.tool_calls] == ["call-1"]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 try:
@@ -44,10 +45,10 @@ def build_tools(state: Any) -> list[Any]:
 
     @tool
     def anchors(path: str, reason: str = "") -> dict[str, Any]:
-        """Return Sxxx sentence ids for a paragraph .md virtual file.
+        """Return Sxxx inline ids for a paragraph .md virtual file.
 
-        Only call this for paragraph .md files after read has located relevant text.
-        Do not call anchors for directories, .list files, or .table files; list items use
+        Only call this for paragraph .md files immediately after read has located relevant text
+        in the same paragraph path. Do not call anchors for directories, .list files, or .table files; list items use
         Ixxx ids from read output and table rows use Rxxx ids from read/query_table output.
         """
 
@@ -68,9 +69,12 @@ def build_tools(state: Any) -> list[Any]:
     def bind_evidence(field_id: str, evidence: list[dict[str, Any]], reason: str = "") -> dict[str, Any]:
         """Bind candidate evidence selectors to one schema field without submitting its value.
 
-        Use this immediately after reading text, list items, or table rows that may support
-        a field. Selector shapes are {path, sentences} for .md Sxxx sentence ids,
-        {path, items} for .list Ixxx item ids, and {path, rows} for .table Rxxx row ids.
+        Only call bind_evidence after the immediately preceding inline-producing tool result:
+        paragraph sentences require anchors first, while list items and table rows can use the
+        Ixxx/Rxxx ids just exposed by read or query_table. Selector shapes are
+        {path, sentences} for .md Sxxx sentence ids, {path, items} for .list Ixxx item ids, and {path, rows} for .table Rxxx row ids.
+        You may call bind_evidence multiple times in a row from the same inline source
+        for different fields or selectors. Any non-bind_evidence tool call makes that inline source stale.
         Bound evidence is only a candidate buffer; write_field later chooses final_evidence
         from this buffer.
         """
@@ -150,6 +154,18 @@ def _read(
 
 
 def _anchors(state: Any, path: str, *, reason: str = "") -> dict[str, Any]:
+    try:
+        ordering_error = validate_inline_request_after_read(state, path)
+    except ValueError as exc:
+        ordering_error = {"code": "INLINE_REQUIRES_READ", "message": str(exc)}
+    if ordering_error:
+        return _run_tool(
+            state,
+            "anchors",
+            {"path": path},
+            reason,
+            lambda: {"ok": False, "errors": [ordering_error]},
+        )
     return _run_tool(
         state,
         "anchors",
@@ -198,6 +214,9 @@ def _bind_evidence(
         if errors:
             return {"ok": False, "errors": errors}
         canonical_evidence = state.document.canonicalize_evidence(evidence)
+        inline_errors = validate_evidence_from_latest_inline(state, canonical_evidence)
+        if inline_errors:
+            return {"ok": False, "errors": [{"field_id": field_id, **error} for error in inline_errors]}
         existing = state.evidence_states.get(field_id, {})
         combined = [*(existing.get("evidence") or []), *canonical_evidence]
         evidence_texts = state.document.evidence_texts(combined)
@@ -416,6 +435,38 @@ def validate_final_evidence_write(
     return errors
 
 
+def validate_inline_request_after_read(state: Any, path: str) -> dict[str, Any] | None:
+    canonical_path = state.document.resolve_path(path)
+    last_read = state.last_read or {}
+    if state.last_tool_name != "read" or last_read.get("path") != canonical_path or last_read.get("kind") != "paragraph":
+        return {
+            "code": "INLINE_REQUIRES_READ",
+            "message": "anchors must be called immediately after read on the same paragraph .md path",
+        }
+    return None
+
+
+def validate_evidence_from_latest_inline(state: Any, evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    evidence_units = _selector_units(evidence)
+    inline_source = state.last_inline_source or {}
+    inline_units = set(tuple(item) for item in inline_source.get("evidence_units", []))
+    if not evidence_units or not inline_units:
+        return [
+            {
+                "code": "BIND_REQUIRES_INLINE",
+                "message": "bind_evidence must immediately follow anchors, read, or query_table that exposed the referenced inline ids",
+            }
+        ]
+    if not evidence_units.issubset(inline_units):
+        return [
+            {
+                "code": "BIND_REQUIRES_INLINE",
+                "message": "evidence selectors must come from the immediately preceding inline-producing tool result",
+            }
+        ]
+    return []
+
+
 def validate_and_build_result(state: Any) -> dict[str, Any]:
     errors: list[dict[str, Any]] = []
     for field in state.task_spec.fields:
@@ -542,6 +593,7 @@ def _run_tool(
     if tool_name == "submit_result" and result.get("ok") is True:
         event_result = {"ok": True, "result": result.get("result")}
     _record_action(state, tool_name, args, reason, event_result)
+    _update_tool_cursor(state, tool_name, event_result)
     _emit_event(
         state,
         {
@@ -564,6 +616,63 @@ def _record_action(state: Any, tool_name: str, args: dict[str, Any], reason: str
             "result": result,
         }
     )
+
+
+def _update_tool_cursor(state: Any, tool_name: str, result: dict[str, Any]) -> None:
+    state.last_tool_name = tool_name
+    if tool_name == "bind_evidence":
+        state.last_read = None
+        return
+    if result.get("ok") is False:
+        state.last_read = None
+        state.last_inline_source = None
+        return
+    if tool_name == "read":
+        state.last_read = {"path": result.get("path"), "kind": result.get("kind")}
+        state.last_inline_source = _inline_source_from_read_result(result)
+        return
+    if tool_name == "query_table":
+        state.last_read = {"path": result.get("path"), "kind": result.get("kind")}
+        state.last_inline_source = _inline_source_from_read_result(result)
+        return
+    if tool_name == "anchors":
+        state.last_inline_source = {
+            "tool": "anchors",
+            "path": result.get("path"),
+            "evidence_units": [
+                (result.get("path"), "sentences", anchor.get("id"))
+                for anchor in result.get("anchors", [])
+                if anchor.get("id")
+            ],
+        }
+        return
+    state.last_read = None
+    state.last_inline_source = None
+
+
+def _inline_source_from_read_result(result: dict[str, Any]) -> dict[str, Any] | None:
+    path = result.get("path")
+    text = result.get("text") or ""
+    if not isinstance(path, str) or not isinstance(text, str):
+        return None
+    kind = result.get("kind")
+    if kind == "list":
+        return {
+            "tool": "read",
+            "path": path,
+            "evidence_units": [(path, "items", item_id) for item_id in _inline_ids(text, r"\[(I\d{3}(?:\.\d{3})*)\]")],
+        }
+    if kind in {"table", "table_query"}:
+        return {
+            "tool": "query_table" if kind == "table_query" else "read",
+            "path": path,
+            "evidence_units": [(path, "rows", row_id) for row_id in _inline_ids(text, r"\|\s*(R\d{3})\s*\|")],
+        }
+    return None
+
+
+def _inline_ids(text: str, pattern: str) -> list[str]:
+    return list(dict.fromkeys(re.findall(pattern, text)))
 
 
 def _emit_event(state: Any, payload: dict[str, Any]) -> None:

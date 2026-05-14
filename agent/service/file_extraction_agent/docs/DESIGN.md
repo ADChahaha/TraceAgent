@@ -12,8 +12,11 @@
 用户给定 schema + 多个语义 HTML 文件
   -> 构建只读 semantic HTML virtual tree
   -> 模型用 tree/read 浏览文件、章节和段落
-  -> 模型用 anchors 给 paragraph 取得句子编号，用 read/query_table 中的编号引用 list item 和 table row
-  -> 模型看到自己认为可能是字段证据的文本、列表项或表格行时，立刻用 bind_evidence 绑定 selector
+  -> 每个 reason 先分析上一轮 action 结果，再说明本轮准备调用什么工具
+  -> read 之后先判断内容是否可能支持某个 schema 字段
+  -> 如果 paragraph 可能支持字段，紧跟 anchors 取得 Sxxx inline 句子编号
+  -> 如果 list/table/query_table 可能支持字段，直接使用刚读到的 Ixxx/Rxxx 编号
+  -> 模型看到自己认为可能是字段证据的 inline 文本、列表项或表格行时，立刻用 bind_evidence 绑定 selector
   -> 只要字段存在候选 evidence，模型写字段前必须用 review_field 复看候选证据
   -> 模型用 write_field 提交字段值或 enum decision，并用 final_evidence 只保留真正有用的最终证据
   -> submit_result 内部按 schema 校验并返回最终结果或错误
@@ -88,7 +91,21 @@ submit_result(reason?)
 
 系统 prompt 只描述 agent 角色、抽取流程、`reason` 语义和 evidence lifecycle；具体工具参数约束写在各 tool description 中，并通过 LangGraph `bind_tools` 暴露给模型。这样模型在选择某个工具时能直接看到该工具的局部规则，例如 `read` 只能读取 `.md/.list/.table` 文件，目录路径必须先用 `tree` 展开。
 
-所有模型主动浏览、读取、查询和写入工具都必须带 `reason`。`reason` 是用户可见的动作说明，用来解释“为什么现在展开这个目录、读取这个文件、查询这张表或写入这个字段”。它不是模型推理链，也不是证据本身；可信证据只来自虚拟路径和文件内编号。
+所有模型主动浏览、读取、查询和写入工具都必须带 `reason`。`reason` 是用户可见的动作说明，用来解释“上一轮 action 说明了什么、所以这一轮准备调用什么工具”。它不是模型推理链，也不是证据本身；可信证据只来自虚拟路径和文件内编号。
+
+resolution system prompt 明确要求模型每个 assistant turn 只发一个 tool call，不能在同一轮返回多个或并行 tool calls，并且必须等待该工具结果回来后再决定下一步。resolution graph 也做同样的运行时兜底：即使模型一次返回多个 tool calls，运行时也只保留第一个交给工具节点执行，强制模型在看到上一轮工具结果后再决定下一步，避免一次性批量 `read` 多个路径而绕过“读到可能证据就绑定”的流程。
+
+`reason` 的最小结构是：
+
+```text
+上一轮 action 结果
+  -> 判断它是否指向某个 schema 字段
+  -> 本轮准备调用的工具和目的
+```
+
+如果上一轮是 `read`，`reason` 必须明确说明刚读到的内容是否可能支持某个字段；如果可能支持 paragraph 字段证据，下一步应调用 `anchors` 取得 Sxxx inline 句子编号，再立刻 `bind_evidence`。list 和 table 的 `read`、以及 `query_table` 已经暴露 Ixxx/Rxxx inline 编号，可以直接紧跟 `bind_evidence`。
+
+候选证据绑定是 provisional collection，不是最终字段分类或定案。模型看到当前 `read` 结果可能支持或反驳某个字段时，必须先把该证据绑定进候选集合，再继续检查其他 supporting、qualifying 或 contrary clauses；不能为了继续读其他路径而推迟当前证据的 `bind_evidence`。这条工具节奏由 resolution prompt 和 tool description 统一负责，`task_spec` 只描述字段语义和输出类型，不负责说明工具调用顺序。
 
 ### `tree`
 
@@ -152,15 +169,18 @@ showing: 1-30
 
 ### `anchors`
 
-`anchors` 只用于 paragraph，对已定位的 `.md` 文件返回轻量句子编号。list 和 table 不需要 `anchors`，因为 `read` 和 `query_table` 已经在 Markdown 视图中暴露 `Ixxx` 和 `Rxxx` 编号。
+`anchors` 只用于 paragraph，对刚刚通过 `read` 定位到的同一个 `.md` 文件返回轻量句子编号。list 和 table 不需要 `anchors`，因为 `read` 和 `query_table` 已经在 Markdown 视图中暴露 `Ixxx` 和 `Rxxx` 编号。
 
 ```text
-paragraph path
-  -> 读取 paragraph 原文
+read(paragraph_path)
+  -> 模型判断 paragraph 可能支持某个字段
+  -> anchors(paragraph_path)
   -> 按句子边界切分
   -> 为每个句子生成 Sxxx 编号
   -> 返回句子编号和短 preview
 ```
+
+`anchors` 的顺序约束是硬规则：它只能紧跟同一路径 paragraph 的成功 `read`。如果中间插入 `tree`、`query_table`、`review_field`、`write_field` 或其他工具，模型必须重新 `read` 对应 paragraph 后再取 inline 句子编号。
 
 示例返回：
 
@@ -218,12 +238,32 @@ showing: 1-2
 bind_evidence(field_id, evidence, reason)
 ```
 
-它解决的是“模型看到了可能有用的证据，但还没完全决定字段值或 enum 分类”的场景。模型读取 paragraph/list/table 后，只要认为当前文本、列表项或表格行可能是某个字段的证据，就应立刻调用 `bind_evidence` 记录 selector，不等字段值或 enum decision 最终确定；后续读到同一字段的更多证据时，再次调用会追加到该字段的 evidence buffer。
+它解决的是“模型看到了可能有用的证据，但还没完全决定字段值或 enum 分类”的场景。模型读取 paragraph/list/table 后，只要认为当前文本、列表项或表格行可能是某个字段的证据，就应立刻调用 `bind_evidence` 记录 selector，不等字段值或 enum decision 最终确定；后续读到同一字段的更多证据时，再次按 `read -> inline -> bind_evidence` 链路绑定，会追加到该字段的 evidence buffer。
+
+`bind_evidence` 只能使用最近一次 inline 来源：
+
+```text
+paragraph:
+  read(.md)
+  -> anchors(.md)
+  -> bind_evidence(field_id, [{"path": ..., "sentences": ["Sxxx"]}])
+
+list:
+  read(.list)
+  -> bind_evidence(field_id, [{"path": ..., "items": ["Ixxx"]}])
+
+table:
+  read(.table) 或 query_table(.table, sql)
+  -> bind_evidence(field_id, [{"path": ..., "rows": ["Rxxx"]}])
+```
+
+同一次 inline 来源可以连续执行多个 `bind_evidence`，用于把同一段 evidence 绑定给多个字段，或把同一个刚暴露的 paragraph/list/table 中的多个 selector 绑定到候选集合。只要中间插入任何非 `bind_evidence` 工具调用，旧 inline 来源就失效；模型如果还要绑定该内容，必须重新走对应的 `read/anchors` 或 `read/query_table` 链路，避免隔了多步后用旧上下文绑定错证据。
 
 `bind_evidence` 做即时校验：
 
 - `field_id` 必须存在于用户 schema。
 - `evidence` 必须使用合法的虚拟路径和文件内编号。
+- `evidence` 中的 selector 必须来自上一条 inline-producing 工具结果。
 - 校验通过后，工具会保存原始 selector，并同步生成只读的 `evidence_texts`。
 
 如果字段值已经通过 `write_field` 写过，后续 `bind_evidence` 只会更新该字段的候选 evidence buffer，并让已有 review snapshot 失效；它不会自动改写字段结果里的最终 evidence。模型需要重新 `review_field`，再用 `write_field` 覆盖字段值和 `final_evidence`。
@@ -398,6 +438,7 @@ inline 证据归因不依赖 quote 匹配、行号或列号，而依赖“虚拟
 ```text
 read(paragraph_path)
   -> 模型理解段落正文
+  -> 如果可能支持字段，reason 说明对应字段
 
 anchors(paragraph_path)
   -> 工具给出该段落的 Sxxx 句子编号和短 preview
@@ -409,7 +450,7 @@ read(table_path) 或 query_table(table_path, sql)
   -> Markdown table 中直接显示 Rxxx row 编号
 
 bind_evidence(field_id, evidence)
-  -> 候选证据绑定到可反查的 path + Sxxx/Ixxx/Rxxx
+  -> 只能使用上一条 inline 来源里的 path + Sxxx/Ixxx/Rxxx
   -> 工具同步生成 evidence_texts，供回放和评测直接使用
 
 review_field(field_id)

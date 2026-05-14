@@ -109,6 +109,37 @@ def _paths(state):
     }
 
 
+def _bind_sentence(state, field_id: str, path: str, sentence_ids: list[str], reason: str):
+    _read(state, path, reason=f"读取 {path}，判断是否支持 {field_id}。")
+    _anchors(state, path, reason=f"上一步 read 支持 {field_id}，获取 inline 句子编号。")
+    return _bind_evidence(
+        state,
+        field_id,
+        [{"path": path, "sentences": sentence_ids}],
+        reason=reason,
+    )
+
+
+def _bind_items(state, field_id: str, path: str, item_ids: list[str], reason: str):
+    _read(state, path, reason=f"读取 {path}，判断是否支持 {field_id}。")
+    return _bind_evidence(
+        state,
+        field_id,
+        [{"path": path, "items": item_ids}],
+        reason=reason,
+    )
+
+
+def _bind_rows(state, field_id: str, path: str, row_ids: list[str], reason: str):
+    _read(state, path, reason=f"读取 {path}，判断是否支持 {field_id}。")
+    return _bind_evidence(
+        state,
+        field_id,
+        [{"path": path, "rows": row_ids}],
+        reason=reason,
+    )
+
+
 def test_build_tools_exposes_virtual_tree_tools_only():
     tools = build_tools(_state())
     tool_names = [getattr(tool, "name", getattr(tool, "__name__", "")) for tool in tools]
@@ -131,6 +162,7 @@ def test_tree_read_anchors_and_query_record_reasoned_events():
 
     tree_result = _tree(state, "/", depth=2, reason="先查看输入文档。")
     read_result = _read(state, paths["table"], offset=0, limit=1, reason="读取费用表。")
+    _read(state, paths["paragraph"], reason="读取公司概况段落，判断是否支持 founded_year。")
     anchors_result = _anchors(state, paths["paragraph"], reason="定位成立年份句子。")
     query_result = _query_table(
         state,
@@ -154,8 +186,77 @@ def test_tree_read_anchors_and_query_record_reasoned_events():
         "tool_completed",
         "tool_started",
         "tool_completed",
+        "tool_started",
+        "tool_completed",
     ]
     assert state.events[0]["reason"] == "先查看输入文档。"
+
+
+def test_anchors_requires_immediate_prior_read_of_same_paragraph():
+    state = _state()
+    paths = _paths(state)
+
+    blocked_before_read = _anchors(state, paths["paragraph"], reason="没有先 read，不能取 inline 句子编号。")
+    _read(state, paths["paragraph"], reason="读取公司概况段落，判断是否支持 founded_year。")
+    anchors_result = _anchors(state, paths["paragraph"], reason="上一步 read 命中 founded_year，获取 inline 句子编号。")
+    _tree(state, "/", depth=1, reason="插入了其他动作。")
+    blocked_after_tree = _anchors(state, paths["paragraph"], reason="不是紧跟 read，不能取 inline 句子编号。")
+
+    assert blocked_before_read["ok"] is False
+    assert blocked_before_read["errors"][0]["code"] == "INLINE_REQUIRES_READ"
+    assert anchors_result["ok"] is True
+    assert anchors_result["anchors"][0]["id"] == "S001"
+    assert blocked_after_tree["ok"] is False
+    assert blocked_after_tree["errors"][0]["code"] == "INLINE_REQUIRES_READ"
+
+
+def test_bind_evidence_requires_fresh_inline_source_from_previous_read_or_anchors():
+    state = _state()
+    paths = _paths(state)
+
+    blocked_before_inline = _bind_evidence(
+        state,
+        "founded_year",
+        [{"path": paths["paragraph"], "sentences": ["S001"]}],
+        reason="没有 inline 来源时不能绑定。",
+    )
+    _read(state, paths["paragraph"], reason="读取公司概况段落，判断是否支持 founded_year。")
+    _anchors(state, paths["paragraph"], reason="上一步 read 支持 founded_year，获取 inline 句子编号。")
+    bound_sentence = _bind_evidence(
+        state,
+        "founded_year",
+        [{"path": paths["paragraph"], "sentences": ["S001"]}],
+        reason="S001 是刚取得的 inline 证据，立即绑定 founded_year。",
+    )
+    consecutive_bound_sentence = _bind_evidence(
+        state,
+        "founded_year",
+        [{"path": paths["paragraph"], "sentences": ["S002"]}],
+        reason="同一个 inline 来源还没被非 bind 工具打断，可以继续绑定 S002。",
+    )
+    _tree(state, "/", depth=1, reason="离开当前 inline 上下文。")
+    blocked_stale_inline = _bind_evidence(
+        state,
+        "founded_year",
+        [{"path": paths["paragraph"], "sentences": ["S001"]}],
+        reason="inline 来源已经被其他动作打断，不能绑定。",
+    )
+    _read(state, paths["list"], reason="读取服务列表，判断是否支持 service_items。")
+    bound_list_item = _bind_evidence(
+        state,
+        "service_items",
+        [{"path": paths["list"], "items": ["I001"]}],
+        reason="I001 是刚 read 返回的 inline item，立即绑定 service_items。",
+    )
+
+    assert blocked_before_inline["ok"] is False
+    assert blocked_before_inline["errors"][0]["code"] == "BIND_REQUIRES_INLINE"
+    assert bound_sentence["ok"] is True
+    assert consecutive_bound_sentence["ok"] is True
+    assert consecutive_bound_sentence["evidence"][-1] == {"path": paths["paragraph"], "sentences": ["S002"]}
+    assert blocked_stale_inline["ok"] is False
+    assert blocked_stale_inline["errors"][0]["code"] == "BIND_REQUIRES_INLINE"
+    assert bound_list_item["ok"] is True
 
 
 def test_virtual_tree_tools_accept_percent_encoded_paths_and_return_canonical_paths():
@@ -168,17 +269,17 @@ def test_virtual_tree_tools_accept_percent_encoded_paths_and_return_canonical_pa
     tree_result = _tree(state, encoded_section, depth=1, reason="展开被 URL 编码过的章节路径。")
     read_result = _read(state, encoded_paragraph, reason="读取被 URL 编码过的段落路径。")
     anchors_result = _anchors(state, encoded_paragraph, reason="给被 URL 编码过的段落路径取句子编号。")
-    query_result = _query_table(
-        state,
-        encoded_table,
-        'SELECT "项目", "金额" FROM data WHERE "项目" = \'押金\'',
-        reason="查询被 URL 编码过的表格路径。",
-    )
     bound = _bind_evidence(
         state,
         "founded_year",
         [{"path": encoded_paragraph, "sentences": ["S001"]}],
         reason="用被 URL 编码过的路径绑定证据。",
+    )
+    query_result = _query_table(
+        state,
+        encoded_table,
+        'SELECT "项目", "金额" FROM data WHERE "项目" = \'押金\'',
+        reason="查询被 URL 编码过的表格路径。",
     )
     _review_field(state, "founded_year", reason="复看 canonical 化后的证据。")
     written = _write_field(
@@ -205,16 +306,18 @@ def test_bind_evidence_accumulates_selectors_and_write_field_submits_value():
     state = _state()
     paths = _paths(state)
 
-    first = _bind_evidence(
+    first = _bind_sentence(
         state,
         "founded_year",
-        [{"path": paths["paragraph"], "sentences": ["S001"]}],
+        paths["paragraph"],
+        ["S001"],
         reason="看到 S001 写明公司成立年份，先绑定证据。",
     )
-    second = _bind_evidence(
+    second = _bind_sentence(
         state,
         "founded_year",
-        [{"path": paths["paragraph"], "sentences": ["S002"]}],
+        paths["paragraph"],
+        ["S002"],
         reason="看到 S002 写明总部位置，追加同字段证据。",
     )
     _review_field(state, "founded_year", reason="复看候选证据后提交字段值。")
@@ -266,16 +369,18 @@ def test_bind_evidence_accumulates_selectors_and_write_field_submits_value():
 def test_write_field_requires_review_and_filters_final_evidence():
     state = _state()
     paths = _paths(state)
-    _bind_evidence(
+    _bind_sentence(
         state,
         "founded_year",
-        [{"path": paths["paragraph"], "sentences": ["S001"]}],
+        paths["paragraph"],
+        ["S001"],
         reason="看到 S001 写明公司成立年份，先绑定证据。",
     )
-    _bind_evidence(
+    _bind_sentence(
         state,
         "founded_year",
-        [{"path": paths["paragraph"], "sentences": ["S002"]}],
+        paths["paragraph"],
+        ["S002"],
         reason="看到 S002 写明总部位置，也先绑定为候选。",
     )
 
@@ -392,10 +497,11 @@ def test_submit_result_allows_empty_final_evidence_for_null_enum_variant_only():
 def test_review_field_returns_current_value_description_and_bound_evidence():
     state = _state()
     paths = _paths(state)
-    _bind_evidence(
+    _bind_sentence(
         state,
         "founded_year",
-        [{"path": paths["paragraph"], "sentences": ["S001"]}],
+        paths["paragraph"],
+        ["S001"],
         reason="看到 S001 写明公司成立年份，先绑定证据。",
     )
     _review_field(state, "founded_year", reason="复看候选证据后提交字段值。")
@@ -439,10 +545,11 @@ def test_review_field_returns_current_value_description_and_bound_evidence():
 def test_submit_result_validates_required_fields_and_returns_new_field_shape():
     state = _state()
     paths = _paths(state)
-    _bind_evidence(
+    _bind_sentence(
         state,
         "founded_year",
-        [{"path": paths["paragraph"], "sentences": ["S001"]}],
+        paths["paragraph"],
+        ["S001"],
         reason="先绑定成立年份证据。",
     )
     _review_field(state, "founded_year", reason="复看成立年份证据。")
@@ -454,10 +561,11 @@ def test_submit_result_validates_required_fields_and_returns_new_field_shape():
         status="resolved",
         reason="写入成立年份。",
     )
-    _bind_evidence(
+    _bind_items(
         state,
         "service_items",
-        [{"path": paths["list"], "items": ["I001", "I002"]}],
+        paths["list"],
+        ["I001", "I002"],
         reason="先绑定服务列表证据。",
     )
     _review_field(state, "service_items", reason="复看服务列表证据。")
@@ -469,10 +577,11 @@ def test_submit_result_validates_required_fields_and_returns_new_field_shape():
         status="resolved",
         reason="写入服务列表。",
     )
-    _bind_evidence(
+    _bind_rows(
         state,
         "deposit",
-        [{"path": paths["table"], "rows": ["R002"]}],
+        paths["table"],
+        ["R002"],
         reason="先绑定押金证据。",
     )
     _review_field(state, "deposit", reason="复看押金证据。")
@@ -502,10 +611,11 @@ def test_submit_result_validates_required_fields_and_returns_new_field_shape():
     assert completed["ok"] is False
     assert completed["errors"][0]["code"] == "REQUIRED_MISSING"
 
-    _bind_evidence(
+    _bind_sentence(
         state,
         "missing_required",
-        [{"path": paths["paragraph"], "sentences": ["S002"]}],
+        paths["paragraph"],
+        ["S002"],
         reason="先绑定补齐字段证据。",
     )
     _review_field(state, "missing_required", reason="复看补齐字段证据。")

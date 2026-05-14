@@ -17,8 +17,20 @@ def build_resolution_messages(state: Any) -> list[Any]:
         content=(
             "You are the field extraction agent for a semantic HTML virtual file tree. "
             "Use only tool calls; do not answer in plain text. "
+            "Call exactly one tool in each assistant turn. Never emit multiple or parallel tool calls in one turn. "
+            "Wait for that tool result before deciding the next tool call. "
             "Tool-specific navigation and argument rules are provided in each tool description. "
             "Every reason is a user-visible action explanation, not hidden reasoning and not evidence. "
+            "Every reason must connect the previous action to the next action. "
+            "First summarize what the previous action showed, then state the tool action you are about to take. "
+            "After a read, say whether the read content appears to support any schema field; "
+            "if it may support a field, get inline ids before binding evidence. "
+            "Candidate evidence binding is provisional collection, not final classification. "
+            "Do not read another path before binding candidate evidence from the current read. "
+            "For paragraph evidence, use read on the .md path, then anchors on the same path, then bind_evidence. "
+            "For list or table evidence, use the Ixxx/Rxxx ids exposed by read or query_table, then bind_evidence. "
+            "You may call bind_evidence multiple times in a row from the same inline source when the same evidence may support multiple fields. "
+            "Continue checking supporting, qualifying, and contrary clauses after binding candidate evidence, not before binding it. "
             "Lists expose Ixxx item ids in read output. Tables expose Rxxx row ids in read and query_table output. "
             "as soon as you see text, list items, or table rows that you think may be evidence for a field, "
             "call bind_evidence immediately for that field. "
@@ -77,7 +89,7 @@ def build_resolution_graph(resolution_model: Any, tools: list[Any], state: Any):
     tool_node = ToolNode(tools)
 
     def call_model(graph_state: MessagesState):
-        return {"messages": [model.invoke(graph_state["messages"])]}
+        return {"messages": [_single_tool_call_message(model.invoke(graph_state["messages"]))]}
 
     def should_continue(graph_state: MessagesState):
         if len(state.actions) >= state.run_options.max_tool_calls:
@@ -125,6 +137,19 @@ def _run_fake_model_loop_stream(state: Any, model: Any, messages: list[Any], too
 
 def _supports_bind_tools(model: Any) -> bool:
     return callable(getattr(model, "bind_tools", None))
+
+
+def _single_tool_call_message(message: Any) -> Any:
+    tool_calls = getattr(message, "tool_calls", None)
+    if not isinstance(tool_calls, list) or len(tool_calls) <= 1:
+        return message
+    if callable(getattr(message, "model_copy", None)):
+        return message.model_copy(update={"tool_calls": tool_calls[:1]})
+    try:
+        message.tool_calls = tool_calls[:1]
+    except Exception:
+        return message
+    return message
 
 
 def _task_fields_text(task_spec: Any) -> str:
