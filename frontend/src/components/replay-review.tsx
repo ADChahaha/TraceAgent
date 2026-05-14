@@ -1,10 +1,11 @@
 "use client";
 
 import * as React from "react";
-import { ChevronRight, Expand, Gauge, Loader2, MousePointerClick, PanelLeftClose, PanelLeftOpen, Pause, Play, Search, SquareTerminal } from "lucide-react";
+import Link from "next/link";
+import { ArrowLeft, ChevronRight, Gauge, Loader2, MousePointerClick, PanelLeftClose, PanelLeftOpen, Pause, Play, Search, SquareTerminal } from "lucide-react";
 
 import { stringifyValue } from "@/lib/json";
-import type { EnumVariantDefinition, ReplayAction, ReplayFieldState, ReplayOutlineNode, TaskReplay, TaskResultField } from "@/lib/types";
+import type { EnumVariantDefinition, ReplayAction, ReplayFieldState, ReplayOutlineNode, TaskReplay, TaskResultField, TaskSummary } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -122,6 +123,8 @@ const RIGHT_PANEL_MAX_WIDTH = 560;
 const PANEL_RESIZE_KEY_STEP = 16;
 
 export function ReplayReview({
+  taskId,
+  summary,
   replay,
   finalFields,
   reviewFields = [],
@@ -132,6 +135,8 @@ export function ReplayReview({
   onReviewCommentChange,
   onSubmitReview,
 }: {
+  taskId?: string;
+  summary?: TaskSummary | null;
   replay: TaskReplay | null;
   finalFields: TaskResultField[];
   reviewFields?: ReviewField[];
@@ -295,6 +300,10 @@ export function ReplayReview({
   const activeVirtualPathList = React.useMemo(
     () => (activeVirtualPath ? getVirtualPathIds(virtualFileTree, activeVirtualPath) : []),
     [activeVirtualPath, virtualFileTree],
+  );
+  const currentDocumentTitle = React.useMemo(
+    () => getCurrentDocumentTitle(replay, activeVirtualPath),
+    [activeVirtualPath, replay],
   );
   const activeOutlinePathIds = React.useMemo(
     () => new Set(activeOutlineId ? getOutlinePathIds(documentOutline, activeOutlineId) : []),
@@ -676,18 +685,6 @@ export function ReplayReview({
     };
   }, [iframeInteractionTick, iframeHtml, replay?.task_id]);
 
-  async function enterBrowserFullscreen() {
-    const target = reviewRef.current;
-    if (!target || !document.fullscreenEnabled) {
-      return;
-    }
-    if (document.fullscreenElement) {
-      await document.exitFullscreen();
-      return;
-    }
-    await target.requestFullscreen();
-  }
-
   function jumpToEvidence(evidenceId: string, options?: { outlineId?: string }) {
     userInspectingRef.current = true;
     setIsUserInspecting(true);
@@ -758,10 +755,11 @@ export function ReplayReview({
   return (
     <section
       ref={reviewRef}
+      aria-label="Replay 全屏文档工作台"
       className={
         visibleFieldWrite
-          ? "replay-review-root has-field-write min-h-[calc(100svh-7rem)] space-y-4 bg-background"
-          : "replay-review-root min-h-[calc(100svh-7rem)] space-y-4 bg-background"
+          ? "replay-review-root replay-review-root-fullscreen has-field-write bg-background"
+          : "replay-review-root replay-review-root-fullscreen bg-background"
       }
     >
       <div
@@ -774,37 +772,36 @@ export function ReplayReview({
           className="replay-cursor-icon"
         />
       </div>
-      <div className="flex flex-wrap items-start justify-between gap-3 rounded-md border bg-background px-4 py-3 shadow-sm">
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold text-foreground">
-            {replay.documents.map((document) => document.filename).join("、") || replay.task_id}
-          </p>
-          <div className="mt-1 flex flex-wrap items-center gap-2">
-            <Badge variant={mode === "auto" ? "success" : "secondary"}>
-              {mode}
-            </Badge>
-            <span className="text-xs text-muted-foreground">AI extraction replay</span>
+      <div className="replay-topbar" aria-label="Replay 顶部工具栏">
+        <div className="replay-topbar-main">
+          <Link href="/" className="replay-topbar-back" aria-label="返回首页">
+            <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+          </Link>
+          <div className="replay-topbar-title" title={`${taskId ?? replay.task_id} / ${currentDocumentTitle}`}>
+            {`${taskId ?? replay.task_id} / ${currentDocumentTitle}`}
           </div>
+          <span className="sr-only">AI extraction replay</span>
         </div>
-        <span className="font-mono text-xs text-muted-foreground">
-          {actions.length === 0 ? "0 / 0" : `${index + 1} / ${actions.length}`}
-        </span>
+        <div className="replay-topbar-status">
+          {summary ? <ReplayStatusBadge status={summary.status} /> : null}
+        </div>
       </div>
       <div
-        className="replay-stage grid"
+        className="replay-stage replay-stage-fullscreen grid"
         data-left-panel-open={isLeftPanelOpen ? "true" : "false"}
         style={stageStyle}
       >
         {isLeftPanelOpen ? (
           <aside
-            className="replay-outline-panel overflow-hidden rounded-md border bg-background"
+            className="replay-outline-panel overflow-hidden bg-background"
             onPointerDown={pauseForUserInspection}
             onWheel={pauseForUserInspection}
             onTouchStart={pauseForUserInspection}
           >
             {usesVirtualFileTree ? (
               <>
-                <div className="flex justify-end border-b px-2 py-2">
+                <div className="replay-contents-header">
+                  <span className="replay-contents-label">CONTENTS</span>
                   <Button
                     type="button"
                     variant="ghost"
@@ -823,7 +820,7 @@ export function ReplayReview({
                 <nav
                   ref={virtualTreeScrollRef}
                   aria-label="虚拟文件树导航"
-                  className="h-[calc(100%-2.75rem)] space-y-1 overflow-auto p-3"
+                  className="h-[calc(100%-3.35rem)] space-y-1 overflow-auto p-3"
                 >
                   {virtualFileTree.tree.map((node) => (
                     <VirtualFileTreeNode
@@ -853,7 +850,8 @@ export function ReplayReview({
               </>
             ) : (
               <>
-                <div className="flex justify-end border-b px-2 py-2">
+                <div className="replay-contents-header">
+                  <span className="replay-contents-label">CONTENTS</span>
                   <Button
                     type="button"
                     variant="ghost"
@@ -869,7 +867,7 @@ export function ReplayReview({
                     <PanelLeftClose className="h-4 w-4" aria-hidden="true" />
                   </Button>
                 </div>
-                <div ref={outlineScrollRef} className="h-[calc(100%-2.75rem)] space-y-1 overflow-auto p-3">
+                <div ref={outlineScrollRef} className="h-[calc(100%-3.35rem)] space-y-1 overflow-auto p-3">
                   {documentOutline.tree.length > 0 ? (
                     documentOutline.tree.map((node) => (
                       <OutlineTreeNode
@@ -1094,15 +1092,6 @@ export function ReplayReview({
                   <span className="font-mono text-xs">{speed}x</span>
                 </label>
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                onClick={() => void enterBrowserFullscreen()}
-                aria-label="全屏视图"
-              >
-                <Expand className="h-4 w-4" />
-              </Button>
               {mode === "auto" ? <Loader2 className="h-4 w-4 animate-spin text-primary" /> : null}
               <span className="ml-auto font-mono text-xs text-muted-foreground">
                 {actions.length === 0 ? "0/0" : `${index + 1}/${actions.length}`}
@@ -1145,6 +1134,19 @@ function PanelResizeHandle({
       <span className="replay-panel-resize-grip" aria-hidden="true" />
     </button>
   );
+}
+
+function ReplayStatusBadge({ status }: { status: TaskSummary["status"] }) {
+  if (status === "completed") {
+    return <Badge variant="success">{status}</Badge>;
+  }
+  if (status === "waiting_review" || status === "processing" || status === "pending") {
+    return <Badge variant="warning">{status}</Badge>;
+  }
+  if (status === "failed" || status === "rejected") {
+    return <Badge variant="destructive">{status}</Badge>;
+  }
+  return <Badge variant="secondary">{status}</Badge>;
 }
 
 function ReplayFieldRouteBadge({ field }: { field: ReplayField }) {
@@ -1766,6 +1768,7 @@ function OutlineTreeNode({
   const isAnimated = node.id === animatedOutlineId;
   const isExpanded = expandedIds.has(node.id) || activePathIds.has(node.id);
   const hasChildren = node.children.length > 0;
+  const visibleLabel = formatDecodedLabel(node.label);
   const handleOpen = () => {
     if (hasChildren) {
       onToggle(node.id);
@@ -1786,19 +1789,19 @@ function OutlineTreeNode({
         type="button"
         className={
           isActive
-            ? "outline-item-active relative flex w-full items-center gap-1 rounded-md border border-primary bg-accent px-1.5 py-1.5 text-left text-xs font-medium text-accent-foreground"
-            : "relative flex w-full items-center gap-1 rounded-md border border-transparent px-1.5 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            ? "outline-item-active relative flex w-full items-center gap-1 rounded-sm px-1.5 py-1.5 text-left text-sm font-medium text-foreground"
+            : "relative flex w-full items-center gap-1 rounded-sm px-1.5 py-1.5 text-left text-sm text-muted-foreground hover:bg-muted/70 hover:text-foreground"
         }
-        title={hasChildren ? `${node.label}（点击展开/折叠）` : node.label}
+        title={hasChildren ? `${visibleLabel}（点击展开/折叠）` : visibleLabel}
         onClick={handleOpen}
       >
         <span className="min-w-0 flex-1 truncate">
           {isActive || isAnimated ? (
             <span key={`${node.id}-${actionIndex}`} className="outline-item-flash">
-              {node.label}
+              {visibleLabel}
             </span>
           ) : (
-            node.label
+            visibleLabel
           )}
         </span>
         {hasChildren ? (
@@ -1862,13 +1865,14 @@ function VirtualFileTreeNode({
   const isAnimated = node.path === animatedVirtualPath;
   const isExpanded = expandedPaths.has(node.path);
   const isActivePath = !isActive && activePathIds.has(node.path);
+  const visibleLabel = formatVirtualVisibleLabel(node.displayLabel);
   const className = [
-    "virtual-file-item relative flex w-full items-center gap-1.5 rounded-md border px-1.5 py-1.5 text-left text-xs transition-colors",
+    "virtual-file-item relative flex w-full items-center gap-2 rounded-sm px-1.5 py-1.5 text-left text-sm transition-colors",
     isActive
-      ? "virtual-file-item-active border-primary bg-accent font-medium text-accent-foreground"
+      ? "virtual-file-item-active font-medium text-foreground"
       : isActivePath
-        ? "virtual-file-item-active-path border-transparent bg-accent/60 text-foreground"
-        : "border-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+        ? "virtual-file-item-active-path text-foreground"
+        : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
   ].join(" ");
 
   return (
@@ -1908,10 +1912,10 @@ function VirtualFileTreeNode({
         <span className="min-w-0 flex-1 truncate">
           {isActive || isAnimated ? (
             <span key={`${node.path}-${actionIndex}`} className="outline-item-flash">
-              {node.displayLabel}
+              {visibleLabel}
             </span>
           ) : (
-            node.displayLabel
+            visibleLabel
           )}
         </span>
         {isAnimated ? (
@@ -2255,13 +2259,64 @@ function inferVirtualFileKind(label: string): VirtualFileKind {
 }
 
 function formatVirtualOutlineLabel(label: string, kind: VirtualFileKind): string {
+  const decoded = formatDecodedLabel(label);
   if (kind !== "file") {
-    return label;
+    return decoded;
   }
-  return label
+  return decoded
+    .replace(/\.(?:md|table|list)$/i, "")
+    .replace(/^\d+-/, "")
+    .trim() || decoded;
+}
+
+function formatVirtualVisibleLabel(label: string): string {
+  return formatDecodedLabel(label)
     .replace(/\.(?:md|table|list)$/i, "")
     .replace(/^\d+-/, "")
     .trim() || label;
+}
+
+function getCurrentDocumentTitle(replay: TaskReplay | null, activeVirtualPath: string): string {
+  const filenames = (replay?.documents ?? [])
+    .map((document) => formatDecodedLabel(document.filename))
+    .filter(Boolean);
+  if (filenames.length === 0) {
+    return replay?.task_id ?? "document";
+  }
+  const topSegment = activeVirtualPath.split("/").filter(Boolean)[0];
+  if (!topSegment) {
+    return filenames[0];
+  }
+  const normalizedTopSegment = normalizeDocumentTitleKey(
+    formatDecodedLabel(topSegment).replace(/^\d+-/, ""),
+  );
+  const matched = filenames.find((filename) => {
+    const normalizedFilename = normalizeDocumentTitleKey(filename);
+    const normalizedStem = normalizeDocumentTitleKey(filename.replace(/\.[^.]+$/, ""));
+    return (
+      normalizedTopSegment.includes(normalizedFilename) ||
+      normalizedTopSegment.includes(normalizedStem) ||
+      normalizedStem.includes(normalizedTopSegment)
+    );
+  });
+  return matched ?? filenames[0];
+}
+
+function normalizeDocumentTitleKey(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/%20/g, " ")
+    .replace(/\.[a-z0-9]+$/i, "")
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "")
+    .trim();
+}
+
+function formatDecodedLabel(label: string): string {
+  try {
+    return decodeURIComponent(label);
+  } catch {
+    return label;
+  }
 }
 
 function normalizeVirtualPath(path: string): string {
@@ -3248,24 +3303,22 @@ body {
   margin: 0;
   min-height: 100vh;
   box-sizing: border-box;
-  padding: clamp(22px, 3.2vw, 40px);
-  background: #edf2f7;
-  color: #1f2937;
-  font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
-  font-size: 15px;
+  padding: 0;
+  background: #fff;
+  color: #20242a;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 18px;
   line-height: 1.72;
   text-rendering: optimizeLegibility;
 }
 .document-canvas {
-  max-width: min(100%, 920px);
+  max-width: min(100%, 1040px);
   margin: 0 auto;
   box-sizing: border-box;
-  min-height: calc(100vh - clamp(44px, 6.4vw, 80px));
-  border: 1px solid #cbd5e1;
-  border-top: 4px solid #94a3b8;
+  min-height: 100vh;
+  border: 0;
   background: #fff;
-  padding: clamp(34px, 4.8vw, 64px);
-  box-shadow: 0 26px 70px rgba(15, 23, 42, 0.18);
+  padding: clamp(52px, 6.2vw, 86px) clamp(34px, 6vw, 92px) 112px;
 }
 .document-canvas > :first-child {
   margin-top: 0;
@@ -3275,24 +3328,23 @@ body {
 .document-canvas h3,
 .document-canvas h4 {
   color: #111827;
-  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-weight: 680;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-weight: 760;
   letter-spacing: 0;
-  line-height: 1.24;
+  line-height: 1.18;
 }
 .document-canvas h1 {
-  margin: 0 0 1.1rem;
-  padding-bottom: 0.65rem;
-  border-bottom: 1px solid #d9e1e7;
-  font-size: 1.55rem;
+  margin: 0 0 1.35rem;
+  font-size: clamp(2.35rem, 4vw, 3.65rem);
+  letter-spacing: -0.01em;
 }
 .document-canvas h2 {
-  margin: 2.1rem 0 0.8rem;
-  font-size: 1.18rem;
+  margin: 3.1rem 0 0.85rem;
+  font-size: clamp(1.55rem, 2.15vw, 2.1rem);
 }
 .document-canvas h3 {
-  margin: 1.6rem 0 0.55rem;
-  font-size: 1.02rem;
+  margin: 2.1rem 0 0.6rem;
+  font-size: 1.25rem;
 }
 .document-canvas p {
   margin: 0.72rem 0;
@@ -3316,7 +3368,7 @@ body {
 .document-canvas .caption {
   margin-bottom: 0.45rem;
   color: #4b5563;
-  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 0.82rem;
   font-weight: 620;
   text-align: left;
@@ -3327,7 +3379,7 @@ body {
   border-collapse: collapse;
   border-top: 1px solid #9aa8b3;
   border-bottom: 1px solid #c8d2dc;
-  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 0.86rem;
   line-height: 1.45;
 }

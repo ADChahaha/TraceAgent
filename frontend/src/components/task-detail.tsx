@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { ArrowLeft, Loader2, RefreshCw } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -18,7 +18,6 @@ import type {
 } from "@/lib/types";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { ReplayReview } from "@/components/replay-review";
 
 export interface TaskDetailProps {
@@ -76,12 +75,6 @@ export function TaskDetail({
     void refresh();
   }, [refresh]);
 
-  function handleManualRefresh() {
-    setIsLoading(true);
-    setError(null);
-    void refresh();
-  }
-
   async function handleSubmitReview() {
     if (!detail?.review) {
       return;
@@ -117,49 +110,45 @@ export function TaskDetail({
   const summary = detail?.summary ?? initialSummary;
 
   return (
-    <main className="min-h-[calc(100svh-4rem)] space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <Link
-            href="/"
-            className="mb-3 inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            返回首页
-          </Link>
-          <h1 className="text-3xl font-semibold tracking-normal text-foreground">{taskId}</h1>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
+    <main aria-label="任务详情全屏工作台" className="task-detail-fullscreen-shell">
+      {!detail?.replay ? (
+        <div className="replay-topbar" aria-label="任务详情顶部工具栏">
+          <div className="replay-topbar-main">
+            <Link href="/" className="replay-topbar-back" aria-label="返回首页">
+              <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+            </Link>
+            <div className="replay-topbar-title">
+              {`${taskId} / no replay`}
+            </div>
+          </div>
+          <div className="replay-topbar-status">
             {summary ? <StatusBadge status={summary.status} /> : null}
-            {summary ? <Badge variant="outline">{summary.stage}</Badge> : null}
-            {summary?.route ? <RouteBadge route={summary.route} /> : null}
           </div>
         </div>
-        <Button type="button" variant="outline" onClick={handleManualRefresh} disabled={isLoading}>
-          {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw />}
-          刷新
-        </Button>
-      </div>
+      ) : null}
 
       {error ? (
-        <Alert variant="destructive">
+        <Alert variant="destructive" className="task-detail-alert">
           <AlertTitle>任务加载失败</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       ) : null}
 
       {summary?.status === "failed" && summary.error_message ? (
-        <Alert variant="destructive">
+        <Alert variant="destructive" className="task-detail-alert">
           <AlertTitle>任务失败</AlertTitle>
           <AlertDescription>{summary.error_message}</AlertDescription>
         </Alert>
       ) : null}
 
       {isLoading && !detail ? (
-        <div className="rounded-md border border-dashed p-8 text-sm text-muted-foreground">正在加载任务详情...</div>
+        <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">正在加载任务详情...</div>
       ) : null}
 
       {detail ? (
         <ReplayReview
+          taskId={taskId}
+          summary={summary}
           replay={detail.replay}
           finalFields={detail.result?.fields ?? []}
           reviewFields={detail.review?.fields ?? []}
@@ -191,16 +180,6 @@ function StatusBadge({ status }: { status: TaskSummary["status"] }) {
     return <Badge variant="destructive">{status}</Badge>;
   }
   return <Badge variant="secondary">{status}</Badge>;
-}
-
-function RouteBadge({ route }: { route: NonNullable<TaskSummary["route"]> }) {
-  if (route === "accept") {
-    return <Badge variant="success">route: {route}</Badge>;
-  }
-  if (route === "review") {
-    return <Badge variant="warning">route: {route}</Badge>;
-  }
-  return <Badge variant="destructive">route: {route}</Badge>;
 }
 
 function getInitialReviewValue(value: unknown): unknown {

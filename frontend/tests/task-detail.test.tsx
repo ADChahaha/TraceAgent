@@ -247,7 +247,7 @@ it("waiting_review 任务只展示 replay，并在 review 字段卡片里提交�
   );
 
   expect(await screen.findByText("AI extraction replay")).toBeInTheDocument();
-  expect(screen.getByText("sample.pdf")).toBeInTheDocument();
+  expect(screen.getByText("task-001 / sample.pdf")).toBeInTheDocument();
   expect(screen.getByText("写入字段：文明寝室房间号")).toBeInTheDocument();
   expect(screen.getAllByText("review").length).toBeGreaterThan(0);
   expect(screen.getByText("字段需要人工确认")).toBeInTheDocument();
@@ -284,6 +284,96 @@ it("waiting_review 任务只展示 replay，并在 review 字段卡片里提交�
     stage: "done"
   });
   expect(recentTasks[0].created_at).toBe("2026-04-29T08:00:00Z");
+});
+
+it("任务详情页使用占满视口的文档工作台布局", async () => {
+  const injectedLoadTaskDetail = jest.fn(async () => detailData);
+
+  render(
+    <TaskDetail
+      taskId="task-001"
+      initialSummary={waitingReviewSummary}
+      loadTaskDetail={injectedLoadTaskDetail}
+    />
+  );
+
+  expect(await screen.findByText("AI extraction replay")).toBeInTheDocument();
+  const shell = screen.getByLabelText("任务详情全屏工作台");
+  const replayRoot = screen.getByLabelText("Replay 全屏文档工作台");
+  const toolbar = screen.getByLabelText("Replay 顶部工具栏");
+  const stage = document.querySelector(".replay-stage") as HTMLElement;
+
+  expect(shell).toHaveClass("task-detail-fullscreen-shell");
+  expect(replayRoot).toHaveClass("replay-review-root-fullscreen");
+  expect(toolbar).toHaveClass("replay-topbar");
+  expect(within(toolbar).getByText("task-001 / sample.pdf")).toHaveClass("replay-topbar-title");
+  expect(stage).toHaveClass("replay-stage-fullscreen");
+  expect(screen.getByText("CONTENTS")).toBeInTheDocument();
+  expect(within(toolbar).getByText("waiting_review")).toBeInTheDocument();
+  expect(within(toolbar).queryByText("review")).not.toBeInTheDocument();
+  expect(within(toolbar).queryByText("route: review")).not.toBeInTheDocument();
+  expect(within(toolbar).queryByText("paused")).not.toBeInTheDocument();
+  expect(within(toolbar).queryByText("1 / 1")).not.toBeInTheDocument();
+  expect(within(toolbar).queryByRole("button", { name: "刷新" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "全屏视图" })).not.toBeInTheDocument();
+});
+
+it("多文件任务顶部标题跟随当前选中文件", async () => {
+  const multiFileDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      documents: [
+        { document_id: "doc-1", filename: "first.pdf" },
+        { document_id: "doc-2", filename: "second.pdf" }
+      ],
+      actions: [
+        {
+          tool_name: "read",
+          reason: "读取第一个文件",
+          args: {
+            path: "/001-first/001-Intro.md",
+          },
+          result: {
+            ok: true,
+            path: "/001-first/001-Intro.md",
+            kind: "paragraph",
+            text: "First file text."
+          }
+        },
+        {
+          tool_name: "read",
+          reason: "读取第二个文件",
+          args: {
+            path: "/002-second/001-Summary.md",
+          },
+          result: {
+            ok: true,
+            path: "/002-second/001-Summary.md",
+            kind: "paragraph",
+            text: "Second file text."
+          }
+        }
+      ]
+    }
+  };
+  const injectedLoadTaskDetail = jest.fn(async () => multiFileDetail);
+
+  render(
+    <TaskDetail
+      taskId="task-001"
+      initialSummary={waitingReviewSummary}
+      loadTaskDetail={injectedLoadTaskDetail}
+    />
+  );
+
+  expect(await screen.findByText("AI extraction replay")).toBeInTheDocument();
+  const toolbar = screen.getByLabelText("Replay 顶部工具栏");
+  expect(within(toolbar).getByText("task-001 / first.pdf")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByText("读取第一个文件"));
+
+  expect(within(toolbar).getByText("task-001 / second.pdf")).toBeInTheDocument();
 });
 
 it("enum 字段复核提交 tagged payload 而不是字符串", async () => {
@@ -747,7 +837,7 @@ it("中间 HTML 直接铺满文档容器，不保留灰色边框槽位", async (
   expect(iframe).toHaveClass("border-0");
 });
 
-it("中间 HTML 使用通用专业文档画布排版", async () => {
+it("中间 HTML 使用全屏白底文档排版", async () => {
   const canvasDetail: TaskDetailData = {
     ...detailData,
     replay: {
@@ -774,13 +864,13 @@ it("中间 HTML 使用通用专业文档画布排版", async () => {
   const srcDoc = iframe.getAttribute("srcdoc") ?? "";
 
   expect(srcDoc).toContain("class=\"document-canvas\"");
-  expect(srcDoc).toContain("max-width: min(100%, 920px)");
-  expect(srcDoc).toContain("background: #edf2f7");
-  expect(srcDoc).toContain("border: 1px solid #cbd5e1");
-  expect(srcDoc).toContain("border-top: 4px solid #94a3b8");
-  expect(srcDoc).toContain("box-shadow: 0 26px 70px rgba(15, 23, 42, 0.18)");
-  expect(srcDoc).toContain("padding: clamp(34px, 4.8vw, 64px)");
-  expect(srcDoc).toContain("font-family: ui-serif");
+  expect(srcDoc).toContain("max-width: min(100%, 1040px)");
+  expect(srcDoc).toContain("background: #fff");
+  expect(srcDoc).toContain("min-height: 100vh");
+  expect(srcDoc).toContain("border: 0");
+  expect(srcDoc).not.toContain("box-shadow: 0 26px 70px");
+  expect(srcDoc).toContain("padding: clamp(52px, 6.2vw, 86px)");
+  expect(srcDoc).toContain("font-family: Inter, ui-sans-serif");
   expect(srcDoc).toContain("border-collapse: collapse");
   expect(srcDoc).toContain("tbody tr:hover");
   expect(srcDoc).toContain(".document-canvas ul");

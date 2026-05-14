@@ -8,9 +8,11 @@
 任务详情页接收 task_id
   -> loadTaskDetail 先读取 summary
   -> 只继续读取 replay 所需的 result/replay/review，不主动读取 trace/audit
-  -> TaskDetail 顶部展示任务 status/stage/route 和失败原因
-  -> ReplayReview 展示文档文件名、左侧文档结构/虚拟文件树、中间铺满容器的 iframe 文档和右侧从上到下的 reason/tool 文字流
-  -> iframe 内部把 backend display_html 包成通用专业文档画布，用浅工作区承托白色纸面，并统一标题、段落、列表和 booktabs 风格表格排版，不引入具体行业语义
+  -> TaskDetail 顶部只展示单个任务 status，失败原因另以错误提示展示
+  -> TaskDetail 让 replay 作为占满视口的文档工作台渲染，跳出根布局最大宽度和页面 padding
+  -> ReplayReview 展示全宽顶部工具栏、左侧 Contents、中央铺满容器的 iframe 文档和右侧从上到下的 reason/tool 文字流
+  -> 顶部工具栏只保留单行任务上下文：左侧展示 `task_id / 当前选中文件名`，右侧只保留一个任务 status；多文件任务会按当前 action path 切换文件名
+  -> iframe 内部把 backend display_html 包成白底全屏文档画布，并统一标题、段落、列表和 booktabs 风格表格排版，不引入具体行业语义
   -> iframe 包装 display_html 时删除页码、页眉、页脚版本号等文档 chrome，避免 `Page 2` 和 `428249v2` 继续显示在中间画布
   -> result.fields 与 review.fields 合并成 replay 字段卡
   -> 真实 file_extraction_agent 工具 tree/read/query_table/bind_evidence/review_field/write_field/submit_result 以 Codex 风格灰色运行记录行展示，reason 是普通正文，read 系列工具使用搜索图标，anchors 只服务左侧树和 HTML 动画、不进入右侧文字流
@@ -44,11 +46,13 @@
 - `loadTaskDetail 只拉 replay 所需数据，不再加载 trace 和 audit`：验证详情聚合函数只请求 summary、result、replay 和 waiting_review 时的 review handoff，并把 `trace/audit` 留成 `null`，避免已移除的下方展示 UI 继续拉取无用数据。
 - `低层 API 仍保留 trace 和 audit 读取能力`：验证 `getTaskTrace` 和 `getTaskAudit` 这些底层 API 函数仍可单独使用，详情页收口不等于删除 backend 调试接口适配。
 - `waiting_review 任务只展示 replay，并在 review 字段卡片里提交修正`：验证详情页不再出现“结果/复核/证据/审计”tab，也不展示原始 trace/audit 文案；当前 `set_field` 卡片显示字段显示名、`review` badge 和 route 原因，并能提交 `revise_and_approve` payload，刷新后同步最近任务缓存。
+- `任务详情页使用占满视口的文档工作台布局`：验证详情页根节点会跳出普通页面容器，ReplayReview 提供全宽顶部工具栏、全屏 stage 和左侧 `CONTENTS` 目录；顶部栏只保留 `task_id / 当前文件名` 和一个 status badge，不再出现刷新、route、播放状态、step 进度或浏览器全屏按钮。
+- `多文件任务顶部标题跟随当前选中文件`：验证 replay.documents 有多个文件时，顶部标题会根据当前 action 的虚拟 path 从 `first.pdf` 切换到 `second.pdf`，避免多文件任务一直显示第一个文件。
 - `enum 字段复核提交 tagged payload 而不是字符串`：验证复核区遇到 `enum` tagged payload 时会显示结构化编辑器，用户可以切换枚举 variant；提交时 `review_value` 仍保持 `{variant, value}` 结构，而不是被前端压成普通字符串。
 - `真实 file_extraction_agent 工具以 Codex 工具行展示`：验证 `tree/read/query_table/bind_evidence/review_field/write_field/submit_result` 使用真实 flat action contract；右侧 reason 是普通正文，tool 行是灰色运行记录式的一行摘要，`read` 使用搜索图标标记并显示 `Read paragraph Confidential` 这类语义文案，anchors 不进入右侧文字流，read/query/submit 的返回正文、Rxxx 和校验错误不进入右侧文字流。
 - `read 工具摘要按 paragraph/table/list 语义展示，不暴露虚拟文件扩展名`：验证 `read` 对 `.md/.table/.list` 虚拟路径分别显示为 `Read paragraph/table/list 名称`，并去掉编号前缀和文件扩展名，避免右侧工具行出现 `Read 001-xxx.md` 这类文件名式文案。
 - `中间 HTML 直接铺满文档容器，不保留灰色边框槽位`：验证文档 iframe 外层不再带圆角卡片边框和灰色 gutter，iframe 自身以无边框 block 方式铺满中间容器。
-- `中间 HTML 使用通用专业文档画布排版`：验证 iframe `srcDoc` 会注入 `document-canvas`、浅工作区、白色纸面、清晰纸面边界、顶部纸边、可见投影、serif 正文、列表间距和 booktabs 风格表格样式，让任意文档类型都以有层级的专业审阅画布呈现。
+- `中间 HTML 使用全屏白底文档排版`：验证 iframe `srcDoc` 会注入 `document-canvas`、白底全屏文档、稳定宽版心、sans 标题正文、列表间距和 booktabs 风格表格样式，让任意文档类型都以干净的文档工作台形态呈现。
 - `中间 HTML 画布不展示页码和页脚噪声`：验证 replay 包装旧 `display_html` 时会移除 `.page-number`、`data-type=page_footer` 和 `block-page_footer` 节点，保留正文标题和正文段落。
 - `右侧 agent 没有真实 reason 时只显示 tool 行，不灌默认占位文案`：验证没有 `action.reason` 的真实工具调用不会显示“模型等待下一步动作”或“等待模型执行下一步”等伪 reason。
 - `file_extraction_agent 的虚拟文件树固定在左侧并随 path action 高亮`：验证真实工具返回的虚拟 path 会被组织成左侧文件树；顶部旧标题/说明/双按钮不再展示，只保留小号关闭左栏按钮；关闭后整列从布局中消失，文档区左上角提供重新打开按钮；目录节点仍可点开收起，切到 `read` action 时当前文件以 outline 标题展示并加 active 状态，父级目录加 active-path 状态，UI 不暴露 `.md` 扩展名。

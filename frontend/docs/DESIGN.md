@@ -111,13 +111,15 @@ frontend/
   -> summary.status=waiting_review 时读取 review handoff
   -> 如果 summary.status=failed 且带有 error_message，在详情页顶部展示失败原因
   -> 页面不渲染 result/review/trace/audit Tabs，只渲染 ReplayReview
-  -> ReplayReview 使用类似 VSCode Copilot / Codex 的三栏工作台：左侧虚拟文件树，中间 iframe 文档/证据视图，右侧用从上到下的文字流展示已走过的 reason 和当前 tool 调用
+  -> TaskDetail 让 replay 作为整页全屏工作台渲染，跳出根布局的最大宽度和页面 padding
+  -> ReplayReview 使用类似文档协作工具 / Codex 的全屏三栏：顶部工具栏、左侧 Contents、中央 iframe 文档正文、右侧从上到下的 reason/tool 文字流
+  -> 顶部工具栏只保留单行任务上下文：左侧返回后展示 `task_id / 当前选中文件名`，右侧只展示一个任务 status badge；当前文件名从正在播放或用户选中的 action path 匹配 replay.documents，支持多文件任务随当前文件切换
   -> 中间 iframe 是文档主画布，直接铺满中间容器；外层不加灰色 gutter、边框卡片或额外内边距
-  -> iframe 内部使用通用专业文档画布：浅色工作区承托白色纸面、稳定版心、清晰纸面边线、顶部纸边、可见投影、serif 正文、sans 标题、克制段落/列表间距和 booktabs 风格表格；这套样式不假设法律、论文或报告等具体文档类型，也避免中间区域整块纯白而失去层级
+  -> iframe 内部使用通用白底文档排版：正文区域占满视口、稳定宽版心、sans 标题和正文、克制段落/列表间距和 booktabs 风格表格；这套样式不假设法律、论文或报告等具体文档类型
   -> ReplayReview 包装 display_html 时会兜底删除页码、页眉、页脚版本号等文档 chrome，避免旧任务的 `Page 2` 或 `428249v2` 在中间画布继续可见
   -> 回放动画的路径导航只发生在左侧文件树或文档结构树：当前 action 的 path / path+selector 证据先定位到左侧节点，再驱动 iframe 滚动和高亮
   -> 左侧虚拟文件树保留真实 path 作为定位 key，但 UI 展示成类似 LaTeX outline 的标题；`.md/.table/.list` 文件不直接显示扩展名，也会去掉文件名前导编号，例如 `001-Confidential.md` 展示为 `Confidential`
-  -> 左侧文件树/文档结构采用较窄的 Codex 式侧栏，不展示大标题、说明文案或展开/折叠双按钮；顶部只保留一个关闭左栏的小按钮，关闭后中间文档区扩展并在左上角显示重新打开按钮，单个目录节点仍通过点击节点自身展开或收起
+  -> 左侧文件树/文档结构采用较窄的 Contents 侧栏，不展示说明文案或展开/折叠双按钮；顶部只保留 `CONTENTS` 标签和一个关闭左栏的小按钮，关闭后中间文档区扩展并在左上角显示重新打开按钮，单个目录节点仍通过点击节点自身展开或收起
   -> 桌面布局下左侧文件树/文档结构和右侧 agent 文字流都通过竖向分隔条手动调整宽度；拖拽会暂停自动播放，左栏关闭后左侧分隔条消失但右侧分隔条仍可调整 agent 区宽度
   -> 左栏关闭时自动播放跳过左侧树形导航和鼠标路径动画，只保留 iframe 内的滚动、阅读线和高亮
   -> 文档结构过滤 `page_001` / `page_002` 这类分页容器节点，也过滤 `Page 2` 页码、页眉和 `428249v2` 这类页脚版本号；左侧只展示标题、段落、表格等实际可读结构

@@ -83,18 +83,40 @@ samp,
   background: color-mix(in oklch, var(--primary) 22%, transparent);
 }
 
+.task-detail-fullscreen-shell {
+  width: 100vw;
+  min-height: 100svh;
+  margin: -2rem calc(50% - 50vw);
+  background: #fff;
+}
+
+.task-detail-alert {
+  position: relative;
+  z-index: 30;
+  margin: 12px;
+}
+
 .field-card-set-current {
   animation: field-card-set-pulse 1.65s ease-out;
 }
 
 .replay-review-root {
   --replay-header-h: 4.5rem;
+  --replay-topbar-h: 4rem;
   position: relative;
 }
 
+.replay-review-root-fullscreen {
+  display: flex;
+  min-height: 100svh;
+  flex-direction: column;
+  overflow: hidden;
+  background: #fff;
+}
+
 .replay-review-root:fullscreen {
-  padding: 12px;
-  background: var(--background);
+  padding: 0;
+  background: #fff;
 }
 
 .replay-outline-panel,
@@ -105,18 +127,94 @@ samp,
   min-height: 32rem;
 }
 
+.replay-review-root-fullscreen .replay-outline-panel,
+.replay-review-root-fullscreen .replay-document-panel,
+.replay-review-root-fullscreen .replay-agent-panel-slot,
+.replay-review-root-fullscreen .replay-panel-resize-handle {
+  height: calc(100svh - var(--replay-topbar-h));
+  min-height: 0;
+}
+
 .replay-review-root:fullscreen .replay-outline-panel,
 .replay-review-root:fullscreen .replay-document-panel,
 .replay-review-root:fullscreen .replay-plan-panel-slot,
 .replay-review-root:fullscreen .replay-agent-panel-slot {
-  height: calc(100svh - var(--replay-header-h) - 3rem);
+  height: calc(100svh - var(--replay-topbar-h));
   min-height: 0;
+}
+
+.replay-topbar {
+  display: flex;
+  height: var(--replay-topbar-h);
+  flex: 0 0 var(--replay-topbar-h);
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid #e5e7eb;
+  background: rgb(255 255 255 / 0.96);
+  padding: 0 clamp(16px, 2vw, 28px);
+}
+
+.replay-topbar-main,
+.replay-topbar-title,
+.replay-topbar-status {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.replay-topbar-main {
+  flex: 1 1 auto;
+  gap: 12px;
+}
+
+.replay-topbar-back {
+  display: inline-flex;
+  height: 2rem;
+  width: 2rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: #536173;
+}
+
+.replay-topbar-back:hover,
+.replay-topbar-back:focus-visible {
+  background: #f3f4f6;
+  color: #111827;
+  outline: none;
+}
+
+.replay-topbar-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #111827;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, ui-monospace, monospace;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.replay-topbar-status {
+  flex: 0 0 auto;
 }
 
 .replay-stage {
   position: relative;
   gap: 16px;
   align-items: stretch;
+}
+
+.replay-stage-fullscreen {
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 0;
+  background: #fff;
 }
 
 .replay-document-panel {
@@ -166,7 +264,7 @@ samp,
 }
 
 .replay-review-root:fullscreen .replay-panel-resize-handle {
-  height: calc(100svh - var(--replay-header-h) - 3rem);
+  height: calc(100svh - var(--replay-topbar-h));
   min-height: 0;
 }
 
@@ -179,6 +277,10 @@ samp,
 
   .replay-stage[data-left-panel-open="true"] {
     grid-template-columns: var(--replay-left-panel-width) 10px minmax(0, 1fr) 10px var(--replay-right-panel-width);
+  }
+
+  .replay-stage-fullscreen {
+    column-gap: 0;
   }
 
   .replay-panel-resize-handle {
@@ -203,6 +305,39 @@ samp,
   border: 1px solid var(--border);
   border-radius: 8px;
   background: rgb(255 255 255 / 0.86);
+}
+
+.replay-review-root-fullscreen .replay-outline-panel {
+  border-right: 1px solid #e5e7eb;
+  background: #fff;
+}
+
+.replay-review-root-fullscreen .replay-agent-panel {
+  border: 0;
+  border-left: 1px solid #e5e7eb;
+  border-radius: 0;
+  background: #fff;
+}
+
+.replay-review-root-fullscreen .replay-agent-header {
+  border-bottom-color: #eceff3;
+}
+
+.replay-contents-header {
+  display: flex;
+  height: 3.35rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid #edf0f3;
+  padding: 0 12px 0 18px;
+}
+
+.replay-contents-label {
+  color: #5d6675;
+  font-size: 11px;
+  font-weight: 820;
+  letter-spacing: 0.12em;
 }
 
 .replay-agent-header {
