@@ -100,6 +100,9 @@ def build_tools(state: Any) -> list[Any]:
     ) -> dict[str, Any]:
         """Write or overwrite one schema field value with selected final evidence.
 
+        write_field must immediately follow review_evidences for the same field. If
+        any other tool call happens after review_evidences, review that field again
+        before writing. This also applies to status="missing" and null enum variants.
         final_evidence must be copied from review_evidences.evidence for the same field.
         Do not use block-level {path_id} selectors as final_evidence.
         Use status="resolved" for extracted values and status="missing" when the document
@@ -297,6 +300,9 @@ def _write_field(
     final_evidence = final_evidence or []
 
     def execute() -> dict[str, Any]:
+        immediate_review_error = validate_immediate_review_before_write(state, field_id)
+        if immediate_review_error:
+            return {"ok": False, "errors": [immediate_review_error]}
         canonical_final_evidence = state.document.canonicalize_evidence(final_evidence)
         errors = validate_field_write(state, field_id, value, status)
         errors.extend(validate_final_evidence_write(state, field_id, canonical_final_evidence, value, status))
@@ -464,14 +470,6 @@ def validate_final_evidence_write(
                     "message": "final_evidence must use inline selectors from review_evidences, not block-level {path_id} selectors",
                 }
             ]
-    if status == "resolved" and field is not None and not empty_evidence_allowed(field, value) and not reviewed_units:
-        return [
-            {
-                "field_id": field_id,
-                "code": "REVIEW_REQUIRED",
-                "message": "review_evidences must be called before writing resolved non-null fields",
-            }
-        ]
     if final_units and not final_units.issubset(reviewed_units):
         errors.append(
             {
@@ -485,6 +483,16 @@ def validate_final_evidence_write(
     if final_evidence:
         errors.extend({"field_id": field_id, **error} for error in state.document.validate_evidence(final_evidence))
     return errors
+
+
+def validate_immediate_review_before_write(state: Any, field_id: str) -> dict[str, Any] | None:
+    if state.last_tool_name == "review_evidences" and state.last_review_field_id == field_id:
+        return None
+    return {
+        "field_id": field_id,
+        "code": "IMMEDIATE_REVIEW_REQUIRED",
+        "message": "write_field must immediately follow review_evidences for the same field",
+    }
 
 
 def expand_candidate_evidence(state: Any, evidence: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -735,7 +743,13 @@ def _record_action(state: Any, tool_name: str, args: dict[str, Any], reason: str
 
 def _update_tool_cursor(state: Any, tool_name: str, result: dict[str, Any]) -> None:
     state.last_tool_name = tool_name
+    if tool_name == "review_evidences" and result.get("ok") is False:
+        state.last_review_field_id = None
+        return
     if result.get("ok") is False:
+        return
+    if tool_name == "review_evidences":
+        state.last_review_field_id = result.get("field_id")
         return
     if tool_name == "bind_evidence":
         state.pending_read = None

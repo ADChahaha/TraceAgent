@@ -13,7 +13,7 @@ documents + task_spec + run_options
   -> 模型按 schema 浏览材料、读取一个 paragraph/list/table，并用 reason 说明每次用户可见动作
   -> 每次 read 成功后必须立刻 bind_evidence 绑定当前对象为候选 block，或 skip_read 标记无关
   -> review_evidences 把字段候选 block 展开成 Sxxx/Ixxx/Rxxx inline selector 和 evidence_texts
-  -> write_field 覆盖写入字段值、状态和从 review 复制的 final_evidence
+  -> 紧跟 write_field 覆盖写入字段值、状态和从刚刚 review 复制的 final_evidence
   -> submit_result 校验必填字段、类型和最终 evidence selector
   -> graph 按顺序输出 NDJSON 工具事件，最后输出 result_completed
 ```
@@ -44,7 +44,7 @@ paragraph 文件名只是预览，不代表截断正文。完整正文由 `read(
 | `bind_evidence(field_id, bindings, reason)` | 把当前 pending read 对象绑定到一个或多个字段的候选 block evidence，不接受模型手写 `path_id` 或 inline selector。 |
 | `skip_read(reason)` | 把当前 pending read 对象标记为无关，关闭 read judgement。 |
 | `review_evidences(field_id, reason)` | 只读复看字段描述、当前值、候选 block evidence，并展开成可用于最终提交的 inline selector。 |
-| `write_field(field_id, value, final_evidence, status, reason)` | 写入或覆盖一个 schema 字段的最终值和最终证据。 |
+| `write_field(field_id, value, final_evidence, status, reason)` | 紧跟同字段 `review_evidences` 后，写入或覆盖一个 schema 字段的最终值和最终证据。 |
 | `submit_result(reason)` | 校验当前字段缓冲区，成功返回最终 `fields[]`，失败返回结构化错误。 |
 
 `reason` 是用户可见动作说明，不是证据，也不是模型推理链。工具 wrapper 会为每次调用写入 `tool_started`、`tool_completed` 或 `tool_failed`，证据绑定另有 `evidence_bound`，字段写入另有 `field_written`，最终提交另有 `result_completed`。
@@ -88,7 +88,7 @@ review_evidences(field_id="fees")
   -> 展开 inline evidence: {"path_id": "[0000.0001.0003.0001]", "rows": ["R001", ...]}
 ```
 
-`write_field(final_evidence=...)` 必须复制 `review_evidences.evidence` 里的 inline selector，不能使用只有 `path_id` 的 block selector，也不能手写 raw virtual path。`submit_result` 会校验 selector 类型和编号是否存在：`.md` 只能用 `sentences`，`.list` 只能用 `items`，`.table` 只能用 `rows`。
+`write_field(final_evidence=...)` 必须紧跟同字段 `review_evidences`，并复制这次 `review_evidences.evidence` 里的 inline selector；如果中间插入任何其他工具调用，需要重新 review 再写。这个规则也适用于 `status="missing"` 和 null enum variant。最终证据不能使用只有 `path_id` 的 block selector，也不能手写 raw virtual path。`submit_result` 会校验 selector 类型和编号是否存在：`.md` 只能用 `sentences`，`.list` 只能用 `items`，`.table` 只能用 `rows`。
 
 ## 公共入口
 

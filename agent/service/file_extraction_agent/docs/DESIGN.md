@@ -18,7 +18,7 @@
   -> 如果当前 paragraph/list/table 可能支持字段，紧跟 bind_evidence 把这个刚读到的对象绑定为候选 block evidence
   -> 如果当前对象不相关，紧跟 skip_read 关闭这次 read 判断，再继续浏览
   -> 模型用 review_evidences 复看某字段的候选 block evidence，并由工具展开成 Sxxx/Ixxx/Rxxx inline selector
-  -> 模型用 write_field 提交字段值或 enum decision，并且 final_evidence 只能复制 review_evidences 返回的 inline selector
+  -> 模型紧跟 write_field 提交同一字段的字段值或 enum decision，并且 final_evidence 只能复制刚刚 review_evidences 返回的 inline selector
   -> submit_result 内部按 schema 校验并返回最终结果或错误
 ```
 
@@ -86,7 +86,7 @@ read(path_id, offset?, limit?, reason)
 bind_evidence(field_id?, bindings?, reason)
 skip_read(reason)
 review_evidences(field_id, reason)
-write_field(field_id, value, final_evidence, status?, reason)
+write_field(field_id, value, final_evidence, status?, reason)  # 必须紧跟同字段 review_evidences
 submit_result(reason?)
 ```
 
@@ -255,7 +255,7 @@ review_evidences(field_id, reason)
   -> 返回 field description、current value/status、candidate_evidence、evidence、evidence_texts 和简短 guidance
 ```
 
-`review_evidences` 不做自动判决，也不替模型打分。它只把模型自己已经绑定/写入的状态重新展示出来；模型复核后可以用 `write_field(... final_evidence ...)` 覆盖字段值，或继续通过新的 `read -> bind_evidence` 补充候选证据。代码层面使用硬规则：如果字段写入 resolved 非 null 值，`write_field` 前必须先 `review_evidences`，并且 `final_evidence` 必须是这次 review 返回的 inline selector 子集。missing 字段或 null enum variant 可以使用空 `final_evidence`，不需要为了空证据机械 review。
+`review_evidences` 不做自动判决，也不替模型打分。它只把模型自己已经绑定/写入的状态重新展示出来；模型复核后可以紧跟 `write_field(... final_evidence ...)` 覆盖字段值，或继续通过新的 `read -> bind_evidence` 补充候选证据。代码层面使用硬规则：每次 `write_field` 都必须紧跟同字段 `review_evidences`，并且 `final_evidence` 必须是这次 review 返回的 inline selector 子集。如果 review 后插入了任何其他工具调用，哪怕是失败的 write、另一个字段的 review、read 或 submit，都必须重新 review 同一字段再写。missing 字段或 null enum variant 可以使用空 `final_evidence`，但仍要在写入前紧跟同字段 review。
 
 ### `write_field`
 
@@ -275,8 +275,8 @@ write_field(field_id, value, final_evidence, status?, reason)
 
 - `field_id` 必须存在于用户 schema。
 - `value` 必须是 JSON 可表示值。
-- resolved 非 null 写入必须先对该字段调用 `review_evidences`。
-- `final_evidence` 必须能反查到原文，并且必须来自最近一次 `review_evidences(field_id)` 返回的 inline selector。
+- 任何写入都必须紧跟同字段成功 `review_evidences`；`status="missing"` 和 null enum variant 也不例外。
+- `final_evidence` 必须能反查到原文，并且必须来自刚刚那次 `review_evidences(field_id)` 返回的 inline selector。
 - `final_evidence` 不能是只有 `path_id` 的 block 级 selector。
 
 完整 schema 校验不在写入阶段完成，而是在 `submit_result` 内部统一执行。`submit_result` 会读取最后一次 `write_field` 写入的字段值和 enum variant：如果字段是 `null` 类型或 enum variant 的 payload 类型是 `null`，允许空 `final_evidence`；其他 resolved 字段没有最终证据会返回 `MISSING_FINAL_EVIDENCE`，要求模型补证据或改成合法的空值/缺失表达。
@@ -344,8 +344,8 @@ write_field(field_id, value, final_evidence, status?, reason)
     },
     {
       "field_id": "company_name",
-      "code": "MISSING_EVIDENCE",
-      "message": "evidence is required"
+      "code": "MISSING_FINAL_EVIDENCE",
+      "message": "final_evidence is required for resolved non-null values"
     }
   ]
 }
@@ -409,7 +409,7 @@ review_evidences/write_field/submit_result
   -> 展开候选 block 为 inline selector，再按 schema 写入字段值和 final_evidence 并提交结果
 ```
 
-resolution prompt 要求模型每次 `read` 后必须立刻判断当前对象：认为可能是字段证据就 `bind_evidence`，完全不相关就 `skip_read`，不要连续读取后再回头绑定。字段写入前必须 `review_evidences`，并且 `write_field(final_evidence=...)` 只能复制 review 返回的 inline selector。`write_field` 不设置固定读写次数或读量预算；硬约束只在工具状态机上表达，即 read 后必须判断、write 前必须 review。
+resolution prompt 要求模型每次 `read` 后必须立刻判断当前对象：认为可能是字段证据就 `bind_evidence`，完全不相关就 `skip_read`，不要连续读取后再回头绑定。字段写入前必须紧跟同字段 `review_evidences`，并且 `write_field(final_evidence=...)` 只能复制刚刚 review 返回的 inline selector。`write_field` 不设置固定读写次数或读量预算；硬约束只在工具状态机上表达，即 read 后必须判断、write 前必须紧邻同字段 review。
 
 ## 证据归因
 
@@ -433,7 +433,7 @@ review_evidences(field_id)
   -> 把已绑定 block 展开为 Sxxx/Ixxx/Rxxx inline selector 和 evidence_texts
 
 write_field(field_id, value, final_evidence)
-  -> 字段值使用从 review_evidences 复制的 inline final_evidence 完成定案
+  -> 必须紧跟同字段 review_evidences，字段值使用从刚刚 review 复制的 inline final_evidence 完成定案
 ```
 
 这样可以避免三类问题：

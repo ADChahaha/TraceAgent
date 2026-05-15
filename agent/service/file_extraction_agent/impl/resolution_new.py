@@ -31,6 +31,8 @@ def build_resolution_messages(state: Any) -> list[Any]:
             "bind_evidence records the current read object as block candidate evidence, not final inline evidence. "
             "review_evidences expands block candidates into Sxxx/Ixxx/Rxxx inline selectors. "
             "write_field final_evidence must copy inline selectors from review_evidences. "
+            "Every write_field call must immediately follow review_evidences for the same field, including missing fields and null enum variants. "
+            "If any other tool runs after review_evidences, review the same field again before write_field. "
             "Candidate evidence binding is provisional collection, not final classification. "
             "Do not read another path before binding or skipping the current read. "
             "Do not wait until the field value or enum decision is final before binding candidate evidence. "

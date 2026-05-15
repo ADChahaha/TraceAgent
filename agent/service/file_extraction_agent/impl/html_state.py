@@ -30,6 +30,7 @@ class GraphState:
     last_inline_source: dict[str, Any] | None = None
     pending_read: dict[str, Any] | None = None
     last_tool_name: str | None = None
+    last_review_field_id: str | None = None
     actions: list[dict[str, Any]] = field(default_factory=list)
     events: list[dict[str, Any]] = field(default_factory=list)
     next_seq: int = 1

@@ -260,40 +260,109 @@ def test_write_field_requires_reviewed_inline_evidence_not_block_evidence():
         status="resolved",
         reason="final_evidence 不能使用 block selector。",
     )
+
+    assert blocked_before_review["ok"] is False
+    assert blocked_before_review["errors"][0]["code"] == "IMMEDIATE_REVIEW_REQUIRED"
+    assert blocked_block_evidence["ok"] is False
+    assert blocked_block_evidence["errors"][0]["code"] == "INLINE_FINAL_EVIDENCE_REQUIRED"
+    _review_evidences(state, "founded_year", reason="失败写入后重新 review，确保 write 前紧邻 review。")
     written = _write_field(
         state,
         "founded_year",
         2020,
         final_evidence=[{"path_id": path_ids["paragraph"], "sentences": ["S001"]}],
         status="resolved",
-        reason="使用 review_evidences 返回的 S001 写入字段。",
+        reason="使用刚刚 review_evidences 返回的 S001 写入字段。",
     )
+    assert written["ok"] is True
+    assert written["field"]["evidence"] == [{"path_id": path_ids["paragraph"], "sentences": ["S001"]}]
+    assert written["field"]["evidence_texts"] == [
+        {"path_id": path_ids["paragraph"], "selector": "S001", "text": "公司成立于2020年。"}
+    ]
+    _review_evidences(state, "founded_year", reason="检查未 review 编号前重新 review。")
     blocked_unreviewed_inline = _write_field(
         state,
         "founded_year",
         2020,
         final_evidence=[{"path_id": path_ids["paragraph"], "sentences": ["S999"]}],
         status="resolved",
-        reason="S999 没有出现在 review_evidences 返回值中。",
+        reason="S999 没有出现在刚刚的 review_evidences 返回值中。",
     )
-
-    assert blocked_before_review["ok"] is False
-    assert blocked_before_review["errors"][0]["code"] == "REVIEW_REQUIRED"
-    assert blocked_block_evidence["ok"] is False
-    assert blocked_block_evidence["errors"][0]["code"] == "INLINE_FINAL_EVIDENCE_REQUIRED"
-    assert written["ok"] is True
-    assert written["field"]["evidence"] == [{"path_id": path_ids["paragraph"], "sentences": ["S001"]}]
-    assert written["field"]["evidence_texts"] == [
-        {"path_id": path_ids["paragraph"], "selector": "S001", "text": "公司成立于2020年。"}
-    ]
     assert blocked_unreviewed_inline["ok"] is False
     assert blocked_unreviewed_inline["errors"][0]["code"] == "UNREVIEWED_FINAL_EVIDENCE"
 
 
-def test_missing_and_null_enum_values_can_use_empty_evidence_without_review():
+def test_write_field_requires_immediately_preceding_same_field_review():
+    stale_state = _state()
+    paths = _paths()
+    path_ids = _path_ids(stale_state, paths)
+
+    _read(stale_state, path_ids["paragraph"], reason="读取成立年份段落。")
+    _bind_evidence(stale_state, "founded_year", reason="绑定 founded_year 候选 block。")
+    _review_evidences(stale_state, "founded_year", reason="先 review founded_year。")
+    _read(stale_state, path_ids["list"], reason="插入一次其它 read，让 review 不再紧邻 write。")
+    _skip_read(stale_state, reason="列表和 founded_year 无关。")
+    stale_write = _write_field(
+        stale_state,
+        "founded_year",
+        2020,
+        final_evidence=[{"path_id": path_ids["paragraph"], "sentences": ["S001"]}],
+        status="resolved",
+        reason="不能用已经被其它工具隔开的 review 写字段。",
+    )
+
+    wrong_field_state = _state()
+    wrong_paths = _path_ids(wrong_field_state, _paths())
+    _read(wrong_field_state, wrong_paths["paragraph"], reason="读取成立年份段落。")
+    _bind_evidence(wrong_field_state, "founded_year", reason="绑定 founded_year 候选 block。")
+    _review_evidences(wrong_field_state, "founded_year", reason="只 review founded_year。")
+    wrong_field_write = _write_field(
+        wrong_field_state,
+        "missing_required",
+        None,
+        final_evidence=[],
+        status="missing",
+        reason="review 了 founded_year，不能紧跟写 missing_required。",
+    )
+
+    assert stale_write["ok"] is False
+    assert stale_write["errors"][0]["code"] == "IMMEDIATE_REVIEW_REQUIRED"
+    assert wrong_field_write["ok"] is False
+    assert wrong_field_write["errors"][0]["code"] == "IMMEDIATE_REVIEW_REQUIRED"
+
+    failed_review_state = _state()
+    failed_paths = _path_ids(failed_review_state, _paths())
+    _read(failed_review_state, failed_paths["paragraph"], reason="读取成立年份段落。")
+    _bind_evidence(failed_review_state, "founded_year", reason="绑定 founded_year 候选 block。")
+    _review_evidences(failed_review_state, "founded_year", reason="先成功 review founded_year。")
+    failed_review = _review_evidences(failed_review_state, "unknown", reason="随后一次失败 review 不能满足 write 前 review。")
+    blocked_after_failed_review = _write_field(
+        failed_review_state,
+        "founded_year",
+        2020,
+        final_evidence=[{"path_id": failed_paths["paragraph"], "sentences": ["S001"]}],
+        status="resolved",
+        reason="最后一个 review 已失败，不能用更早的 review 写字段。",
+    )
+
+    assert failed_review["ok"] is False
+    assert blocked_after_failed_review["ok"] is False
+    assert blocked_after_failed_review["errors"][0]["code"] == "IMMEDIATE_REVIEW_REQUIRED"
+
+
+def test_missing_and_null_enum_values_can_use_empty_evidence_after_review():
     missing_state = _state()
     enum_state = _enum_state()
 
+    blocked_missing = _write_field(
+        missing_state,
+        "missing_required",
+        None,
+        final_evidence=[],
+        status="missing",
+        reason="没有紧跟 review，不能写 missing。",
+    )
+    _review_evidences(missing_state, "missing_required", reason="写 missing 前先 review 空候选。")
     missing = _write_field(
         missing_state,
         "missing_required",
@@ -302,6 +371,15 @@ def test_missing_and_null_enum_values_can_use_empty_evidence_without_review():
         status="missing",
         reason="文档未提及该字段，写 missing。",
     )
+    blocked_null_enum = _write_field(
+        enum_state,
+        "limited_use_decision",
+        {"variant": "NotMentioned", "value": None},
+        final_evidence=[],
+        status="resolved",
+        reason="没有紧跟 review，不能写 null enum。",
+    )
+    _review_evidences(enum_state, "limited_use_decision", reason="写 null enum 前先 review 空候选。")
     null_enum = _write_field(
         enum_state,
         "limited_use_decision",
@@ -311,7 +389,11 @@ def test_missing_and_null_enum_values_can_use_empty_evidence_without_review():
         reason="null enum variant 表示未提及，可以空证据。",
     )
 
+    assert blocked_missing["ok"] is False
+    assert blocked_missing["errors"][0]["code"] == "IMMEDIATE_REVIEW_REQUIRED"
     assert missing["ok"] is True
+    assert blocked_null_enum["ok"] is False
+    assert blocked_null_enum["errors"][0]["code"] == "IMMEDIATE_REVIEW_REQUIRED"
     assert null_enum["ok"] is True
 
 
@@ -340,7 +422,7 @@ def test_submit_result_requires_final_evidence_for_resolved_non_null_values():
     blocked = _submit_result(state, reason="提交时拒绝非 null enum 空证据。")
 
     assert blocked_before_review["ok"] is False
-    assert blocked_before_review["errors"][0]["code"] == "REVIEW_REQUIRED"
+    assert blocked_before_review["errors"][0]["code"] == "IMMEDIATE_REVIEW_REQUIRED"
     assert written["ok"] is True
     assert blocked["ok"] is False
     assert blocked["errors"][0]["code"] == "MISSING_FINAL_EVIDENCE"
@@ -377,5 +459,14 @@ def test_read_write_reject_raw_paths_and_use_path_id_through_review():
     assert review["candidate_evidence"] == [{"path_id": path_ids["paragraph"]}]
     assert written["ok"] is True
     assert written["field"]["evidence"] == [{"path_id": path_ids["paragraph"], "sentences": ["S001"]}]
+    _review_evidences(state, "founded_year", reason="raw path 校验前重新 review，确保错误来自 selector 本身。")
+    raw_path_final_evidence = _write_field(
+        state,
+        "founded_year",
+        2020,
+        final_evidence=[{"path_id": paths["paragraph"], "sentences": ["S001"]}],
+        status="resolved",
+        reason="raw path 不能伪装成 path_id selector。",
+    )
     assert raw_path_final_evidence["ok"] is False
     assert raw_path_final_evidence["errors"][0]["code"] == "UNREVIEWED_FINAL_EVIDENCE"

@@ -43,6 +43,9 @@ def test_resolution_messages_describe_read_judgement_policy_without_tool_manual(
     assert "bind_evidence records the current read object as block candidate evidence" in content
     assert "review_evidences expands block candidates into Sxxx/Ixxx/Rxxx inline selectors" in content
     assert "write_field final_evidence must copy inline selectors from review_evidences" in content
+    assert "Every write_field call must immediately follow review_evidences for the same field" in content
+    assert "including missing fields and null enum variants" in content
+    assert "review the same field again before write_field" in content
     assert "Use path_id locators like [0000.0001]" in content
     assert "Tool-specific navigation and argument rules are provided in each tool description" in content
     assert "tree(path, depth, reason)" not in content
@@ -80,6 +83,8 @@ def test_tool_descriptions_carry_read_judgement_and_review_contracts():
     assert "Do not pass path_id, sentences, items, or rows" in tools["bind_evidence"].description
     assert "Use this only when the current read object is irrelevant" in tools["skip_read"].description
     assert "review_evidences expands block candidate evidence into inline selectors" in tools["review_evidences"].description
+    assert "write_field must immediately follow review_evidences for the same field" in tools["write_field"].description
+    assert 'status="missing" and null enum variants' in tools["write_field"].description
     assert "final_evidence must be copied from review_evidences.evidence" in tools["write_field"].description
     assert "Only null-typed fields or null enum variants may use final_evidence=[]" in tools["submit_result"].description
 
