@@ -18,80 +18,77 @@ def build_tools(state: Any) -> list[Any]:
     """Build model-facing tools bound to the current graph state."""
 
     @tool
-    def tree(path: str = "/", depth: int = 3, reason: str = "") -> dict[str, Any]:
-        """Expand the virtual semantic HTML file tree at a directory path.
+    def tree(path_id: str = "[0000]", depth: int = 3, reason: str = "") -> dict[str, Any]:
+        """Expand the virtual semantic HTML file tree at a directory path_id.
 
         Use this for directories: root, document directories, and section directories.
-        Directory paths are shown with a trailing slash in tree output. tree returns child
-        directories and readable .md/.list/.table file paths; it does not return file text.
-        If you need content inside a directory, call tree on that directory first, then
-        call read on one of the child file paths ending in .md, .list, or .table.
+        Use only path_id values such as [0000.0001] copied from tree output. Directory
+        names are shown with a trailing slash in tree output. tree returns child
+        directories and readable .md/.list/.table file path_ids; it does not return file
+        text. If you need content inside a directory, call tree on that directory first,
+        then call read on one of the child file path_ids ending in .md, .list, or .table.
         """
 
-        return _tree(state, path, depth=depth, reason=reason)
+        return _tree(state, path_id, depth=depth, reason=reason)
 
     @tool
-    def read(path: str, offset: int = 0, limit: int = 30, reason: str = "") -> dict[str, Any]:
-        """Only read paths ending in .md, .list, or .table.
+    def read(path_id: str, offset: int = 0, limit: int = 0, reason: str = "") -> dict[str, Any]:
+        """Only read file path_ids ending in .md, .list, or .table in tree output.
 
-        Never call read on document or section directories. If tree shows a path ending with /, call tree on that directory first, then read a child .md/.list/.table file.
-        Paragraph .md files return plain text without sentence ids; call anchors on the
-        same .md path when you need Sxxx sentence ids for evidence. List and table reads
-        return Markdown with Ixxx item ids or Rxxx row ids. Use offset/limit for list or
-        table pagination.
+        Use only path_id values such as [0000.0001.0002] copied from tree output. Never
+        call read on document or section directories. If tree shows a directory ending
+        with /, call tree on that directory first, then read a child .md/.list/.table file
+        path_id.
+        Paragraph .md files return plain text without sentence ids. List and table reads
+        return Markdown with Ixxx item ids or Rxxx row ids. By default list/table reads
+        return the whole object; use offset/limit only for intentional pagination.
+        After a successful read, the next tool must be bind_evidence or skip_read.
+        Use bind_evidence if the current read object may support, contradict, or qualify
+        any schema field. Use skip_read only when the current read object is irrelevant
+        to every field.
         """
 
-        return _read(state, path, offset=offset, limit=limit, reason=reason)
+        return _read(state, path_id, offset=offset, limit=limit, reason=reason)
 
     @tool
-    def anchors(path: str, reason: str = "") -> dict[str, Any]:
-        """Return Sxxx inline ids for a paragraph .md virtual file.
+    def bind_evidence(
+        field_id: str = "",
+        bindings: list[dict[str, Any]] | None = None,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        """Bind the current read object as block candidate evidence for one field.
 
-        Only call this for paragraph .md files immediately after read has located relevant text
-        in the same paragraph path. Do not call anchors for directories, .list files, or .table files; list items use
-        Ixxx ids from read output and table rows use Rxxx ids from read/query_table output.
+        Only call this immediately after a successful read, before any non-bind tool.
+        bind_evidence uses the current read object. Do not pass path_id, sentences, items, or rows.
+        The candidate evidence stored by this tool is block-level {path_id}; call
+        review_evidences later to expand block candidate evidence into Sxxx/Ixxx/Rxxx
+        inline selectors for final_evidence. Use bindings=[{field_id}, ...] when the current read object supports multiple fields.
         """
 
-        return _anchors(state, path, reason=reason)
+        return _bind_evidence(state, field_id, bindings=bindings, reason=reason)
 
     @tool
-    def query_table(path: str, sql: str, offset: int = 0, limit: int = 30, reason: str = "") -> dict[str, Any]:
-        """Run a safe SELECT over one .table virtual file and return Markdown rows.
+    def skip_read(reason: str = "") -> dict[str, Any]:
+        """Mark the current read object as irrelevant and close the read judgement.
 
-        Only call this for .table paths. The SQL must be a single SELECT statement over
-        the fixed table name data. Returned rows keep their original Rxxx ids, which can
-        be used as table evidence selectors.
+        Use this only when the current read object is irrelevant to every schema field.
+        It writes no field value and no evidence; it only lets the agent continue after
+        explicitly judging the latest read.
         """
 
-        return _query_table(state, path, sql, offset=offset, limit=limit, reason=reason)
+        return _skip_read(state, reason=reason)
 
     @tool
-    def bind_evidence(field_id: str, evidence: list[dict[str, Any]], reason: str = "") -> dict[str, Any]:
-        """Bind candidate evidence selectors to one schema field without submitting its value.
+    def review_evidences(field_id: str, reason: str = "") -> dict[str, Any]:
+        """Review one field's block candidates and expose inline final-evidence selectors.
 
-        Only call bind_evidence after the immediately preceding inline-producing tool result:
-        paragraph sentences require anchors first, while list items and table rows can use the
-        Ixxx/Rxxx ids just exposed by read or query_table. Selector shapes are
-        {path, sentences} for .md Sxxx sentence ids, {path, items} for .list Ixxx item ids, and {path, rows} for .table Rxxx row ids.
-        You may call bind_evidence multiple times in a row from the same inline source
-        for different fields or selectors. Any non-bind_evidence tool call makes that inline source stale.
-        Bound evidence is only a candidate buffer; write_field later chooses final_evidence
-        from this buffer.
+        review_evidences expands block candidate evidence into inline selectors:
+        paragraph blocks become {path_id, sentences}, list blocks become {path_id, items}, and
+        table blocks become {path_id, rows}. It also returns evidence_texts. Use these
+        returned inline selectors as the only source for write_field(final_evidence=...).
         """
 
-        return _bind_evidence(state, field_id, evidence, reason=reason)
-
-    @tool
-    def review_field(field_id: str, reason: str = "") -> dict[str, Any]:
-        """Review one field's current value and bound candidate evidence before final writing.
-
-        Call review_field before write_field whenever that field has any bound candidate
-        evidence. This tool does not judge correctness; it shows the field description,
-        current value, candidate selectors, and evidence texts so you can keep useful
-        evidence and drop topical, duplicate, background, or weak evidence.
-        """
-
-        return _review_field(state, field_id, reason=reason)
+        return _review_evidences(state, field_id, reason=reason)
 
     @tool
     def write_field(
@@ -103,7 +100,8 @@ def build_tools(state: Any) -> list[Any]:
     ) -> dict[str, Any]:
         """Write or overwrite one schema field value with selected final evidence.
 
-        final_evidence must be selected from bound candidate evidence for the same field.
+        final_evidence must be copied from review_evidences.evidence for the same field.
+        Do not use block-level {path_id} selectors as final_evidence.
         Use status="resolved" for extracted values and status="missing" when the document
         does not support the field. Array fields must be written as a complete array; do
         not append items incrementally. Rewriting the same field replaces the prior value.
@@ -123,33 +121,33 @@ def build_tools(state: Any) -> list[Any]:
 
         return _submit_result(state, reason=reason)
 
-    return [tree, read, anchors, query_table, bind_evidence, review_field, write_field, submit_result]
+    return [tree, read, bind_evidence, skip_read, review_evidences, write_field, submit_result]
 
 
-def _tree(state: Any, path: str = "/", *, depth: int = 3, reason: str = "") -> dict[str, Any]:
+def _tree(state: Any, path_id: str = "[0000]", *, depth: int = 3, reason: str = "") -> dict[str, Any]:
     return _run_tool(
         state,
         "tree",
-        {"path": path, "depth": depth},
+        {"path_id": path_id, "depth": depth},
         reason,
-        lambda: _tree_result(state, path, depth),
+        lambda: _path_id_error(path_id) or _tree_result(state, path_id, depth),
     )
 
 
 def _read(
     state: Any,
-    path: str,
+    path_id: str,
     *,
     offset: int = 0,
-    limit: int = 30,
+    limit: int = 0,
     reason: str = "",
 ) -> dict[str, Any]:
     return _run_tool(
         state,
         "read",
-        {"path": path, "offset": offset, "limit": limit},
+        {"path_id": path_id, "offset": offset, "limit": limit},
         reason,
-        lambda: {"ok": True, **state.document.read_markdown(path, offset=offset, limit=limit)},
+        lambda: _path_id_error(path_id) or {"ok": True, **state.document.read_markdown(path_id, offset=offset, limit=limit)},
     )
 
 
@@ -199,61 +197,92 @@ def _query_table(
 
 def _bind_evidence(
     state: Any,
-    field_id: str,
-    evidence: list[dict[str, Any]] | None,
+    field_id: str = "",
     *,
+    bindings: list[dict[str, Any]] | None = None,
     reason: str = "",
 ) -> dict[str, Any]:
-    evidence = evidence or []
+    normalized_bindings = normalize_evidence_bindings(field_id, bindings)
 
     def execute() -> dict[str, Any]:
-        field = field_definition(state, field_id)
-        if field is None:
-            return {"ok": False, "errors": [{"field_id": field_id, "code": "UNKNOWN_FIELD", "message": "unknown field_id"}]}
-        errors = [{"field_id": field_id, **error} for error in state.document.validate_evidence(evidence)]
+        pending_read = state.pending_read or {}
+        path_id = pending_read.get("path_id")
+        kind = pending_read.get("kind")
+        if not isinstance(path_id, str) or kind not in {"paragraph", "list", "table"}:
+            return {"ok": False, "errors": [{"code": "READ_REQUIRED", "message": "bind_evidence requires the current pending read object"}]}
+        errors: list[dict[str, Any]] = []
+        for binding in normalized_bindings:
+            binding_field_id = binding.get("field_id")
+            if not isinstance(binding_field_id, str) or not binding_field_id:
+                errors.append({"field_id": binding_field_id, "code": "BAD_BINDING", "message": "field_id is required"})
+                continue
+            if field_definition(state, binding_field_id) is None:
+                errors.append({"field_id": binding_field_id, "code": "UNKNOWN_FIELD", "message": "unknown field_id"})
         if errors:
             return {"ok": False, "errors": errors}
-        canonical_evidence = state.document.canonicalize_evidence(evidence)
-        inline_errors = validate_evidence_from_latest_inline(state, canonical_evidence)
-        if inline_errors:
-            return {"ok": False, "errors": [{"field_id": field_id, **error} for error in inline_errors]}
-        existing = state.evidence_states.get(field_id, {})
-        combined = [*(existing.get("evidence") or []), *canonical_evidence]
-        evidence_texts = state.document.evidence_texts(combined)
-        state.evidence_states[field_id] = {
-            "field_id": field_id,
-            "evidence": combined,
-            "evidence_texts": evidence_texts,
-            "reason": reason,
-        }
-        state.review_states.pop(field_id, None)
+
+        canonical_evidence = [{"path_id": state.document.path_id(path_id)}]
+        results: list[dict[str, Any]] = []
+        for binding in normalized_bindings:
+            binding_field_id = binding["field_id"]
+            existing = state.evidence_states.get(binding_field_id, {})
+            combined = [*(existing.get("evidence") or []), *canonical_evidence]
+            state.evidence_states[binding_field_id] = {
+                "field_id": binding_field_id,
+                "evidence": combined,
+                "reason": reason,
+            }
+            state.review_states.pop(binding_field_id, None)
+            results.append(
+                {
+                    "field_id": binding_field_id,
+                    "candidate_evidence": combined,
+                }
+            )
         return {
             "ok": True,
-            "field_id": field_id,
-            "evidence": combined,
-            "evidence_texts": evidence_texts,
+            "bindings": results,
+            "current_read": pending_read,
         }
 
     result = _run_tool(
         state,
         "bind_evidence",
-        {"field_id": field_id, "evidence": evidence},
+        {"field_id": field_id, "bindings": bindings},
         reason,
         execute,
     )
     if result.get("ok") is True:
-        _emit_event(
-            state,
-            {
-                "type": "evidence_bound",
-                "tool": "bind_evidence",
-                "reason": reason,
-                "field_id": field_id,
-                "evidence": result["evidence"],
-                "evidence_texts": result["evidence_texts"],
-            },
-        )
+        for binding in result["bindings"]:
+            _emit_event(
+                state,
+                {
+                    "type": "evidence_bound",
+                    "tool": "bind_evidence",
+                    "reason": reason,
+                    "field_id": binding["field_id"],
+                    "candidate_evidence": binding["candidate_evidence"],
+                },
+            )
+        if len(result["bindings"]) == 1:
+            result.update(result["bindings"][0])
     return result
+
+
+def _skip_read(state: Any, *, reason: str = "") -> dict[str, Any]:
+    def execute() -> dict[str, Any]:
+        pending_read = state.pending_read
+        if not pending_read:
+            return {"ok": False, "errors": [{"code": "READ_REQUIRED", "message": "skip_read requires the current pending read object"}]}
+        return {"ok": True, "skipped": pending_read}
+
+    return _run_tool(
+        state,
+        "skip_read",
+        {},
+        reason,
+        execute,
+    )
 
 
 def _write_field(
@@ -268,11 +297,9 @@ def _write_field(
     final_evidence = final_evidence or []
 
     def execute() -> dict[str, Any]:
-        evidence_state = state.evidence_states.get(field_id, {})
-        candidate_evidence = evidence_state.get("evidence") or []
         canonical_final_evidence = state.document.canonicalize_evidence(final_evidence)
         errors = validate_field_write(state, field_id, value, status)
-        errors.extend(validate_final_evidence_write(state, field_id, candidate_evidence, canonical_final_evidence))
+        errors.extend(validate_final_evidence_write(state, field_id, canonical_final_evidence, value, status))
         if errors:
             return {"ok": False, "errors": errors}
         evidence_texts = state.document.evidence_texts(canonical_final_evidence)
@@ -307,19 +334,19 @@ def _write_field(
     return result
 
 
-def _review_field(state: Any, field_id: str, *, reason: str = "") -> dict[str, Any]:
+def _review_evidences(state: Any, field_id: str, *, reason: str = "") -> dict[str, Any]:
     def execute() -> dict[str, Any]:
         field = field_definition(state, field_id)
         if field is None:
             return {"ok": False, "errors": [{"field_id": field_id, "code": "UNKNOWN_FIELD", "message": "unknown field_id"}]}
         evidence_state = state.evidence_states.get(field_id, {})
         field_state = state.field_states.get(field_id, {})
-        evidence = evidence_state.get("evidence") or field_state.get("evidence") or []
-        evidence_texts = evidence_state.get("evidence_texts") or field_state.get("evidence_texts")
-        if evidence_texts is None:
-            evidence_texts = state.document.evidence_texts(evidence)
+        candidate_evidence = evidence_state.get("evidence") or []
+        evidence = expand_candidate_evidence(state, candidate_evidence)
+        evidence_texts = state.document.evidence_texts(evidence)
         state.review_states[field_id] = {
             "field_id": field_id,
+            "candidate_evidence": candidate_evidence,
             "evidence": evidence,
             "evidence_units": sorted(_selector_units(evidence)),
             "reason": reason,
@@ -329,18 +356,18 @@ def _review_field(state: Any, field_id: str, *, reason: str = "") -> dict[str, A
             "field_id": field_id,
             "field_description": getattr(field, "description", "") or "",
             "field": field_state or None,
+            "candidate_evidence": candidate_evidence,
             "evidence": evidence,
             "evidence_texts": evidence_texts,
             "guidance": (
-                "This tool does not judge correctness. Re-read the field description, current value, "
-                "and bound evidence, then decide whether to keep the value, overwrite it with write_field, "
-                "or bind additional evidence."
+                "This tool does not judge correctness. Copy only useful inline selectors from "
+                "review_evidences.evidence into write_field(final_evidence=...)."
             ),
         }
 
     return _run_tool(
         state,
-        "review_field",
+        "review_evidences",
         {"field_id": field_id},
         reason,
         execute,
@@ -371,13 +398,27 @@ def _submit_result(state: Any, *, reason: str = "") -> dict[str, Any]:
     return result
 
 
-def _tree_result(state: Any, path: str, depth: int) -> dict[str, Any]:
-    canonical_path = state.document.resolve_path(path)
+def _tree_result(state: Any, path_id: str, depth: int) -> dict[str, Any]:
+    canonical_path_id = state.document.path_id(path_id)
     return {
         "ok": True,
-        "path": canonical_path,
+        "path_id": canonical_path_id,
         "depth": depth,
-        "text": state.document.tree_text(canonical_path, depth=depth),
+        "text": state.document.tree_text(canonical_path_id, depth=depth),
+    }
+
+
+def _path_id_error(path_id: str) -> dict[str, Any] | None:
+    if isinstance(path_id, str) and re.fullmatch(r"\[\d{4}(?:\.\d{4})*\]", path_id.strip()):
+        return None
+    return {
+        "ok": False,
+        "errors": [
+            {
+                "code": "BAD_PATH_ID",
+                "message": "use a path_id like [0000.0001] copied from tree output; raw paths are not accepted",
+            }
+        ],
     }
 
 
@@ -403,36 +444,76 @@ def validate_field_write(
 def validate_final_evidence_write(
     state: Any,
     field_id: str,
-    candidate_evidence: list[dict[str, Any]],
     final_evidence: list[dict[str, Any]],
+    value: Any,
+    status: str,
 ) -> list[dict[str, Any]]:
     errors: list[dict[str, Any]] = []
-    candidate_units = _selector_units(candidate_evidence)
+    field = field_definition(state, field_id)
+    final_evidence = state.document.canonicalize_evidence(final_evidence)
     final_units = _selector_units(final_evidence)
+    review_state = state.review_states.get(field_id)
+    reviewed_units = set(tuple(item) for item in review_state.get("evidence_units", [])) if review_state else set()
     if final_evidence:
-        errors.extend({"field_id": field_id, **error} for error in state.document.validate_evidence(final_evidence))
-    if errors:
-        return errors
-    if candidate_units:
-        review_state = state.review_states.get(field_id)
-        reviewed_units = set(tuple(item) for item in review_state.get("evidence_units", [])) if review_state else set()
-        if reviewed_units != candidate_units:
+        block_selectors = [selector for selector in final_evidence if _is_block_selector(selector)]
+        if block_selectors:
             return [
                 {
                     "field_id": field_id,
-                    "code": "REVIEW_REQUIRED",
-                    "message": "bound candidate evidence must be reviewed before write_field",
+                    "code": "INLINE_FINAL_EVIDENCE_REQUIRED",
+                    "message": "final_evidence must use inline selectors from review_evidences, not block-level {path_id} selectors",
                 }
             ]
-    if final_units and not final_units.issubset(candidate_units):
+    if status == "resolved" and field is not None and not empty_evidence_allowed(field, value) and not reviewed_units:
+        return [
+            {
+                "field_id": field_id,
+                "code": "REVIEW_REQUIRED",
+                "message": "review_evidences must be called before writing resolved non-null fields",
+            }
+        ]
+    if final_units and not final_units.issubset(reviewed_units):
         errors.append(
             {
                 "field_id": field_id,
-                "code": "UNBOUND_FINAL_EVIDENCE",
-                "message": "final_evidence must be selected from evidence already bound to this field",
+                "code": "UNREVIEWED_FINAL_EVIDENCE",
+                "message": "final_evidence must be selected from review_evidences.evidence for this field",
             }
         )
+    if errors:
+        return errors
+    if final_evidence:
+        errors.extend({"field_id": field_id, **error} for error in state.document.validate_evidence(final_evidence))
     return errors
+
+
+def expand_candidate_evidence(state: Any, evidence: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    expanded: list[dict[str, Any]] = []
+    for selector in evidence or []:
+        if not isinstance(selector, dict):
+            continue
+        path_id = selector.get("path_id")
+        if not isinstance(path_id, str):
+            continue
+        try:
+            expanded.append(state.document.inline_selector_for_path(path_id))
+        except ValueError:
+            continue
+    return expanded
+
+
+def normalize_evidence_bindings(field_id: str, bindings: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    if bindings is None:
+        return [{"field_id": field_id}]
+    if not isinstance(bindings, list) or not bindings:
+        return [{"field_id": ""}]
+    normalized: list[dict[str, Any]] = []
+    for binding in bindings:
+        if isinstance(binding, dict):
+            normalized.append({"field_id": binding.get("field_id", "")})
+        else:
+            normalized.append({"field_id": ""})
+    return normalized
 
 
 def validate_inline_request_after_read(state: Any, path: str) -> dict[str, Any] | None:
@@ -556,14 +637,18 @@ def empty_evidence_allowed(field: Any, value: Any) -> bool:
 def _selector_units(evidence: list[dict[str, Any]] | None) -> set[tuple[str, str, str]]:
     units: set[tuple[str, str, str]] = set()
     for selector in evidence or []:
-        path = selector.get("path")
-        if not isinstance(path, str):
+        path_id = selector.get("path_id")
+        if not isinstance(path_id, str):
             continue
         for key in ("sentences", "items", "rows"):
             values = selector.get(key)
             if isinstance(values, list):
-                units.update((path, key, str(value)) for value in values)
+                units.update((path_id, key, str(value)) for value in values)
     return units
+
+
+def _is_block_selector(selector: dict[str, Any]) -> bool:
+    return isinstance(selector.get("path_id"), str) and not any(key in selector for key in ("sentences", "items", "rows"))
 
 
 def _run_tool(
@@ -584,6 +669,21 @@ def _run_tool(
             "args": args,
         },
     )
+    ordering_error = validate_tool_order(state, tool_name)
+    if ordering_error:
+        result = {"ok": False, "errors": [ordering_error]}
+        _record_action(state, tool_name, args, reason, result)
+        _emit_event(
+            state,
+            {
+                "type": "tool_failed",
+                "tool": tool_name,
+                "reason": reason,
+                "args": args,
+                "result": result,
+            },
+        )
+        return result
     try:
         result = execute()
     except Exception as exc:  # pragma: no cover - exercised by tool users
@@ -607,6 +707,21 @@ def _run_tool(
     return result
 
 
+def validate_tool_order(state: Any, tool_name: str) -> dict[str, Any] | None:
+    if state.pending_read and tool_name not in {"bind_evidence", "skip_read"}:
+        return {
+            "code": "READ_JUDGEMENT_REQUIRED",
+            "message": "after read, call bind_evidence or skip_read before any other tool",
+            "pending_read": state.pending_read,
+        }
+    if tool_name in {"bind_evidence", "skip_read"} and not state.pending_read:
+        return {
+            "code": "READ_REQUIRED",
+            "message": f"{tool_name} requires a current pending read object",
+        }
+    return None
+
+
 def _record_action(state: Any, tool_name: str, args: dict[str, Any], reason: str, result: dict[str, Any]) -> None:
     state.actions.append(
         {
@@ -620,19 +735,21 @@ def _record_action(state: Any, tool_name: str, args: dict[str, Any], reason: str
 
 def _update_tool_cursor(state: Any, tool_name: str, result: dict[str, Any]) -> None:
     state.last_tool_name = tool_name
-    if tool_name == "bind_evidence":
-        state.last_read = None
-        return
     if result.get("ok") is False:
-        state.last_read = None
-        state.last_inline_source = None
+        return
+    if tool_name == "bind_evidence":
+        state.pending_read = None
         return
     if tool_name == "read":
-        state.last_read = {"path": result.get("path"), "kind": result.get("kind")}
+        state.last_read = {"path_id": result.get("path_id"), "kind": result.get("kind")}
+        state.pending_read = {"path_id": result.get("path_id"), "kind": result.get("kind")}
         state.last_inline_source = _inline_source_from_read_result(result)
         return
+    if tool_name == "skip_read":
+        state.pending_read = None
+        return
     if tool_name == "query_table":
-        state.last_read = {"path": result.get("path"), "kind": result.get("kind")}
+        state.last_read = {"path_id": result.get("path_id"), "kind": result.get("kind")}
         state.last_inline_source = _inline_source_from_read_result(result)
         return
     if tool_name == "anchors":
@@ -646,27 +763,28 @@ def _update_tool_cursor(state: Any, tool_name: str, result: dict[str, Any]) -> N
             ],
         }
         return
+    state.pending_read = None
     state.last_read = None
     state.last_inline_source = None
 
 
 def _inline_source_from_read_result(result: dict[str, Any]) -> dict[str, Any] | None:
-    path = result.get("path")
+    path_id = result.get("path_id")
     text = result.get("text") or ""
-    if not isinstance(path, str) or not isinstance(text, str):
+    if not isinstance(path_id, str) or not isinstance(text, str):
         return None
     kind = result.get("kind")
     if kind == "list":
         return {
             "tool": "read",
-            "path": path,
-            "evidence_units": [(path, "items", item_id) for item_id in _inline_ids(text, r"\[(I\d{3}(?:\.\d{3})*)\]")],
+            "path_id": path_id,
+            "evidence_units": [(path_id, "items", item_id) for item_id in _inline_ids(text, r"\[(I\d{3}(?:\.\d{3})*)\]")],
         }
     if kind in {"table", "table_query"}:
         return {
             "tool": "query_table" if kind == "table_query" else "read",
-            "path": path,
-            "evidence_units": [(path, "rows", row_id) for row_id in _inline_ids(text, r"\|\s*(R\d{3})\s*\|")],
+            "path_id": path_id,
+            "evidence_units": [(path_id, "rows", row_id) for row_id in _inline_ids(text, r"\|\s*(R\d{3})\s*\|")],
         }
     return None
 
@@ -685,10 +803,9 @@ __all__ = [
     "build_tools",
     "_tree",
     "_read",
-    "_anchors",
-    "_query_table",
     "_bind_evidence",
-    "_review_field",
+    "_review_evidences",
+    "_skip_read",
     "_write_field",
     "_submit_result",
 ]

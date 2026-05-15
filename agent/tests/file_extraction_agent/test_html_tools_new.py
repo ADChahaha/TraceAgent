@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-from urllib.parse import quote
-
-from service.file_extraction_agent.impl.html_index import build_html_document
 from service.file_extraction_agent.impl.html_state import build_graph_state
 from service.file_extraction_agent.impl.html_tools import (
-    _anchors,
+    __all__ as html_tools_all,
     _bind_evidence,
-    _query_table,
     _read,
-    _review_field,
+    _review_evidences,
+    _skip_read,
     _submit_result,
     _tree,
     _write_field,
@@ -52,6 +49,34 @@ def _state():
     return build_graph_state(extraction_input)
 
 
+def _large_collection_state():
+    list_items = "\n".join(f"<li>服务项目 {index}</li>" for index in range(1, 36))
+    table_rows = "\n".join(f"<tr><td>费用 {index}</td><td>{index}</td></tr>" for index in range(1, 36))
+    extraction_input = build_graph_input(
+        documents=[
+            {
+                "filename": "large.html",
+                "html": f"""
+                <h1>大列表</h1>
+                <h2>明细</h2>
+                <ul>{list_items}</ul>
+                <table>
+                  <tr><th>项目</th><th>金额</th></tr>
+                  {table_rows}
+                </table>
+                """,
+            }
+        ],
+        task_spec={
+            "fields": [
+                {"name": "items", "type": "list[string]", "required": False},
+                {"name": "fees", "type": "list[number]", "required": False},
+            ]
+        },
+    )
+    return build_graph_state(extraction_input)
+
+
 def _enum_state():
     extraction_input = build_graph_input(
         documents=[
@@ -81,27 +106,7 @@ def _enum_state():
     return build_graph_state(extraction_input)
 
 
-def _number_state():
-    extraction_input = build_graph_input(
-        documents=[
-            {
-                "filename": "company.html",
-                "html": """
-                <h1>公司资料</h1>
-                <p>公司成立于2020年。</p>
-                """,
-            }
-        ],
-        task_spec={
-            "fields": [
-                {"name": "founded_year", "type": "number", "required": True},
-            ]
-        },
-    )
-    return build_graph_state(extraction_input)
-
-
-def _paths(state):
+def _paths():
     return {
         "paragraph": "/001-company-公司资料/001-概况/001-公司成立于2020年。总部位于上海.md",
         "list": "/001-company-公司资料/001-概况/002-提供系统维护.list",
@@ -109,365 +114,222 @@ def _paths(state):
     }
 
 
-def _bind_sentence(state, field_id: str, path: str, sentence_ids: list[str], reason: str):
-    _read(state, path, reason=f"读取 {path}，判断是否支持 {field_id}。")
-    _anchors(state, path, reason=f"上一步 read 支持 {field_id}，获取 inline 句子编号。")
-    return _bind_evidence(
-        state,
-        field_id,
-        [{"path": path, "sentences": sentence_ids}],
-        reason=reason,
-    )
+def _path_ids(state, paths):
+    return {name: state.document.path_id(path) for name, path in paths.items()}
 
 
-def _bind_items(state, field_id: str, path: str, item_ids: list[str], reason: str):
-    _read(state, path, reason=f"读取 {path}，判断是否支持 {field_id}。")
-    return _bind_evidence(
-        state,
-        field_id,
-        [{"path": path, "items": item_ids}],
-        reason=reason,
-    )
+def _large_paths():
+    return {
+        "list": "/001-large-大列表/001-明细/001-服务项目 1.list",
+        "table": "/001-large-大列表/001-明细/002-项目 金额.table",
+    }
 
 
-def _bind_rows(state, field_id: str, path: str, row_ids: list[str], reason: str):
-    _read(state, path, reason=f"读取 {path}，判断是否支持 {field_id}。")
-    return _bind_evidence(
-        state,
-        field_id,
-        [{"path": path, "rows": row_ids}],
-        reason=reason,
-    )
+def _first_path_by_kind(state, kind: str):
+    for path, node in state.document.nodes_by_path.items():
+        if node.kind == kind:
+            return state.document.path_id(path)
+    raise AssertionError(f"missing {kind} path")
 
 
-def test_build_tools_exposes_virtual_tree_tools_only():
+def test_build_tools_exposes_read_judgement_tools_only():
     tools = build_tools(_state())
     tool_names = [getattr(tool, "name", getattr(tool, "__name__", "")) for tool in tools]
 
     assert tool_names == [
         "tree",
         "read",
-        "anchors",
-        "query_table",
         "bind_evidence",
-        "review_field",
+        "skip_read",
+        "review_evidences",
         "write_field",
         "submit_result",
     ]
 
 
-def test_tree_read_anchors_and_query_record_reasoned_events():
+def test_module_exports_current_review_helper():
+    assert "_review_evidences" in html_tools_all
+    assert "_anchors" not in html_tools_all
+    assert "_query_table" not in html_tools_all
+    assert "_review_field" not in html_tools_all
+
+
+def test_read_requires_bind_or_skip_before_other_tools():
     state = _state()
-    paths = _paths(state)
+    paths = _paths()
+    path_ids = _path_ids(state, paths)
 
-    tree_result = _tree(state, "/", depth=2, reason="先查看输入文档。")
-    read_result = _read(state, paths["table"], offset=0, limit=1, reason="读取费用表。")
-    _read(state, paths["paragraph"], reason="读取公司概况段落，判断是否支持 founded_year。")
-    anchors_result = _anchors(state, paths["paragraph"], reason="定位成立年份句子。")
-    query_result = _query_table(
-        state,
-        paths["table"],
-        'SELECT "项目", "金额" FROM data WHERE "项目" = \'押金\'',
-        offset=0,
-        limit=10,
-        reason="查询押金行。",
-    )
+    read_result = _read(state, path_ids["paragraph"], reason="读取成立年份段落。")
+    blocked_tree = _tree(state, "[0000]", depth=1, reason="还没判断上次 read，不能继续展开 tree。")
+    blocked_read = _read(state, path_ids["list"], reason="还没判断上次 read，不能继续 read。")
+    skipped = _skip_read(state, reason="刚读段落不作为当前字段证据，关闭 read 判断。")
+    next_read = _read(state, path_ids["list"], reason="上次 read 已判断完，继续读取列表。")
 
-    assert "001-company-公司资料/" in tree_result["text"]
-    assert "| R001 | 服务费 | 1000 |" in read_result["text"]
-    assert anchors_result["anchors"][0]["id"] == "S001"
-    assert "| R002 | 押金 | 500 |" in query_result["text"]
-    assert [event["type"] for event in state.events] == [
-        "tool_started",
-        "tool_completed",
-        "tool_started",
-        "tool_completed",
-        "tool_started",
-        "tool_completed",
-        "tool_started",
-        "tool_completed",
-        "tool_started",
-        "tool_completed",
-    ]
-    assert state.events[0]["reason"] == "先查看输入文档。"
+    assert read_result["ok"] is True
+    assert blocked_tree["ok"] is False
+    assert blocked_tree["errors"][0]["code"] == "READ_JUDGEMENT_REQUIRED"
+    assert blocked_read["ok"] is False
+    assert blocked_read["errors"][0]["code"] == "READ_JUDGEMENT_REQUIRED"
+    assert skipped["ok"] is True
+    assert skipped["skipped"]["path_id"] == path_ids["paragraph"]
+    assert next_read["ok"] is True
 
 
-def test_anchors_requires_immediate_prior_read_of_same_paragraph():
+def test_bind_evidence_uses_current_read_block_and_review_expands_inline():
     state = _state()
-    paths = _paths(state)
+    paths = _paths()
+    path_ids = _path_ids(state, paths)
 
-    blocked_before_read = _anchors(state, paths["paragraph"], reason="没有先 read，不能取 inline 句子编号。")
-    _read(state, paths["paragraph"], reason="读取公司概况段落，判断是否支持 founded_year。")
-    anchors_result = _anchors(state, paths["paragraph"], reason="上一步 read 命中 founded_year，获取 inline 句子编号。")
-    _tree(state, "/", depth=1, reason="插入了其他动作。")
-    blocked_after_tree = _anchors(state, paths["paragraph"], reason="不是紧跟 read，不能取 inline 句子编号。")
-
-    assert blocked_before_read["ok"] is False
-    assert blocked_before_read["errors"][0]["code"] == "INLINE_REQUIRES_READ"
-    assert anchors_result["ok"] is True
-    assert anchors_result["anchors"][0]["id"] == "S001"
-    assert blocked_after_tree["ok"] is False
-    assert blocked_after_tree["errors"][0]["code"] == "INLINE_REQUIRES_READ"
-
-
-def test_bind_evidence_requires_fresh_inline_source_from_previous_read_or_anchors():
-    state = _state()
-    paths = _paths(state)
-
-    blocked_before_inline = _bind_evidence(
-        state,
-        "founded_year",
-        [{"path": paths["paragraph"], "sentences": ["S001"]}],
-        reason="没有 inline 来源时不能绑定。",
-    )
-    _read(state, paths["paragraph"], reason="读取公司概况段落，判断是否支持 founded_year。")
-    _anchors(state, paths["paragraph"], reason="上一步 read 支持 founded_year，获取 inline 句子编号。")
-    bound_sentence = _bind_evidence(
-        state,
-        "founded_year",
-        [{"path": paths["paragraph"], "sentences": ["S001"]}],
-        reason="S001 是刚取得的 inline 证据，立即绑定 founded_year。",
-    )
-    consecutive_bound_sentence = _bind_evidence(
-        state,
-        "founded_year",
-        [{"path": paths["paragraph"], "sentences": ["S002"]}],
-        reason="同一个 inline 来源还没被非 bind 工具打断，可以继续绑定 S002。",
-    )
-    _tree(state, "/", depth=1, reason="离开当前 inline 上下文。")
-    blocked_stale_inline = _bind_evidence(
-        state,
-        "founded_year",
-        [{"path": paths["paragraph"], "sentences": ["S001"]}],
-        reason="inline 来源已经被其他动作打断，不能绑定。",
-    )
-    _read(state, paths["list"], reason="读取服务列表，判断是否支持 service_items。")
-    bound_list_item = _bind_evidence(
-        state,
-        "service_items",
-        [{"path": paths["list"], "items": ["I001"]}],
-        reason="I001 是刚 read 返回的 inline item，立即绑定 service_items。",
-    )
-
-    assert blocked_before_inline["ok"] is False
-    assert blocked_before_inline["errors"][0]["code"] == "BIND_REQUIRES_INLINE"
-    assert bound_sentence["ok"] is True
-    assert consecutive_bound_sentence["ok"] is True
-    assert consecutive_bound_sentence["evidence"][-1] == {"path": paths["paragraph"], "sentences": ["S002"]}
-    assert blocked_stale_inline["ok"] is False
-    assert blocked_stale_inline["errors"][0]["code"] == "BIND_REQUIRES_INLINE"
-    assert bound_list_item["ok"] is True
-
-
-def test_virtual_tree_tools_accept_percent_encoded_paths_and_return_canonical_paths():
-    state = _state()
-    paths = _paths(state)
-    encoded_section = quote("/001-company-公司资料/001-概况", safe="/")
-    encoded_paragraph = quote(paths["paragraph"], safe="/")
-    encoded_table = quote(paths["table"], safe="/")
-
-    tree_result = _tree(state, encoded_section, depth=1, reason="展开被 URL 编码过的章节路径。")
-    read_result = _read(state, encoded_paragraph, reason="读取被 URL 编码过的段落路径。")
-    anchors_result = _anchors(state, encoded_paragraph, reason="给被 URL 编码过的段落路径取句子编号。")
+    missing_read = _bind_evidence(state, "founded_year", reason="没有 read，不能绑定。")
+    _read(state, path_ids["paragraph"], reason="读取成立年份段落。")
     bound = _bind_evidence(
         state,
-        "founded_year",
-        [{"path": encoded_paragraph, "sentences": ["S001"]}],
-        reason="用被 URL 编码过的路径绑定证据。",
+        bindings=[{"field_id": "founded_year"}, {"field_id": "missing_required"}],
+        reason="当前段落可能支持两个字段，一次绑定到两个候选池。",
     )
-    query_result = _query_table(
-        state,
-        encoded_table,
-        'SELECT "项目", "金额" FROM data WHERE "项目" = \'押金\'',
-        reason="查询被 URL 编码过的表格路径。",
-    )
-    _review_field(state, "founded_year", reason="复看 canonical 化后的证据。")
-    written = _write_field(
-        state,
-        "founded_year",
-        2020,
-        final_evidence=[{"path": encoded_paragraph, "sentences": ["S001"]}],
-        status="resolved",
-        reason="用被 URL 编码过的路径提交最终证据。",
-    )
+    review = _review_evidences(state, "founded_year", reason="展开 founded_year 候选 block 为 inline。")
 
-    assert tree_result["ok"] is True
-    assert tree_result["path"] == "/001-company-公司资料/001-概况"
-    assert "001-公司成立于2020年。总部位于上海.md" in tree_result["text"]
-    assert read_result["path"] == paths["paragraph"]
-    assert anchors_result["path"] == paths["paragraph"]
-    assert query_result["path"] == paths["table"]
-    assert "| R002 | 押金 | 500 |" in query_result["text"]
-    assert bound["evidence"] == [{"path": paths["paragraph"], "sentences": ["S001"]}]
-    assert written["field"]["evidence"] == [{"path": paths["paragraph"], "sentences": ["S001"]}]
-
-
-def test_bind_evidence_accumulates_selectors_and_write_field_submits_value():
-    state = _state()
-    paths = _paths(state)
-
-    first = _bind_sentence(
-        state,
-        "founded_year",
-        paths["paragraph"],
-        ["S001"],
-        reason="看到 S001 写明公司成立年份，先绑定证据。",
-    )
-    second = _bind_sentence(
-        state,
-        "founded_year",
-        paths["paragraph"],
-        ["S002"],
-        reason="看到 S002 写明总部位置，追加同字段证据。",
-    )
-    _review_field(state, "founded_year", reason="复看候选证据后提交字段值。")
-    written = _write_field(
-        state,
-        "founded_year",
-        2020,
-        final_evidence=[{"path": paths["paragraph"], "sentences": ["S001"]}],
-        status="resolved",
-        reason="证据已绑定，提交成立年份。",
-    )
-    overwritten = _write_field(
-        state,
-        "founded_year",
-        2021,
-        final_evidence=[{"path": paths["paragraph"], "sentences": ["S001"]}],
-        status="resolved",
-        reason="覆盖上一版字段值。",
-    )
-    bad = _bind_evidence(
-        state,
-        "deposit",
-        [{"path": paths["table"], "sentences": ["S001"]}],
-        reason="错误地用句子引用表格。",
-    )
-
-    assert first["ok"] is True
-    assert first["evidence_texts"] == [
-        {
-            "path": paths["paragraph"],
-            "selector": "S001",
-            "text": "公司成立于2020年。",
-        }
+    assert missing_read["ok"] is False
+    assert missing_read["errors"][0]["code"] == "READ_REQUIRED"
+    assert bound["ok"] is True
+    assert bound["bindings"][0]["candidate_evidence"] == [{"path_id": path_ids["paragraph"]}]
+    assert state.evidence_states["founded_year"]["evidence"] == [{"path_id": path_ids["paragraph"]}]
+    assert state.evidence_states["missing_required"]["evidence"] == [{"path_id": path_ids["paragraph"]}]
+    assert review["candidate_evidence"] == [{"path_id": path_ids["paragraph"]}]
+    assert review["evidence"] == [{"path_id": path_ids["paragraph"], "sentences": ["S001", "S002"]}]
+    assert review["evidence_texts"] == [
+        {"path_id": path_ids["paragraph"], "selector": "S001", "text": "公司成立于2020年。"},
+        {"path_id": path_ids["paragraph"], "selector": "S002", "text": "总部位于上海。"},
     ]
-    assert second["evidence"] == [
-        {"path": paths["paragraph"], "sentences": ["S001"]},
-        {"path": paths["paragraph"], "sentences": ["S002"]},
-    ]
-    assert written["field"]["value"] == 2020
-    assert written["field"]["evidence"][0]["sentences"] == ["S001"]
-    assert overwritten["field"]["value"] == 2021
-    assert state.field_states["founded_year"]["value"] == 2021
-    assert state.evidence_states["founded_year"]["evidence"][1]["sentences"] == ["S002"]
-    assert bad["ok"] is False
-    assert "rows" in bad["errors"][0]["message"]
-    assert state.events[-1]["type"] == "tool_failed"
 
 
-def test_write_field_requires_review_and_filters_final_evidence():
+def test_bind_evidence_cannot_reuse_read_after_other_tool():
     state = _state()
-    paths = _paths(state)
-    _bind_sentence(
-        state,
-        "founded_year",
-        paths["paragraph"],
-        ["S001"],
-        reason="看到 S001 写明公司成立年份，先绑定证据。",
-    )
-    _bind_sentence(
-        state,
-        "founded_year",
-        paths["paragraph"],
-        ["S002"],
-        reason="看到 S002 写明总部位置，也先绑定为候选。",
-    )
+    paths = _paths()
+    path_ids = _path_ids(state, paths)
 
-    blocked = _write_field(
+    _read(state, path_ids["paragraph"], reason="读取成立年份段落。")
+    _bind_evidence(state, "founded_year", reason="绑定当前 read block，pending read 关闭。")
+    stale = _bind_evidence(state, "deposit", reason="不能回头绑定已经关闭的旧 read block。")
+
+    assert stale["ok"] is False
+    assert stale["errors"][0]["code"] == "READ_REQUIRED"
+    assert "deposit" not in state.evidence_states
+
+
+def test_list_and_table_read_return_all_rows_and_review_expands_all_inline():
+    state = _large_collection_state()
+    paths = _large_paths()
+    path_ids = _path_ids(state, paths)
+
+    list_result = _read(state, path_ids["list"], reason="读取完整列表。")
+    _bind_evidence(state, "items", reason="完整列表可能支持 items，绑定 list block。")
+    list_review = _review_evidences(state, "items", reason="展开 list block。")
+    _read(state, path_ids["table"], reason="读取完整表格。")
+    _bind_evidence(state, "fees", reason="完整表格可能支持 fees，绑定 table block。")
+    table_review = _review_evidences(state, "fees", reason="展开 table block。")
+
+    assert list_result["has_more"] is False
+    assert "[I035] 服务项目 35" in list_result["text"]
+    assert list_review["evidence"] == [{"path_id": path_ids["list"], "items": [f"I{index:03d}" for index in range(1, 36)]}]
+    assert "| R035 | 费用 35 | 35 |" in state.document.read_markdown(paths["table"], limit=0)["text"]
+    assert table_review["evidence"] == [{"path_id": path_ids["table"], "rows": [f"R{index:03d}" for index in range(1, 36)]}]
+
+
+def test_write_field_requires_reviewed_inline_evidence_not_block_evidence():
+    state = _state()
+    paths = _paths()
+    path_ids = _path_ids(state, paths)
+
+    _read(state, path_ids["paragraph"], reason="读取成立年份段落。")
+    _bind_evidence(state, "founded_year", reason="当前段落支持 founded_year，绑定 block。")
+    blocked_before_review = _write_field(
         state,
         "founded_year",
         2020,
-        final_evidence=[{"path": paths["paragraph"], "sentences": ["S001"]}],
+        final_evidence=[{"path_id": path_ids["paragraph"], "sentences": ["S001"]}],
         status="resolved",
-        reason="还没复看候选证据，应该被拒绝。",
+        reason="还没 review_evidences，不能写 resolved 非 null 字段。",
     )
-    _review_field(
+    _review_evidences(state, "founded_year", reason="展开候选 block。")
+    blocked_block_evidence = _write_field(
         state,
         "founded_year",
-        reason="复看候选证据，只保留直接支持成立年份的 S001。",
+        2020,
+        final_evidence=[{"path_id": path_ids["paragraph"]}],
+        status="resolved",
+        reason="final_evidence 不能使用 block selector。",
     )
     written = _write_field(
         state,
         "founded_year",
         2020,
-        final_evidence=[{"path": paths["paragraph"], "sentences": ["S001"]}],
+        final_evidence=[{"path_id": path_ids["paragraph"], "sentences": ["S001"]}],
         status="resolved",
-        reason="复看后只提交 S001 作为最终证据。",
+        reason="使用 review_evidences 返回的 S001 写入字段。",
     )
-    bad = _write_field(
+    blocked_unreviewed_inline = _write_field(
         state,
         "founded_year",
         2020,
-        final_evidence=[{"path": paths["table"], "rows": ["R001"]}],
+        final_evidence=[{"path_id": path_ids["paragraph"], "sentences": ["S999"]}],
         status="resolved",
-        reason="不能使用未绑定到该字段的证据。",
+        reason="S999 没有出现在 review_evidences 返回值中。",
     )
 
-    assert blocked["ok"] is False
-    assert blocked["errors"][0]["code"] == "REVIEW_REQUIRED"
+    assert blocked_before_review["ok"] is False
+    assert blocked_before_review["errors"][0]["code"] == "REVIEW_REQUIRED"
+    assert blocked_block_evidence["ok"] is False
+    assert blocked_block_evidence["errors"][0]["code"] == "INLINE_FINAL_EVIDENCE_REQUIRED"
     assert written["ok"] is True
-    assert written["field"]["evidence"] == [{"path": paths["paragraph"], "sentences": ["S001"]}]
+    assert written["field"]["evidence"] == [{"path_id": path_ids["paragraph"], "sentences": ["S001"]}]
     assert written["field"]["evidence_texts"] == [
-        {
-            "path": paths["paragraph"],
-            "selector": "S001",
-            "text": "公司成立于2020年。",
-        }
+        {"path_id": path_ids["paragraph"], "selector": "S001", "text": "公司成立于2020年。"}
     ]
-    assert bad["ok"] is False
-    assert bad["errors"][0]["code"] == "UNBOUND_FINAL_EVIDENCE"
+    assert blocked_unreviewed_inline["ok"] is False
+    assert blocked_unreviewed_inline["errors"][0]["code"] == "UNREVIEWED_FINAL_EVIDENCE"
 
 
-def test_write_field_without_candidate_evidence_does_not_require_review():
-    state = _state()
+def test_missing_and_null_enum_values_can_use_empty_evidence_without_review():
+    missing_state = _state()
+    enum_state = _enum_state()
 
-    written = _write_field(
-        state,
+    missing = _write_field(
+        missing_state,
         "missing_required",
         None,
         final_evidence=[],
         status="missing",
-        reason="没有候选证据时直接标记缺失。",
+        reason="文档未提及该字段，写 missing。",
+    )
+    null_enum = _write_field(
+        enum_state,
+        "limited_use_decision",
+        {"variant": "NotMentioned", "value": None},
+        final_evidence=[],
+        status="resolved",
+        reason="null enum variant 表示未提及，可以空证据。",
     )
 
-    assert written["ok"] is True
-    assert written["field"]["evidence"] == []
-    assert written["field"]["evidence_texts"] == []
+    assert missing["ok"] is True
+    assert null_enum["ok"] is True
 
 
 def test_submit_result_requires_final_evidence_for_resolved_non_null_values():
-    state = _number_state()
-
-    written = _write_field(
-        state,
-        "founded_year",
-        2020,
-        final_evidence=[],
-        status="resolved",
-        reason="先允许写入草稿，最终提交时再校验证据。",
-    )
-    result = _submit_result(state, reason="提交时拒绝非 null 字段空证据。")
-
-    assert written["ok"] is True
-    assert result["ok"] is False
-    assert result["errors"][0]["code"] == "MISSING_FINAL_EVIDENCE"
-
-
-def test_submit_result_allows_empty_final_evidence_for_null_enum_variant_only():
     state = _enum_state()
 
-    non_null_written = _write_field(
+    blocked_before_review = _write_field(
+        state,
+        "limited_use_decision",
+        {"variant": "Entailment", "value": ["接收方只能为项目目的使用保密信息。"]},
+        final_evidence=[],
+        status="resolved",
+        reason="非 null enum 没有 review，不能直接写入。",
+    )
+    _read(state, _first_path_by_kind(state, "paragraph"), reason="读取可能支持 enum 的段落。")
+    _bind_evidence(state, "limited_use_decision", reason="当前段落可能支持 enum 字段，绑定 block。")
+    _review_evidences(state, "limited_use_decision", reason="写字段前先 review 候选证据。")
+    written = _write_field(
         state,
         "limited_use_decision",
         {"variant": "Entailment", "value": ["接收方只能为项目目的使用保密信息。"]},
@@ -476,160 +338,44 @@ def test_submit_result_allows_empty_final_evidence_for_null_enum_variant_only():
         reason="先写入非 null enum 草稿。",
     )
     blocked = _submit_result(state, reason="提交时拒绝非 null enum 空证据。")
-    written = _write_field(
-        state,
-        "limited_use_decision",
-        {"variant": "NotMentioned", "value": None},
-        final_evidence=[],
-        status="resolved",
-        reason="null enum variant 表示未提及，可以空证据提交。",
-    )
-    completed = _submit_result(state, reason="null enum variant 可以空证据提交。")
 
-    assert non_null_written["ok"] is True
+    assert blocked_before_review["ok"] is False
+    assert blocked_before_review["errors"][0]["code"] == "REVIEW_REQUIRED"
+    assert written["ok"] is True
     assert blocked["ok"] is False
     assert blocked["errors"][0]["code"] == "MISSING_FINAL_EVIDENCE"
+
+
+def test_read_write_reject_raw_paths_and_use_path_id_through_review():
+    state = _state()
+    paths = _paths()
+    path_ids = _path_ids(state, paths)
+
+    raw_path_result = _read(state, paths["paragraph"], reason="raw path 不再是模型可见 locator。")
+    read_result = _read(state, path_ids["paragraph"], reason="读取 path_id 指向的段落。")
+    _bind_evidence(state, "founded_year", reason="绑定 canonicalized paragraph block。")
+    review = _review_evidences(state, "founded_year", reason="展开 canonicalized paragraph block。")
+    written = _write_field(
+        state,
+        "founded_year",
+        2020,
+        final_evidence=[{"path_id": path_ids["paragraph"], "sentences": ["S001"]}],
+        status="resolved",
+        reason="write_field 使用 path_id selector。",
+    )
+    raw_path_final_evidence = _write_field(
+        state,
+        "founded_year",
+        2020,
+        final_evidence=[{"path_id": paths["paragraph"], "sentences": ["S001"]}],
+        status="resolved",
+        reason="raw path 不能伪装成 path_id selector。",
+    )
+
+    assert raw_path_result["ok"] is False
+    assert read_result["path_id"] == path_ids["paragraph"]
+    assert review["candidate_evidence"] == [{"path_id": path_ids["paragraph"]}]
     assert written["ok"] is True
-    assert written["field"]["evidence"] == []
-    assert completed["ok"] is True
-
-
-def test_review_field_returns_current_value_description_and_bound_evidence():
-    state = _state()
-    paths = _paths(state)
-    _bind_sentence(
-        state,
-        "founded_year",
-        paths["paragraph"],
-        ["S001"],
-        reason="看到 S001 写明公司成立年份，先绑定证据。",
-    )
-    _review_field(state, "founded_year", reason="复看候选证据后提交字段值。")
-    _write_field(
-        state,
-        "founded_year",
-        2020,
-        final_evidence=[{"path": paths["paragraph"], "sentences": ["S001"]}],
-        status="resolved",
-        reason="证据已绑定，提交成立年份。",
-    )
-
-    result = _review_field(
-        state,
-        "founded_year",
-        reason="重新查看已绑定证据是否直接支持成立年份。",
-    )
-    missing = _review_field(state, "unknown", reason="查看未知字段。")
-
-    assert result["ok"] is True
-    assert result["field_id"] == "founded_year"
-    assert result["field"]["value"] == 2020
-    assert result["field_description"] == ""
-    assert result["evidence_texts"] == [
-        {
-            "path": paths["paragraph"],
-            "selector": "S001",
-            "text": "公司成立于2020年。",
-        }
-    ]
-    assert result["guidance"] == (
-        "This tool does not judge correctness. Re-read the field description, current value, "
-        "and bound evidence, then decide whether to keep the value, overwrite it with write_field, "
-        "or bind additional evidence."
-    )
-    assert state.events[-1]["tool"] == "review_field"
-    assert missing["ok"] is False
-    assert missing["errors"][0]["code"] == "UNKNOWN_FIELD"
-
-
-def test_submit_result_validates_required_fields_and_returns_new_field_shape():
-    state = _state()
-    paths = _paths(state)
-    _bind_sentence(
-        state,
-        "founded_year",
-        paths["paragraph"],
-        ["S001"],
-        reason="先绑定成立年份证据。",
-    )
-    _review_field(state, "founded_year", reason="复看成立年份证据。")
-    _write_field(
-        state,
-        "founded_year",
-        2020,
-        final_evidence=[{"path": paths["paragraph"], "sentences": ["S001"]}],
-        status="resolved",
-        reason="写入成立年份。",
-    )
-    _bind_items(
-        state,
-        "service_items",
-        paths["list"],
-        ["I001", "I002"],
-        reason="先绑定服务列表证据。",
-    )
-    _review_field(state, "service_items", reason="复看服务列表证据。")
-    _write_field(
-        state,
-        "service_items",
-        ["提供系统维护", "提供数据备份"],
-        final_evidence=[{"path": paths["list"], "items": ["I001", "I002"]}],
-        status="resolved",
-        reason="写入服务列表。",
-    )
-    _bind_rows(
-        state,
-        "deposit",
-        paths["table"],
-        ["R002"],
-        reason="先绑定押金证据。",
-    )
-    _review_field(state, "deposit", reason="复看押金证据。")
-    _write_field(
-        state,
-        "deposit",
-        500,
-        final_evidence=[{"path": paths["table"], "rows": ["R002"]}],
-        status="resolved",
-        reason="写入押金金额。",
-    )
-
-    failed = _submit_result(state, reason="先提交检查必填字段。")
-    assert failed["ok"] is False
-    assert failed["errors"][0]["field_id"] == "missing_required"
-
-    _write_field(
-        state,
-        "missing_required",
-        None,
-        final_evidence=[],
-        status="missing",
-        reason="文档未提及该字段。",
-    )
-    completed = _submit_result(state, reason="字段都已处理，提交最终结果。")
-
-    assert completed["ok"] is False
-    assert completed["errors"][0]["code"] == "REQUIRED_MISSING"
-
-    _bind_sentence(
-        state,
-        "missing_required",
-        paths["paragraph"],
-        ["S002"],
-        reason="先绑定补齐字段证据。",
-    )
-    _review_field(state, "missing_required", reason="复看补齐字段证据。")
-    _write_field(
-        state,
-        "missing_required",
-        "已补齐",
-        final_evidence=[{"path": paths["paragraph"], "sentences": ["S002"]}],
-        status="resolved",
-        reason="S002 提供补齐字段的测试证据。",
-    )
-    completed = _submit_result(state, reason="再次提交最终结果。")
-
-    assert completed["ok"] is True
-    assert completed["result"]["fields"][0]["field_id"] == "founded_year"
-    assert completed["result"]["fields"][0]["evidence"][0]["sentences"] == ["S001"]
-    assert state.events[-1]["type"] == "result_completed"
+    assert written["field"]["evidence"] == [{"path_id": path_ids["paragraph"], "sentences": ["S001"]}]
+    assert raw_path_final_evidence["ok"] is False
+    assert raw_path_final_evidence["errors"][0]["code"] == "UNREVIEWED_FINAL_EVIDENCE"

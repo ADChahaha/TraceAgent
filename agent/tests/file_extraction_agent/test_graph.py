@@ -12,40 +12,27 @@ class FakeStreamingModel:
         self.calls = [
             {
                 "tool_name": "tree",
-                "arguments": {"path": "/", "depth": 2, "reason": "查看输入文档。"},
+                "arguments": {"path_id": "[0000]", "depth": 2, "reason": "查看输入文档。"},
             },
             {
                 "tool_name": "read",
                 "arguments": {
-                    "path": "/001-company-公司资料/001-概况/001-公司成立于2020年.md",
+                    "path_id": "[0000.0001.0001.0001]",
                     "reason": "读取成立年份段落。",
-                },
-            },
-            {
-                "tool_name": "anchors",
-                "arguments": {
-                    "path": "/001-company-公司资料/001-概况/001-公司成立于2020年.md",
-                    "reason": "取得句子证据编号。",
                 },
             },
             {
                 "tool_name": "bind_evidence",
                 "arguments": {
                     "field_id": "founded_year",
-                    "evidence": [
-                        {
-                            "path": "/001-company-公司资料/001-概况/001-公司成立于2020年.md",
-                            "sentences": ["S001"],
-                        }
-                    ],
-                    "reason": "看到 S001 写明公司成立年份，先绑定证据。",
+                    "reason": "当前段落写明公司成立年份，先绑定当前 read block。",
                 },
             },
             {
-                "tool_name": "review_field",
+                "tool_name": "review_evidences",
                 "arguments": {
                     "field_id": "founded_year",
-                    "reason": "复看成立年份候选证据。",
+                    "reason": "展开成立年份候选 block 为 inline 证据。",
                 },
             },
             {
@@ -55,7 +42,7 @@ class FakeStreamingModel:
                     "value": 2020,
                     "final_evidence": [
                         {
-                            "path": "/001-company-公司资料/001-概况/001-公司成立于2020年.md",
+                            "path_id": "[0000.0001.0001.0001]",
                             "sentences": ["S001"],
                         }
                     ],
@@ -108,13 +95,13 @@ def test_run_extraction_graph_stream_yields_ndjson_events_and_final_result():
             "value": 2020,
             "evidence": [
                 {
-                    "path": "/001-company-公司资料/001-概况/001-公司成立于2020年.md",
+                    "path_id": "[0000.0001.0001.0001]",
                     "sentences": ["S001"],
                 }
             ],
             "evidence_texts": [
                 {
-                    "path": "/001-company-公司资料/001-概况/001-公司成立于2020年.md",
+                    "path_id": "[0000.0001.0001.0001]",
                     "selector": "S001",
                     "text": "公司成立于2020年。",
                 }
@@ -133,7 +120,7 @@ def test_run_extraction_graph_stream_flushes_events_after_each_tool_call():
 
     assert first_event["type"] == "tool_started"
     assert first_event["tool"] == "tree"
-    assert len(model.calls) == 6
+    assert len(model.calls) == 5
 
 
 def test_map_state_to_result_returns_new_field_result_shape():
@@ -144,7 +131,7 @@ def test_map_state_to_result_returns_new_field_result_shape():
         "value": 2020,
         "evidence": [
             {
-                "path": "/001-company-公司资料/001-概况/001-公司成立于2020年.md",
+                "path_id": "[0000.0001.0001.0001]",
                 "sentences": ["S001"],
             }
         ],
@@ -162,13 +149,13 @@ def test_map_state_to_result_returns_new_field_result_shape():
                 "value": 2020,
                 "evidence": [
                     {
-                        "path": "/001-company-公司资料/001-概况/001-公司成立于2020年.md",
+                        "path_id": "[0000.0001.0001.0001]",
                         "sentences": ["S001"],
                     }
                 ],
                 "evidence_texts": [
                     {
-                        "path": "/001-company-公司资料/001-概况/001-公司成立于2020年.md",
+                        "path_id": "[0000.0001.0001.0001]",
                         "selector": "S001",
                         "text": "公司成立于2020年。",
                     }

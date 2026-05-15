@@ -7,18 +7,18 @@
 ```text
 documents + task_spec + run_options
   -> input_adapter 校验 documents 非空、每个 document 有 filename/html、task_spec.fields 非空
-  -> html_index 解析 HTML，生成 /001-filename-title/... 虚拟树和 path -> node 索引
+  -> html_index 解析 HTML，生成 /001-filename-title/... 内部虚拟树、path -> node 索引和模型可见 path_id
   -> paragraph/list/table 分别建成 .md/.list/.table 文件，section header 建成目录
-  -> resolution_new 生成抽取提示并挂载 tree/read/anchors/query_table/bind_evidence/review_field/write_field/submit_result
-  -> 模型按 schema 浏览材料、读取文件、查询表格，并用 reason 说明每次用户可见动作
-  -> bind_evidence 先绑定字段候选证据 selector
-  -> 如果字段有候选证据，review_field 复看字段描述、当前值和已绑定证据
-  -> write_field 覆盖写入字段值、状态和 final_evidence
-  -> submit_result 校验必填字段、类型和 evidence selector
+  -> resolution_new 生成抽取提示并挂载 tree/read/bind_evidence/skip_read/review_evidences/write_field/submit_result
+  -> 模型按 schema 浏览材料、读取一个 paragraph/list/table，并用 reason 说明每次用户可见动作
+  -> 每次 read 成功后必须立刻 bind_evidence 绑定当前对象为候选 block，或 skip_read 标记无关
+  -> review_evidences 把字段候选 block 展开成 Sxxx/Ixxx/Rxxx inline selector 和 evidence_texts
+  -> write_field 覆盖写入字段值、状态和从 review 复制的 final_evidence
+  -> submit_result 校验必填字段、类型和最终 evidence selector
   -> graph 按顺序输出 NDJSON 工具事件，最后输出 result_completed
 ```
 
-虚拟树不会落盘。路径是给模型导航和给证据反查用的稳定界面；内部仍通过 `HtmlDocument.nodes_by_path` 找回 paragraph 文本、list item 和 table row。
+虚拟树不会落盘。raw virtual path 只作为内部索引和调试信息使用；模型看到和提交的 locator 是 `[0000.0001]` 这种 `path_id`。内部仍通过 `HtmlDocument.nodes_by_path` / `nodes_by_path_id` 找回 paragraph 文本、list item 和 table row。
 
 ## 虚拟文件树
 
@@ -32,18 +32,18 @@ documents + task_spec + run_options
 - table 是 `.table` 文件，内部 row 编号为 `R001`。
 - 同级节点都先按原文顺序编号，用编号保持排序并消除同名冲突。
 
-paragraph 文件名只是预览，不代表截断正文。完整正文由 `read(path)` 返回，句子编号由 `anchors(path)` 返回。
+paragraph 文件名只是预览，不代表截断正文。完整正文由 `read(path_id)` 返回；句子编号会在字段候选证据进入 `review_evidences(field_id)` 后展开。
+paragraph 文件名只是预览，不代表截断正文。完整正文由 `read(path_id)` 返回；句子编号会在字段候选证据进入 `review_evidences(field_id)` 后展开。
 
 ## 工具
 
 | Tool | 作用 |
 | --- | --- |
-| `tree(path, depth, reason)` | 展开虚拟目录，只返回目录和文件名。 |
-| `read(path, offset, limit, reason)` | 读取 `.md/.list/.table` 文件；paragraph 返回纯正文，list/table 返回 Markdown。 |
-| `anchors(path, reason)` | 只用于 `.md`，返回 `Sxxx` 句子编号和短 preview。 |
-| `query_table(path, sql, offset, limit, reason)` | 只用于 `.table`，在内存表 `data` 上执行单条安全 SELECT。 |
-| `bind_evidence(field_id, evidence, reason)` | 给一个 schema 字段绑定 selector 候选证据，不提交字段值。 |
-| `review_field(field_id, reason)` | 只读复看字段描述、当前值和已绑定候选证据文本；有候选证据时写字段前必须调用。 |
+| `tree(path_id, depth, reason)` | 展开虚拟目录，只返回子节点的 `path_id`、目录名和文件名。 |
+| `read(path_id, offset, limit, reason)` | 读取 `.md/.list/.table` 文件；成功后必须先判断绑定或跳过。 |
+| `bind_evidence(field_id, bindings, reason)` | 把当前 pending read 对象绑定到一个或多个字段的候选 block evidence，不接受模型手写 `path_id` 或 inline selector。 |
+| `skip_read(reason)` | 把当前 pending read 对象标记为无关，关闭 read judgement。 |
+| `review_evidences(field_id, reason)` | 只读复看字段描述、当前值、候选 block evidence，并展开成可用于最终提交的 inline selector。 |
 | `write_field(field_id, value, final_evidence, status, reason)` | 写入或覆盖一个 schema 字段的最终值和最终证据。 |
 | `submit_result(reason)` | 校验当前字段缓冲区，成功返回最终 `fields[]`，失败返回结构化错误。 |
 
@@ -54,34 +54,41 @@ paragraph 文件名只是预览，不代表截断正文。完整正文由 `read(
 paragraph：
 
 ```text
-read("/001-file/001-概况/001-公司成立于2020年.md")
+tree("[0000]", depth=2)
+  -> 显示 [0000.0001.0001.0001] 001-公司成立于2020年.md
+read("[0000.0001.0001.0001]")
   -> 返回完整 paragraph 正文，不带句子号
-anchors("/001-file/001-概况/001-公司成立于2020年.md")
-  -> [{"id": "S001", "preview": "..."}]
-bind_evidence(..., evidence=[{"path": "...md", "sentences": ["S001"]}])
+bind_evidence(field_id="founded_year")
+  -> 保存候选 block evidence: {"path_id": "[0000.0001.0001.0001]"}
+review_evidences(field_id="founded_year")
+  -> 展开 inline evidence: {"path_id": "[0000.0001.0001.0001]", "sentences": ["S001", ...]}
 ```
 
 list：
 
 ```text
-read("/001-file/002-条款/001-服务范围.list")
+read("[0000.0001.0002.0001]")
   -> frontmatter metadata + Markdown list
   -> - [I001] ...
-bind_evidence(..., evidence=[{"path": "...list", "items": ["I001"]}])
+bind_evidence(field_id="service_items")
+  -> 保存候选 block evidence: {"path_id": "[0000.0001.0002.0001]"}
+review_evidences(field_id="service_items")
+  -> 展开 inline evidence: {"path_id": "[0000.0001.0002.0001]", "items": ["I001", ...]}
 ```
 
 table：
 
 ```text
-read("/001-file/003-费用/001-费用明细.table", offset=0, limit=30)
+read("[0000.0001.0003.0001]", offset=0, limit=30)
   -> frontmatter metadata + Markdown table
   -> | R001 | ... |
-query_table("/001-file/003-费用/001-费用明细.table", "SELECT * FROM data WHERE ...")
-  -> 查询结果仍保留原始 Rxxx 行号
-bind_evidence(..., evidence=[{"path": "...table", "rows": ["R001"]}])
+bind_evidence(field_id="fees")
+  -> 保存候选 block evidence: {"path_id": "[0000.0001.0003.0001]"}
+review_evidences(field_id="fees")
+  -> 展开 inline evidence: {"path_id": "[0000.0001.0003.0001]", "rows": ["R001", ...]}
 ```
 
-`submit_result` 会校验 selector 类型和编号是否存在：`.md` 只能用 `sentences`，`.list` 只能用 `items`，`.table` 只能用 `rows`。
+`write_field(final_evidence=...)` 必须复制 `review_evidences.evidence` 里的 inline selector，不能使用只有 `path_id` 的 block selector，也不能手写 raw virtual path。`submit_result` 会校验 selector 类型和编号是否存在：`.md` 只能用 `sentences`，`.list` 只能用 `items`，`.table` 只能用 `rows`。
 
 ## 公共入口
 

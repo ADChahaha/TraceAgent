@@ -25,7 +25,7 @@ def _state():
     return build_graph_state(extraction_input)
 
 
-def test_resolution_messages_describe_extraction_policy_without_tool_manual():
+def test_resolution_messages_describe_read_judgement_policy_without_tool_manual():
     messages = build_resolution_messages(_state())
     content = "\n\n".join(message.content for message in messages)
 
@@ -37,56 +37,50 @@ def test_resolution_messages_describe_extraction_policy_without_tool_manual():
     assert "Every reason must connect the previous action to the next action" in content
     assert "First summarize what the previous action showed" in content
     assert "then state the tool action you are about to take" in content
-    assert "After a read, say whether the read content appears to support any schema field" in content
-    assert "if it may support a field, get inline ids before binding evidence" in content
-    assert "Candidate evidence binding is provisional collection, not final classification" in content
-    assert "Do not read another path before binding candidate evidence from the current read" in content
-    assert "Continue checking supporting, qualifying, and contrary clauses after binding candidate evidence" in content
+    assert "After every successful read, the next tool must be bind_evidence or skip_read" in content
+    assert "Use bind_evidence when the current read object may support, contradict, or qualify any field" in content
+    assert "Use skip_read only when the current read object is irrelevant to every field" in content
+    assert "bind_evidence records the current read object as block candidate evidence" in content
+    assert "review_evidences expands block candidates into Sxxx/Ixxx/Rxxx inline selectors" in content
+    assert "write_field final_evidence must copy inline selectors from review_evidences" in content
+    assert "Use path_id locators like [0000.0001]" in content
     assert "Tool-specific navigation and argument rules are provided in each tool description" in content
-    assert "as soon as you see text, list items, or table rows that you think may be evidence for a field" in content
-    assert "call bind_evidence immediately" in content
-    assert "Do not wait until the field value or enum decision is final before binding evidence" in content
-    assert "If a field has any bound candidate evidence, call review_field for that field before write_field" in content
-    assert "Do not call review_field for fields that have no bound candidate evidence" in content
-    assert "write_field submits a field value with final_evidence" in content
-    assert "final_evidence should include only selectors that are genuinely useful for the submitted value" in content
-    assert "drop merely topical, background, duplicate, or weakly related candidate evidence" in content
-    assert "Only null-typed fields or null enum variants may submit final_evidence=[]" in content
-    assert "submit_result requires non-empty final_evidence" in content
     assert "tree(path, depth, reason)" not in content
     assert "read(path, offset, limit, reason)" not in content
-    assert "query_table(path, sql, offset, limit, reason)" not in content
-    assert "Use read to inspect .md/.list/.table files" not in content
-    assert "once the value or enum decision is ready" not in content
-    assert "maximum number of reads" not in content.lower()
-    assert "read budget" not in content.lower()
-    assert "Do not create or update a plan" not in content
-    assert "old block-reading or field-finalization concepts" not in content
-    assert "update_soft_plan" not in content
+    assert "tree(path_id, depth, reason)" not in content
+    assert "read(path_id, offset, limit, reason)" not in content
+    assert "anchors" not in content
+    assert "query_table" not in content
+    assert "review_field" not in content
     assert "soft plan" not in content.lower()
     assert "record_note" not in content
     assert "overview" not in content
 
 
-def test_tool_descriptions_carry_navigation_and_evidence_contracts():
+def test_resolution_messages_include_depth_3_initial_tree_with_readable_files():
+    messages = build_resolution_messages(_state())
+    content = "\n\n".join(message.content for message in messages)
+
+    assert "Initial virtual tree:" in content
+    assert "[0000] /" in content
+    assert "[0000.0001] company-公司资料/" in content
+    assert "[0000.0001.0001] 概况/" in content
+    assert "[0000.0001.0001.0001] 公司成立于2020年.md" in content
+
+
+def test_tool_descriptions_carry_read_judgement_and_review_contracts():
     tools = {getattr(tool, "name", getattr(tool, "__name__", "")): tool for tool in build_tools(_state())}
 
     assert "Use this for directories" in tools["tree"].description
-    assert "Directory paths are shown with a trailing slash" in tools["tree"].description
-    assert "Only read paths ending in .md, .list, or .table" in tools["read"].description
-    assert "Never call read on document or section directories" in tools["read"].description
-    assert "If tree shows a path ending with /, call tree on that directory first" in tools["read"].description
-    assert "Only call this for paragraph .md files" in tools["anchors"].description
-    assert "inline id" in tools["anchors"].description
-    assert "immediately after read" in tools["anchors"].description
-    assert "Only call this for .table paths" in tools["query_table"].description
-    assert "{path, sentences}" in tools["bind_evidence"].description
-    assert "Only call bind_evidence after the immediately preceding inline-producing tool result" in tools["bind_evidence"].description
-    assert "paragraph sentences require anchors first" in tools["bind_evidence"].description
-    assert "You may call bind_evidence multiple times in a row from the same inline source" in tools["bind_evidence"].description
-    assert "Any non-bind_evidence tool call makes that inline source stale" in tools["bind_evidence"].description
-    assert "Call review_field before write_field" in tools["review_field"].description
-    assert "final_evidence must be selected from bound candidate evidence" in tools["write_field"].description
+    assert "Use only path_id values" in tools["tree"].description
+    assert "Only read file path_ids ending in .md, .list, or .table" in tools["read"].description
+    assert "After a successful read, the next tool must be bind_evidence or skip_read" in tools["read"].description
+    assert "current read object" in tools["bind_evidence"].description
+    assert "Use bindings=[{field_id}, ...] when the current read object supports multiple fields" in tools["bind_evidence"].description
+    assert "Do not pass path_id, sentences, items, or rows" in tools["bind_evidence"].description
+    assert "Use this only when the current read object is irrelevant" in tools["skip_read"].description
+    assert "review_evidences expands block candidate evidence into inline selectors" in tools["review_evidences"].description
+    assert "final_evidence must be copied from review_evidences.evidence" in tools["write_field"].description
     assert "Only null-typed fields or null enum variants may use final_evidence=[]" in tools["submit_result"].description
 
 
@@ -130,10 +124,9 @@ def test_resolution_graph_exposes_new_tools_only():
     assert tool_names == [
         "tree",
         "read",
-        "anchors",
-        "query_table",
         "bind_evidence",
-        "review_field",
+        "skip_read",
+        "review_evidences",
         "write_field",
         "submit_result",
     ]
@@ -143,8 +136,8 @@ def test_resolution_limits_model_to_one_tool_call_per_turn():
     message = AIMessage(
         content="",
         tool_calls=[
-            {"id": "call-1", "name": "read", "args": {"path": "/a.md"}},
-            {"id": "call-2", "name": "read", "args": {"path": "/b.md"}},
+            {"id": "call-1", "name": "read", "args": {"path_id": "/a.md"}},
+            {"id": "call-2", "name": "read", "args": {"path_id": "/b.md"}},
         ],
     )
 

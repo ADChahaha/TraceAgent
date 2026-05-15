@@ -43,10 +43,12 @@ def test_build_html_document_builds_virtual_tree_for_multiple_documents():
 
     root = document.virtual_root
     assert root.path == "/"
+    assert root.path_id == "[0000]"
     assert [child.name for child in root.children] == [
         "001-contract-项目设计说明",
         "002-contract-项目设计说明",
     ]
+    assert [child.path_id for child in root.children] == ["[0000.0001]", "[0000.0002]"]
     assert "/001-contract-项目设计说明/001-背景" in document.nodes_by_path
     assert "/001-contract-项目设计说明/002-背景" in document.nodes_by_path
     assert (
@@ -65,14 +67,49 @@ def test_tree_view_respects_depth_and_file_kinds():
     document = build_html_document(_documents())
 
     depth_one = document.tree_text("/", depth=1)
-    assert "001-contract-项目设计说明/" in depth_one
-    assert "001-背景/" not in depth_one
+    assert "[0000] /" in depth_one
+    assert "[0000.0001] contract-项目设计说明/" in depth_one
+    assert "001-contract-项目设计说明/" not in depth_one
+    assert "背景/" not in depth_one
 
     depth_three = document.tree_text("/001-contract-项目设计说明", depth=3)
-    assert "001-背景/" in depth_three
-    assert "001-这个项目最初是为了抽取字段.md" in depth_three
-    assert "001-第一项.list" in depth_three
-    assert "002-费用明细.table" in depth_three
+    assert "[0000.0001]" in depth_three
+    assert "/001-contract-项目设计说明/001-背景" not in depth_three
+    assert "背景/" in depth_three
+    assert "这个项目最初是为了抽取字段.md" in depth_three
+    assert "第一项.list" in depth_three
+    assert "费用明细.table" in depth_three
+    assert "001-这个项目最初是为了抽取字段.md" not in depth_three
+
+
+def test_path_ids_are_stable_model_visible_locators_for_raw_paths():
+    document = build_html_document(_documents())
+    path = "/001-contract-项目设计说明/001-背景/001-这个项目最初是为了抽取字段.md"
+
+    path_id = document.path_id(path)
+
+    assert path_id == "[0000.0001.0001.0001]"
+    assert document.resolve_path_id(path_id) == path
+    assert document.resolve_path(path_id) == path
+    assert document.read_markdown(path_id)["path_id"] == path_id
+    assert "path" not in document.read_markdown(path_id)
+
+
+def test_tree_display_names_decode_percent_encoded_filenames_without_changing_raw_paths():
+    document = build_html_document(
+        [
+            {
+                "filename": "Confidentiality%20Agreement.html",
+                "html": "<h1>NDA</h1><p>Confidential text.</p>",
+            }
+        ]
+    )
+
+    tree = document.tree_text("/", depth=1)
+
+    assert "[0000.0001] Confidentiality Agreement-NDA/" in tree
+    assert "Confidentiality%20Agreement" not in tree
+    assert "/001-Confidentiality%20Agreement-NDA" in document.nodes_by_path
 
 
 def test_paragraph_anchors_use_sentence_ids_without_polluting_read():
@@ -96,7 +133,7 @@ def test_list_markdown_uses_item_numbers_and_nested_numbers():
     assert "- [I002] 第二项 子项" in result["text"]
     assert "  - [I002.001] 子项" in result["text"]
     assert document.validate_evidence(
-        [{"path": result["path"], "items": ["I002", "I002.001"]}]
+        [{"path_id": result["path_id"], "items": ["I002", "I002.001"]}]
     ) == []
 
 
@@ -138,7 +175,7 @@ def test_table_markdown_uses_row_numbers_and_supports_pagination():
     assert "showing: 1-1" in first_row["text"]
     assert "| R001 | 服务费 | 1000 |" in first_row["text"]
     assert "| R002 | 押金 | 500 |" not in first_row["text"]
-    assert document.validate_evidence([{"path": path, "rows": ["R002"]}]) == []
+    assert document.validate_evidence([{"path_id": document.path_id(path), "rows": ["R002"]}]) == []
 
 
 def test_query_table_only_accepts_table_paths_and_keeps_original_row_numbers():

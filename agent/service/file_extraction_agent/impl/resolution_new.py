@@ -20,24 +20,21 @@ def build_resolution_messages(state: Any) -> list[Any]:
             "Call exactly one tool in each assistant turn. Never emit multiple or parallel tool calls in one turn. "
             "Wait for that tool result before deciding the next tool call. "
             "Tool-specific navigation and argument rules are provided in each tool description. "
+            "Use path_id locators like [0000.0001] exactly as shown by tree. "
+            "Do not write, encode, or guess raw virtual paths. "
             "Every reason is a user-visible action explanation, not hidden reasoning and not evidence. "
             "Every reason must connect the previous action to the next action. "
             "First summarize what the previous action showed, then state the tool action you are about to take. "
-            "After a read, say whether the read content appears to support any schema field; "
-            "if it may support a field, get inline ids before binding evidence. "
+            "After every successful read, the next tool must be bind_evidence or skip_read. "
+            "Use bind_evidence when the current read object may support, contradict, or qualify any field. "
+            "Use skip_read only when the current read object is irrelevant to every field. "
+            "bind_evidence records the current read object as block candidate evidence, not final inline evidence. "
+            "review_evidences expands block candidates into Sxxx/Ixxx/Rxxx inline selectors. "
+            "write_field final_evidence must copy inline selectors from review_evidences. "
             "Candidate evidence binding is provisional collection, not final classification. "
-            "Do not read another path before binding candidate evidence from the current read. "
-            "For paragraph evidence, use read on the .md path, then anchors on the same path, then bind_evidence. "
-            "For list or table evidence, use the Ixxx/Rxxx ids exposed by read or query_table, then bind_evidence. "
-            "You may call bind_evidence multiple times in a row from the same inline source when the same evidence may support multiple fields. "
-            "Continue checking supporting, qualifying, and contrary clauses after binding candidate evidence, not before binding it. "
-            "Lists expose Ixxx item ids in read output. Tables expose Rxxx row ids in read and query_table output. "
-            "as soon as you see text, list items, or table rows that you think may be evidence for a field, "
-            "call bind_evidence immediately for that field. "
-            "Do not wait until the field value or enum decision is final before binding evidence. "
-            "If a field has any bound candidate evidence, call review_field for that field before write_field. "
-            "Do not call review_field for fields that have no bound candidate evidence. "
-            "write_field submits a field value with final_evidence selected from that field's bound candidate evidence. "
+            "Do not read another path before binding or skipping the current read. "
+            "Do not wait until the field value or enum decision is final before binding candidate evidence. "
+            "write_field submits a field value with final_evidence selected from reviewed inline evidence. "
             "final_evidence should include only selectors that are genuinely useful for the submitted value; "
             "drop merely topical, background, duplicate, or weakly related candidate evidence. "
             "Only null-typed fields or null enum variants may submit final_evidence=[]. "
@@ -50,7 +47,7 @@ def build_resolution_messages(state: Any) -> list[Any]:
         content="\n\n".join(
             [
                 "Task fields:\n" + _task_fields_text(state.task_spec),
-                "Initial virtual tree:\n" + state.document.tree_text("/", depth=2),
+                "Initial virtual tree:\n" + state.document.tree_text("/", depth=3),
             ]
         )
     )

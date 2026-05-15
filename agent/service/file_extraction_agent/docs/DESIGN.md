@@ -11,14 +11,14 @@
 ```text
 用户给定 schema + 多个语义 HTML 文件
   -> 构建只读 semantic HTML virtual tree
-  -> 模型用 tree/read 浏览文件、章节和段落
+  -> resolution 初始上下文写入 root depth=3 的导航树
+  -> 模型用初始树和 tree/read 浏览文件、章节和段落
   -> 每个 reason 先分析上一轮 action 结果，再说明本轮准备调用什么工具
-  -> read 之后先判断内容是否可能支持某个 schema 字段
-  -> 如果 paragraph 可能支持字段，紧跟 anchors 取得 Sxxx inline 句子编号
-  -> 如果 list/table/query_table 可能支持字段，直接使用刚读到的 Ixxx/Rxxx 编号
-  -> 模型看到自己认为可能是字段证据的 inline 文本、列表项或表格行时，立刻用 bind_evidence 绑定 selector
-  -> 只要字段存在候选 evidence，模型写字段前必须用 review_field 复看候选证据
-  -> 模型用 write_field 提交字段值或 enum decision，并用 final_evidence 只保留真正有用的最终证据
+  -> read 成功后进入 pending judgement 状态，模型必须先判断当前对象是否可能支持某个 schema 字段
+  -> 如果当前 paragraph/list/table 可能支持字段，紧跟 bind_evidence 把这个刚读到的对象绑定为候选 block evidence
+  -> 如果当前对象不相关，紧跟 skip_read 关闭这次 read 判断，再继续浏览
+  -> 模型用 review_evidences 复看某字段的候选 block evidence，并由工具展开成 Sxxx/Ixxx/Rxxx inline selector
+  -> 模型用 write_field 提交字段值或 enum decision，并且 final_evidence 只能复制 review_evidences 返回的 inline selector
   -> submit_result 内部按 schema 校验并返回最终结果或错误
 ```
 
@@ -52,16 +52,16 @@
 示例：
 
 ```text
-/
-└── 001-file1-项目设计说明/
-    ├── 001-背景/
-    │   ├── 001-这个项目最初是为了.md
-    │   └── 002-后来我们发现模型.md
-    └── 002-实现方案/
-        ├── 001-系统会先解析HTML.md
-        ├── 002-关键步骤.list
-        ├── 003-费用明细.table
-        └── 004-虚拟树不会落盘.md
+[0000] /
+└── [0000.0001] file1-项目设计说明/
+    ├── [0000.0001.0001] 背景/
+    │   ├── [0000.0001.0001.0001] 这个项目最初是为了.md
+    │   └── [0000.0001.0001.0002] 后来我们发现模型.md
+    └── [0000.0001.0002] 实现方案/
+        ├── [0000.0001.0002.0001] 系统会先解析HTML.md
+        ├── [0000.0001.0002.0002] 关键步骤.list
+        ├── [0000.0001.0002.0003] 费用明细.table
+        └── [0000.0001.0002.0004] 虚拟树不会落盘.md
 ```
 
 编号是路径稳定性的基础：
@@ -70,26 +70,27 @@
 - section 目录使用同级编号区分相同 header。
 - paragraph、list 和 table 文件使用同级编号保留原文 block 顺序并避免 snippet 重复。
 
-路径是模型可读的定位界面，不是内部唯一主键。内部仍应保存 `node_id`、源 HTML 节点、原始文件信息和必要的 source range，便于工具从路径反查原文。
+这些 `001-` / `002-` 同级编号只存在于内部 raw path。模型可见的 `tree` 行已经有 `path_id` 承担去重和定位职责，所以显示名会去掉同级编号前缀，避免重复噪音。显示名还会 percent-decode，例如把 `Confidentiality%20Agreement` 显示为 `Confidentiality Agreement`；内部 raw path 保持原样，避免破坏已有索引兼容。
 
-工具输入路径需要做轻量归一化：模型可能把树中显示的空格、中文或符号按 URL 规则写成 `%20`、`%E2%80%93` 这类 percent-encoded 片段。`tree/read/anchors/query_table/bind_evidence/write_field` 在查节点前先按原始路径查找，找不到时再 percent-decode 后查找；工具返回和结果 buffer 中保存的 evidence path 始终使用虚拟树里的 canonical raw path。
+raw virtual path 是内部索引，不再作为模型可见 locator。`HtmlDocument` 会同时维护 `nodes_by_path` 和 `nodes_by_path_id`：raw path 用于内部调试和兼容底层查询，`path_id` 用于 tree/read/review/write 的模型交互。`path_id` 按树位置生成，例如根为 `[0000]`，第一个文档为 `[0000.0001]`，文档下第一个 section 为 `[0000.0001.0001]`。
+
+模型只能复制 tree 输出里的 `path_id`，不能手写、URL encode 或猜 raw virtual path。工具返回、候选 evidence buffer、`review_evidences.evidence`、`write_field(final_evidence=...)` 和最终结果都使用 `path_id` selector；原文文本由系统通过 `path_id + Sxxx/Ixxx/Rxxx` 反查。
 
 ## 工具边界
 
 面向模型的最小工具集合：
 
 ```text
-tree(path="/", depth=3, reason)
-read(path, offset?, limit?, reason)
-anchors(path, reason)
-query_table(path, sql, offset?, limit?, reason)
-bind_evidence(field_id, evidence, reason)
-review_field(field_id, reason)
+tree(path_id="[0000]", depth=3, reason)
+read(path_id, offset?, limit?, reason)
+bind_evidence(field_id?, bindings?, reason)
+skip_read(reason)
+review_evidences(field_id, reason)
 write_field(field_id, value, final_evidence, status?, reason)
 submit_result(reason?)
 ```
 
-系统 prompt 只描述 agent 角色、抽取流程、`reason` 语义和 evidence lifecycle；具体工具参数约束写在各 tool description 中，并通过 LangGraph `bind_tools` 暴露给模型。这样模型在选择某个工具时能直接看到该工具的局部规则，例如 `read` 只能读取 `.md/.list/.table` 文件，目录路径必须先用 `tree` 展开。
+系统 prompt 只描述 agent 角色、抽取流程、`reason` 语义和 evidence lifecycle；具体工具参数约束写在各 tool description 中，并通过 LangGraph `bind_tools` 暴露给模型。这样模型在选择某个工具时能直接看到该工具的局部规则，例如 `read` 只能读取 tree 输出中 `.md/.list/.table` 文件对应的 `path_id`，目录 `path_id` 必须先用 `tree` 展开。
 
 所有模型主动浏览、读取、查询和写入工具都必须带 `reason`。`reason` 是用户可见的动作说明，用来解释“上一轮 action 说明了什么、所以这一轮准备调用什么工具”。它不是模型推理链，也不是证据本身；可信证据只来自虚拟路径和文件内编号。
 
@@ -103,19 +104,30 @@ resolution system prompt 明确要求模型每个 assistant turn 只发一个 to
   -> 本轮准备调用的工具和目的
 ```
 
-如果上一轮是 `read`，`reason` 必须明确说明刚读到的内容是否可能支持某个字段；如果可能支持 paragraph 字段证据，下一步应调用 `anchors` 取得 Sxxx inline 句子编号，再立刻 `bind_evidence`。list 和 table 的 `read`、以及 `query_table` 已经暴露 Ixxx/Rxxx inline 编号，可以直接紧跟 `bind_evidence`。
+如果上一轮是 `read`，下一步只能是 `bind_evidence` 或 `skip_read`。`reason` 必须明确说明刚读到的 paragraph/list/table 是否可能支持某个字段：可能支持就 `bind_evidence`，完全不相关才 `skip_read`。在这次判断关闭之前，模型不能继续 `read`、`tree`、`review_evidences`、`write_field` 或 `submit_result`。这个约束让模型不能连续扫很多内容后靠隐式记忆直接写答案。
 
-候选证据绑定是 provisional collection，不是最终字段分类或定案。模型看到当前 `read` 结果可能支持或反驳某个字段时，必须先把该证据绑定进候选集合，再继续检查其他 supporting、qualifying 或 contrary clauses；不能为了继续读其他路径而推迟当前证据的 `bind_evidence`。这条工具节奏由 resolution prompt 和 tool description 统一负责，`task_spec` 只描述字段语义和输出类型，不负责说明工具调用顺序。
+候选证据绑定是 provisional collection，不是最终字段分类或定案。`bind_evidence` 只绑定刚刚 `read` 的一个对象，保存的是 block 级候选 evidence，不接受模型手写任意 `path_id`，也不接受 Sxxx/Ixxx/Rxxx inline selector。模型看到当前 `read` 结果可能支持或反驳某个字段时，必须先把该对象绑定进候选集合，再继续检查其他 supporting、qualifying 或 contrary clauses；不能为了继续读其他路径而推迟当前对象的判断。这条工具节奏由 resolution prompt 和 tool description 统一负责，`task_spec` 只描述字段语义和输出类型，不负责说明工具调用顺序。
 
 ### `tree`
 
-`tree` 返回虚拟文件树的目录和 paragraph 文件名，是模型进入材料空间的入口。
+resolution 的初始 human message 会直接包含 `tree("[0000]", depth=3)` 等价的导航树。这个初始树不需要模型主动调用工具，层级覆盖根目录、文档目录、一级 section，以及一级 section 下的 paragraph/list/table 文件：
 
 ```text
-tree("/", depth=1, reason="先查看有哪些输入文档。")
+[0000] /
+  -> [0000.0001] 文档目录/
+  -> [0000.0001.0001] 一级 section/
+  -> [0000.0001.0001.0001] 可读 paragraph/list/table 文件
+```
+
+这样当 OCR 或语义解析把实质条款挂到标题看似无关的目录下时，模型一开始也能看到该目录下的可读文件。`tree` 工具仍然保留，用于继续展开更深层 section；初始树和 `tree` 只提供导航，不返回 paragraph 正文，不作为最终 evidence。
+
+`tree` 返回虚拟文件树的目录和 paragraph 文件名，是模型继续展开更深目录的入口。
+
+```text
+tree("[0000]", depth=1, reason="先查看有哪些输入文档。")
   -> 返回所有文档目录
 
-tree("/001-file1-项目设计说明", depth=2, reason="展开项目设计说明，定位实现相关章节。")
+tree("[0000.0001]", depth=2, reason="展开项目设计说明，定位实现相关章节。")
   -> 返回该文档下的 section 和 paragraph/list/table 文件
 ```
 
@@ -123,21 +135,32 @@ tree("/001-file1-项目设计说明", depth=2, reason="展开项目设计说明�
 
 ### `read`
 
-`read` 按虚拟文件类型返回 Markdown 阅读视图。paragraph 默认返回完整正文，不带句子编号；list 和 table 默认带 item/row 编号，方便字段证据直接绑定到文件内编号。
+`read` 按虚拟文件类型返回 Markdown 阅读视图。paragraph 默认返回完整正文，不带句子编号；list 和 table 默认带 item/row 编号，便于模型判断这个对象是否可能支持字段。`read` 成功后会在内部记录一个 pending read judgement：模型必须先用 `bind_evidence` 或 `skip_read` 关闭这个判断，才能继续调用其他工具。
 
 ```text
-read("/001-file1-项目设计说明/002-实现方案/001-系统会先解析HTML.md", reason="读取实现方案段落，确认语义树生成方式。")
+read("[0000.0001.0002.0001]", reason="读取实现方案段落，确认语义树生成方式。")
   -> "系统会先解析 HTML，并按 heading 层级生成语义树。..."
 ```
+
+pending read 的状态机是：
+
+```text
+read(path_id)
+  -> pending_read = 当前 paragraph/list/table 对象
+  -> bind_evidence(field_id 或 bindings)  # 当前对象可能支持字段，保存 block 候选并关闭 pending_read
+     或 skip_read(reason)     # 当前对象完全不相关，记录跳过并关闭 pending_read
+  -> tree/read/review_evidences/write_field/submit_result 才能继续
+```
+
+如果 pending read 未关闭就调用其他工具，工具返回 `READ_JUDGEMENT_REQUIRED`。如果没有 pending read 却调用 `bind_evidence` 或 `skip_read`，工具返回 `READ_REQUIRED`。
 
 list 返回 Markdown list，前置少量 metadata，并给每个 item 稳定编号：
 
 ```markdown
 ---
 kind: list
-path: /001-file1-项目设计说明/002-实现方案/002-关键步骤.list
+path_id: [0000.0001.0002.0002]
 title: 关键步骤
-items: 3
 showing: 1-3
 ---
 
@@ -152,7 +175,7 @@ table 返回 Markdown table，前置少量 metadata，并给每行稳定编号�
 ```markdown
 ---
 kind: table
-path: /001-file1-项目设计说明/002-实现方案/003-费用明细.table
+path_id: [0000.0001.0002.0003]
 title: 费用明细
 rows: 238
 columns: 项目 | 金额 | 日期
@@ -165,121 +188,74 @@ showing: 1-30
 | R002 | 押金 | 500 | 2024-01-02 |
 ```
 
-`offset` 和 `limit` 用于 list/table 分页，默认限制返回数量，避免大列表或大表一次性膨胀上下文。paragraph 不需要分页。
-
-### `anchors`
-
-`anchors` 只用于 paragraph，对刚刚通过 `read` 定位到的同一个 `.md` 文件返回轻量句子编号。list 和 table 不需要 `anchors`，因为 `read` 和 `query_table` 已经在 Markdown 视图中暴露 `Ixxx` 和 `Rxxx` 编号。
-
-```text
-read(paragraph_path)
-  -> 模型判断 paragraph 可能支持某个字段
-  -> anchors(paragraph_path)
-  -> 按句子边界切分
-  -> 为每个句子生成 Sxxx 编号
-  -> 返回句子编号和短 preview
-```
-
-`anchors` 的顺序约束是硬规则：它只能紧跟同一路径 paragraph 的成功 `read`。如果中间插入 `tree`、`query_table`、`review_field`、`write_field` 或其他工具，模型必须重新 `read` 对应 paragraph 后再取 inline 句子编号。
-
-示例返回：
-
-```json
-[
-  {
-    "id": "S001",
-    "preview": "系统会先解析 HTML，并按 heading..."
-  },
-  {
-    "id": "S002",
-    "preview": "解析结果不会落盘，而是作为虚拟..."
-  }
-]
-```
-
-第一版证据粒度以 sentence 为主，不默认切到 clause。clause 切分在中文、英文和技术文本中容易过度破碎，可以作为后续增强。
-
-### `query_table`
-
-`query_table` 是 `.table` 文件的辅助读取工具，用于大表或需要按条件定位行的场景。它只接受 table 虚拟路径，不接受 section id 或原始 HTML id。
-
-```text
-query_table(path, sql, offset?, limit?, reason)
-  -> 校验 path 是 .table 文件
-  -> 校验 SQL 是单条安全 SELECT，表名固定为 data
-  -> 执行查询并保留原始 Rxxx 行编号
-  -> 返回带 metadata 的 Markdown table
-```
-
-示例返回：
-
-```markdown
----
-kind: table_query
-path: /001-file1-项目设计说明/002-实现方案/003-费用明细.table
-sql: SELECT "项目", "金额" FROM data WHERE "项目" LIKE '%押金%'
-matched_rows: 2
-showing: 1-2
----
-
-| row | 项目 | 金额 |
-| --- | --- | --- |
-| R002 | 押金 | 500 |
-| R078 | 押金退还 | -500 |
-```
-
-字段证据可以直接引用 query 结果里出现的 `Rxxx` 行编号。`query_table` 不是最终提交入口；它只帮助模型定位和阅读表格行。
+`offset` 和 `limit` 用于 list/table 显式分页；默认读取整个 list/table，便于模型在一次 read 后完整判断当前对象是否值得绑定。paragraph 不需要分页。
 
 ### `bind_evidence`
 
-`bind_evidence` 用来把已经读到的证据 selector 绑定到某个 schema 字段，但不提交字段值：
+`bind_evidence` 用来把刚刚 `read` 的 paragraph/list/table 对象绑定到一个或多个 schema 字段，但不提交字段值：
 
 ```text
-bind_evidence(field_id, evidence, reason)
+bind_evidence(field_id, reason)
+bind_evidence(bindings=[{"field_id": "..."}], reason)
 ```
 
-它解决的是“模型看到了可能有用的证据，但还没完全决定字段值或 enum 分类”的场景。模型读取 paragraph/list/table 后，只要认为当前文本、列表项或表格行可能是某个字段的证据，就应立刻调用 `bind_evidence` 记录 selector，不等字段值或 enum decision 最终确定；后续读到同一字段的更多证据时，再次按 `read -> inline -> bind_evidence` 链路绑定，会追加到该字段的 evidence buffer。
+它解决的是“模型刚读到一个可能有用的对象，但还没完全决定字段值或 enum 分类”的场景。模型读取 paragraph/list/table 后，只要认为当前对象可能是某个字段的证据，就应立刻调用 `bind_evidence` 把这个对象记录为候选 block evidence，不等字段值或 enum decision 最终确定；后续读到同一字段的更多证据时，再次按 `read -> bind_evidence` 链路追加到该字段的 evidence buffer。
 
-`bind_evidence` 只能使用最近一次 inline 来源：
+`bind_evidence` 只能使用当前 pending read：
 
 ```text
 paragraph:
   read(.md)
-  -> anchors(.md)
-  -> bind_evidence(field_id, [{"path": ..., "sentences": ["Sxxx"]}])
+  -> bind_evidence(field_id)
 
 list:
   read(.list)
-  -> bind_evidence(field_id, [{"path": ..., "items": ["Ixxx"]}])
+  -> bind_evidence(field_id)
 
 table:
-  read(.table) 或 query_table(.table, sql)
-  -> bind_evidence(field_id, [{"path": ..., "rows": ["Rxxx"]}])
+  read(.table)
+  -> bind_evidence(field_id)
 ```
 
-同一次 inline 来源可以连续执行多个 `bind_evidence`，用于把同一段 evidence 绑定给多个字段，或把同一个刚暴露的 paragraph/list/table 中的多个 selector 绑定到候选集合。只要中间插入任何非 `bind_evidence` 工具调用，旧 inline 来源就失效；模型如果还要绑定该内容，必须重新走对应的 `read/anchors` 或 `read/query_table` 链路，避免隔了多步后用旧上下文绑定错证据。
+如果当前对象可能支持多个字段，应在同一次工具调用里使用 `bindings=[{"field_id": ...}, ...]` 把这个 block 绑定给多个字段。`bind_evidence` 成功后会关闭 pending read judgement；模型随后可以继续 `tree/read/review_evidences/write_field/submit_result`。如果 bind 后又想给同一个旧 read 追加字段，必须重新 `read` 该对象，这能避免模型隔多步后靠记忆回头绑定。换句话说，`bind_evidence` 不是按 path 寻址的证据搜索工具，它只是“把刚读到的这一块放进字段候选池”。
 
 `bind_evidence` 做即时校验：
 
 - `field_id` 必须存在于用户 schema。
-- `evidence` 必须使用合法的虚拟路径和文件内编号。
-- `evidence` 中的 selector 必须来自上一条 inline-producing 工具结果。
-- 校验通过后，工具会保存原始 selector，并同步生成只读的 `evidence_texts`。
+- 当前必须存在未关闭的 pending read。
+- pending read 必须是 paragraph/list/table 对象。
+- 校验通过后，工具会保存 block selector，例如 `{"path_id": "[0000.0001.0002.0001]"}`。
 
-如果字段值已经通过 `write_field` 写过，后续 `bind_evidence` 只会更新该字段的候选 evidence buffer，并让已有 review snapshot 失效；它不会自动改写字段结果里的最终 evidence。模型需要重新 `review_field`，再用 `write_field` 覆盖字段值和 `final_evidence`。
+如果字段值已经通过 `write_field` 写过，后续 `bind_evidence` 只会更新该字段的候选 evidence buffer，并让已有 review snapshot 失效；它不会自动改写字段结果里的最终 evidence。模型需要重新 `review_evidences`，再用 `write_field` 覆盖字段值和 `final_evidence`。
 
-### `review_field`
+### `skip_read`
 
-`review_field` 是只读的字段复核工具。它返回一个字段的 schema 描述、当前字段值、已绑定候选 evidence selector 和系统反查的 `evidence_texts`，帮助模型在写字段前重新判断“候选证据里哪些应该进入最终 evidence”。
+`skip_read` 是关闭 pending read judgement 的工具。它只用于刚读到的对象完全不支持任何 schema 字段时，记录“这个对象已判断为无关”，然后允许模型继续浏览。
 
 ```text
-review_field(field_id, reason)
-  -> 校验 field_id 是否存在
-  -> 读取该字段当前 field buffer 和 evidence buffer
-  -> 返回 field description、current value/status、evidence、evidence_texts 和简短 guidance
+read(path_id)
+  -> 模型判断当前对象完全不相关
+  -> skip_read(reason)
+  -> 可以继续 tree/read/review_evidences/write_field/submit_result
 ```
 
-`review_field` 不做自动判决，也不替模型打分。它只把模型自己已经绑定/写入的状态重新展示出来；模型复核后可以用 `write_field(... final_evidence ...)` 覆盖字段值，或继续 `bind_evidence` 补充候选证据。代码层面只使用一个通用规则：如果某字段有候选 evidence buffer，`write_field` 前必须先 `review_field`；如果没有候选 evidence，则不需要为了空证据机械 review。
+`skip_read` 不写字段、不写候选证据，也不参与最终结果。它的存在是为了避免模型在读到无关内容时被迫绑定假证据；同时也让每次 read 都有显式判断，避免连续阅读后直接靠隐式记忆写答案。
+
+### `review_evidences`
+
+`review_evidences` 是只读的字段证据复核工具。它返回一个字段的 schema 描述、当前字段值、已绑定候选 block evidence，以及这些 block 展开后的 inline selector 和 `evidence_texts`，帮助模型在写字段前重新判断“候选对象里的哪些句子、列表项或表格行应该进入最终 evidence”。
+
+```text
+review_evidences(field_id, reason)
+  -> 校验 field_id 是否存在
+  -> 读取该字段当前 field buffer 和 evidence buffer
+  -> paragraph block 展开为 {"path_id": ..., "sentences": ["S001", ...]}
+  -> list block 展开为 {"path_id": ..., "items": ["I001", ...]}
+  -> table block 展开为 {"path_id": ..., "rows": ["R001", ...]}
+  -> 返回 field description、current value/status、candidate_evidence、evidence、evidence_texts 和简短 guidance
+```
+
+`review_evidences` 不做自动判决，也不替模型打分。它只把模型自己已经绑定/写入的状态重新展示出来；模型复核后可以用 `write_field(... final_evidence ...)` 覆盖字段值，或继续通过新的 `read -> bind_evidence` 补充候选证据。代码层面使用硬规则：如果字段写入 resolved 非 null 值，`write_field` 前必须先 `review_evidences`，并且 `final_evidence` 必须是这次 review 返回的 inline selector 子集。missing 字段或 null enum variant 可以使用空 `final_evidence`，不需要为了空证据机械 review。
 
 ### `write_field`
 
@@ -291,7 +267,7 @@ write_field(field_id, value, final_evidence, status?, reason)
 
 `write_field` 的语义是“用 value 和 final_evidence 对某个 schema 字段做一次可覆盖的字段定案”。它不是候选记录工具，也不是数组追加工具；如果同一字段被再次写入，最终以最后一次为准。数组字段也通过 `write_field` 一次写入完整数组。
 
-`final_evidence` 必须是该字段候选 evidence buffer 的子集。它让模型可以先用 `bind_evidence` 记录宽一点的候选证据，再在 `review_field` 之后只提交真正保留的 selector。真正保留指的是直接支撑提交值的 selector；只是同主题、背景、重复或弱相关的候选证据应当丢弃。只有 `null` 类型字段或 `null` enum variant 可以用 `final_evidence=[]` 表示“文档未提及/无最终证据”；非 `null` resolved 值必须在最终提交时带非空 `final_evidence`。
+`final_evidence` 必须是 `review_evidences` 返回的 inline evidence 子集，不能使用 `bind_evidence` 保存的 block selector。它让模型可以先用 `bind_evidence` 记录宽一点的候选对象，再在 `review_evidences` 之后只提交真正保留的 Sxxx/Ixxx/Rxxx selector。真正保留指的是直接支撑提交值的 selector；只是同主题、背景、重复或弱相关的候选证据应当丢弃。只有 `null` 类型字段或 `null` enum variant 可以用 `final_evidence=[]` 表示“文档未提及/无最终证据”；非 `null` resolved 值必须在最终提交时带非空 `final_evidence`。
 
 `status` 默认为 `resolved`。字段确实无法从材料中抽到时，可以写成 `missing`，并让 `submit_result` 根据 schema 判断是否允许缺失。`failed` 只用于系统或工具层失败，不应用来表达文档未提及。
 
@@ -299,8 +275,9 @@ write_field(field_id, value, final_evidence, status?, reason)
 
 - `field_id` 必须存在于用户 schema。
 - `value` 必须是 JSON 可表示值。
-- 如果字段有候选 evidence，必须已经对同一份候选 evidence 调过 `review_field`。
-- `final_evidence` 必须能反查到原文，并且不能包含未绑定到该字段的 selector。
+- resolved 非 null 写入必须先对该字段调用 `review_evidences`。
+- `final_evidence` 必须能反查到原文，并且必须来自最近一次 `review_evidences(field_id)` 返回的 inline selector。
+- `final_evidence` 不能是只有 `path_id` 的 block 级 selector。
 
 完整 schema 校验不在写入阶段完成，而是在 `submit_result` 内部统一执行。`submit_result` 会读取最后一次 `write_field` 写入的字段值和 enum variant：如果字段是 `null` 类型或 enum variant 的 payload 类型是 `null`，允许空 `final_evidence`；其他 resolved 字段没有最终证据会返回 `MISSING_FINAL_EVIDENCE`，要求模型补证据或改成合法的空值/缺失表达。
 
@@ -309,15 +286,15 @@ write_field(field_id, value, final_evidence, status?, reason)
 ```json
 [
   {
-    "path": "/001-file/001-概况/001-公司成立于2020年.md",
+    "path_id": "[0000.0001.0001.0001]",
     "sentences": ["S001"]
   },
   {
-    "path": "/001-file/002-条款/004-服务范围.list",
+    "path_id": "[0000.0001.0002.0004]",
     "items": ["I002", "I002.001"]
   },
   {
-    "path": "/001-file/003-费用/002-费用明细.table",
+    "path_id": "[0000.0001.0003.0002]",
     "rows": ["R002", "R078"]
   }
 ]
@@ -328,15 +305,15 @@ write_field(field_id, value, final_evidence, status?, reason)
 ```text
 .md
   -> evidence 必须使用 sentences
-  -> sentence 编号必须来自 anchors(path)
+  -> sentence 编号必须来自 review_evidences 展开的 paragraph block
 
 .list
   -> evidence 必须使用 items
-  -> item 编号必须存在于该 list
+  -> item 编号必须来自 review_evidences 展开的 list block
 
 .table
   -> evidence 必须使用 rows
-  -> row 编号必须存在于该 table，且可以来自 read 或 query_table 的阅读结果
+  -> row 编号必须来自 review_evidences 展开的 table block
 ```
 
 ### `submit_result`
@@ -422,53 +399,52 @@ schema
 tree/read
   -> 告诉模型从哪里读
 
-anchors/read/query_table
-  -> 给出 paragraph 句子编号、list item 编号和 table row 编号，说明字段凭什么成立
+bind_evidence
+  -> 把刚读到且可能相关的 paragraph/list/table 对象放入字段候选池
 
-bind_evidence/review_field/write_field/submit_result
-  -> 让模型先绑定候选证据，有候选证据时先复看，再按 schema 写入字段值和 final_evidence 并提交结果
+skip_read
+  -> 把刚读到但完全不相关的对象显式标记为已判断
+
+review_evidences/write_field/submit_result
+  -> 展开候选 block 为 inline selector，再按 schema 写入字段值和 final_evidence 并提交结果
 ```
 
-resolution prompt 要求模型看到自己认为可能是字段证据的文本、列表项或表格行时立刻 `bind_evidence`，不要等字段值或 enum decision 最终确定后再绑定。只要某字段有候选 evidence，模型必须先 `review_field` 再 `write_field`；没有候选 evidence 的字段不需要空 review。`write_field` 只作为提交字段值和 `final_evidence` 的工具语义出现，不再用 prompt 催促模型“值够了就立刻提交”；它不设置固定读写次数、读量预算或“读几次必须写一次”的工具节奏硬约束。
+resolution prompt 要求模型每次 `read` 后必须立刻判断当前对象：认为可能是字段证据就 `bind_evidence`，完全不相关就 `skip_read`，不要连续读取后再回头绑定。字段写入前必须 `review_evidences`，并且 `write_field(final_evidence=...)` 只能复制 review 返回的 inline selector。`write_field` 不设置固定读写次数或读量预算；硬约束只在工具状态机上表达，即 read 后必须判断、write 前必须 review。
 
 ## 证据归因
 
-inline 证据归因不依赖 quote 匹配、行号或列号，而依赖“虚拟路径 + 文件内编号”：
+inline 证据归因不依赖 quote 匹配、行号或列号，而依赖“`path_id` + 文件内编号”：
 
 ```text
-read(paragraph_path)
+read(paragraph_path_id)
   -> 模型理解段落正文
-  -> 如果可能支持字段，reason 说明对应字段
+  -> 如果可能支持字段，bind_evidence(field_id) 绑定当前 paragraph block
+  -> 如果完全无关，skip_read()
 
-anchors(paragraph_path)
-  -> 工具给出该段落的 Sxxx 句子编号和短 preview
+read(list_path_id)
+  -> 模型理解完整 list 及 Ixxx item 编号
+  -> 如果可能支持字段，bind_evidence(field_id) 绑定当前 list block
 
-read(list_path)
-  -> Markdown list 中直接显示 Ixxx item 编号
+read(table_path_id)
+  -> 模型理解完整 table 及 Rxxx row 编号
+  -> 如果可能支持字段，bind_evidence(field_id) 绑定当前 table block
 
-read(table_path) 或 query_table(table_path, sql)
-  -> Markdown table 中直接显示 Rxxx row 编号
-
-bind_evidence(field_id, evidence)
-  -> 只能使用上一条 inline 来源里的 path + Sxxx/Ixxx/Rxxx
-  -> 工具同步生成 evidence_texts，供回放和评测直接使用
-
-review_field(field_id)
-  -> 有候选证据时复看字段描述、当前字段值和 evidence_texts
+review_evidences(field_id)
+  -> 把已绑定 block 展开为 Sxxx/Ixxx/Rxxx inline selector 和 evidence_texts
 
 write_field(field_id, value, final_evidence)
-  -> 字段值使用筛选后的 final_evidence 完成定案
+  -> 字段值使用从 review_evidences 复制的 inline final_evidence 完成定案
 ```
 
 这样可以避免三类问题：
 
 - 模型传入的 quote 和原文标点、空白或字词不一致。
-- paragraph 的 `read` 默认返回句子编号导致 token 膨胀。
+- paragraph 的 `read` 默认返回句子编号导致 token 膨胀；句子编号延后到 `review_evidences` 展开候选时出现。
 - 用户看到的证据文本由模型自由改写，无法验证。
 
 证据文本必须能从 selector 反查回原文。模型可以用 `reason` 解释为什么使用该证据，但字段证据只能引用 `.md` 的 `Sxxx`、`.list` 的 `Ixxx` 或 `.table` 的 `Rxxx`。
 
-`bind_evidence` 会在字段候选 evidence buffer 中保留原始 `evidence` selector，同时用 `HtmlDocument.evidence_texts()` 生成 `evidence_texts`。`write_field` 输出字段对象时只带上 `final_evidence` 和对应的 `evidence_texts`。`evidence_texts` 是系统从 selector 反查出的只读文本，方便前端回放和实验 scorer 使用；它不是模型手写证据，也不作为模型可编辑输入。
+`bind_evidence` 会在字段候选 evidence buffer 中保留 block selector。`review_evidences` 用 `HtmlDocument.inline_selector_for_path()` 把 block 展开成 inline selector，再用 `HtmlDocument.evidence_texts()` 生成 `evidence_texts`。`write_field` 输出字段对象时只带上 `final_evidence` 和对应的 `evidence_texts`。`evidence_texts` 是系统从 selector 反查出的只读文本，方便前端回放和实验 scorer 使用；它不是模型手写证据，也不作为模型可编辑输入。
 
 ## 结果形态
 
@@ -483,13 +459,13 @@ write_field(field_id, value, final_evidence)
       "value": "Acme Inc.",
       "evidence": [
         {
-          "path": "/001-file/001-概况/001-公司名称.md",
+          "path_id": "[0000.0001.0001.0001]",
           "sentences": ["S001"]
         }
       ],
       "evidence_texts": [
         {
-          "path": "/001-file/001-概况/001-公司名称.md",
+          "path_id": "[0000.0001.0001.0001]",
           "selector": "S001",
           "text": "公司名称为 Acme Inc."
         }
@@ -502,13 +478,13 @@ write_field(field_id, value, final_evidence)
       "value": 2020,
       "evidence": [
         {
-          "path": "/001-file/001-概况/002-公司成立于2020年.md",
+          "path_id": "[0000.0001.0001.0002]",
           "sentences": ["S001"]
         }
       ],
       "evidence_texts": [
         {
-          "path": "/001-file/001-概况/002-公司成立于2020年.md",
+          "path_id": "[0000.0001.0001.0002]",
           "selector": "S001",
           "text": "公司成立于2020年。"
         }
