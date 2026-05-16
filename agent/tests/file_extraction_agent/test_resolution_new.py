@@ -39,9 +39,14 @@ def test_resolution_messages_describe_read_judgement_policy_without_tool_manual(
     assert "then state the tool action you are about to take" in content
     assert "After every successful read, the next tool must be bind_evidence or skip_read" in content
     assert "Use bind_evidence when the current read object may support, contradict, or qualify any field" in content
+    assert "If the current read is only possibly relevant, bind it as a candidate note instead of trying to remember it" in content
     assert "Use skip_read only when the current read object is irrelevant to every field" in content
     assert "bind_evidence records the current read object as block candidate evidence" in content
+    assert "bind_evidence is a broad note-taking step, not a final evidence decision" in content
     assert "review_evidences expands block candidates into Sxxx/Ixxx/Rxxx inline selectors" in content
+    assert "Use review_evidences like reviewing your notes" in content
+    assert "decide whether the current candidates are enough to write_field or whether you need more evidence" in content
+    assert "If you continue reading after review_evidences, the next reason must say what the review showed was missing" in content
     assert "write_field final_evidence must copy inline selectors from review_evidences" in content
     assert "Every write_field call must immediately follow review_evidences for the same field" in content
     assert "including missing fields and null enum variants" in content
@@ -80,9 +85,12 @@ def test_tool_descriptions_carry_read_judgement_and_review_contracts():
     assert "After a successful read, the next tool must be bind_evidence or skip_read" in tools["read"].description
     assert "current read object" in tools["bind_evidence"].description
     assert "Use bindings=[{field_id}, ...] when the current read object supports multiple fields" in tools["bind_evidence"].description
+    assert "possible or uncertain relevance is enough to bind" in tools["bind_evidence"].description
     assert "Do not pass path_id, sentences, items, or rows" in tools["bind_evidence"].description
     assert "Use this only when the current read object is irrelevant" in tools["skip_read"].description
     assert "review_evidences expands block candidate evidence into inline selectors" in tools["review_evidences"].description
+    assert "Use review_evidences like checking your notes before deciding whether to write or keep reading" in tools["review_evidences"].description
+    assert "If you keep reading after review, explain what was missing or still uncertain" in tools["review_evidences"].description
     assert "write_field must immediately follow review_evidences for the same field" in tools["write_field"].description
     assert 'status="missing" and null enum variants' in tools["write_field"].description
     assert "final_evidence must be copied from review_evidences.evidence" in tools["write_field"].description

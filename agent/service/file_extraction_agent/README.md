@@ -47,7 +47,7 @@ paragraph 文件名只是预览，不代表截断正文。完整正文由 `read(
 | `write_field(field_id, value, final_evidence, status, reason)` | 紧跟同字段 `review_evidences` 后，写入或覆盖一个 schema 字段的最终值和最终证据。 |
 | `submit_result(reason)` | 校验当前字段缓冲区，成功返回最终 `fields[]`，失败返回结构化错误。 |
 
-`reason` 是用户可见动作说明，不是证据，也不是模型推理链。工具 wrapper 会为每次调用写入 `tool_started`、`tool_completed` 或 `tool_failed`，证据绑定另有 `evidence_bound`，字段写入另有 `field_written`，最终提交另有 `result_completed`。
+`reason` 是用户可见动作说明，不是证据，也不是模型推理链。`bind_evidence` 的 reason 可以表达“可能相关所以先记为候选”，不需要提前定案；`review_evidences` 的 reason 应表达正在复看候选证据是否足够写入，如果 review 后继续读，下一步 reason 要说明刚才复看发现还缺什么或哪里不确定。工具 wrapper 会为每次调用写入 `tool_started`、`tool_completed` 或 `tool_failed`，证据绑定另有 `evidence_bound`，字段写入另有 `field_written`，最终提交另有 `result_completed`。
 
 ## 读取与证据
 

@@ -15,9 +15,10 @@
   -> 模型用初始树和 tree/read 浏览文件、章节和段落
   -> 每个 reason 先分析上一轮 action 结果，再说明本轮准备调用什么工具
   -> read 成功后进入 pending judgement 状态，模型必须先判断当前对象是否可能支持某个 schema 字段
-  -> 如果当前 paragraph/list/table 可能支持字段，紧跟 bind_evidence 把这个刚读到的对象绑定为候选 block evidence
+  -> 如果当前 paragraph/list/table 可能支持字段，紧跟 bind_evidence 把这个刚读到的对象绑定为候选 block evidence；不确定但可能相关也先作为粗笔记绑定
   -> 如果当前对象不相关，紧跟 skip_read 关闭这次 read 判断，再继续浏览
-  -> 模型用 review_evidences 复看某字段的候选 block evidence，并由工具展开成 Sxxx/Ixxx/Rxxx inline selector
+  -> 模型用 review_evidences 像看笔记一样复看某字段的候选 block evidence，并由工具展开成 Sxxx/Ixxx/Rxxx inline selector
+  -> 如果 review 后继续读，下一步 reason 要说明刚才复看发现缺什么或哪里还不确定
   -> 模型紧跟 write_field 提交同一字段的字段值或 enum decision，并且 final_evidence 只能复制刚刚 review_evidences 返回的 inline selector
   -> submit_result 内部按 schema 校验并返回最终结果或错误
 ```
@@ -106,7 +107,7 @@ resolution system prompt 明确要求模型每个 assistant turn 只发一个 to
 
 如果上一轮是 `read`，下一步只能是 `bind_evidence` 或 `skip_read`。`reason` 必须明确说明刚读到的 paragraph/list/table 是否可能支持某个字段：可能支持就 `bind_evidence`，完全不相关才 `skip_read`。在这次判断关闭之前，模型不能继续 `read`、`tree`、`review_evidences`、`write_field` 或 `submit_result`。这个约束让模型不能连续扫很多内容后靠隐式记忆直接写答案。
 
-候选证据绑定是 provisional collection，不是最终字段分类或定案。`bind_evidence` 只绑定刚刚 `read` 的一个对象，保存的是 block 级候选 evidence，不接受模型手写任意 `path_id`，也不接受 Sxxx/Ixxx/Rxxx inline selector。模型看到当前 `read` 结果可能支持或反驳某个字段时，必须先把该对象绑定进候选集合，再继续检查其他 supporting、qualifying 或 contrary clauses；不能为了继续读其他路径而推迟当前对象的判断。这条工具节奏由 resolution prompt 和 tool description 统一负责，`task_spec` 只描述字段语义和输出类型，不负责说明工具调用顺序。
+候选证据绑定是 provisional collection，不是最终字段分类或定案。`bind_evidence` 只绑定刚刚 `read` 的一个对象，保存的是 block 级候选 evidence，不接受模型手写任意 `path_id`，也不接受 Sxxx/Ixxx/Rxxx inline selector。模型看到当前 `read` 结果可能支持或反驳某个字段时，必须先把该对象绑定进候选集合，再继续检查其他 supporting、qualifying 或 contrary clauses；不能为了继续读其他路径而推迟当前对象的判断。不确定但可能相关的对象也应该先绑定为候选笔记，后续通过 `review_evidences` 再筛掉弱相关、重复或背景证据。这条工具节奏由 resolution prompt 和 tool description 统一负责，`task_spec` 只描述字段语义和输出类型，不负责说明工具调用顺序。
 
 ### `tree`
 
@@ -255,7 +256,7 @@ review_evidences(field_id, reason)
   -> 返回 field description、current value/status、candidate_evidence、evidence、evidence_texts 和简短 guidance
 ```
 
-`review_evidences` 不做自动判决，也不替模型打分。它只把模型自己已经绑定/写入的状态重新展示出来；模型复核后可以紧跟 `write_field(... final_evidence ...)` 覆盖字段值，或继续通过新的 `read -> bind_evidence` 补充候选证据。代码层面使用硬规则：每次 `write_field` 都必须紧跟同字段 `review_evidences`，并且 `final_evidence` 必须是这次 review 返回的 inline selector 子集。如果 review 后插入了任何其他工具调用，哪怕是失败的 write、另一个字段的 review、read 或 submit，都必须重新 review 同一字段再写。missing 字段或 null enum variant 可以使用空 `final_evidence`，但仍要在写入前紧跟同字段 review。
+`review_evidences` 不做自动判决，也不替模型打分。它只把模型自己已经绑定/写入的状态重新展示出来；模型复核后可以紧跟 `write_field(... final_evidence ...)` 覆盖字段值，或继续通过新的 `read -> bind_evidence` 补充候选证据。review 的 `reason` 应表达“正在检查这个字段当前候选是否足够写入，还是还缺某类证据”。如果 review 后继续读，下一步 `reason` 要接上刚才 review 的结果，说明候选为空、证据不足、selector 不合适，或哪个语义点仍不确定。代码层面使用硬规则：每次 `write_field` 都必须紧跟同字段 `review_evidences`，并且 `final_evidence` 必须是这次 review 返回的 inline selector 子集。如果 review 后插入了任何其他工具调用，哪怕是失败的 write、另一个字段的 review、read 或 submit，都必须重新 review 同一字段再写。missing 字段或 null enum variant 可以使用空 `final_evidence`，但仍要在写入前紧跟同字段 review。
 
 ### `write_field`
 

@@ -60,6 +60,7 @@ def build_tools(state: Any) -> list[Any]:
 
         Only call this immediately after a successful read, before any non-bind tool.
         bind_evidence uses the current read object. Do not pass path_id, sentences, items, or rows.
+        This is broad note-taking, not the final evidence decision; possible or uncertain relevance is enough to bind.
         The candidate evidence stored by this tool is block-level {path_id}; call
         review_evidences later to expand block candidate evidence into Sxxx/Ixxx/Rxxx
         inline selectors for final_evidence. Use bindings=[{field_id}, ...] when the current read object supports multiple fields.
@@ -86,6 +87,8 @@ def build_tools(state: Any) -> list[Any]:
         paragraph blocks become {path_id, sentences}, list blocks become {path_id, items}, and
         table blocks become {path_id, rows}. It also returns evidence_texts. Use these
         returned inline selectors as the only source for write_field(final_evidence=...).
+        Use review_evidences like checking your notes before deciding whether to write or keep reading.
+        If you keep reading after review, explain what was missing or still uncertain.
         """
 
         return _review_evidences(state, field_id, reason=reason)
