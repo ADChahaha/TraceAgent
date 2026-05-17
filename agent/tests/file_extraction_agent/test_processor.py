@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from service.file_extraction_agent.impl import model_factory as model_factory_module
-from service.file_extraction_agent.impl.model_factory import normalize_model_config
+from service.file_extraction_agent.impl.model_factory import build_chat_model, normalize_model_config
 from service.file_extraction_agent.processor import extract_stream
 from service.file_extraction_agent.schemas import ModelConfig
 
@@ -86,6 +86,36 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
     assert config.reasoning_effort == "high"
     assert config.max_retries == 8
     assert config.request_timeout == 120.0
+
+
+def test_build_chat_model_builds_responses_stream_then_chat_fallbacks(monkeypatch):
+    captured = []
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            captured.append(kwargs)
+
+    monkeypatch.setattr(model_factory_module, "ChatOpenAI", FakeChatOpenAI)
+
+    model = build_chat_model(
+        ModelConfig(
+            base_url="https://example.com/v1",
+            api_key="key",
+            resolution_model_name="resolution",
+        ),
+        "resolution",
+    )
+
+    attempts = model.model_call_attempts()
+    assert [attempt.name for attempt in attempts] == [
+        "responses_stream",
+        "chat_completions_stream",
+        "responses_invoke",
+        "chat_completions_invoke",
+    ]
+    assert [attempt.use_stream for attempt in attempts] == [True, True, False, False]
+    assert [kwargs["use_responses_api"] for kwargs in captured] == [True, False, True, False]
+    assert [kwargs["streaming"] for kwargs in captured] == [True, True, False, False]
 
 
 def test_normalize_model_config_rejects_unknown_model_fields():

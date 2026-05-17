@@ -12,46 +12,46 @@ class FakeStreamingModel:
         self.calls = [
             {
                 "tool_name": "tree",
-                "arguments": {"path_id": "[0000]", "depth": 2, "reason": "查看输入文档。"},
+                "content": "查看输入文档。",
+                "arguments": {"path_id": "evidence://0000", "depth": 2},
             },
             {
                 "tool_name": "read",
+                "content": "读取成立年份段落。",
                 "arguments": {
-                    "path_id": "[0000.0001.0001.0001]",
-                    "reason": "读取成立年份段落。",
+                    "path_id": "evidence://0000.0001.0001.0001",
                 },
             },
             {
                 "tool_name": "bind_evidence",
+                "content": "当前段落写明公司成立年份，先绑定当前 read block。",
                 "arguments": {
                     "field_id": "founded_year",
-                    "reason": "当前段落写明公司成立年份，先绑定当前 read block。",
+                    "path_id": "evidence://0000.0001.0001.0001",
                 },
             },
             {
                 "tool_name": "review_evidences",
+                "content": "展开成立年份候选 block 为 inline 证据。",
                 "arguments": {
                     "field_id": "founded_year",
-                    "reason": "展开成立年份候选 block 为 inline 证据。",
                 },
             },
             {
                 "tool_name": "write_field",
+                "content": "证据已绑定，提交成立年份。",
                 "arguments": {
                     "field_id": "founded_year",
                     "value": 2020,
                     "final_evidence": [
-                        {
-                            "path_id": "[0000.0001.0001.0001]",
-                            "sentences": ["S001"],
-                        }
+                        "evidence://0000.0001.0001.0001/S001"
                     ],
-                    "reason": "证据已绑定，提交成立年份。",
                 },
             },
             {
                 "tool_name": "submit_result",
-                "arguments": {"reason": "提交最终结果。"},
+                "content": "提交最终结果。",
+                "arguments": {},
             },
         ]
 
@@ -95,13 +95,13 @@ def test_run_extraction_graph_stream_yields_ndjson_events_and_final_result():
             "value": 2020,
             "evidence": [
                 {
-                    "path_id": "[0000.0001.0001.0001]",
+                    "path_id": "0000.0001.0001.0001",
                     "sentences": ["S001"],
                 }
             ],
             "evidence_texts": [
                 {
-                    "path_id": "[0000.0001.0001.0001]",
+                    "path_id": "0000.0001.0001.0001",
                     "selector": "S001",
                     "text": "公司成立于2020年。",
                 }
@@ -131,7 +131,7 @@ def test_map_state_to_result_returns_new_field_result_shape():
         "value": 2020,
         "evidence": [
             {
-                "path_id": "[0000.0001.0001.0001]",
+                "path_id": "0000.0001.0001.0001",
                 "sentences": ["S001"],
             }
         ],
@@ -149,13 +149,13 @@ def test_map_state_to_result_returns_new_field_result_shape():
                 "value": 2020,
                 "evidence": [
                     {
-                        "path_id": "[0000.0001.0001.0001]",
+                        "path_id": "0000.0001.0001.0001",
                         "sentences": ["S001"],
                     }
                 ],
                 "evidence_texts": [
                     {
-                        "path_id": "[0000.0001.0001.0001]",
+                        "path_id": "0000.0001.0001.0001",
                         "selector": "S001",
                         "text": "公司成立于2020年。",
                     }

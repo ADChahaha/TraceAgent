@@ -33,6 +33,7 @@ class GraphState:
     last_review_field_id: str | None = None
     actions: list[dict[str, Any]] = field(default_factory=list)
     events: list[dict[str, Any]] = field(default_factory=list)
+    current_model_content: str = ""
     next_seq: int = 1
     failed_stage: str | None = None
 

@@ -4,56 +4,46 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, message_chunk_to_message
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import MessagesState
 from langgraph.prebuilt import ToolNode
 
-from service.file_extraction_agent.impl.html_tools import build_tools
+from service.file_extraction_agent.impl.html_tools import build_tools, model_tree_text
 
 
 def build_resolution_messages(state: Any) -> list[Any]:
     system = SystemMessage(
         content=(
             "You are the field extraction agent for a semantic HTML virtual file tree. "
-            "Use only tool calls; do not answer in plain text. "
-            "Call exactly one tool in each assistant turn. Never emit multiple or parallel tool calls in one turn. "
-            "Wait for that tool result before deciding the next tool call. "
-            "Tool-specific navigation and argument rules are provided in each tool description. "
-            "Use path_id locators like [0000.0001] exactly as shown by tree. "
-            "Do not write, encode, or guess raw virtual paths. "
-            "Every reason is a user-visible action explanation, not hidden reasoning and not evidence. "
-            "Every reason must connect the previous action to the next action. "
-            "First summarize what the previous action showed, then state the tool action you are about to take. "
-            "After every successful read, the next tool must be bind_evidence or skip_read. "
-            "Use bind_evidence when the current read object may support, contradict, or qualify any field. "
-            "If the current read is only possibly relevant, bind it as a candidate note instead of trying to remember it. "
-            "Use skip_read only when the current read object is irrelevant to every field. "
-            "bind_evidence records the current read object as block candidate evidence, not final inline evidence. "
-            "bind_evidence is a broad note-taking step, not a final evidence decision. "
-            "review_evidences expands block candidates into Sxxx/Ixxx/Rxxx inline selectors. "
-            "Use review_evidences like reviewing your notes to decide whether the current candidates are enough to write_field or whether you need more evidence. "
-            "If you continue reading after review_evidences, the next reason must say what the review showed was missing or still uncertain. "
-            "write_field final_evidence must copy inline selectors from review_evidences. "
-            "Every write_field call must immediately follow review_evidences for the same field, including missing fields and null enum variants. "
-            "If any other tool runs after review_evidences, review the same field again before write_field. "
-            "Candidate evidence binding is provisional collection, not final classification. "
-            "Do not read another path before binding or skipping the current read. "
-            "Do not wait until the field value or enum decision is final before binding candidate evidence. "
-            "write_field submits a field value with final_evidence selected from reviewed inline evidence. "
-            "final_evidence should include only selectors that are genuinely useful for the submitted value; "
-            "drop merely topical, background, duplicate, or weakly related candidate evidence. "
-            "Only null-typed fields or null enum variants may submit final_evidence=[]. "
-            "For any resolved non-null value or non-null enum variant, submit_result requires non-empty final_evidence. "
-            "Mark a field missing with write_field when the document does not mention it. "
-            "Call submit_result after all fields have been written. If submit_result returns errors, fix fields and submit again."
+            "Your goal is to extract fields according to task_spec and finally call submit_result. "
+            "Assistant content is optional user-visible progress narration, like Codex updates. "
+            "Read like a human working through a document. "
+            "Do not narrate mechanical navigation or every individual read. "
+            "It is fine to call tools with empty assistant content while you are still reading adjacent blocks. "
+            "Write assistant content when you have completed a semantic reading chunk, "
+            "collected a meaningful candidate-evidence group, are switching from reading to review or write, "
+            "are writing a field decision, or need to explain a correction. "
+            "Do not use a fixed template or a long summary. "
+            "Call exactly one tool in each assistant turn. "
+            "Never emit multiple or parallel tool calls in one turn. "
+            "Any action that depends on a previous tool result must wait until that tool result returns. "
+            "Do not put a dependent write_field in the same assistant turn as the review_evidences output it needs. "
+            "Tool-specific argument rules are provided in the tool descriptions. "
+            "Tool path arguments and assistant content source references use evidence:// links. "
+            "In assistant content, use evidence:// links for source or path references. "
+            "Whenever assistant content mentions, quotes, summarizes, or relies on source text, "
+            "make that source-related text a Markdown evidence link. "
+            "Quote source words as much as possible when explaining what you read, saved, reviewed, or wrote, "
+            "for example [\"short source quote\"](evidence://0000.0001.0014) or "
+            "[\"short source quote\"](evidence://0000.0001/S002)."
         )
     )
     human = HumanMessage(
         content="\n\n".join(
             [
                 "Task fields:\n" + _task_fields_text(state.task_spec),
-                "Initial virtual tree:\n" + state.document.tree_text("/", depth=3),
+                "Initial virtual tree:\n" + model_tree_text(state.document, "/", depth=3),
             ]
         )
     )
@@ -88,11 +78,14 @@ def run_resolution_stream(state: Any, resolution_model: Any) -> Iterable[dict[st
 
 
 def build_resolution_graph(resolution_model: Any, tools: list[Any], state: Any):
-    model = resolution_model.bind_tools(tools)
+    model = _bind_tools_without_parallel(resolution_model, tools)
     tool_node = ToolNode(tools)
 
     def call_model(graph_state: MessagesState):
-        return {"messages": [_single_tool_call_message(model.invoke(graph_state["messages"]))]}
+        message = _invoke_model_message(model, graph_state["messages"])
+        _keep_first_tool_call(message)
+        _record_model_message(state, message)
+        return {"messages": [message]}
 
     def should_continue(graph_state: MessagesState):
         if len(state.actions) >= state.run_options.max_tool_calls:
@@ -113,6 +106,38 @@ def build_resolution_graph(resolution_model: Any, tools: list[Any], state: Any):
     return graph.compile()
 
 
+def _bind_tools_without_parallel(resolution_model: Any, tools: list[Any]) -> Any:
+    try:
+        return resolution_model.bind_tools(tools, parallel_tool_calls=False)
+    except TypeError:
+        return resolution_model.bind_tools(tools)
+
+
+def _keep_first_tool_call(message: Any) -> Any:
+    tool_calls = getattr(message, "tool_calls", None)
+    if not isinstance(tool_calls, list) or len(tool_calls) <= 1:
+        return message
+    first_tool_call = tool_calls[0]
+    message.tool_calls = [first_tool_call]
+    _keep_first_raw_tool_call(message, first_tool_call)
+    return message
+
+
+def _keep_first_raw_tool_call(message: Any, first_tool_call: Any) -> None:
+    additional_kwargs = getattr(message, "additional_kwargs", None)
+    if not isinstance(additional_kwargs, dict):
+        return
+    raw_tool_calls = additional_kwargs.get("tool_calls")
+    if not isinstance(raw_tool_calls, list) or len(raw_tool_calls) <= 1:
+        return
+    first_id = _read(first_tool_call, "id")
+    if first_id is None:
+        additional_kwargs["tool_calls"] = raw_tool_calls[:1]
+        return
+    matching_raw_calls = [call for call in raw_tool_calls if _read(call, "id") == first_id]
+    additional_kwargs["tool_calls"] = matching_raw_calls[:1] if matching_raw_calls else raw_tool_calls[:1]
+
+
 def _run_fake_model_loop(state: Any, model: Any, messages: list[Any], tools: list[Any]) -> dict[str, Any]:
     outcome: dict[str, Any] = {"ok": False, "errors": [{"message": "resolution did not run"}]}
     for outcome in _run_fake_model_loop_stream(state, model, messages, tools):
@@ -124,6 +149,8 @@ def _run_fake_model_loop_stream(state: Any, model: Any, messages: list[Any], too
     tool_map = {getattr(tool, "name", getattr(tool, "__name__", "")): tool for tool in tools}
     for _ in range(state.run_options.max_tool_calls):
         call = model.invoke(messages)
+        content = _plain_json(_read(call, "content", ""))
+        state.current_model_content = content if isinstance(content, str) else ""
         name = _read(call, "tool_name") or _read(call, "name")
         args = _read(call, "arguments", {}) or _read(call, "args", {}) or {}
         selected = tool_map.get(name)
@@ -142,17 +169,77 @@ def _supports_bind_tools(model: Any) -> bool:
     return callable(getattr(model, "bind_tools", None))
 
 
-def _single_tool_call_message(message: Any) -> Any:
+def _invoke_model_message(model: Any, messages: list[Any]) -> Any:
+    errors: list[tuple[str, Exception]] = []
+    for attempt in _model_call_attempts(model):
+        attempt_name = _read(attempt, "name", "model_call")
+        attempt_model = _read(attempt, "model", model)
+        use_stream = bool(_read(attempt, "use_stream", True))
+        try:
+            if use_stream:
+                return _stream_model_message(attempt_model, messages)
+            return attempt_model.invoke(messages)
+        except Exception as exc:
+            errors.append((str(attempt_name), exc))
+    details = "; ".join(f"{name}: {type(error).__name__}: {error}" for name, error in errors)
+    raise RuntimeError(f"all model call attempts failed: {details}")
+
+
+def _model_call_attempts(model: Any) -> list[Any]:
+    attempts = getattr(model, "model_call_attempts", None)
+    if callable(attempts):
+        return list(attempts())
+    return [
+        {"name": "stream", "model": model, "use_stream": True},
+        {"name": "invoke", "model": model, "use_stream": False},
+    ]
+
+
+def _stream_model_message(model: Any, messages: list[Any]) -> Any:
+    stream = getattr(model, "stream", None)
+    if not callable(stream):
+        raise RuntimeError("model does not support stream")
+    streamed_message: Any = None
+    for chunk in stream(messages):
+        streamed_message = chunk if streamed_message is None else streamed_message + chunk
+    if streamed_message is None:
+        raise RuntimeError("model stream returned no chunks")
+    return message_chunk_to_message(streamed_message)
+
+
+def _record_model_message(state: Any, message: Any) -> None:
     tool_calls = getattr(message, "tool_calls", None)
-    if not isinstance(tool_calls, list) or len(tool_calls) <= 1:
-        return message
-    if callable(getattr(message, "model_copy", None)):
-        return message.model_copy(update={"tool_calls": tool_calls[:1]})
-    try:
-        message.tool_calls = tool_calls[:1]
-    except Exception:
-        return message
-    return message
+    if not isinstance(tool_calls, list):
+        tool_calls = []
+    content = _message_content_text(getattr(message, "content", ""))
+    state.current_model_content = content if isinstance(content, str) else ""
+    state.events.append(
+        {
+            "seq": state.next_seq,
+            "type": "model_message",
+            "content": content,
+            "tool_call_count": len(tool_calls),
+            "tool_calls": [_tool_call_summary(call) for call in tool_calls],
+        }
+    )
+    state.next_seq += 1
+
+
+def _message_content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for item in content:
+        if isinstance(item, str):
+            parts.append(item)
+            continue
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "text" and isinstance(item.get("text"), str):
+            parts.append(item["text"])
+    return "".join(parts)
 
 
 def _task_fields_text(task_spec: Any) -> str:
@@ -177,4 +264,29 @@ def _read(value: Any, key: str, default: Any = None) -> Any:
     return getattr(value, key, default)
 
 
-__all__ = ["build_resolution_messages", "run_resolution", "run_resolution_stream", "build_resolution_graph"]
+def _tool_call_summary(call: Any) -> dict[str, Any]:
+    summary = {
+        "id": _read(call, "id"),
+        "name": _read(call, "name"),
+        "args": _plain_json(_read(call, "args", {})),
+    }
+    return {key: value for key, value in summary.items() if value not in (None, "")}
+
+
+def _plain_json(value: Any) -> Any:
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _plain_json(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_plain_json(item) for item in value]
+    return str(value)
+
+
+__all__ = [
+    "build_resolution_messages",
+    "run_resolution",
+    "run_resolution_stream",
+    "build_resolution_graph",
+    "_invoke_model_message",
+]

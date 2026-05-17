@@ -7,7 +7,8 @@
 ```text
 documents + task_spec
   -> build_graph_state
-  -> fake model 使用 path_id 依次调用 tree/read/bind_evidence/review_evidences/write_field/submit_result
+  -> fake model 使用 evidence:// locator 和可选 content 依次调用 tree/read/bind_evidence/review_evidences/write_field/submit_result
+  -> fake loop 把 fake model 的 content 写入 state.current_model_content，工具参数本身不携带 reason
   -> 工具层写入 state.events
   -> run_extraction_graph_stream 逐条 yield NDJSON
   -> map_state_to_result 生成 fields 数组、selector 反查文本和 trace
@@ -15,6 +16,6 @@ documents + task_spec
 
 ## 测试函数
 
-- `test_run_extraction_graph_stream_yields_ndjson_events_and_final_result`：确认流式图会按工具调用顺序输出 NDJSON 事件，事件 `seq` 连续递增，最后一条是 `result_completed`，字段结果会把 `write_field(final_evidence=...)` 保留的 `path_id` selector 和 `evidence_texts` 带入最终结果，方便回放和评测。
+- `test_run_extraction_graph_stream_yields_ndjson_events_and_final_result`：确认流式图会按工具调用顺序输出 NDJSON 事件，事件 `seq` 连续递增，最后一条是 `result_completed`；fake model 面向工具传 `evidence://` block/inline links，工具内部会把 `write_field(final_evidence=...)` 转回 canonical `path_id` selector、`evidence_texts` 和来自 fake model content 的兼容说明带入最终结果，方便回放和评测。
 - `test_run_extraction_graph_stream_flushes_events_after_each_tool_call`：确认 graph stream 会在每次工具调用后立即产出事件，而不是等整轮 resolution 结束后批量返回。
 - `test_map_state_to_result_returns_new_field_result_shape`：确认最终结果使用 `fields[]` 字段对象结构，保留证据 selector 的反查文本，并且 trace 不再包含 soft plan。

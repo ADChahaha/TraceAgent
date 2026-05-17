@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -61,7 +62,62 @@ def build_chat_model(config: ModelConfig, model_name: str) -> Any:
         if _should_enable_deepseek_thinking(config, model_name)
         else ChatOpenAI
     )
-    return model_cls(**kwargs)
+    return ChatModelFallbackChain(
+        [
+            ModelCallAttempt(
+                name=name,
+                model=model_cls(**{**kwargs, "use_responses_api": use_responses_api, "streaming": streaming}),
+                use_stream=streaming,
+            )
+            for name, use_responses_api, streaming in _transport_attempt_specs()
+        ]
+    )
+
+
+@dataclass
+class ModelCallAttempt:
+    name: str
+    model: Any
+    use_stream: bool
+
+
+class ChatModelFallbackChain:
+    """Ordered model-call fallbacks for API family and streaming transport."""
+
+    def __init__(self, attempts: list[ModelCallAttempt]):
+        if not attempts:
+            raise ValueError("at least one model call attempt is required")
+        self._attempts = attempts
+
+    @property
+    def attempts(self) -> list[ModelCallAttempt]:
+        return list(self._attempts)
+
+    def bind_tools(self, tools: list[Any], *args: Any, **kwargs: Any) -> "ChatModelFallbackChain":
+        bound_attempts = []
+        for attempt in self._attempts:
+            bind_tools = getattr(attempt.model, "bind_tools", None)
+            bound_model = bind_tools(tools, *args, **kwargs) if callable(bind_tools) else attempt.model
+            bound_attempts.append(
+                ModelCallAttempt(
+                    name=attempt.name,
+                    model=bound_model,
+                    use_stream=attempt.use_stream,
+                )
+            )
+        return ChatModelFallbackChain(bound_attempts)
+
+    def model_call_attempts(self) -> list[ModelCallAttempt]:
+        return self.attempts
+
+
+def _transport_attempt_specs() -> list[tuple[str, bool, bool]]:
+    return [
+        ("responses_stream", True, True),
+        ("chat_completions_stream", False, True),
+        ("responses_invoke", True, False),
+        ("chat_completions_invoke", False, False),
+    ]
 
 
 class DeepSeekReasoningChatOpenAI(ChatOpenAI):

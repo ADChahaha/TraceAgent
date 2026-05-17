@@ -16,6 +16,7 @@ BLOCK_TAGS = {"p", "ul", "ol", "table"}
 DEFAULT_SNIPPET_CHARS = 24
 DEFAULT_READ_LIMIT = 30
 MAX_READ_LIMIT = 100
+READABLE_KINDS = {"paragraph", "list", "table"}
 
 
 @dataclass
@@ -95,6 +96,44 @@ class HtmlDocument:
         if node.kind == "table":
             return self._read_table(node, offset=offset, limit=limit)
         raise ValueError(f"path is not readable: {path}")
+
+    def read_sequence(
+        self,
+        path: str,
+        *,
+        count: int,
+        offset: int = 0,
+        limit: int = 0,
+    ) -> dict[str, Any]:
+        start = self._node(path)
+        if start.kind not in READABLE_KINDS:
+            raise ValueError(f"path is not readable: {path}")
+        parent = self._parent_node(start)
+        siblings = parent.children
+        start_index = siblings.index(start)
+        requested_count = int(count)
+        bounded_count = max(1, min(3, requested_count))
+        selected: list[VirtualNode] = []
+        has_more_in_section = False
+        for sibling in siblings[start_index:]:
+            if sibling.kind not in READABLE_KINDS:
+                break
+            if len(selected) >= bounded_count:
+                has_more_in_section = True
+                break
+            selected.append(sibling)
+        blocks = [self.read_markdown(node.path, offset=offset, limit=limit) for node in selected]
+        return {
+            "path_id": start.path_id,
+            "kind": "read_sequence",
+            "count_requested": requested_count,
+            "count_limit": 3,
+            "count_returned": len(blocks),
+            "returned_path_ids": [block["path_id"] for block in blocks],
+            "blocks": blocks,
+            "text": render_read_sequence_text(blocks),
+            "has_more_in_section": has_more_in_section,
+        }
 
     def paragraph_anchors(self, path: str) -> list[dict[str, str]]:
         node = self._node(path)
@@ -243,6 +282,13 @@ class HtmlDocument:
             return node
         raise ValueError(f"unknown path_id: {path_id}")
 
+    def _parent_node(self, node: VirtualNode) -> VirtualNode:
+        parent_path = node.path.rsplit("/", 1)[0] or "/"
+        parent = self.nodes_by_path.get(parent_path)
+        if parent is None:
+            raise ValueError(f"missing parent for path: {node.path}")
+        return parent
+
     def _append_tree_lines(
         self,
         node: VirtualNode,
@@ -335,7 +381,7 @@ class _Parser(HTMLParser):
 
 def build_html_document(documents: Any) -> HtmlDocument:
     source_documents = normalize_documents(documents)
-    root = VirtualNode(name="", path="/", path_id="[0000]", kind="root")
+    root = VirtualNode(name="", path="/", path_id="0000", kind="root")
     nodes_by_path = {"/": root}
     nodes_by_path_id = {root.path_id: root}
     used_root_names: dict[str, int] = {}
@@ -626,6 +672,19 @@ def render_table_markdown(
     return "\n".join(lines)
 
 
+def render_read_sequence_text(blocks: list[dict[str, Any]]) -> str:
+    rendered: list[str] = []
+    for block in blocks:
+        rendered.extend(
+            [
+                f"## {block.get('path_id', '')} ({block.get('kind', 'unknown')})",
+                "",
+                str(block.get("text", "")),
+            ]
+        )
+    return "\n\n".join(rendered)
+
+
 def validate_selector_values(index: int, selector: dict[str, Any], key: str, allowed: list[str]) -> list[dict[str, Any]]:
     if key not in selector:
         return [{"index": index, "message": f"evidence selector for this path_id must use {key}"}]
@@ -690,17 +749,18 @@ def normalize_path(path: str) -> str:
 
 
 def child_path_id(parent_path_id: str, index: int) -> str:
-    prefix = normalize_path_id(parent_path_id).strip("[]")
-    return f"[{prefix}.{index:04d}]"
+    prefix = normalize_path_id(parent_path_id)
+    return f"{prefix}.{index:04d}"
 
 
 def is_path_id(value: str) -> bool:
-    return bool(re.fullmatch(r"\[\d{4}(?:\.\d{4})*\]", str(value or "").strip()))
+    normalized = str(value or "").strip()
+    return bool(re.fullmatch(r"\d{4}(?:\.\d{4})*", normalized))
 
 
 def normalize_path_id(path_id: str) -> str:
     normalized = str(path_id or "").strip()
-    if not is_path_id(normalized):
+    if not re.fullmatch(r"\d{4}(?:\.\d{4})*", normalized):
         raise ValueError(f"invalid path_id: {path_id}")
     return normalized
 
