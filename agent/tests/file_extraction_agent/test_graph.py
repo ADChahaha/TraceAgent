@@ -23,8 +23,8 @@ class FakeStreamingModel:
                 },
             },
             {
-                "tool_name": "bind_evidence",
-                "content": "当前段落写明公司成立年份，先绑定当前 read block。",
+                "tool_name": "add_candidate_evidence",
+                "content": "当前段落写明公司成立年份，先保存为候选证据。",
                 "arguments": {
                     "field_id": "founded_year",
                     "path_id": "evidence://0000.0001.0001.0001",
@@ -39,7 +39,7 @@ class FakeStreamingModel:
             },
             {
                 "tool_name": "write_field",
-                "content": "证据已绑定，提交成立年份。",
+                "content": "候选证据复核后足够，提交成立年份。",
                 "arguments": {
                     "field_id": "founded_year",
                     "value": 2020,
@@ -106,7 +106,7 @@ def test_run_extraction_graph_stream_yields_ndjson_events_and_final_result():
                     "text": "公司成立于2020年。",
                 }
             ],
-            "reason": "证据已绑定，提交成立年份。",
+            "reason": "候选证据复核后足够，提交成立年份。",
         }
     ]
     assert [payload["seq"] for payload in payloads] == list(range(1, len(payloads) + 1))

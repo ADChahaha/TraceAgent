@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-from langchain_core.messages import HumanMessage, SystemMessage, message_chunk_to_message
+from langchain_core.messages import (
+    HumanMessage,
+    SystemMessage,
+    message_chunk_to_message,
+)
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import MessagesState
 from langgraph.prebuilt import ToolNode
 
-from service.file_extraction_agent.impl.html_tools import build_tools, model_tree_text
+from service.file_extraction_agent.impl.html_tools import build_tools
 
 
 def build_resolution_messages(state: Any) -> list[Any]:
@@ -17,14 +21,26 @@ def build_resolution_messages(state: Any) -> list[Any]:
         content=(
             "You are the field extraction agent for a semantic HTML virtual file tree. "
             "Your goal is to extract fields according to task_spec and finally call submit_result. "
-            "Assistant content is optional user-visible progress narration, like Codex updates. "
+            "Assistant content is visible to a human reviewer. "
+            "Use it as Codex-style progress notes: short, human-readable snapshots of "
+            "what you learned, why it matters, and what you will do next. "
+            "Do not turn content into a tool-call log. "
             "Read like a human working through a document. "
-            "Do not narrate mechanical navigation or every individual read. "
-            "It is fine to call tools with empty assistant content while you are still reading adjacent blocks. "
-            "Write assistant content when you have completed a semantic reading chunk, "
-            "collected a meaningful candidate-evidence group, are switching from reading to review or write, "
-            "are writing a field decision, or need to explain a correction. "
-            "Do not use a fixed template or a long summary. "
+            "Before the first tool call, always write one short content update: "
+            "say you will inspect the document outline, then read likely relevant clauses. "
+            "Before starting a new reading cluster, briefly say what you are about to inspect and why. "
+            "Routine tree navigation and mechanical adjacent reads can be silent after that. "
+            "Do not stay silent across long navigation; "
+            "after at most ten consecutive tree/read turns, "
+            "write a short content update if you learned anything. "
+            "Speak when a small local reading chunk is complete, "
+            "when a finding changes which fields matter, "
+            "when a candidate group is ready to review or write, "
+            "or when a tool error needs correction. "
+            "When you speak, state one concrete finding, decision, or uncertainty and the next action. "
+            "Keep local reading chunks short. "
+            "Do not stretch one note across a whole section or unrelated blocks. "
+            "Avoid fixed templates and long summaries. "
             "Call exactly one tool in each assistant turn. "
             "Never emit multiple or parallel tool calls in one turn. "
             "Any action that depends on a previous tool result must wait until that tool result returns. "
@@ -34,16 +50,18 @@ def build_resolution_messages(state: Any) -> list[Any]:
             "In assistant content, use evidence:// links for source or path references. "
             "Whenever assistant content mentions, quotes, summarizes, or relies on source text, "
             "make that source-related text a Markdown evidence link. "
+            "Do not quote source words in plain quotation marks without an evidence link. "
+            "When saving candidate evidence, cite the block being saved with a Markdown evidence link. "
             "Quote source words as much as possible when explaining what you read, saved, reviewed, or wrote, "
-            "for example [\"short source quote\"](evidence://0000.0001.0014) or "
-            "[\"short source quote\"](evidence://0000.0001/S002)."
+            'for example ["short source quote"](evidence://0000.0001.0014) or '
+            '["short source quote"](evidence://0000.0001/S002).'
         )
     )
     human = HumanMessage(
         content="\n\n".join(
             [
                 "Task fields:\n" + _task_fields_text(state.task_spec),
-                "Initial virtual tree:\n" + model_tree_text(state.document, "/", depth=3),
+                "Use tree first to inspect the virtual file tree, then read specific files from tree output.",
             ]
         )
     )
@@ -51,13 +69,18 @@ def build_resolution_messages(state: Any) -> list[Any]:
 
 
 def run_resolution(state: Any, resolution_model: Any) -> dict[str, Any]:
-    outcome: dict[str, Any] = {"ok": False, "errors": [{"message": "resolution did not run"}]}
+    outcome: dict[str, Any] = {
+        "ok": False,
+        "errors": [{"message": "resolution did not run"}],
+    }
     for outcome in run_resolution_stream(state, resolution_model):
         pass
     return outcome
 
 
-def run_resolution_stream(state: Any, resolution_model: Any) -> Iterable[dict[str, Any]]:
+def run_resolution_stream(
+    state: Any, resolution_model: Any
+) -> Iterable[dict[str, Any]]:
     tools = build_tools(state)
     messages = build_resolution_messages(state)
     if _supports_bind_tools(resolution_model):
@@ -68,11 +91,17 @@ def run_resolution_stream(state: Any, resolution_model: Any) -> Iterable[dict[st
             config={"recursion_limit": state.run_options.max_tool_calls * 2 + 10},
         ):
             yield {"ok": None, "output": output}
-        completed = [event for event in state.events if event.get("type") == "result_completed"]
+        completed = [
+            event for event in state.events if event.get("type") == "result_completed"
+        ]
         if completed:
             yield {"ok": True, "output": output}
             return
-        yield {"ok": False, "errors": [{"message": "resolution did not submit result"}], "output": output}
+        yield {
+            "ok": False,
+            "errors": [{"message": "resolution did not submit result"}],
+            "output": output,
+        }
         return
     yield from _run_fake_model_loop_stream(state, resolution_model, messages, tools)
 
@@ -134,19 +163,32 @@ def _keep_first_raw_tool_call(message: Any, first_tool_call: Any) -> None:
     if first_id is None:
         additional_kwargs["tool_calls"] = raw_tool_calls[:1]
         return
-    matching_raw_calls = [call for call in raw_tool_calls if _read(call, "id") == first_id]
-    additional_kwargs["tool_calls"] = matching_raw_calls[:1] if matching_raw_calls else raw_tool_calls[:1]
+    matching_raw_calls = [
+        call for call in raw_tool_calls if _read(call, "id") == first_id
+    ]
+    additional_kwargs["tool_calls"] = (
+        matching_raw_calls[:1] if matching_raw_calls else raw_tool_calls[:1]
+    )
 
 
-def _run_fake_model_loop(state: Any, model: Any, messages: list[Any], tools: list[Any]) -> dict[str, Any]:
-    outcome: dict[str, Any] = {"ok": False, "errors": [{"message": "resolution did not run"}]}
+def _run_fake_model_loop(
+    state: Any, model: Any, messages: list[Any], tools: list[Any]
+) -> dict[str, Any]:
+    outcome: dict[str, Any] = {
+        "ok": False,
+        "errors": [{"message": "resolution did not run"}],
+    }
     for outcome in _run_fake_model_loop_stream(state, model, messages, tools):
         pass
     return outcome
 
 
-def _run_fake_model_loop_stream(state: Any, model: Any, messages: list[Any], tools: list[Any]) -> Iterable[dict[str, Any]]:
-    tool_map = {getattr(tool, "name", getattr(tool, "__name__", "")): tool for tool in tools}
+def _run_fake_model_loop_stream(
+    state: Any, model: Any, messages: list[Any], tools: list[Any]
+) -> Iterable[dict[str, Any]]:
+    tool_map = {
+        getattr(tool, "name", getattr(tool, "__name__", "")): tool for tool in tools
+    }
     for _ in range(state.run_options.max_tool_calls):
         call = model.invoke(messages)
         content = _plain_json(_read(call, "content", ""))
@@ -157,10 +199,16 @@ def _run_fake_model_loop_stream(state: Any, model: Any, messages: list[Any], too
         if selected is None:
             yield {"ok": False, "errors": [{"message": f"unknown tool: {name}"}]}
             return
-        result = selected.invoke(args) if hasattr(selected, "invoke") else selected(**args)
+        result = (
+            selected.invoke(args) if hasattr(selected, "invoke") else selected(**args)
+        )
         messages.append({"tool": name, "result": result})
         yield result
-        if name == "submit_result" and isinstance(result, dict) and result.get("ok") is True:
+        if (
+            name == "submit_result"
+            and isinstance(result, dict)
+            and result.get("ok") is True
+        ):
             return
     yield {"ok": False, "errors": [{"message": "max_tool_calls exceeded"}]}
 
@@ -181,7 +229,9 @@ def _invoke_model_message(model: Any, messages: list[Any]) -> Any:
             return attempt_model.invoke(messages)
         except Exception as exc:
             errors.append((str(attempt_name), exc))
-    details = "; ".join(f"{name}: {type(error).__name__}: {error}" for name, error in errors)
+    details = "; ".join(
+        f"{name}: {type(error).__name__}: {error}" for name, error in errors
+    )
     raise RuntimeError(f"all model call attempts failed: {details}")
 
 
@@ -201,7 +251,9 @@ def _stream_model_message(model: Any, messages: list[Any]) -> Any:
         raise RuntimeError("model does not support stream")
     streamed_message: Any = None
     for chunk in stream(messages):
-        streamed_message = chunk if streamed_message is None else streamed_message + chunk
+        streamed_message = (
+            chunk if streamed_message is None else streamed_message + chunk
+        )
     if streamed_message is None:
         raise RuntimeError("model stream returned no chunks")
     return message_chunk_to_message(streamed_message)
@@ -248,7 +300,9 @@ def _task_fields_text(task_spec: Any) -> str:
         detail = f"- {field.name}: type={field.type}, required={field.required}"
         variants = getattr(field, "variants", []) or []
         if getattr(field, "type", None) == "enum" and variants:
-            variant_text = ", ".join(f"{variant.name}({variant.type})" for variant in variants)
+            variant_text = ", ".join(
+                f"{variant.name}({variant.type})" for variant in variants
+            )
             detail += f", variants={variant_text}"
             detail += ', write_field value shape: {"variant": "<variant name>", "value": <payload>}'
         detail += f", description={field.description or ''}"

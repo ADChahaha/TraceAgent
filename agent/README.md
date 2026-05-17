@@ -87,7 +87,7 @@ POST /v1/file-extraction-agent/extract/stream
 documents + task_spec
   -> input_adapter 校验 documents、task_spec.fields 和 run_options
   -> html_index 构建 /001-filename-title/... 只读虚拟文件树
-  -> resolution_new 按字段调用 tree / read / anchors / query_table / bind_evidence / review_field / write_field / submit_result
+  -> resolution_new 按字段调用 tree / read / add_candidate_evidence / review_evidences / write_field / submit_result
   -> graph 逐行输出 tool_started / tool_completed / tool_failed / field_written / result_completed
 ```
 
@@ -97,14 +97,12 @@ documents + task_spec
 
 | Tool / Event | 粒度 | 保留的关键信息 | 用途 |
 | --- | --- | --- | --- |
-| `tree(path, depth, reason)` | 文件树导航 | 路径、展开深度、读取理由、目录/文件名 | 追踪模型先看了哪些文档和章节。 |
-| `read(path, offset, limit, reason)` | 文件读取 | `.md/.list/.table` 路径、分页窗口、读取理由、Markdown 摘要 | 追踪模型读了哪个 paragraph、list 或 table 文件。 |
-| `anchors(path, reason)` | paragraph 证据编号 | `.md` 路径、读取理由、`Sxxx` 句子编号 | 给 paragraph 字段证据绑定句子编号。 |
-| `query_table(path, sql, offset, limit, reason)` | 表格查询 | `.table` 路径、SQL、分页窗口、`Rxxx` 行号 | 从大表中定位字段相关行。 |
-| `bind_evidence(field_id, evidence, reason)` | 候选证据绑定 | 字段 id、selector 证据、绑定理由、反查文本 | 追踪模型看到证据后先绑定到哪个字段。 |
-| `review_field(field_id, reason)` | 候选证据复看 | 字段描述、当前值、已绑定 selector 和反查文本 | 有候选证据时，帮助模型写字段前复看并筛选最终证据。 |
-| `write_field(field_id, value, final_evidence, status, reason)` | 字段写入 | 字段 id、值、最终 selector、状态、写入理由 | 追踪字段最终为什么被写入或标记缺失。 |
-| `submit_result(reason)` | 结果校验 | 当前字段缓冲、校验结果或错误 | 追踪本轮抽取是否通过 schema 和证据校验。 |
+| `tree(path_id, depth)` | 文件树导航 | `evidence://` locator、展开深度、目录/文件名 | 追踪模型先看了哪些文档和章节。 |
+| `read(path_id)` | 文件读取 | `.md/.list/.table` locator、Markdown 阅读视图 | 追踪模型读了哪个 paragraph、list 或 table 文件。 |
+| `add_candidate_evidence(field_id, path_id)` | 候选证据记录 | 字段 id、一个 block 级 `evidence://` locator | 追踪模型看到哪些对象可能支持、反驳或限定字段。 |
+| `review_evidences(field_id)` | 候选证据复看 | 字段描述、当前值、候选 block、展开后的 inline selector 和反查文本 | 帮助模型像看笔记一样筛选最终证据。 |
+| `write_field(field_id, value, final_evidence, status)` | 字段写入 | 字段 id、值、最终 inline selector、状态、可见说明 | 追踪字段最终为什么被写入或标记缺失。 |
+| `submit_result()` | 结果校验 | 当前字段缓冲、校验结果或错误 | 追踪本轮抽取是否通过 schema 和证据校验。 |
 | `result_completed` | 最终收口 | `fields[]`、trace、失败原因 | 给 backend 一个完整可入库的最终事件。 |
 
 这套工具让前端可以把抽取过程回放成：
@@ -112,9 +110,8 @@ documents + task_spec
 ```text
 展开目录
   -> 读取 paragraph/list/table
-  -> 取得句子编号或查询表格行
-  -> 绑定候选 evidence selector
-  -> 有候选证据时复看字段证据
+  -> 记录可能相关的候选 block evidence
+  -> 复看字段候选并展开 inline evidence
   -> 写入字段值和 final_evidence
   -> 提交并校验结果
 ```

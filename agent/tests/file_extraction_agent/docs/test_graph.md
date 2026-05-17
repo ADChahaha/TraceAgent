@@ -7,7 +7,7 @@
 ```text
 documents + task_spec
   -> build_graph_state
-  -> fake model 使用 evidence:// locator 和可选 content 依次调用 tree/read/bind_evidence/review_evidences/write_field/submit_result
+  -> fake model 使用 evidence:// locator 和可选 content 依次调用 tree/read/add_candidate_evidence/review_evidences/write_field/submit_result
   -> fake loop 把 fake model 的 content 写入 state.current_model_content，工具参数本身不携带 reason
   -> 工具层写入 state.events
   -> run_extraction_graph_stream 逐条 yield NDJSON

@@ -32,21 +32,38 @@ def _state():
     return build_graph_state(extraction_input)
 
 
-def test_resolution_messages_describe_free_bind_policy_without_tool_manual():
+def test_resolution_messages_describe_candidate_policy_without_tool_manual():
     messages = build_resolution_messages(_state())
     system_content = messages[0].content
     content = "\n\n".join(message.content for message in messages)
 
     assert "semantic HTML virtual file tree" in content
     assert "Your goal is to extract fields according to task_spec and finally call submit_result" in content
-    assert "Assistant content is optional user-visible progress narration" in content
+    assert "Assistant content is visible to a human reviewer" in content
+    assert "Codex-style progress notes" in content
+    assert "short, human-readable snapshots" in content
+    assert "what you learned, why it matters, and what you will do next" in content
+    assert "Do not turn content into a tool-call log" in content
     assert "Read like a human working through a document" in content
-    assert "Do not narrate mechanical navigation or every individual read" in content
-    assert "It is fine to call tools with empty assistant content while you are still reading adjacent blocks" in content
-    assert "Write assistant content when you have completed a semantic reading chunk" in content
-    assert "collected a meaningful candidate-evidence group" in content
-    assert "are switching from reading to review or write" in content
-    assert "Do not use a fixed template or a long summary" in content
+    assert "Before the first tool call, always write one short content update" in content
+    assert "inspect the document outline" in content
+    assert "then read likely relevant clauses" in content
+    assert "Before starting a new reading cluster" in content
+    assert "what you are about to inspect and why" in content
+    assert "Routine tree navigation and mechanical adjacent reads can be silent" in content
+    assert "Do not stay silent across long navigation" in content
+    assert "after at most ten consecutive tree/read turns" in content
+    assert "write a short content update if you learned anything" in content
+    assert "Speak when a small local reading chunk is complete" in content
+    assert "when a finding changes which fields matter" in content
+    assert "when a candidate group is ready to review or write" in content
+    assert "when a tool error needs correction" in content
+    assert "state one concrete finding, decision, or uncertainty and the next action" in content
+    assert "Keep local reading chunks short" in content
+    assert "Do not stretch one note across a whole section or unrelated blocks" in content
+    assert "Avoid fixed templates and long summaries" in content
+    assert "bind candidate evidence" not in content
+    assert "skip binding" not in content
     assert "Call exactly one tool in each assistant turn" in content
     assert "Never emit multiple or parallel tool calls in one turn" in content
     assert "Any action that depends on a previous tool result must wait until that tool result returns" in content
@@ -54,6 +71,8 @@ def test_resolution_messages_describe_free_bind_policy_without_tool_manual():
     assert "In assistant content, use evidence:// links for source or path references" in system_content
     assert "Whenever assistant content mentions, quotes, summarizes, or relies on source text" in system_content
     assert "make that source-related text a Markdown evidence link" in system_content
+    assert "Do not quote source words in plain quotation marks without an evidence link" in system_content
+    assert "When saving candidate evidence, cite the block being saved with a Markdown evidence link" in system_content
     assert "Quote source words as much as possible when explaining what you read, saved, reviewed, or wrote" in system_content
     assert "[\"short source quote\"](evidence://0000.0001.0014)" in system_content
     assert "[\"short source quote\"](evidence://0000.0001/S002)" in system_content
@@ -66,7 +85,15 @@ def test_resolution_messages_describe_free_bind_policy_without_tool_manual():
     assert "Do not use bare path_id text as the citation in content" not in system_content
     assert "read does not force the next tool call" not in content
     assert "Use read count when you want to continue through adjacent blocks in the same section" not in content
-    assert "bind_evidence can be called whenever a known readable path_id should be saved" not in content
+    assert "After finishing a local semantic topic" not in content
+    assert "make an explicit candidate-evidence decision before moving on" not in content
+    assert "definition block" not in content
+    assert "disclosure restriction" not in content
+    assert "permitted-use clause" not in content
+    assert "whether you will call add_candidate_evidence now" not in content
+    assert "Do not wait until the whole document is read before making candidate-evidence decisions" not in content
+    assert "Uncertain but plausible relevance is enough to add as candidate evidence" not in content
+    assert "add_candidate_evidence can be called whenever a known readable path_id should be saved" not in content
     assert "review_evidences expands block candidates into Sxxx/Ixxx/Rxxx inline selectors" not in content
     assert "write_field final_evidence must copy inline selectors from review_evidences" not in content
     assert "Only null-typed fields or null enum variants may submit final_evidence=[]" not in content
@@ -91,7 +118,7 @@ def test_resolution_messages_describe_free_bind_policy_without_tool_manual():
     assert "read(path_id, offset, limit, reason)" not in content
     assert "read(path_id, offset, limit)" not in content
     assert "skip_read" not in content
-    assert "After every successful read, the next tool must be bind_evidence or skip_read" not in content
+    assert "After every successful read, the next tool must be add_candidate_evidence or skip_read" not in content
     assert "Do not read another path before binding or skipping the current read" not in content
     assert "anchors" not in content
     assert "query_table" not in content
@@ -101,18 +128,20 @@ def test_resolution_messages_describe_free_bind_policy_without_tool_manual():
     assert "overview" not in content
 
 
-def test_resolution_messages_include_depth_3_initial_tree_with_readable_files():
+def test_resolution_messages_do_not_inline_initial_tree():
     messages = build_resolution_messages(_state())
     content = "\n\n".join(message.content for message in messages)
 
-    assert "Initial virtual tree:" in content
-    assert "evidence://0000 /" in content
-    assert "evidence://0000.0001 company-公司资料/" in content
-    assert "evidence://0000.0001.0001 概况/" in content
-    assert "evidence://0000.0001.0001.0001 公司成立于2020年.md" in content
+    assert "Task fields:" in content
+    assert "Initial virtual tree:" not in content
+    assert "evidence://0000 /" not in content
+    assert "evidence://0000.0001 company-公司资料/" not in content
+    assert "evidence://0000.0001.0001 概况/" not in content
+    assert "evidence://0000.0001.0001.0001 公司成立于2020年.md" not in content
+    assert "Use tree first to inspect the virtual file tree" in content
 
 
-def test_tool_descriptions_carry_free_bind_and_review_contracts():
+def test_tool_descriptions_carry_candidate_and_review_contracts():
     tools = {getattr(tool, "name", getattr(tool, "__name__", "")): tool for tool in build_tools(_state())}
 
     assert "Use this for directories" in tools["tree"].description
@@ -128,22 +157,30 @@ def test_tool_descriptions_carry_free_bind_and_review_contracts():
     assert "offset" not in tools["read"].description
     assert "limit" not in tools["read"].description
     assert "pagination" not in tools["read"].description
-    assert "read does not require an immediate bind_evidence" in tools["read"].description
+    assert "read does not require an immediate add_candidate_evidence" in tools["read"].description
     assert "No assistant content is needed for mechanical adjacent reads" in tools["read"].description
     assert "If optional assistant content mentions source text" in tools["read"].description
-    assert "Bind any readable paragraph/list/table evidence link as block candidate evidence" in tools["bind_evidence"].description
-    assert "Use exactly one field_id and one path_id" in tools["bind_evidence"].description
-    assert "one paragraph, list, or table block" in tools["bind_evidence"].description
-    assert "path_ids" not in tools["bind_evidence"].args
-    assert "bindings" not in tools["bind_evidence"].args
-    assert "bindings=[{field_id, path_ids}, ...]" not in tools["bind_evidence"].description
-    assert "binding several fields" not in tools["bind_evidence"].description
-    assert "possible or uncertain relevance is enough to bind" in tools["bind_evidence"].description
-    assert "Candidate evidence can be broader than final_evidence" in tools["bind_evidence"].description
-    assert "final_evidence is selected later after review" in tools["bind_evidence"].description
-    assert "Assistant content is optional for routine binds" in tools["bind_evidence"].description
-    assert "Use content when this bind completes a meaningful candidate-evidence group" in tools["bind_evidence"].description
-    assert "Do not pass sentence/item/row inline links" in tools["bind_evidence"].description
+    assert "Add one readable paragraph/list/table evidence link as block candidate evidence" in tools["add_candidate_evidence"].description
+    assert "Use exactly one field_id and one path_id" in tools["add_candidate_evidence"].description
+    assert "one paragraph, list, or table block" in tools["add_candidate_evidence"].description
+    assert "path_ids" not in tools["add_candidate_evidence"].args
+    assert "bindings" not in tools["add_candidate_evidence"].args
+    assert "bindings=[{field_id, path_ids}, ...]" not in tools["add_candidate_evidence"].description
+    assert "binding several fields" not in tools["add_candidate_evidence"].description
+    assert "possible or uncertain relevance is enough to add as candidate" in tools["add_candidate_evidence"].description
+    assert "Candidate evidence can be broader than final_evidence" in tools["add_candidate_evidence"].description
+    assert "final_evidence is selected later after review" in tools["add_candidate_evidence"].description
+    assert "Assistant content is not optional when you call add_candidate_evidence" in tools["add_candidate_evidence"].description
+    assert "Before calling add_candidate_evidence, write a short user-visible note" in tools["add_candidate_evidence"].description
+    assert "why this block is worth saving for this field" in tools["add_candidate_evidence"].description
+    assert "include a Markdown evidence link to the same block path_id you are saving" in tools["add_candidate_evidence"].description
+    assert "[\"quoted words\"](evidence://0000.0001.0014)" in tools["add_candidate_evidence"].description
+    assert "Do not leave source words as plain quoted text" in tools["add_candidate_evidence"].description
+    assert "This candidate is not the final field decision" in tools["add_candidate_evidence"].description
+    assert "Assistant content is optional for routine candidate additions" not in tools["add_candidate_evidence"].description
+    assert "Use content when this candidate addition completes a meaningful candidate-evidence group" not in tools["add_candidate_evidence"].description
+    assert "Do not pass sentence/item/row inline links" in tools["add_candidate_evidence"].description
+    assert "bind_evidence" not in tools["add_candidate_evidence"].description
     assert "review_evidences expands block candidate evidence into inline evidence links" in tools["review_evidences"].description
     assert "Use review_evidences like checking your notes before deciding whether to write or keep reading" in tools["review_evidences"].description
     assert "Only write after review makes the evidence sufficient for the field decision" in tools["review_evidences"].description
@@ -152,7 +189,7 @@ def test_tool_descriptions_carry_free_bind_and_review_contracts():
     assert "write_field does not have to immediately follow review_evidences" in tools["write_field"].description
     assert "Use a recent review snapshot" in tools["write_field"].description
     assert "If" in tools["write_field"].description
-    assert "bind_evidence adds more candidates for this field after review" in tools["write_field"].description
+    assert "add_candidate_evidence adds more candidates for this field after review" in tools["write_field"].description
     assert "review again before" in tools["write_field"].description
     assert "final_evidence must copy inline" in tools["write_field"].description
     assert "evidence:// links from review_evidences.evidence" in tools["write_field"].description
@@ -220,7 +257,7 @@ def test_resolution_graph_exposes_new_tools_only():
     assert tool_names == [
         "tree",
         "read",
-        "bind_evidence",
+        "add_candidate_evidence",
         "review_evidences",
         "write_field",
         "submit_result",

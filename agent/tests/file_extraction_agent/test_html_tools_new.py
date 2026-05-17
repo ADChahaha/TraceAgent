@@ -5,7 +5,7 @@ import inspect
 from service.file_extraction_agent.impl.html_state import build_graph_state
 from service.file_extraction_agent.impl.html_tools import (
     __all__ as html_tools_all,
-    _bind_evidence,
+    _add_candidate_evidence,
     _read,
     _review_evidences,
     _submit_result,
@@ -167,14 +167,14 @@ def _paragraph_path_id_containing(state, text: str) -> str:
     raise AssertionError(f"missing paragraph containing {text}")
 
 
-def test_build_tools_exposes_free_bind_tools_only():
+def test_build_tools_exposes_candidate_tools_only():
     tools = build_tools(_state())
     tool_names = [getattr(tool, "name", getattr(tool, "__name__", "")) for tool in tools]
 
     assert tool_names == [
         "tree",
         "read",
-        "bind_evidence",
+        "add_candidate_evidence",
         "review_evidences",
         "write_field",
         "submit_result",
@@ -189,7 +189,7 @@ def test_module_exports_current_review_helper():
 
 
 def test_internal_tool_helpers_do_not_accept_reason_parameter():
-    helpers = [_tree, _read, _bind_evidence, _review_evidences, _write_field, _submit_result]
+    helpers = [_tree, _read, _add_candidate_evidence, _review_evidences, _write_field, _submit_result]
 
     for helper in helpers:
         assert "reason" not in inspect.signature(helper).parameters
@@ -217,7 +217,7 @@ def test_tool_path_arguments_use_evidence_links_and_write_final_evidence_copies_
 
     tree = _tree(state, "evidence://0000", depth=2)
     read = _read(state, locators["paragraph"])
-    bound = _bind_evidence(state, "founded_year", path_id=locators["paragraph"])
+    bound = _add_candidate_evidence(state, "founded_year", path_id=locators["paragraph"])
     review = _review_evidences(state, "founded_year")
     written = _write_field(
         state,
@@ -249,7 +249,7 @@ def test_bare_path_ids_are_rejected_for_model_facing_path_arguments():
     path_ids = _path_ids(state, paths)
 
     read = _read(state, path_ids["paragraph"])
-    bind = _bind_evidence(state, "founded_year", path_id=path_ids["paragraph"])
+    bind = _add_candidate_evidence(state, "founded_year", path_id=path_ids["paragraph"])
 
     assert read["ok"] is False
     assert read["errors"][0]["code"] == "BAD_LOCATOR"
@@ -272,19 +272,19 @@ def test_read_reads_one_block_and_exposes_only_path_id_argument():
     assert "第一节第二段" not in read["text"]
 
 
-def test_bind_evidence_accepts_one_explicit_path_id_and_review_expands_inline():
+def test_add_candidate_evidence_accepts_one_explicit_path_id_and_review_expands_inline():
     state = _state()
     paths = _paths()
     path_ids = _path_ids(state, paths)
     locators = _locators(state, paths)
 
-    missing_path = _bind_evidence(state, "founded_year")
-    founded_bound = _bind_evidence(state, "founded_year", path_id=locators["paragraph"])
-    missing_bound = _bind_evidence(state, "missing_required", path_id=locators["paragraph"])
+    missing_path = _add_candidate_evidence(state, "founded_year")
+    founded_bound = _add_candidate_evidence(state, "founded_year", path_id=locators["paragraph"])
+    missing_bound = _add_candidate_evidence(state, "missing_required", path_id=locators["paragraph"])
     review = _review_evidences(state, "founded_year")
 
     assert missing_path["ok"] is False
-    assert missing_path["errors"][0]["code"] == "BIND_PATH_REQUIRED"
+    assert missing_path["errors"][0]["code"] == "CANDIDATE_PATH_REQUIRED"
     assert founded_bound["ok"] is True
     assert founded_bound["field_id"] == "founded_year"
     assert founded_bound["candidate_evidence"] == [locators["paragraph"]]
@@ -301,7 +301,7 @@ def test_bind_evidence_accepts_one_explicit_path_id_and_review_expands_inline():
     ]
 
 
-def test_bind_evidence_can_bind_after_other_tools_with_explicit_path_id():
+def test_add_candidate_evidence_can_add_after_other_tools_with_explicit_path_id():
     state = _state()
     paths = _paths()
     path_ids = _path_ids(state, paths)
@@ -309,7 +309,7 @@ def test_bind_evidence_can_bind_after_other_tools_with_explicit_path_id():
 
     _read(state, locators["paragraph"])
     _tree(state, "evidence://0000", depth=1)
-    bound = _bind_evidence(state, "deposit", path_id=locators["paragraph"])
+    bound = _add_candidate_evidence(state, "deposit", path_id=locators["paragraph"])
 
     assert bound["ok"] is True
     assert state.evidence_states["deposit"]["evidence"] == [{"path_id": path_ids["paragraph"]}]
@@ -322,10 +322,10 @@ def test_list_and_table_read_return_all_rows_and_review_expands_all_inline():
     locators = _locators(state, paths)
 
     list_result = _read(state, locators["list"])
-    _bind_evidence(state, "items", path_id=locators["list"])
+    _add_candidate_evidence(state, "items", path_id=locators["list"])
     list_review = _review_evidences(state, "items")
     _read(state, locators["table"])
-    _bind_evidence(state, "fees", path_id=locators["table"])
+    _add_candidate_evidence(state, "fees", path_id=locators["table"])
     table_review = _review_evidences(state, "fees")
 
     assert list_result["has_more"] is False
@@ -342,7 +342,7 @@ def test_write_field_requires_reviewed_inline_evidence_not_block_evidence():
     locators = _locators(state, paths)
 
     _read(state, locators["paragraph"])
-    _bind_evidence(state, "founded_year", path_id=locators["paragraph"])
+    _add_candidate_evidence(state, "founded_year", path_id=locators["paragraph"])
     blocked_before_review = _write_field(
         state,
         "founded_year",
@@ -396,7 +396,7 @@ def test_write_field_accepts_recent_review_snapshot_but_rejects_unreviewed_field
     locators = _locators(reviewed_state, paths)
 
     _read(reviewed_state, locators["paragraph"])
-    _bind_evidence(reviewed_state, "founded_year", path_id=locators["paragraph"])
+    _add_candidate_evidence(reviewed_state, "founded_year", path_id=locators["paragraph"])
     _review_evidences(reviewed_state, "founded_year")
     _read(reviewed_state, locators["list"])
     reviewed_write = _write_field(
@@ -411,7 +411,7 @@ def test_write_field_accepts_recent_review_snapshot_but_rejects_unreviewed_field
     wrong_paths = _path_ids(wrong_field_state, _paths())
     wrong_locators = _locators(wrong_field_state, _paths())
     _read(wrong_field_state, wrong_locators["paragraph"])
-    _bind_evidence(wrong_field_state, "founded_year", path_id=wrong_locators["paragraph"])
+    _add_candidate_evidence(wrong_field_state, "founded_year", path_id=wrong_locators["paragraph"])
     _review_evidences(wrong_field_state, "founded_year")
     wrong_field_write = _write_field(
         wrong_field_state,
@@ -429,7 +429,7 @@ def test_write_field_accepts_recent_review_snapshot_but_rejects_unreviewed_field
     failed_paths = _path_ids(failed_review_state, _paths())
     failed_locators = _locators(failed_review_state, _paths())
     _read(failed_review_state, failed_locators["paragraph"])
-    _bind_evidence(failed_review_state, "founded_year", path_id=failed_locators["paragraph"])
+    _add_candidate_evidence(failed_review_state, "founded_year", path_id=failed_locators["paragraph"])
     _review_evidences(failed_review_state, "founded_year")
     failed_review = _review_evidences(failed_review_state, "unknown")
     write_after_failed_review = _write_field(
@@ -444,15 +444,15 @@ def test_write_field_accepts_recent_review_snapshot_but_rejects_unreviewed_field
     assert write_after_failed_review["ok"] is True
 
 
-def test_bind_after_review_invalidates_review_snapshot_for_that_field():
+def test_add_candidate_after_review_invalidates_review_snapshot_for_that_field():
     state = _state()
     paths = _paths()
     path_ids = _path_ids(state, paths)
     locators = _locators(state, paths)
 
-    _bind_evidence(state, "founded_year", path_id=locators["paragraph"])
+    _add_candidate_evidence(state, "founded_year", path_id=locators["paragraph"])
     _review_evidences(state, "founded_year")
-    _bind_evidence(state, "founded_year", path_id=locators["list"])
+    _add_candidate_evidence(state, "founded_year", path_id=locators["list"])
     stale_write = _write_field(
         state,
         "founded_year",
@@ -508,6 +508,26 @@ def test_missing_and_null_enum_values_can_use_empty_evidence_after_review():
     assert null_enum["ok"] is True
 
 
+def test_write_field_normalizes_enum_value_json_string_from_tool_call():
+    state = _enum_state()
+
+    _review_evidences(state, "limited_use_decision")
+    written = _write_field(
+        state,
+        "limited_use_decision",
+        '{"variant": "NotMentioned", "value": null}',
+        final_evidence=[],
+        status="resolved",
+    )
+
+    assert written["ok"] is True
+    assert written["field"]["value"] == {"variant": "NotMentioned", "value": None}
+    assert state.field_states["limited_use_decision"]["value"] == {
+        "variant": "NotMentioned",
+        "value": None,
+    }
+
+
 def test_submit_result_requires_final_evidence_for_resolved_non_null_values():
     state = _enum_state()
     paragraph_path_id = _first_path_by_kind(state, "paragraph")
@@ -521,7 +541,7 @@ def test_submit_result_requires_final_evidence_for_resolved_non_null_values():
         status="resolved",
     )
     _read(state, paragraph_locator)
-    _bind_evidence(state, "limited_use_decision", path_id=paragraph_locator)
+    _add_candidate_evidence(state, "limited_use_decision", path_id=paragraph_locator)
     _review_evidences(state, "limited_use_decision")
     written = _write_field(
         state,
@@ -548,7 +568,7 @@ def test_read_write_reject_raw_paths_and_bare_ids_and_use_evidence_links_through
     raw_path_result = _read(state, paths["paragraph"])
     bare_path_id_result = _read(state, path_ids["paragraph"])
     read_result = _read(state, locators["paragraph"])
-    _bind_evidence(state, "founded_year", path_id=locators["paragraph"])
+    _add_candidate_evidence(state, "founded_year", path_id=locators["paragraph"])
     review = _review_evidences(state, "founded_year")
     written = _write_field(
         state,

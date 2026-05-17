@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -43,8 +44,8 @@ def build_tools(state: Any) -> list[Any]:
         return the whole object as Markdown with Ixxx item ids or Rxxx row ids.
         Each read call returns exactly this one paragraph, list, or table block. To inspect
         a neighboring block, call read again with that block's evidence link.
-        read does not require an immediate bind_evidence; continue browsing,
-        reviewing, binding, or writing according to the evidence you need.
+        read does not require an immediate add_candidate_evidence; continue browsing,
+        reviewing, adding candidates, or writing according to the evidence you need.
         No assistant content is needed for mechanical adjacent reads. Use optional
         assistant content only when this read completes a semantic chunk or changes what
         you will do next. If optional assistant content mentions source text, make that
@@ -55,26 +56,28 @@ def build_tools(state: Any) -> list[Any]:
         return _read(state, path_id)
 
     @tool
-    def bind_evidence(
+    def add_candidate_evidence(
         field_id: str = "",
         path_id: str = "",
     ) -> dict[str, Any]:
-        """Bind any readable paragraph/list/table evidence link as block candidate evidence.
+        """Add one readable paragraph/list/table evidence link as block candidate evidence.
 
         Use exactly one field_id and one path_id evidence link. One call saves
         one paragraph, list, or table block for one field. If the same block may help
-        another field, or a field needs another block, call bind_evidence again.
-        This is broad note-taking, not the final evidence decision; possible or uncertain relevance is enough to bind.
-        Candidate evidence can be broader than final_evidence: bind blocks that may matter.
+        another field, or a field needs another block, call add_candidate_evidence again.
+        This is broad note-taking, not the final evidence decision; possible or uncertain relevance is enough to add as candidate.
+        Candidate evidence can be broader than final_evidence: add blocks that may matter.
         final_evidence is selected later after review, and it may be a smaller or different
         inline subset of the candidate blocks.
-        Assistant content is optional for routine binds.
-        Use content when this bind completes a meaningful candidate-evidence group or
-        explains an uncertainty or correction. If you already saw source text and mention it,
-        make the quoted words an evidence link and explain why they may support, contradict, or qualify the field.
+        Assistant content is not optional when you call add_candidate_evidence.
+        Before calling add_candidate_evidence, write a short user-visible note explaining
+        why this block is worth saving for this field. This candidate is not the final field decision;
+        it is a reading note for later review. When source text is available, include a Markdown evidence link to the same block path_id you are saving, for example
+        ["quoted words"](evidence://0000.0001.0014). Do not leave source words as plain quoted text.
+        Explain why the linked text may support, contradict, or qualify the field.
         If inline selectors are not available yet, block-level evidence links such as
         evidence://0000.0001.0014 are acceptable.
-        Do not pass sentence/item/row inline links; bind_evidence records only block-level
+        Do not pass sentence/item/row inline links; add_candidate_evidence records only block-level
         evidence links. The evidence link must point to a readable .md/.list/.table file,
         not a directory.
         The candidate evidence stored by this tool is block-level evidence; call
@@ -82,7 +85,7 @@ def build_tools(state: Any) -> list[Any]:
         inline evidence links for final_evidence.
         """
 
-        return _bind_evidence(state, field_id, path_id=path_id)
+        return _add_candidate_evidence(state, field_id, path_id=path_id)
 
     @tool
     def review_evidences(field_id: str) -> dict[str, Any]:
@@ -116,7 +119,7 @@ def build_tools(state: Any) -> list[Any]:
         for the same field, and prefer writing soon after review because
         old reviews are hard for humans to follow. final_evidence must copy inline
         evidence:// links from review_evidences.evidence for the same field. If
-        bind_evidence adds more candidates for this field after review, review again before
+        add_candidate_evidence adds more candidates for this field after review, review again before
         writing. Do not use block-level evidence links as final_evidence.
         Use status="resolved" for extracted values and status="missing" when the document
         does not support the field. Array fields must be written as a complete array; do
@@ -147,7 +150,7 @@ def build_tools(state: Any) -> list[Any]:
 
         return _submit_result(state)
 
-    return [tree, read, bind_evidence, review_evidences, write_field, submit_result]
+    return [tree, read, add_candidate_evidence, review_evidences, write_field, submit_result]
 
 
 EVIDENCE_LOCATOR_RE = re.compile(r"^evidence://(?P<path_id>\d{4}(?:\.\d{4})*)(?:/(?P<selector>[SIR]\d{3}(?:\.\d{3})*))?$")
@@ -219,7 +222,7 @@ def _query_table(
     )
 
 
-def _bind_evidence(
+def _add_candidate_evidence(
     state: Any,
     field_id: str = "",
     *,
@@ -230,13 +233,13 @@ def _bind_evidence(
     def execute() -> dict[str, Any]:
         errors: list[dict[str, Any]] = []
         if not isinstance(field_id, str) or not field_id:
-            errors.append({"field_id": field_id, "code": "BAD_BINDING", "message": "field_id is required"})
+            errors.append({"field_id": field_id, "code": "BAD_CANDIDATE", "message": "field_id is required"})
         elif field_definition(state, field_id) is None:
             errors.append({"field_id": field_id, "code": "UNKNOWN_FIELD", "message": "unknown field_id"})
 
         canonical_path_id = _block_path_id_from_locator(path_id)
         if not isinstance(path_id, str) or not path_id.strip():
-            errors.append({"field_id": field_id, "code": "BIND_PATH_REQUIRED", "message": "path_id is required"})
+            errors.append({"field_id": field_id, "code": "CANDIDATE_PATH_REQUIRED", "message": "path_id is required"})
         elif canonical_path_id is None:
             errors.append(
                 {
@@ -255,7 +258,7 @@ def _bind_evidence(
                     {
                         "field_id": field_id,
                         "path_id": path_id,
-                        "code": "UNREADABLE_BIND_PATH",
+                        "code": "UNREADABLE_CANDIDATE_PATH",
                         "message": "evidence link must point to a readable .md/.list/.table file",
                     }
                 )
@@ -281,7 +284,7 @@ def _bind_evidence(
 
     result = _run_tool(
         state,
-        "bind_evidence",
+        "add_candidate_evidence",
         {"field_id": field_id, "path_id": path_id},
         execute,
     )
@@ -289,8 +292,8 @@ def _bind_evidence(
         _emit_event(
             state,
             {
-                "type": "evidence_bound",
-                "tool": "bind_evidence",
+                "type": "candidate_evidence_added",
+                "tool": "add_candidate_evidence",
                 "reason": action_text,
                 "field_id": result["field_id"],
                 "candidate_evidence": result["candidate_evidence"],
@@ -311,17 +314,18 @@ def _write_field(
     final_evidence = final_evidence or []
 
     def execute() -> dict[str, Any]:
+        normalized_value = normalize_write_value(state, field_id, value)
         canonical_final_evidence, locator_errors = _canonicalize_final_evidence_links(final_evidence)
-        errors = validate_field_write(state, field_id, value, status)
+        errors = validate_field_write(state, field_id, normalized_value, status)
         errors.extend(locator_errors)
-        errors.extend(validate_final_evidence_write(state, field_id, canonical_final_evidence, value, status))
+        errors.extend(validate_final_evidence_write(state, field_id, canonical_final_evidence, normalized_value, status))
         if errors:
             return {"ok": False, "errors": errors}
         evidence_texts = state.document.evidence_texts(canonical_final_evidence)
         field = {
             "field_id": field_id,
             "status": status,
-            "value": value,
+            "value": normalized_value,
             "evidence": canonical_final_evidence,
             "evidence_texts": evidence_texts,
             "reason": action_text,
@@ -609,6 +613,17 @@ def validate_field_write(
     return errors
 
 
+def normalize_write_value(state: Any, field_id: str, value: Any) -> Any:
+    field = field_definition(state, field_id)
+    if field is None or getattr(field, "type", "") != "enum" or not isinstance(value, str):
+        return value
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return value
+    return parsed
+
+
 def validate_final_evidence_write(
     state: Any,
     field_id: str,
@@ -698,14 +713,14 @@ def validate_evidence_from_latest_inline(state: Any, evidence: list[dict[str, An
     if not evidence_units or not inline_units:
         return [
             {
-                "code": "BIND_REQUIRES_INLINE",
-                "message": "bind_evidence must immediately follow anchors, read, or query_table that exposed the referenced inline ids",
+                "code": "CANDIDATE_REQUIRES_INLINE",
+                "message": "add_candidate_evidence must immediately follow anchors, read, or query_table that exposed the referenced inline ids",
             }
         ]
     if not evidence_units.issubset(inline_units):
         return [
             {
-                "code": "BIND_REQUIRES_INLINE",
+                "code": "CANDIDATE_REQUIRES_INLINE",
                 "message": "evidence selectors must come from the immediately preceding inline-producing tool result",
             }
         ]
@@ -901,7 +916,7 @@ def _update_tool_cursor(state: Any, tool_name: str, result: dict[str, Any]) -> N
     if tool_name == "review_evidences":
         state.last_review_field_id = result.get("field_id")
         return
-    if tool_name == "bind_evidence":
+    if tool_name == "add_candidate_evidence":
         return
     if tool_name == "read":
         state.last_read = {"path_id": _result_path_id(result), "kind": result.get("kind")}
@@ -970,7 +985,7 @@ __all__ = [
     "model_tree_text",
     "_tree",
     "_read",
-    "_bind_evidence",
+    "_add_candidate_evidence",
     "_review_evidences",
     "_write_field",
     "_submit_result",
