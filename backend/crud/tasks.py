@@ -48,7 +48,7 @@ def list_tasks(connection: sqlite3.Connection, *, limit: int = 20) -> list[dict[
         """
         SELECT *
         FROM tasks
-        ORDER BY updated_at DESC, created_at DESC, id DESC
+        ORDER BY updated_at DESC, created_at DESC, rowid DESC
         LIMIT ?
         """,
         (limit,),

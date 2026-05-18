@@ -6,6 +6,7 @@ from typing import Any
 
 from backend.crud import extraction as extraction_crud
 from backend.crud import reviews as reviews_crud
+from backend.crud import task_events as task_events_crud
 from backend.crud import tasks as tasks_crud
 from backend.crud.json_utils import loads_json
 from backend.services.agent_process import (
@@ -126,6 +127,12 @@ class ReviewService:
                 completed_at=reviewed_at,
                 now=reviewed_at,
             )
+            self._emit_review_task_event(
+                task,
+                event_type="task.rejected",
+                payload={"review_decision": decision},
+                now=reviewed_at,
+            )
             return self._serialize_review_response(task, decision)
 
         for route in review_routes:
@@ -186,7 +193,32 @@ class ReviewService:
             completed_at=reviewed_at,
             now=reviewed_at,
         )
+        self._emit_review_task_event(
+            task,
+            event_type="task.completed",
+            payload={"review_decision": decision},
+            now=reviewed_at,
+        )
         return self._serialize_review_response(task, decision)
+
+    def _emit_review_task_event(
+        self,
+        task: dict[str, Any],
+        *,
+        event_type: str,
+        payload: dict[str, Any],
+        now: str,
+    ) -> dict[str, Any]:
+        return task_events_crud.create_task_event(
+            self.connection,
+            event_id=f"event_{uuid.uuid4().hex}",
+            task_id=task["id"],
+            event_type=event_type,
+            status=task["status"],
+            stage=task["stage"],
+            payload=payload,
+            created_at=now,
+        )
 
     def _get_task(self, task_id: str) -> dict[str, Any]:
         task = tasks_crud.get_task(self.connection, task_id)

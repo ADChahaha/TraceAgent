@@ -1,6 +1,24 @@
 # Backend Devlog
 
-last updated: 2026-05-05 01:05:20
+last updated: 2026-05-18 18:37:31
+
+## 2026-05-18 18:37:31
+
+### 已完成工作
+
+- 新增 `task_events` 持久化事件表和 CRUD，任务内用递增 `sequence` 作为回放和续传游标。
+- `POST /tasks`、`GET /tasks` 和 `GET /tasks/{task_id}` 现在返回 `stream.state` 与 `stream.last_event_seq`。
+- 新增 `GET /tasks/{task_id}/events?after_seq=n`，以 SSE 返回 `seq > n` 的事件；任务未结束时会等待新事件，终态后关闭。
+- 后台任务和人工复核会写入 `task.created`、阶段变化、文档处理、字段写入、route policy、review required 和终态事件。
+- 同步更新 API/设计文档，并新增 `backend/tests/test_task_events.py` 与一一对应测试说明文档。
+
+### 当前进展
+
+- 后端已经具备第一阶段 `snapshot + events` 流式基础能力；agent 抽取仍可先走现有非流式调用，再把关键阶段归一成任务事件。
+
+### 验证
+
+- `PYTHONPATH=. pytest backend/tests -q`，结果 `22 passed`。
 
 ## 2026-05-05 01:05:20
 

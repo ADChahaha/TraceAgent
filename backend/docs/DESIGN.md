@@ -6,6 +6,19 @@
 
 `backend` 负责把 `agent service` 产出的抽取结果变成可治理、可审核、可追责的业务任务。它不重新实现 OCR 或字段抽取，而是围绕上传文件、任务状态、route policy、人工审核、最终结果和审计记录组织流程。
 
+流式改造后的 API 设计把任务读取拆成三层：`GET /tasks/{task_id}` 返回当前快照，`GET /tasks/{task_id}/events?after_seq=n` 返回可回放、可续传的任务事件流，`result/trace/replay/review/audit` 继续作为页面读模型。`events` 只描述过程，`result` 和 `audit` 仍由后端从数据库中的字段、route、review 和提交记录组装。
+
+目标流式链路是：
+
+```text
+POST /tasks 创建任务
+  -> 写入 task.created 事件并返回 task_id / stream.last_event_seq
+  -> 前端打开 GET /tasks/{task_id}/events?after_seq=n
+  -> backend 后台处理文档、消费 file_extraction_agent NDJSON stream、执行 route_policy
+  -> 每个阶段写入 task_events，前端按 seq 实时渲染或断线补拉
+  -> 终态后 result / replay / review / audit 作为整理后的读模型继续可直接读取
+```
+
 核心链路是：
 
 ```text
@@ -55,6 +68,7 @@ backend/
     errors.py
   crud/
     agent_stage_runs.py
+    task_events.py
     tasks.py
     extraction.py
     reviews.py
@@ -239,6 +253,9 @@ crud/tasks.py
 crud/agent_stage_runs.py
   -> agent_stage_runs
 
+crud/task_events.py
+  -> task_events
+
 crud/extraction.py
   -> agent_runs
   -> extracted_fields
@@ -258,8 +275,10 @@ crud/audit.py
 ```text
 创建任务
   -> 先写 tasks
+  -> 同时写 task_events(task.created)
   -> 后台处理文件时再写 documents
   -> 每次 agent HTTP 调用写 agent_stage_runs
+  -> 每个可见阶段或终态写 task_events
 
 保存 agent 输出
   -> 同时写 agent_runs、extracted_fields、field_traces
@@ -271,6 +290,7 @@ crud/audit.py
 提交人工审核
   -> 写 reviews / review_fields
   -> 更新 extracted_fields.final_value_json
+  -> 写 task_events(task.completed 或 task.rejected)
 
 生成审计记录
   -> 写 field_commits
@@ -288,9 +308,11 @@ files/file + task_type + task_spec + metadata
   -> 逐个从 filename 推断 pdf，否则抛出 ValidationError
   -> 如果未传 task_spec，抛出 ValidationError
   -> 创建 task_... 记录为 pending/uploaded
+  -> 写入 task_events(task.created)，返回 stream.last_event_seq
   -> 如果调用方要求立即返回，create_task(run_pipeline=False) 直接序列化 task_id/status/stage/error_message
   -> routes.tasks 把上传文件 bytes 和 task_spec 交给 BackgroundTasks，后台调用 run_created_task(...)
   -> 逐个调用 agent_client.process_document(file_bytes, filename, file_type)
+  -> 每个阶段通过 task_events 写入 task.stage_changed / document.processed / agent.event / field.written / route_policy.completed
   -> 每次 document_processor 调用保存 agent_stage_runs(request 摘要、完整 response、trace)
   -> 每个文件生成独立 document_id，并为返回 blocks 补 document_id 和 block_id
   -> 逐个写入 documents，只保存标准化文本结果和上传元信息
@@ -307,6 +329,8 @@ files/file + task_type + task_spec + metadata
   -> accept 写 final_value/source 和 field_commits
   -> review 只自动提交 accept 字段，其余等待 review_service
   -> reject/failed 写任务终态；后台异常会被捕获并写入 failed/done/error_message
+  -> get_task_summary(task_id) 返回 stream.state 和 stream.last_event_seq
+  -> list_task_events(task_id, after_sequence) 返回 seq 大于游标的已持久化事件
 ```
 
 ### `services.agent_client`
@@ -348,6 +372,7 @@ extracted_fields + field_traces + task_spec
 
 - `GET review`：把 agent 字段结果、trace 和 route 原因合并成 handoff 包。
 - `POST review`：保存人工决策，并把 `review_value` 合并到最终字段结果。
+- review 提交进入 `completed` 或 `rejected` 终态时，会继续写 `task_events` 终态事件，确保前端能从复核前的 `last_event_seq` 续传到最终状态。
 
 ### `services.audit_service`
 
@@ -447,6 +472,32 @@ task_service 准备某次 agent HTTP 调用
 | `trace_json` | `TEXT` | agent trace 或可解释摘要 |
 | `started_at` | `DATETIME` | agent 调用开始时间 |
 | `finished_at` | `DATETIME NULL` | agent 调用结束时间 |
+
+### `task_events`
+
+保存任务级可回放事件，用于 `GET /tasks/{task_id}/events?after_seq=n`。事件不是业务结果本体，而是任务处理过程的增量日志；`result`、`trace`、`review` 和 `audit` 仍从各自的数据表组装。
+
+处理链路是：
+
+```text
+任务创建、阶段切换、文档处理、字段写入、route policy、人工复核或失败
+  -> service 层拿到更新后的 task 状态
+  -> task_events 按 task_id 查询当前最大 sequence
+  -> 新事件 sequence = max(sequence) + 1
+  -> 写入 event_type/status/stage/payload_json/created_at
+  -> GET /tasks/{task_id}/events?after_seq=n 按 sequence 升序输出 SSE
+```
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | `TEXT PRIMARY KEY` | 事件 ID |
+| `task_id` | `TEXT INDEX` | 所属任务 ID |
+| `sequence` | `INTEGER` | 当前任务内递增事件序号 |
+| `event_type` | `TEXT` | 事件类型，例如 `task.created / field.written / task.completed` |
+| `status` | `TEXT` | 写入事件时的任务业务状态 |
+| `stage` | `TEXT` | 写入事件时的任务阶段 |
+| `payload_json` | `TEXT` | 事件载荷 |
+| `created_at` | `DATETIME` | 写入时间 |
 
 ### `extracted_fields`
 

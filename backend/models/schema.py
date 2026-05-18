@@ -68,6 +68,20 @@ SCHEMA_SQL = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS task_events (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        event_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        stage TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(task_id) REFERENCES tasks(id),
+        UNIQUE(task_id, sequence)
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS extracted_fields (
         id TEXT PRIMARY KEY,
         task_id TEXT NOT NULL,
@@ -160,6 +174,7 @@ SCHEMA_SQL = [
     "CREATE INDEX IF NOT EXISTS idx_documents_task_id ON documents(task_id)",
     "CREATE INDEX IF NOT EXISTS idx_agent_runs_task_id ON agent_runs(task_id)",
     "CREATE INDEX IF NOT EXISTS idx_agent_stage_runs_task_id ON agent_stage_runs(task_id)",
+    "CREATE INDEX IF NOT EXISTS idx_task_events_task_sequence ON task_events(task_id, sequence)",
     "CREATE INDEX IF NOT EXISTS idx_extracted_fields_task_id ON extracted_fields(task_id)",
     "CREATE INDEX IF NOT EXISTS idx_field_traces_task_id ON field_traces(task_id)",
     "CREATE INDEX IF NOT EXISTS idx_field_routes_task_id ON field_routes(task_id)",

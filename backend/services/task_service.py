@@ -15,6 +15,7 @@ from backend.crud import agent_stage_runs as agent_stage_runs_crud
 from backend.crud import audit as audit_crud
 from backend.crud import extraction as extraction_crud
 from backend.crud import reviews as reviews_crud
+from backend.crud import task_events as task_events_crud
 from backend.crud import tasks as tasks_crud
 from backend.crud.json_utils import loads_json
 from backend.services.agent_process import (
@@ -185,6 +186,12 @@ class TaskService:
             metadata=metadata,
             now=now,
         )
+        self._emit_task_event(
+            task,
+            event_type="task.created",
+            payload={"task_type": task_type},
+            now=now,
+        )
 
         if not run_pipeline:
             return self.serialize_created_task(task)
@@ -218,13 +225,19 @@ class TaskService:
             )
         except Exception as exc:
             failed_at = utc_now()
-            tasks_crud.update_task(
+            failed_task = tasks_crud.update_task(
                 self.connection,
                 task_id=task_id,
                 status="failed",
                 stage="done",
                 error_message=str(exc),
                 completed_at=failed_at,
+                now=failed_at,
+            )
+            self._emit_task_event(
+                failed_task,
+                event_type="task.failed",
+                payload={"error_message": str(exc)},
                 now=failed_at,
             )
             if raise_on_error:
@@ -262,6 +275,7 @@ class TaskService:
             "has_result": bool(fields),
             "has_trace": bool(traces),
             "needs_review": needs_review,
+            "stream": self._serialize_stream_state(task),
             "created_at": task["created_at"],
             "updated_at": task["updated_at"],
         }
@@ -386,7 +400,56 @@ class TaskService:
             "status": task["status"],
             "stage": task["stage"],
             "error_message": task["error_message"],
+            "stream": self._serialize_stream_state(task),
         }
+
+    def list_task_events(self, task_id: str, *, after_sequence: int = 0) -> list[dict[str, Any]]:
+        self.get_task_or_raise(task_id)
+        return [
+            self._serialize_task_event(event)
+            for event in task_events_crud.list_task_events(
+                self.connection,
+                task_id=task_id,
+                after_sequence=max(0, after_sequence),
+            )
+        ]
+
+    def _serialize_stream_state(self, task: dict[str, Any]) -> dict[str, Any]:
+        state = "ended" if task["status"] in {"completed", "rejected", "failed"} else "running"
+        return {
+            "state": state,
+            "last_event_seq": task_events_crud.get_last_sequence(self.connection, task["id"]),
+        }
+
+    def _serialize_task_event(self, event: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "seq": event["sequence"],
+            "task_id": event["task_id"],
+            "type": event["event_type"],
+            "status": event["status"],
+            "stage": event["stage"],
+            "payload": loads_json(event["payload_json"], {}),
+            "created_at": event["created_at"],
+        }
+
+    def _emit_task_event(
+        self,
+        task: dict[str, Any],
+        *,
+        event_type: str,
+        payload: dict[str, Any] | None = None,
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        return task_events_crud.create_task_event(
+            self.connection,
+            event_id=f"event_{uuid.uuid4().hex}",
+            task_id=task["id"],
+            event_type=event_type,
+            status=task["status"],
+            stage=task["stage"],
+            payload=payload or {},
+            created_at=now or utc_now(),
+        )
 
     def _save_agent_stage_run(
         self,
@@ -429,11 +492,17 @@ class TaskService:
         metadata: dict[str, Any],
     ) -> dict[str, Any]:
         now = utc_now()
-        tasks_crud.update_task(
+        task = tasks_crud.update_task(
             self.connection,
             task_id=task_id,
             status="processing",
             stage="document_processing",
+            now=now,
+        )
+        self._emit_task_event(
+            task,
+            event_type="task.stage_changed",
+            payload={"stage": "document_processing"},
             now=now,
         )
         document_bundle = self._process_documents(
@@ -444,10 +513,16 @@ class TaskService:
         next_trace_sequence = document_bundle["next_trace_sequence"]
 
         extraction_started_at = utc_now()
-        tasks_crud.update_task(
+        task = tasks_crud.update_task(
             self.connection,
             task_id=task_id,
             stage="extraction",
+            now=extraction_started_at,
+        )
+        self._emit_task_event(
+            task,
+            event_type="task.stage_changed",
+            payload={"stage": "extraction"},
             now=extraction_started_at,
         )
         extraction_metadata = {
@@ -468,6 +543,16 @@ class TaskService:
             run_options=None,
         )
         extraction_finished_at = utc_now()
+        self._emit_task_event(
+            self.get_task_or_raise(task_id),
+            event_type="agent.event",
+            payload={
+                "agent": "file_extraction_agent",
+                "type": "result_completed",
+                "status": extraction_result.get("status") or "completed",
+            },
+            now=extraction_finished_at,
+        )
         self._save_agent_stage_run(
             task_id=task_id,
             sequence=next_trace_sequence,
@@ -499,7 +584,7 @@ class TaskService:
             finished_at=extraction_finished_at,
         )
         if extraction_result.get("status") == "failed":
-            return tasks_crud.update_task(
+            failed_task = tasks_crud.update_task(
                 self.connection,
                 task_id=task_id,
                 status="failed",
@@ -508,6 +593,13 @@ class TaskService:
                 completed_at=extraction_finished_at,
                 now=extraction_finished_at,
             )
+            self._emit_task_event(
+                failed_task,
+                event_type="task.failed",
+                payload={"error_message": extraction_result.get("failure_reason")},
+                now=extraction_finished_at,
+            )
+            return failed_task
 
         self._save_extraction_result(
             task_id=task_id,
@@ -521,10 +613,16 @@ class TaskService:
         route_block_lookup = build_document_block_lookup(route_documents)
 
         route_started_at = utc_now()
-        tasks_crud.update_task(
+        task = tasks_crud.update_task(
             self.connection,
             task_id=task_id,
             stage="route_policy",
+            now=route_started_at,
+        )
+        self._emit_task_event(
+            task,
+            event_type="route_policy.started",
+            payload={},
             now=route_started_at,
         )
         route_request = build_route_policy_request(
@@ -541,6 +639,15 @@ class TaskService:
         )
         route_result = self.agent_client.evaluate_route_policy(**route_request)
         route_finished_at = utc_now()
+        self._emit_task_event(
+            self.get_task_or_raise(task_id),
+            event_type="route_policy.completed",
+            payload={
+                "status": route_result.get("status") or "completed",
+                "field_routes": route_result.get("field_routes") or [],
+            },
+            now=route_finished_at,
+        )
         self._save_agent_stage_run(
             task_id=task_id,
             sequence=next_trace_sequence,
@@ -559,7 +666,7 @@ class TaskService:
             finished_at=route_finished_at,
         )
         if route_result.get("status") == "failed":
-            return tasks_crud.update_task(
+            failed_task = tasks_crud.update_task(
                 self.connection,
                 task_id=task_id,
                 status="failed",
@@ -568,6 +675,13 @@ class TaskService:
                 completed_at=route_finished_at,
                 now=route_finished_at,
             )
+            self._emit_task_event(
+                failed_task,
+                event_type="task.failed",
+                payload={"error_message": route_result.get("failure_reason")},
+                now=route_finished_at,
+            )
+            return failed_task
         routes = self._save_field_routes(
             task_id=task_id,
             field_routes=route_result.get("field_routes") or [],
@@ -614,6 +728,18 @@ class TaskService:
                 file_type=file_type,
             )
             document_finished_at = utc_now()
+            self._emit_task_event(
+                self.get_task_or_raise(task_id),
+                event_type="document.processed",
+                payload={
+                    "document_id": document_id,
+                    "filename": upload_file.filename,
+                    "file_type": file_type,
+                    "status": document_result.get("status") or "completed",
+                    "warning_count": len(document_result.get("warnings") or []),
+                },
+                now=document_finished_at,
+            )
             self._save_agent_stage_run(
                 task_id=task_id,
                 sequence=next_trace_sequence,
@@ -724,6 +850,16 @@ class TaskService:
                 trace_status=trace.get("status") or field.get("status") or "failed",
                 reason=trace.get("reason"),
                 failure_reason=trace.get("failure_reason"),
+            )
+            self._emit_task_event(
+                self.get_task_or_raise(task_id),
+                event_type="field.written",
+                payload={
+                    "field_name": field_name,
+                    "status": field.get("status") or "failed",
+                    "value": field.get("value"),
+                },
+                now=now,
             )
 
     def _iter_extraction_result_fields(
@@ -913,7 +1049,7 @@ class TaskService:
                     committed_by="agent",
                     committed_at=committed_at,
                 )
-            return tasks_crud.update_task(
+            completed_task = tasks_crud.update_task(
                 self.connection,
                 task_id=task_id,
                 status="completed",
@@ -923,6 +1059,13 @@ class TaskService:
                 completed_at=committed_at,
                 now=committed_at,
             )
+            self._emit_task_event(
+                completed_task,
+                event_type="task.completed",
+                payload={"route": "accept"},
+                now=committed_at,
+            )
+            return completed_task
 
         if route_summary == "review":
             reviewed_at = utc_now()
@@ -955,7 +1098,7 @@ class TaskService:
                         committed_by="agent",
                         committed_at=reviewed_at,
                     )
-            return tasks_crud.update_task(
+            review_task = tasks_crud.update_task(
                 self.connection,
                 task_id=task_id,
                 status="waiting_review",
@@ -964,9 +1107,16 @@ class TaskService:
                 route_reason=route_reason,
                 now=reviewed_at,
             )
+            self._emit_task_event(
+                review_task,
+                event_type="review.required",
+                payload={"route": "review", "route_reason": route_reason},
+                now=reviewed_at,
+            )
+            return review_task
 
         rejected_at = utc_now()
-        return tasks_crud.update_task(
+        rejected_task = tasks_crud.update_task(
             self.connection,
             task_id=task_id,
             status="rejected",
@@ -976,6 +1126,13 @@ class TaskService:
             completed_at=rejected_at,
             now=rejected_at,
         )
+        self._emit_task_event(
+            rejected_task,
+            event_type="task.rejected",
+            payload={"route": "reject", "route_reason": route_reason},
+            now=rejected_at,
+        )
+        return rejected_task
 
     def _infer_file_type(self, filename: str) -> str:
         suffix = Path(filename).suffix.lower().lstrip(".")

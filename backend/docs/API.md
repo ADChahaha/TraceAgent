@@ -1,52 +1,82 @@
 # Backend API 设计
 
-这份文档定义毕业设计原型阶段 `backend` 对前端和实验脚本暴露的 API。后端负责上传、任务状态、route 输出保存、人工审核、最终结果和审计；`agent service` 负责文档标准化、字段抽取和字段级 route policy，不直接写库。
+这份文档定义 `backend` 流式改造后的 API。后端负责创建任务、保存任务状态、持久化事件、组织人工复核、最终结果和审计记录；`agent service` 继续负责文档标准化、字段抽取和 route policy，不直接写 backend 数据库。
+
+当前设计把 API 分成三类：
+
+```text
+任务快照
+  -> GET /tasks/{task_id}
+  -> 回答任务现在是什么状态、是否已经结束、最后一条事件序号是多少
+
+任务事件流
+  -> GET /tasks/{task_id}/events
+  -> 回答任务过程中发生了什么，支持全量回放和断线续传
+
+业务读模型
+  -> GET /tasks/{task_id}/result|trace|replay|review|audit
+  -> 给结果页、回放页、复核页和审计页直接读取已经整理好的视图
+```
 
 ## 基本链路
 
-后端 API 围绕一次文档治理任务展开：
+一次文档治理任务的主链路如下：
 
 ```text
-前端或脚本上传一个或多个 PDF 和任务参数
+前端上传一个或多个 PDF、task_type、task_spec 和 metadata
   -> POST /tasks 创建任务
-  -> POST /tasks 立即返回 task_id 和 pending/uploaded
-  -> 后端在后台逐个调用 document_processor，把上传文件转成 markdown + blocks
-  -> 后端为每个文件保存 markdown / blocks，不保存用户上传的原始文件
-  -> 后端合并多个文件的 markdown、md_list 和 blocks
-  -> 后端调用 file_extraction_agent 执行字段抽取
-  -> agent 返回 ExtractionResult(result + trace)
-  -> 后端组装 field_outputs + refs_with_text + field_processes 并调用 route_policy_agent
-  -> agent 返回 accept / review / reject 字段路由
-  -> 如果 route=accept，生成最终字段结果和审计记录
-  -> 如果 route=review，生成人工审核 handoff 包
-  -> 人工审核提交 approve / revise_and_approve / reject
-  -> 后端更新最终 result、任务状态和 audit
+  -> backend 生成 task_id，写入 task.created 事件
+  -> POST /tasks 立即返回 task_id、pending/uploaded 和 stream.last_event_seq
+  -> 前端打开 GET /tasks/{task_id}/events?after_seq=n 接收实时事件
+  -> backend 后台逐个调用 document_processor，把上传文件转成 markdown/html/blocks
+  -> backend 保存每个文件的标准化结果，不保存原始文件 bytes
+  -> backend 将文档 html 和 task_spec 传给 file_extraction_agent
+  -> backend 保存抽取结果和 trace，并把关键阶段归一成 task_events
+  -> backend 组装 field_outputs + refs_with_text + field_processes 调用 route_policy_agent
+  -> backend 保存 accept/review/reject route 结果
+  -> accept 字段进入 final result 和 audit
+  -> review 字段生成 review handoff，等待 POST /tasks/{task_id}/review
+  -> reject 或 failed 任务进入终态，并写入对应终止事件
 ```
 
-这里的核心边界是：
+关键边界：
 
-- `result` 表示后端治理后的最终字段结果，可以包含 agent 原值、人工修正值和最终值。
-- `trace` 表示 Agent 执行层如何得到字段结果，包括 agent 抽取过程、route policy 验证过程、证据、定位、搜索、候选写入、最终定案 action 和失败原因。
-- `review` 表示人工审核需要接管的信息包和人工提交的处理结论。
-- `audit` 表示字段最终进入或未进入正式数据区的责任链路。
+- `events` 是任务过程日志，用于实时 UI、回放和断线续传。
+- `snapshot` 是任务当前状态，不返回完整 result、trace 或 replay。
+- `result` 是最终字段结果。
+- `trace` 是 agent 执行和证据细节。
+- `replay` 是前端回放页读模型，可以由事件和 trace 重建，但保留独立接口能让页面刷新后直接读取。
+- `review` 是人工复核待办单和提交入口。
+- `audit` 是字段最终提交后的责任链路，覆盖 agent 自动提交和人工 review 后提交。
 
 ## API 列表
 
 ```text
 POST /tasks
 GET  /tasks
-GET  /tasks/:task_id
-GET  /tasks/:task_id/result
-GET  /tasks/:task_id/trace
-GET  /tasks/:task_id/review
-POST /tasks/:task_id/review
-GET  /tasks/:task_id/audit
+GET  /tasks/{task_id}
+GET  /tasks/{task_id}/events
+GET  /tasks/{task_id}/result
+GET  /tasks/{task_id}/trace
+GET  /tasks/{task_id}/replay
+GET  /tasks/{task_id}/review
+POST /tasks/{task_id}/review
+GET  /tasks/{task_id}/audit
 GET  /capabilities
+GET  /healthz
+```
+
+内部 agent service API：
+
+```text
+POST /v1/document-processor/process
+POST /v1/file-extraction-agent/extract/stream
+POST /v1/route-policy-agent/evaluate
 ```
 
 ## 通用状态
 
-任务状态 `status`：
+任务业务状态 `status`：
 
 ```text
 pending
@@ -57,7 +87,7 @@ rejected
 failed
 ```
 
-处理阶段 `stage`：
+任务处理阶段 `stage`：
 
 ```text
 uploaded
@@ -69,6 +99,15 @@ field_commit
 done
 ```
 
+事件流状态 `stream.state`：
+
+```text
+running
+ended
+```
+
+`stream.state` 只描述事件流是否还会继续产生新事件；任务成功、失败或拒绝仍然看 `status`。
+
 route 决策 `route`：
 
 ```text
@@ -76,8 +115,6 @@ accept
 review
 reject
 ```
-
-`route` 由 agent service 的 `route_policy_agent` 给出。backend 提交任务/字段定义、字段输出、`refs_with_text` 和 `field_processes`，然后保存 `accept / review / reject` 输出并驱动状态流转。`refs_with_text` 提供最终证据文本；`field_processes` 提供 broad / resolution 两阶段的 search 查询词、候选写入数量、count 摘要、broad 结束原因、是否执行最终定案，以及 `table_audit/query_audit` 这类轻量工具观察摘要，不包含 `status`、工具返回的原始表格行、cell 值或 refs 列表。
 
 人工审核结论 `review_decision`：
 
@@ -87,18 +124,66 @@ revise_and_approve
 reject
 ```
 
+## 事件模型
+
+任务事件必须持久化，不能只放在内存里。每个事件使用任务内递增的 `seq` 作为续传游标。
+
+事件对象建议结构：
+
+```json
+{
+  "seq": 13,
+  "task_id": "task_xxx",
+  "type": "field_written",
+  "status": "processing",
+  "stage": "extraction",
+  "payload": {},
+  "created_at": "2026-05-18T10:20:30Z"
+}
+```
+
+字段说明：
+
+- `seq`：同一个任务内从 1 开始递增，不能跳回。
+- `type`：事件类型。
+- `status` / `stage`：事件发生后的任务业务状态和阶段快照。
+- `payload`：事件细节，按事件类型变化。
+- `created_at`：事件写入时间，使用 UTC ISO 字符串。
+
+推荐事件类型：
+
+```text
+task.created
+task.stage_changed
+document.processing_started
+document.processed
+agent.event
+field.written
+route_policy.started
+route_policy.completed
+review.required
+task.completed
+task.rejected
+task.failed
+```
+
+`agent.event` 用于承载 agent service 的原始或归一化 stream 事件，例如 `tool_started`、`tool_completed`、`tool_failed`、`candidate_evidence_added`、`field_written` 和 `result_completed`。如果某类 agent 事件已经被 backend 提升成业务事件，例如字段写入，也可以同时写入 `field.written`，但前端要以 `seq` 去重。
+
+第一阶段后端事件流已经持久化并通过 SSE 暴露；如果后端仍调用 agent service 的非流式抽取接口，就把抽取完成后的结果归一成 `agent.event`、`field.written` 和终态事件。后续切到 agent NDJSON stream 时，事件表和 `/events` 协议不需要改变，只需要把 agent 的逐条事件更早写入 `task_events`。
+
 ## `POST /tasks`
 
 创建一次文档治理任务。
 
-请求类型建议使用 `multipart/form-data`：
+请求类型：`multipart/form-data`
+
+字段：
 
 - `files`：必填，上传的一个或多个 PDF；multipart 中可以重复传入多个 `files` 字段。
-- `task_type`：必填，调用方定义的任务类型标识，例如 `civilized_dormitory`。
-- `task_spec`：必填，显式字段 schema；后端不提供默认 task spec，也不按 `task_type` 兜底选择 schema。
-- `metadata`：可选，前端或脚本传入的补充信息。
-
-兼容说明：旧版单文件字段名 `file` 仍可使用；新版前端应统一使用重复 `files` 字段。
+- `file`：兼容旧版单文件字段；新前端应使用 `files`。
+- `task_type`：必填，调用方定义的任务类型标识。
+- `task_spec`：必填，显式字段 schema；后端不提供默认 task spec。
+- `metadata`：可选，调用方透传的任务元信息。
 
 请求示例：
 
@@ -114,58 +199,37 @@ curl -X POST "http://localhost:8000/tasks" \
 
 ```json
 {
-  "task_id": "task-001",
+  "task_id": "task_xxx",
   "status": "pending",
   "stage": "uploaded",
-  "error_message": null
+  "error_message": null,
+  "stream": {
+    "state": "running",
+    "last_event_seq": 1
+  }
 }
 ```
 
 处理步骤：
 
 ```text
-上传一个或多个 files、task_type、task_spec 和 metadata
-  -> 校验至少存在一个文件，逐个从 filename 推断 pdf
-  -> 校验 task_spec 必须是 JSON object
-  -> 在当前请求中读取每个上传文件 bytes，避免响应后 UploadFile 被关闭
-  -> 创建 task 记录，状态设为 pending / uploaded
-  -> 响应 task_id、pending/uploaded 和 error_message=null
-  -> 后台任务对每个文件调用 document_processor 生成 markdown、md_list 和 blocks
-  -> 每个文件生成一个 document_id 并保存标准化结果，不保存原始文件
-  -> 合并所有文件的 markdown、md_list 和 blocks
-  -> 调用 file_extraction_agent，并在 metadata 中传入 document_ids
-  -> 保存 result 和 trace
-  -> 组装 field_outputs + refs_with_text + field_processes 并调用 route_policy_agent
-  -> 按 route 写入 final result、review 状态或 reject / failed 状态
-  -> 如果后台流程抛错，任务会变成 failed/done，并把失败原因写入 error_message
+multipart 请求
+  -> 收集 files/file 上传项
+  -> 在当前请求中读取 UploadFile bytes，避免后台任务开始前文件对象关闭
+  -> 校验至少一个文件、文件类型、task_type 和 task_spec JSON object
+  -> 写入 tasks，状态为 pending/uploaded
+  -> 写入 task.created 事件，seq=1
+  -> 返回 task_id、状态快照和 stream.last_event_seq
+  -> 后台继续执行 document_processing / extraction / route_policy
 ```
-
-第一版为请求内创建、后台处理模型。`POST /tasks` 不等待 OCR、字段抽取和 route policy 完成，响应中的 `status/stage` 固定表示任务刚入队：
-
-- `pending / uploaded`：任务已创建，后台处理即将开始或正在排队。
-
-调用方应使用 `GET /tasks/:task_id` 轮询最终状态：
-
-- `processing / document_processing|extraction|route_policy`：后台处理中。
-- `completed / done`：字段已自动通过并写入 audit。
-- `waiting_review / review`：至少一个字段需要人工复核。
-- `rejected / done`：route policy 拒绝任务。
-- `failed / done`：agent 调用或后端流程失败，`error_message` 会返回失败原因。
 
 ## `GET /tasks`
 
-查询最近任务摘要列表，用于前端工作台从 backend 数据库恢复已有任务，而不是只依赖浏览器本地缓存。
+查询最近任务摘要列表，用于工作台恢复已有任务。
 
-处理步骤：
+查询参数：
 
-```text
-GET /tasks?limit=20
-  -> backend 将 limit 限制在 1..100
-  -> 按 updated_at DESC、created_at DESC、id DESC 读取 tasks
-  -> 对每个任务复用单任务 summary 序列化
-  -> 补齐 has_result、has_trace、needs_review、route 和错误信息
-  -> 返回 { "tasks": [...] }
-```
+- `limit`：可选，默认 `20`，后端应限制在 `1..100`。
 
 响应示例：
 
@@ -173,7 +237,7 @@ GET /tasks?limit=20
 {
   "tasks": [
     {
-      "task_id": "task-001",
+      "task_id": "task_xxx",
       "status": "waiting_review",
       "stage": "review",
       "route": "review",
@@ -182,51 +246,133 @@ GET /tasks?limit=20
       "has_result": true,
       "has_trace": true,
       "needs_review": true,
-      "created_at": "2026-05-14T03:36:34Z",
-      "updated_at": "2026-05-14T16:50:44Z"
+      "stream": {
+        "state": "running",
+        "last_event_seq": 42
+      },
+      "created_at": "2026-05-18T10:00:00Z",
+      "updated_at": "2026-05-18T10:02:30Z"
     }
   ]
 }
 ```
 
-## `GET /tasks/:task_id`
+处理步骤：
 
-查询任务当前状态和 route 摘要。这个接口用于前端轮询，不返回完整 result 或 trace。
-`needs_review` 以任务当前 `status` 为准：只有 `status=waiting_review` 时才为 `true`；人工复核提交后即使历史 route 仍为 `review`，任务 summary 也会返回 `completed / done / needs_review=false`。
+```text
+GET /tasks?limit=20
+  -> 限制 limit 范围
+  -> 按 updated_at DESC、created_at DESC、id DESC 读取最近任务
+  -> 为每个任务补 status/stage/route/error_message/needs_review
+  -> 查询每个任务最后一条事件 seq，填入 stream.last_event_seq
+  -> 返回摘要列表
+```
+
+## `GET /tasks/{task_id}`
+
+读取任务快照。这个接口用于初次打开任务页、断线恢复前校准状态、流结束后的最终确认，以及无流兜底轮询。
+
+它不返回完整字段结果、trace、replay、review handoff 或 audit commit。
 
 响应示例：
 
 ```json
 {
-  "task_id": "task-001",
-  "status": "waiting_review",
-  "stage": "review",
-  "route": "review",
-  "route_reason": "关键字段由候选证据定案，需要人工确认",
+  "task_id": "task_xxx",
+  "status": "processing",
+  "stage": "extraction",
+  "route": null,
+  "route_reason": null,
   "error_message": null,
-  "has_result": true,
+  "has_result": false,
   "has_trace": true,
-  "needs_review": true,
-  "created_at": "2026-04-28T10:00:00Z",
-  "updated_at": "2026-04-28T10:02:30Z"
+  "needs_review": false,
+  "stream": {
+    "state": "running",
+    "last_event_seq": 18
+  },
+  "created_at": "2026-05-18T10:00:00Z",
+  "updated_at": "2026-05-18T10:01:00Z"
 }
 ```
 
-## `GET /tasks/:task_id/result`
+处理步骤：
 
-查询后端治理后的最终字段结果。
+```text
+task_id
+  -> 读取 tasks 当前记录
+  -> 读取 result/trace/review 是否已存在
+  -> 读取 task_events 最大 seq
+  -> 如果 status 是 completed/rejected/failed，stream.state=ended
+  -> 否则 stream.state=running
+  -> 返回轻量快照
+```
+
+## `GET /tasks/{task_id}/events`
+
+读取任务事件流。这个接口是过程事件的唯一公开出口，支持全量回放和断线续传。
+
+查询参数：
+
+- `after_seq`：可选，默认 `0`。只返回 `seq > after_seq` 的事件。
+
+响应类型：
+
+```text
+text/event-stream
+```
+
+SSE 消息示例：
+
+```text
+event: field.written
+id: 13
+data: {"seq":13,"task_id":"task_xxx","type":"field.written","status":"processing","stage":"extraction","payload":{"field_name":"room_numbers"},"created_at":"2026-05-18T10:01:15Z"}
+```
+
+处理步骤：
+
+```text
+GET /tasks/{task_id}/events?after_seq=n
+  -> 校验 task_id 存在
+  -> 从 task_events 读取 seq > n 的历史事件
+  -> 按 seq 升序逐条发送
+  -> 如果任务仍在 running，保持连接并继续发送新事件
+  -> 如果任务已经 ended，补完历史事件后关闭连接
+```
+
+断线恢复规则：
+
+```text
+前端每收到一条事件
+  -> 用 event.seq 更新本地 lastSeq
+  -> 将 lastSeq 写入 localStorage 或 Electron 持久层
+
+连接断开或页面刷新
+  -> 先读取本地 lastSeq
+  -> 如果没有本地 lastSeq，使用 0
+  -> 可先 GET /tasks/{task_id} 校准任务 status 和 stream.last_event_seq
+  -> 再 GET /tasks/{task_id}/events?after_seq=lastSeq
+```
+
+如果浏览器使用原生 `EventSource`，服务端也应设置 SSE `id: seq`。后端可以兼容 `Last-Event-ID` 请求头，但业务上仍建议显式支持 `after_seq`，方便刷新、跨窗口和 Electron 场景恢复。
+
+## `GET /tasks/{task_id}/result`
+
+查询最终字段结果。这个接口是结果页读模型，不承担过程回放。
 
 响应示例：
 
 ```json
 {
-  "task_id": "task-001",
+  "task_id": "task_xxx",
   "status": "completed",
   "route": "accept",
   "fields": [
     {
       "field_name": "room_numbers",
       "display_name": "文明寝室房间号",
+      "field_type": "string",
       "agent_value": "1-101,1-102",
       "review_value": null,
       "final_value": "1-101,1-102",
@@ -242,265 +388,70 @@ GET /tasks?limit=20
 字段说明：
 
 - `agent_value`：Agent 原始定案值。
-- `review_value`：人工审核修正值；未人工修正时为 `null`。
-- `final_value`：最终用于展示或写库的字段值。
-- `source`：最终值来源，建议使用 `agent` 或 `human`。
-- `committed`：该字段是否已经进入最终提交记录。
+- `review_value`：人工修正值，未人工修正时为 `null`。
+- `final_value`：最终展示或提交值。
+- `source`：最终值来源，通常为 `agent` 或 `human`。
+- `committed`：该字段是否已进入最终提交记录。
 
-## `GET /tasks/:task_id/trace`
+## `GET /tasks/{task_id}/trace`
 
-查询 Agent 执行层 trace，用于证据高亮、调试和论文展示。
+查询 agent 执行层 trace 和证据，用于调试、论文展示和证据高亮。
+
+响应主体建议包含：
+
+```text
+task_id
+agent_status
+failure_reason
+steps[]
+agent_trace[]
+fields[]
+metadata
+```
+
+处理步骤：
+
+```text
+task_id
+  -> 读取 documents、agent_runs、agent_stage_runs、field_traces 和 field_routes
+  -> 组装 document_processing / extraction / route_policy 摘要步骤
+  -> 从字段 trace 派生 field_decisions 和 process_steps
+  -> 返回 agent service 已暴露给 backend 的 trace 内容
+```
+
+`trace` 不保存也不伪造 agent service 未返回的 raw prompt、隐藏思考或 raw model response。
+
+## `GET /tasks/{task_id}/replay`
+
+查询前端回放页读模型。
+
+`replay` 不是新的事实来源。它是把 `documents`、`trace.actions`、`result`、`field_states` 和 route 摘要整理成前端容易渲染的结构。前端如果已经完整消费 `events`，可以直接用事件流渲染实时回放；页面刷新或深链接进入时，`replay` 能避免从第一条事件重新聚合整个页面状态。
+
+响应主体建议包含：
+
+```text
+task_id
+status
+stage
+documents[]
+display_html
+outline_tree
+actions[]
+result
+field_states
+audit.route
+audit.route_reason
+```
+
+## `GET /tasks/{task_id}/review`
+
+获取人工复核待办单。只有任务处于 `waiting_review` 时才应调用。
 
 响应示例：
 
 ```json
 {
-  "task_id": "task-001",
-  "agent_status": "completed",
-  "failure_reason": null,
-  "steps": [
-    {
-      "stage": "document_processing",
-      "agent": "document_processor",
-      "status": "completed",
-      "started_at": "2026-04-28T10:00:01Z",
-      "finished_at": "2026-04-28T10:00:08Z",
-      "summary": {
-        "document_count": 2,
-        "block_count": 24,
-        "warning_count": 0
-      },
-      "documents": [
-        {
-          "document_id": "doc-1",
-          "filename": "sample.pdf",
-          "file_type": "pdf",
-          "block_count": 12,
-          "markdown_chars": 3200,
-          "warning_count": 0
-        },
-        {
-          "document_id": "doc-2",
-          "filename": "supplement.pdf",
-          "file_type": "pdf",
-          "block_count": 12,
-          "markdown_chars": 2800,
-          "warning_count": 0
-        }
-      ]
-    },
-    {
-      "stage": "extraction",
-      "agent": "file_extraction_agent",
-      "status": "completed",
-      "started_at": "2026-04-28T10:00:08Z",
-      "finished_at": "2026-04-28T10:00:20Z",
-      "failure_reason": null,
-      "summary": {
-        "field_count": 1,
-        "resolved_count": 1,
-        "failed_count": 0,
-        "warning_count": 0
-      },
-      "field_decisions": [
-        {
-          "field_name": "room_numbers",
-          "status": "resolved",
-          "value": "1-101,1-102",
-          "evidence": {
-            "block_ids": ["doc-1:p2:b3"],
-            "texts": ["1-101、1-102 被列为文明寝室"],
-            "refs": [
-              {
-                "document_id": "doc-1",
-                "page": 2,
-                "block_id": "doc-1:p2:b3"
-              }
-            ],
-            "status": "candidate_resolved",
-            "notes": ["field decision referenced candidate_ids: c1"]
-          },
-          "related_fields": [],
-          "actions": [
-            {
-              "action_type": "search_grep",
-              "message": "文明寝室 OR 房间号",
-              "refs": [
-                {
-                  "document_id": "doc-1",
-                  "page": 2,
-                  "span": "p:p1",
-                  "block_id": "doc-1:p2:b3"
-                }
-              ],
-              "used_in_final_decision": false,
-              "metadata": {
-                "stage": "broad"
-              }
-            },
-            {
-              "action_type": "add_broad_candidate",
-              "message": "召回文明寝室房间号候选",
-              "used_in_final_decision": true,
-              "metadata": {
-                "stage": "broad",
-                "candidate_ids": ["c1"]
-              }
-            },
-            {
-              "action_type": "final_decision",
-              "message": "候选证据支持字段值",
-              "used_in_final_decision": true
-            }
-          ],
-          "reason": "候选证据支持字段值",
-          "failure_reason": null
-        }
-      ],
-      "warnings": [],
-      "metadata": {}
-    },
-    {
-      "stage": "route_policy",
-      "agent": "route_policy_agent",
-      "status": "completed",
-      "started_at": "2026-04-28T10:00:20Z",
-      "finished_at": "2026-04-28T10:00:21Z",
-      "summary": {
-        "field_count": 1,
-        "routes": {
-          "accept": 0,
-          "review": 1,
-          "reject": 0
-        }
-      },
-      "routes": [
-        {
-          "field_name": "room_numbers",
-          "route": "review",
-          "needs_review": true,
-          "route_reason": "关键字段证据较弱，需要人工确认"
-        }
-      ]
-    }
-  ],
-  "agent_trace": [
-    {
-      "id": "stage_run_001",
-      "sequence": 1,
-      "stage": "document_processing",
-      "agent": "document_processor",
-      "status": "completed",
-      "failure_reason": null,
-      "request": {
-        "document_id": "doc-1",
-        "filename": "sample.pdf",
-        "file_type": "pdf",
-        "content_type": "application/pdf",
-        "upload_size_bytes": 20480,
-        "upload_sha256": "..."
-      },
-      "response": {
-        "markdown": "1-101、1-102 被列为文明寝室",
-        "md_list": ["1-101、1-102 被列为文明寝室"],
-        "blocks": []
-      },
-      "trace": {
-        "meta_info": {},
-        "warnings": []
-      },
-      "started_at": "2026-04-28T10:00:01Z",
-      "finished_at": "2026-04-28T10:00:08Z"
-    }
-  ],
-  "fields": [
-    {
-      "field_name": "room_numbers",
-      "status": "resolved",
-      "evidence": {
-        "block_ids": ["doc-1:p2:b3"],
-        "texts": ["1-101、1-102 被列为文明寝室"],
-        "refs": [
-          {
-            "document_id": "doc-1",
-            "page": 2,
-            "block_id": "doc-1:p2:b3"
-          }
-        ],
-        "status": "candidate_resolved",
-        "notes": ["field decision referenced candidate_ids: c1"]
-      },
-      "related_fields": [],
-      "actions": [
-        {
-          "action_type": "final_decision",
-          "message": "候选证据支持字段值",
-          "used_in_final_decision": true
-        }
-      ],
-      "reason": "候选证据支持字段值",
-      "failure_reason": null
-    }
-  ],
-  "metadata": {
-    "failure_stage": null
-  }
-}
-```
-
-`steps` 按 backend 实际调用顺序返回：
-
-```text
-documents 表中的标准化结果
-  -> document_processor 步骤，返回每个文件的 filename/file_type/block_count/warning_count
-  -> agent_runs 中的 result_json/trace_json
-  -> file_extraction_agent 步骤，返回字段数、resolved/failed 统计、warning 数和 field_decisions
-  -> field_routes 表中的 route 结果
-  -> route_policy_agent 步骤，返回 accept/review/reject 计数和每个字段的 route_reason
-```
-
-`field_decisions` 来自 `agent_runs.trace_json` 和 `agent_runs.result_json`，用于把 file_extraction_agent 的字段定案过程透给前端。它包含字段值、证据摘要、相关字段、搜索与候选动作、最终定案动作、reason、failure_reason 和 `process_steps`。当前 agent 契约不保存 raw prompt 或 raw model response，因此 backend 也不会在 trace 中伪造这类原始内容。
-
-`process_steps` 是 backend 从现有字段 trace 派生的展示链路，不新增数据库字段：
-
-```text
-field evidence + documents.blocks_json + actions + agent value
-  -> broad_extraction：按 evidence.block_ids / refs[].block_id 回查候选 block 正文，并返回 blocks、文本、refs、notes 和 broad 阶段 actions，例如 search_grep / add_broad_candidate / copy_field_candidates / finish_broad
-  -> field_resolution：返回本阶段产出的 route 前 output_fields(field_name/status/value/reason)，并说明读取了哪些 related_fields、执行了哪些 resolution actions，例如 add_resolution_candidate / count_field_candidates / final_decision；没有额外 action 时返回 completed 和直接定案说明，不返回 skipped
-  -> final_result：route policy 之前的 agent 抽取结果，包含 status、agent value、reason 或 failure_reason
-  -> route_validation：route_policy_agent 的验证/路由结论，包含 route、needs_review 和 route_reason
-```
-
-`agent_trace` 来自 `agent_stage_runs`，按每次 HTTP 调用单独保存并返回：
-
-```text
-document_processor 每个文件一次记录
-  -> request 保存 document_id、filename、file_type、content_type、upload_size_bytes、upload_sha256，不保存 file_bytes
-  -> response 保存 agent service 返回的完整 JSON
-  -> trace 保存 response.trace；没有 trace 时保存 meta_info/warnings
-
-file_extraction_agent 一次记录
-  -> request 保存 blocks、markdown、md_list、task_spec、metadata、run_options
-  -> response 保存 ExtractionResult 完整 JSON
-  -> trace 保存 ExtractionResult.trace
-
-route_policy_agent 一次记录
-  -> request 保存 task_spec、field_outputs、refs_with_text、field_processes、metadata
-  -> response 保存 RoutePolicyResult 完整 JSON
-  -> trace 保存 response.trace；没有 trace 时保存 field_routes/warnings/metadata 摘要
-```
-
-`trace.steps` 是给工作台展示的摘要视图；`agent_trace` 是更接近原始 agent 调用过程的调试视图。两者都只包含 agent service 已经返回给 backend 的内容，不包含 agent service 未暴露的 raw prompt 或 raw model response。
-
-## `GET /tasks/:task_id/review`
-
-获取人工审核 handoff 包。只有任务进入 `waiting_review` 时才需要调用。
-
-响应示例：
-
-```json
-{
-  "task_id": "task-001",
+  "task_id": "task_xxx",
   "status": "waiting_review",
   "route": "review",
   "route_reason": "关键字段证据较弱，需要人工确认",
@@ -508,6 +459,7 @@ route_policy_agent 一次记录
     {
       "field_name": "room_numbers",
       "display_name": "文明寝室房间号",
+      "field_type": "string",
       "agent_value": "1-101,1-102",
       "field_status": "resolved",
       "needs_review": true,
@@ -515,80 +467,16 @@ route_policy_agent 一次记录
       "evidence_texts": ["1-101、1-102 被列为文明寝室"],
       "evidence_refs": [
         {
-          "document_id": "doc-1",
+          "document_id": "doc_xxx",
           "page": 2,
-          "block_id": "doc-1:p2:b3"
+          "block_id": "doc_xxx:p2:b3"
         }
       ],
       "related_fields": [],
-      "actions": ["search_grep", "add_broad_candidate", "finish_broad", "final_decision"],
+      "actions": ["tree", "read", "write_field"],
       "reason": "候选证据支持字段值",
       "failure_reason": null,
-      "agent_process": {
-        "field_name": "room_numbers",
-        "status": "resolved",
-        "evidence": {
-          "block_ids": ["doc-1:p2:b3"],
-          "texts": ["1-101、1-102 被列为文明寝室"],
-          "refs": [
-            {
-              "document_id": "doc-1",
-              "page": 2,
-              "block_id": "doc-1:p2:b3"
-            }
-          ],
-          "status": "candidate_resolved",
-          "notes": ["field decision referenced candidate_ids: c1"]
-        },
-        "related_fields": [],
-        "actions": [
-          {
-            "action_type": "search_grep",
-            "message": "文明寝室 OR 房间号",
-            "refs": [
-              {
-                "document_id": "doc-1",
-                "page": 2,
-                "span": "p:p1",
-                "block_id": "doc-1:p2:b3"
-              }
-            ],
-            "used_in_final_decision": false,
-            "metadata": {
-              "stage": "broad"
-            }
-          },
-          {
-            "action_type": "add_broad_candidate",
-            "message": "召回文明寝室房间号候选",
-            "used_in_final_decision": true,
-            "metadata": {
-              "stage": "broad",
-              "candidate_ids": ["c1"]
-            }
-          },
-          {
-            "action_type": "finish_broad",
-            "message": "候选足够，结束 broad",
-            "used_in_final_decision": false,
-            "metadata": {
-              "stage": "broad",
-              "candidate_ids": []
-            }
-          },
-          {
-            "action_type": "final_decision",
-            "message": "候选证据支持字段值",
-            "used_in_final_decision": true,
-            "metadata": {
-              "stage": "resolution",
-              "candidate_ids": ["c1"]
-            }
-          }
-        ],
-        "reason": "候选证据支持字段值",
-        "failure_reason": null
-      }
+      "agent_process": {}
     }
   ]
 }
@@ -598,16 +486,15 @@ route_policy_agent 一次记录
 
 ```text
 task_id
-  -> 读取 agent result + trace
-  -> 读取 route policy 输出
-  -> 只挑出需要人工接管或需要展示的字段
-  -> 合并字段值、证据、定位、route 原因和 agent_process
-  -> 返回人工审核信息包
+  -> 校验任务 status 必须是 waiting_review
+  -> 读取 extracted_fields、field_traces 和 needs_review=true 的 field_routes
+  -> 合并 agent_value、证据、route_reason、related_fields 和 agent_process
+  -> 返回人工可编辑的 handoff 包
 ```
 
-## `POST /tasks/:task_id/review`
+## `POST /tasks/{task_id}/review`
 
-提交人工审核结果。
+提交人工复核结果。
 
 请求示例：
 
@@ -617,10 +504,12 @@ task_id
   "fields": [
     {
       "field_name": "room_numbers",
-      "review_value": "1-101,1-102,1-103"
+      "review_value": "1-101,1-102,1-103",
+      "comment": "人工根据原文补充遗漏房间"
     }
   ],
-  "comment": "人工根据原文补充一个遗漏房间"
+  "comment": "复核完成",
+  "reviewer": "operator"
 }
 ```
 
@@ -628,7 +517,7 @@ task_id
 
 ```json
 {
-  "task_id": "task-001",
+  "task_id": "task_xxx",
   "status": "completed",
   "stage": "done",
   "review_decision": "revise_and_approve"
@@ -640,22 +529,24 @@ task_id
 ```text
 人工提交 decision、字段修正值和备注
   -> 校验任务必须处于 waiting_review
-  -> 如果 decision=approve，沿用 agent_value 作为 final_value
-  -> 如果 decision=revise_and_approve，使用 review_value 作为 final_value
-  -> 如果 decision=reject，任务进入 rejected，不写入最终字段提交
-  -> 记录人工处理痕迹
-  -> 更新 result 和 audit
+  -> 写入 reviews 和 review_fields
+  -> approve 沿用 agent_value 作为 final_value
+  -> revise_and_approve 使用 review_value 作为 final_value
+  -> reject 将任务置为 rejected，不生成字段提交
+  -> 对通过的字段写入 field_commits
+  -> 写入 task.completed 或 task.rejected 事件
+  -> 返回更新后的任务状态
 ```
 
-## `GET /tasks/:task_id/audit`
+## `GET /tasks/{task_id}/audit`
 
-查询字段级提交与责任链路。这个接口用于论文中的可追责展示，也用于排查“某个字段为什么最终这样写入”。
+查询字段级最终提交与责任链路。`audit` 用于回答“最终值是谁在什么时候、基于什么 route 和证据提交的”，不是全过程事件日志。
 
 响应示例：
 
 ```json
 {
-  "task_id": "task-001",
+  "task_id": "task_xxx",
   "status": "completed",
   "field_commits": [
     {
@@ -668,82 +559,18 @@ task_id
       "review_value": "1-101,1-102,1-103",
       "evidence_refs": [
         {
-          "document_id": "doc-1",
+          "document_id": "doc_xxx",
           "page": 2,
-          "block_id": "doc-1:p2:b3"
+          "block_id": "doc_xxx:p2:b3"
         }
       ],
       "used_global_lookup": false,
       "used_validation_rule": false,
-      "action_types": ["search_grep", "add_broad_candidate", "finish_broad", "final_decision"],
+      "action_types": ["tree", "read", "write_field"],
       "related_fields": [],
       "committed_by": "human",
-      "committed_at": "2026-04-28T10:05:00Z",
-      "agent_process": {
-        "field_name": "room_numbers",
-        "status": "resolved",
-        "evidence": {
-          "block_ids": ["doc-1:p2:b3"],
-          "texts": ["1-101、1-102 被列为文明寝室"],
-          "refs": [
-            {
-              "document_id": "doc-1",
-              "page": 2,
-              "block_id": "doc-1:p2:b3"
-            }
-          ],
-          "status": "candidate_resolved",
-          "notes": ["field decision referenced candidate_ids: c1"]
-        },
-        "related_fields": [],
-        "actions": [
-          {
-            "action_type": "search_grep",
-            "message": "文明寝室 OR 房间号",
-            "refs": [
-              {
-                "document_id": "doc-1",
-                "page": 2,
-                "span": "p:p1",
-                "block_id": "doc-1:p2:b3"
-              }
-            ],
-            "used_in_final_decision": false,
-            "metadata": {
-              "stage": "broad"
-            }
-          },
-          {
-            "action_type": "add_broad_candidate",
-            "message": "召回文明寝室房间号候选",
-            "used_in_final_decision": true,
-            "metadata": {
-              "stage": "broad",
-              "candidate_ids": ["c1"]
-            }
-          },
-          {
-            "action_type": "finish_broad",
-            "message": "候选足够，结束 broad",
-            "used_in_final_decision": false,
-            "metadata": {
-              "stage": "broad",
-              "candidate_ids": []
-            }
-          },
-          {
-            "action_type": "final_decision",
-            "message": "候选证据支持字段值",
-            "used_in_final_decision": true,
-            "metadata": {
-              "stage": "resolution",
-              "candidate_ids": ["c1"]
-            }
-          }
-        ],
-        "reason": "候选证据支持字段值",
-        "failure_reason": null
-      }
+      "committed_at": "2026-05-18T10:05:00Z",
+      "agent_process": {}
     }
   ]
 }
@@ -765,9 +592,22 @@ task_id
     "trace": true,
     "review": true,
     "audit": true,
+    "stream": true,
     "external_task_spec": true,
     "multiple_files": true
   }
+}
+```
+
+## `GET /healthz`
+
+健康检查。
+
+响应示例：
+
+```json
+{
+  "status": "ok"
 }
 ```
 
@@ -775,11 +615,62 @@ task_id
 
 第一版保持简单：
 
-- 请求体或文件缺失：FastAPI 参数校验返回 `422`
+- 请求体或文件缺失：`422`
 - 文件类型不支持、`task_spec` 缺失或 JSON 非法：`422`
 - `task_id` 不存在：`404`
 - 当前任务状态不允许执行该操作：`409`
-- agent HTTP 调用或后端流程异常：`502`；如果任务已经创建，后台流程会把任务更新为 `failed / done`
+- agent HTTP 调用或后端流程异常：`502`
 
-如果 agent 本身返回 `ExtractionResult.status="failed"` 或 route policy 返回失败状态，后端保存失败结果并让任务进入 `failed / done`。
-`POST /tasks` 只返回入队状态；失败原因以 `GET /tasks/:task_id` summary 中的 `error_message` 为准。
+如果任务已经创建，后台流程失败时应：
+
+```text
+异常
+  -> 写 task.failed 事件
+  -> 更新 tasks.status=failed
+  -> 更新 tasks.stage=done
+  -> 写 error_message
+  -> stream.state 变为 ended
+```
+
+`POST /tasks` 只保证任务已创建并入队；后台失败原因以后续 `GET /tasks/{task_id}` 中的 `error_message` 和 `events` 中的 `task.failed` 为准。
+
+## 前端推荐流程
+
+新建任务：
+
+```text
+POST /tasks
+  -> 得到 task_id 和 stream.last_event_seq
+  -> GET /tasks/{task_id}/events?after_seq=stream.last_event_seq
+  -> 实时渲染事件
+  -> 任务进入 completed/waiting_review/rejected/failed 后关闭或等待服务端关闭流
+```
+
+打开已有任务：
+
+```text
+GET /tasks/{task_id}
+  -> 渲染 status/stage/route/error_message
+  -> 从本地读取 lastSeq；没有就用 0
+  -> GET /tasks/{task_id}/events?after_seq=lastSeq
+  -> 如果 status 已经是终态，也可以直接读取 result/replay/review/audit
+```
+
+断线恢复：
+
+```text
+EventSource 或 fetch stream 断开
+  -> 保留最后处理成功的 seq
+  -> GET /tasks/{task_id} 校准当前 status 和 stream.last_event_seq
+  -> GET /tasks/{task_id}/events?after_seq=lastSeq
+  -> 后端补发断线期间已落库的事件
+```
+
+页面刷新：
+
+```text
+刷新后 JS 内存丢失
+  -> 从 localStorage 或 Electron 持久层读取 lastSeq
+  -> 没有 lastSeq 就 after_seq=0 全量回放
+  -> 有 lastSeq 就 after_seq=lastSeq 增量续传
+```
