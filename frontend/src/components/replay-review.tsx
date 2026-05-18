@@ -3,15 +3,9 @@
 import * as React from "react";
 import Link from "next/link";
 import {
-  ChevronRight,
-  Gauge,
-  Loader2,
-  MousePointerClick,
   Paperclip,
   PanelLeftClose,
   PanelLeftOpen,
-  Pause,
-  Play,
   Plus,
   Search,
   SendHorizonal,
@@ -29,8 +23,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
-type ReplayMode = "auto" | "paused";
-type SidebarResizeSide = "left" | "right";
+type SidebarResizeSide = "left" | "field-progress" | "evidence-review";
 
 type ReplayField = {
   sourceName: string;
@@ -53,8 +46,20 @@ type EvidenceReviewTab = {
   evidenceId: string;
 };
 
+type ReviewPanelMode = "field" | "evidence";
+type AgentBalanceSide = "left" | "right" | "none";
+
+type FieldProgressGroupKey = "review" | "reject" | "accept";
+
+const FIELD_PROGRESS_GROUPS: Array<{ key: FieldProgressGroupKey; label: string }> = [
+  { key: "review", label: "Review" },
+  { key: "reject", label: "Reject" },
+  { key: "accept", label: "Accept" },
+];
+
 const DEFAULT_LEFT_PANEL_WIDTH = 224;
-const DEFAULT_RIGHT_PANEL_WIDTH = 384;
+const DEFAULT_FIELD_PROGRESS_PANEL_WIDTH = 320;
+const DEFAULT_EVIDENCE_REVIEW_PANEL_WIDTH = 384;
 const LEFT_PANEL_MIN_WIDTH = 176;
 const LEFT_PANEL_MAX_WIDTH = 360;
 const RIGHT_PANEL_MIN_WIDTH = 300;
@@ -89,31 +94,30 @@ export function ReplayReview({
   onSubmitReview?: () => void;
 }) {
   const actions = React.useMemo(() => replay?.actions ?? [], [replay?.actions]);
-  const [index, setIndex] = React.useState(0);
-  const [mode, setMode] = React.useState<ReplayMode>("paused");
-  const [speed, setSpeed] = React.useState(0.75);
-  const [hoveredAgentActionIndex, setHoveredAgentActionIndex] = React.useState<number | null>(null);
   const [isLeftPanelOpen, setIsLeftPanelOpen] = React.useState(true);
-  const [reviewTabs, setReviewTabs] = React.useState<EvidenceReviewTab[]>([]);
-  const [activeReviewTabId, setActiveReviewTabId] = React.useState("");
+  const [isEvidenceReviewOpen, setIsEvidenceReviewOpen] = React.useState(false);
+  const [reviewTabsByTask, setReviewTabsByTask] = React.useState<Record<string, EvidenceReviewTab[]>>({});
+  const [activeReviewTabByTask, setActiveReviewTabByTask] = React.useState<Record<string, string>>({});
+  const [reviewPanelModeByTask, setReviewPanelModeByTask] = React.useState<Record<string, ReviewPanelMode>>({});
+  const [selectedFieldName, setSelectedFieldName] = React.useState("");
   const [composerValue, setComposerValue] = React.useState("");
   const [leftPanelWidth, setLeftPanelWidth] = React.useState(DEFAULT_LEFT_PANEL_WIDTH);
-  const [rightPanelWidth, setRightPanelWidth] = React.useState(DEFAULT_RIGHT_PANEL_WIDTH);
+  const [fieldProgressPanelWidth, setFieldProgressPanelWidth] = React.useState(DEFAULT_FIELD_PROGRESS_PANEL_WIDTH);
+  const [evidenceReviewPanelWidth, setEvidenceReviewPanelWidth] = React.useState(DEFAULT_EVIDENCE_REVIEW_PANEL_WIDTH);
   const agentStreamRef = React.useRef<HTMLDivElement | null>(null);
 
+  const currentTaskId = taskId ?? replay?.task_id ?? "";
+
   React.useEffect(() => {
-    setIndex(0);
-    setMode("paused");
-    setReviewTabs([]);
-    setActiveReviewTabId("");
-  }, [replay?.task_id]);
+    setIsEvidenceReviewOpen(false);
+  }, [currentTaskId]);
 
   React.useEffect(() => {
     const stream = agentStreamRef.current;
     if (stream) {
       stream.scrollTop = stream.scrollHeight;
     }
-  }, [index]);
+  }, [actions.length]);
 
   const visibleActions = React.useMemo(
     () =>
@@ -122,75 +126,66 @@ export function ReplayReview({
         .filter(({ action }) => shouldDisplayAgentAction(action)),
     [actions],
   );
-  const agentStreamActions = React.useMemo(
-    () => visibleActions.filter(({ actionIndex }) => actionIndex <= index),
-    [index, visibleActions],
-  );
+  const agentStreamActions = visibleActions;
   const visibleActionCount = visibleActions.length;
-  const currentAction = actions[index] ?? null;
-  const currentActionType = currentAction ? getActionType(currentAction) : "";
-  const currentSetFieldName =
-    currentAction && (currentActionType === "set_field" || currentActionType === "write_field")
-      ? getSetFieldPayload(currentAction).name
-      : "";
   const replayFields = React.useMemo(
-    () => reduceReplayFields(actions.slice(0, index + 1), finalFields, reviewFields),
-    [actions, finalFields, index, reviewFields],
+    () => reduceReplayFields(actions, finalFields, reviewFields),
+    [actions, finalFields, reviewFields],
   );
-  const currentSetField = React.useMemo(
-    () => replayFields.find((field) => field.sourceName === currentSetFieldName) ?? null,
-    [currentSetFieldName, replayFields],
-  );
-  const fallbackReviewField = React.useMemo(() => {
-    if (currentSetField || (actions.length > 0 && index < actions.length - 1)) {
-      return null;
+  const fieldProgressFields = React.useMemo(() => orderReplayFieldsForProgress(replayFields), [replayFields]);
+  const hasFieldProgressFields = fieldProgressFields.length > 0;
+  const defaultSelectedFieldName =
+    fieldProgressFields.find((field) => field.needsReview)?.sourceName ??
+    fieldProgressFields[0]?.sourceName ??
+    "";
+  React.useEffect(() => {
+    if (!defaultSelectedFieldName) {
+      setSelectedFieldName("");
+      return;
     }
-    return replayFields.find((field) => field.needsReview) ?? null;
-  }, [actions.length, currentSetField, index, replayFields]);
-  const visibleFieldWrite = currentSetField ?? fallbackReviewField;
+    setSelectedFieldName((current) =>
+      fieldProgressFields.some((field) => field.sourceName === current) ? current : defaultSelectedFieldName,
+    );
+  }, [defaultSelectedFieldName, fieldProgressFields]);
+  const reviewTabs = reviewTabsByTask[currentTaskId] ?? [];
+  const activeReviewTabId = activeReviewTabByTask[currentTaskId] ?? "";
   const activeReviewTab = React.useMemo(
     () => reviewTabs.find((tab) => tab.id === activeReviewTabId) ?? null,
     [activeReviewTabId, reviewTabs],
   );
-  const shouldShowProgressPanel = !isLeftPanelOpen && !activeReviewTab;
-  const shouldShowRightPanel = shouldShowProgressPanel || Boolean(activeReviewTab);
-  const currentDocumentTitle = getCurrentDocumentTitle(replay, currentAction);
+  const selectedReviewField = React.useMemo(
+    () => fieldProgressFields.find((field) => field.sourceName === selectedFieldName) ?? null,
+    [fieldProgressFields, selectedFieldName],
+  );
+  const activeReviewPanelMode = reviewPanelModeByTask[currentTaskId] ?? null;
+  const shouldShowFieldProgressPanel = !isLeftPanelOpen;
+  const shouldShowEvidenceReviewPanel = isEvidenceReviewOpen;
+  const shouldShowRightPanel = shouldShowFieldProgressPanel || shouldShowEvidenceReviewPanel;
+  const visibleSidePanelCount =
+    (isLeftPanelOpen ? 1 : 0) + (shouldShowFieldProgressPanel ? 1 : 0) + (shouldShowEvidenceReviewPanel ? 1 : 0);
+  const agentBalanceSide: AgentBalanceSide =
+    visibleSidePanelCount === 1 ? (isLeftPanelOpen ? "right" : "left") : "none";
+  const agentContentMode = visibleSidePanelCount === 1 ? "centered" : "full";
+  const currentDocumentTitle = getCurrentDocumentTitle(replay, null);
+  const stageColumns = React.useMemo(
+    () =>
+      [
+        ...(isLeftPanelOpen ? ["var(--replay-left-panel-width)", "10px"] : []),
+        "minmax(0, 1fr)",
+        ...(shouldShowFieldProgressPanel ? ["10px", "var(--replay-field-progress-panel-width)"] : []),
+        ...(shouldShowEvidenceReviewPanel ? ["10px", "var(--replay-evidence-review-panel-width)"] : []),
+      ].join(" "),
+    [isLeftPanelOpen, shouldShowEvidenceReviewPanel, shouldShowFieldProgressPanel],
+  );
   const stageStyle = React.useMemo(
     () => ({
       "--replay-left-panel-width": `${leftPanelWidth}px`,
-      "--replay-right-panel-width": `${rightPanelWidth}px`,
+      "--replay-field-progress-panel-width": `${fieldProgressPanelWidth}px`,
+      "--replay-evidence-review-panel-width": `${evidenceReviewPanelWidth}px`,
+      "--replay-stage-columns": stageColumns,
     }) as React.CSSProperties,
-    [leftPanelWidth, rightPanelWidth],
+    [evidenceReviewPanelWidth, fieldProgressPanelWidth, leftPanelWidth, stageColumns],
   );
-
-  React.useEffect(() => {
-    if (mode !== "auto" || visibleActions.length === 0) {
-      return;
-    }
-    const timeout = window.setTimeout(() => {
-      setIndex((current) => getNextVisibleActionIndex(actions, current));
-    }, Math.max(260, 900 / Math.max(speed, 0.25)));
-    return () => window.clearTimeout(timeout);
-  }, [actions, index, mode, speed, visibleActions.length]);
-
-  function goNext() {
-    setMode("paused");
-    setIndex((current) => getNextVisibleActionIndex(actions, current));
-  }
-
-  function jumpToReplayAction(actionIndex: number) {
-    setMode("paused");
-    setIndex(clampActionIndex(actions, actionIndex));
-  }
-
-  function playSingleReplayAction(actionIndex: number) {
-    setMode("paused");
-    setIndex(clampActionIndex(actions, actionIndex));
-  }
-
-  function toggleAutoMode() {
-    setMode((current) => (current === "auto" ? "paused" : "auto"));
-  }
 
   function openEvidenceReview(uri: string, label: string) {
     const evidenceId = getEvidenceIdFromUri(uri);
@@ -201,26 +196,59 @@ export function ReplayReview({
       label: label || evidenceId || "Evidence",
       evidenceId,
     };
-    setReviewTabs((current) => {
-      const exists = current.some((tab) => tab.id === tabId);
-      return exists ? current : [...current, nextTab];
+    setReviewTabsByTask((current) => {
+      const currentTabs = current[currentTaskId] ?? [];
+      const exists = currentTabs.some((tab) => tab.id === tabId);
+      return {
+        ...current,
+        [currentTaskId]: exists ? currentTabs : [...currentTabs, nextTab],
+      };
     });
-    setActiveReviewTabId(tabId);
+    setActiveReviewTabByTask((current) => ({
+      ...current,
+      [currentTaskId]: tabId,
+    }));
+    setReviewPanelModeByTask((current) => ({
+      ...current,
+      [currentTaskId]: "evidence",
+    }));
+    setIsEvidenceReviewOpen(true);
   }
 
-  function closeActiveReview() {
-    setReviewTabs((current) => {
-      const next = current.filter((tab) => tab.id !== activeReviewTabId);
-      setActiveReviewTabId(next.at(-1)?.id ?? "");
-      return next;
-    });
+  function openFieldReview(fieldName: string) {
+    setSelectedFieldName(fieldName);
+    setReviewPanelModeByTask((current) => ({
+      ...current,
+      [currentTaskId]: "field",
+    }));
+    setIsEvidenceReviewOpen(true);
+  }
+
+  function closeEvidenceReview() {
+    setIsEvidenceReviewOpen(false);
+  }
+
+  function selectEvidenceTab(tabId: string) {
+    setActiveReviewTabByTask((current) => ({
+      ...current,
+      [currentTaskId]: tabId,
+    }));
+    setReviewPanelModeByTask((current) => ({
+      ...current,
+      [currentTaskId]: "evidence",
+    }));
   }
 
   function startPanelResize(side: SidebarResizeSide, event: React.PointerEvent<HTMLButtonElement>) {
     event.preventDefault();
     const handle = event.currentTarget;
     const startX = event.clientX;
-    const startWidth = side === "left" ? leftPanelWidth : rightPanelWidth;
+    const startWidth =
+      side === "left"
+        ? leftPanelWidth
+        : side === "field-progress"
+          ? fieldProgressPanelWidth
+          : evidenceReviewPanelWidth;
     const pointerId = event.pointerId;
 
     const updateWidth = (clientX: number) => {
@@ -229,7 +257,12 @@ export function ReplayReview({
         setLeftPanelWidth(clampPanelWidth(startWidth + deltaX, LEFT_PANEL_MIN_WIDTH, LEFT_PANEL_MAX_WIDTH));
         return;
       }
-      setRightPanelWidth(clampPanelWidth(startWidth - deltaX, RIGHT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH));
+      const nextWidth = clampPanelWidth(startWidth - deltaX, RIGHT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH);
+      if (side === "field-progress") {
+        setFieldProgressPanelWidth(nextWidth);
+      } else {
+        setEvidenceReviewPanelWidth(nextWidth);
+      }
     };
     const stopResize = () => {
       window.removeEventListener("pointermove", handlePointerMove);
@@ -270,20 +303,12 @@ export function ReplayReview({
     };
     if (event.key === "Home") {
       event.preventDefault();
-      if (side === "left") {
-        setLeftPanelWidth(LEFT_PANEL_MIN_WIDTH);
-      } else {
-        setRightPanelWidth(RIGHT_PANEL_MAX_WIDTH);
-      }
+      setPanelWidthToBoundary(side, side === "left" ? LEFT_PANEL_MIN_WIDTH : RIGHT_PANEL_MAX_WIDTH);
       return;
     }
     if (event.key === "End") {
       event.preventDefault();
-      if (side === "left") {
-        setLeftPanelWidth(LEFT_PANEL_MAX_WIDTH);
-      } else {
-        setRightPanelWidth(RIGHT_PANEL_MIN_WIDTH);
-      }
+      setPanelWidthToBoundary(side, side === "left" ? LEFT_PANEL_MAX_WIDTH : RIGHT_PANEL_MIN_WIDTH);
       return;
     }
     const delta = keyToDelta[event.key];
@@ -295,7 +320,23 @@ export function ReplayReview({
       setLeftPanelWidth((current) => clampPanelWidth(current + delta, LEFT_PANEL_MIN_WIDTH, LEFT_PANEL_MAX_WIDTH));
       return;
     }
-    setRightPanelWidth((current) => clampPanelWidth(current - delta, RIGHT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH));
+    if (side === "field-progress") {
+      setFieldProgressPanelWidth((current) => clampPanelWidth(current - delta, RIGHT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH));
+      return;
+    }
+    setEvidenceReviewPanelWidth((current) => clampPanelWidth(current - delta, RIGHT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH));
+  }
+
+  function setPanelWidthToBoundary(side: SidebarResizeSide, width: number) {
+    if (side === "left") {
+      setLeftPanelWidth(width);
+      return;
+    }
+    if (side === "field-progress") {
+      setFieldProgressPanelWidth(width);
+      return;
+    }
+    setEvidenceReviewPanelWidth(width);
   }
 
   if (!replay) {
@@ -310,7 +351,7 @@ export function ReplayReview({
     <section
       aria-label="Replay 全屏文档工作台"
       className={
-        visibleFieldWrite
+        hasFieldProgressFields
           ? "replay-review-root replay-review-root-fullscreen replay-task-workbench has-field-write bg-background"
           : "replay-review-root replay-review-root-fullscreen replay-task-workbench bg-background"
       }
@@ -332,16 +373,14 @@ export function ReplayReview({
           <span className="sr-only">AI extraction replay</span>
         </div>
         <div className="replay-topbar-status">
-          {activeReviewTab ? (
-            <button
-              type="button"
-              className="replay-review-tab-button is-active"
-              aria-label="切换 Review 面板"
-              onClick={closeActiveReview}
-            >
-              Review
-            </button>
-          ) : null}
+          <button
+            type="button"
+            className={isEvidenceReviewOpen ? "replay-review-tab-button is-active" : "replay-review-tab-button"}
+            aria-label={isEvidenceReviewOpen ? "关闭 evidence Review" : "打开 evidence Review"}
+            onClick={() => setIsEvidenceReviewOpen((current) => !current)}
+          >
+            Review
+          </button>
           {summary ? <ReplayStatusBadge status={summary.status} /> : null}
         </div>
       </div>
@@ -365,146 +404,59 @@ export function ReplayReview({
           />
         ) : null}
 
-        <div className="replay-agent-panel-slot" aria-label="Agent 中间工作区">
+        <div
+          className="replay-agent-panel-slot"
+          aria-label="Agent 中间工作区"
+          data-agent-balance-side={agentBalanceSide}
+          data-agent-content-mode={agentContentMode}
+          data-agent-gutter={agentContentMode === "centered" ? "compact" : "none"}
+        >
           <section className="replay-agent-panel" aria-label="Agent 工具回放">
             <div className="replay-agent-header">
               <span className="replay-agent-title">AI</span>
               <span className="replay-agent-step">
-                {visibleActionCount === 0 ? "step 0 of 0" : `step ${agentStreamActions.length} of ${visibleActionCount}`}
+                {visibleActionCount === 0 ? "0 tool calls" : `${visibleActionCount} tool calls`}
               </span>
             </div>
             <div ref={agentStreamRef} className="replay-agent-stream" aria-label="Agent 文字流">
-              {agentStreamActions.length > 0 ? (
-                agentStreamActions.map(({ action, actionIndex }, visibleIndex) => {
-                  const isCurrent = actionIndex === index;
-                  const visibleStepNumber = visibleIndex + 1;
-                  const reason = getActionReason(action);
-                  const toolName = getActionType(action) || "tool";
-                  const target = getActionTarget(action);
-                  const result = readObject(action.result);
-                  const ok = result?.ok !== false;
-                  const showActionControls = hoveredAgentActionIndex === actionIndex;
-                  return (
-                    <div
-                      key={`${actionIndex}-${toolName}-${target}`}
-                      aria-label={`第 ${visibleStepNumber} 步 ${toolName}`}
-                      className={isCurrent ? "replay-agent-turn is-current" : "replay-agent-turn"}
-                      onMouseEnter={() => setHoveredAgentActionIndex(actionIndex)}
-                      onMouseLeave={() => setHoveredAgentActionIndex((current) => (current === actionIndex ? null : current))}
-                      onFocus={() => setHoveredAgentActionIndex(actionIndex)}
-                      onBlur={(event) => {
-                        if (!event.currentTarget.contains(event.relatedTarget)) {
-                          setHoveredAgentActionIndex((current) => (current === actionIndex ? null : current));
-                        }
-                      }}
-                    >
-                      {reason ? (
-                        <button type="button" className="replay-agent-message" onClick={goNext}>
-                          <span className="replay-agent-reason-text">
-                            <EvidenceReasonText text={reason} onOpenEvidence={openEvidenceReview} />
-                          </span>
-                        </button>
-                      ) : null}
-                      <AgentToolLine action={action} ok={ok} onClick={goNext} />
-                      {showActionControls ? (
-                        <div className="replay-agent-turn-controls">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="icon"
-                            className="h-7 w-7"
-                            aria-label={`跳到第 ${visibleStepNumber} 步`}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              jumpToReplayAction(actionIndex);
-                            }}
+              <div className="replay-agent-centered-content" aria-label="Agent 居中文字流内容">
+                <div className="replay-agent-content-frame" aria-label="Agent 中间文字框">
+                  <AgentBalanceSpacer side="left" active={agentContentMode === "centered"} />
+                  <div className="replay-agent-readable-column" aria-label="Agent 阅读列">
+                    {agentStreamActions.length > 0 ? (
+                      agentStreamActions.map(({ action, actionIndex }, visibleIndex) => {
+                        const visibleStepNumber = visibleIndex + 1;
+                        const reason = getActionReason(action);
+                        const toolName = getActionType(action) || "tool";
+                        const target = getActionTarget(action);
+                        const result = readObject(action.result);
+                        const ok = result?.ok !== false;
+                        return (
+                          <div
+                            key={`${actionIndex}-${toolName}-${target}`}
+                            aria-label={`第 ${visibleStepNumber} 步 ${toolName}`}
+                            className="replay-agent-turn"
                           >
-                            <MousePointerClick className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="icon"
-                            className="h-7 w-7"
-                            aria-label={`只播放第 ${visibleStepNumber} 步`}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              playSingleReplayAction(actionIndex);
-                            }}
-                          >
-                            <Play className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })
-              ) : (
-                <div className="replay-agent-turn is-current">
-                  <div className="replay-agent-empty">等待工具调用。</div>
+                            {reason ? (
+                              <div className="replay-agent-message">
+                                <span className="replay-agent-reason-text">
+                                  <EvidenceReasonText text={reason} onOpenEvidence={openEvidenceReview} />
+                                </span>
+                              </div>
+                            ) : null}
+                            <AgentToolLine action={action} ok={ok} />
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="replay-agent-turn is-current">
+                        <div className="replay-agent-empty">等待工具调用。</div>
+                      </div>
+                    )}
+                  </div>
+                  <AgentBalanceSpacer side="right" active={agentContentMode === "centered"} />
                 </div>
-              )}
-            </div>
-            {visibleFieldWrite ? (
-              <div className="replay-agent-review-shell">
-                <ReplayFieldWriteCard
-                  key={`field-${index}-${visibleFieldWrite.sourceName}`}
-                  field={visibleFieldWrite}
-                  reviewValue={
-                    reviewValues[visibleFieldWrite.sourceName] ??
-                    visibleFieldWrite.reviewField?.agent_value ??
-                    stringifyValue(visibleFieldWrite.value)
-                  }
-                  reviewComment={reviewComment}
-                  isSubmittingReview={isSubmittingReview}
-                  onOpenEvidence={(evidenceId) => openEvidenceReview(`evidence://${taskId ?? replay.task_id}/${evidenceId}`, evidenceId)}
-                  onReviewValueChange={onReviewValueChange}
-                  onReviewCommentChange={onReviewCommentChange}
-                  onSubmitReview={onSubmitReview}
-                />
               </div>
-            ) : null}
-            <div className="replay-agent-controls">
-              <Button
-                type="button"
-                variant={mode === "auto" ? "default" : "outline"}
-                size="icon"
-                onClick={toggleAutoMode}
-                disabled={actions.length === 0}
-                aria-label={mode === "auto" ? "暂停自动播放" : "自动播放"}
-              >
-                {mode === "auto" ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                onClick={goNext}
-                disabled={actions.length === 0}
-                aria-label="下一步"
-              >
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-              <div className="replay-speed-control">
-                <Button type="button" variant="outline" size="icon" aria-label="播放速度">
-                  <Gauge className="h-4 w-4" />
-                </Button>
-                <label className="replay-speed-popover">
-                  <input
-                    type="range"
-                    min="0.25"
-                    max="2"
-                    step="0.25"
-                    value={speed}
-                    onChange={(event) => setSpeed(Number(event.currentTarget.value))}
-                  />
-                  <span className="font-mono text-xs">{speed}x</span>
-                </label>
-              </div>
-              {mode === "auto" ? <Loader2 className="h-4 w-4 animate-spin text-primary" /> : null}
-              <span className="ml-auto font-mono text-xs text-muted-foreground">
-                {actions.length === 0 ? "0/0" : `${index + 1}/${actions.length}`}
-              </span>
             </div>
             <form
               className="replay-agent-composer"
@@ -514,19 +466,28 @@ export function ReplayReview({
                 setComposerValue("");
               }}
             >
-              <textarea
-                aria-label="Agent 对话输入框"
-                value={composerValue}
-                onChange={(event) => setComposerValue(event.currentTarget.value)}
-                placeholder="Ask for follow-up changes"
-              />
-              <div className="replay-agent-composer-actions">
-                <Button type="button" variant="ghost" size="icon" aria-label="添加文件">
-                  <Paperclip className="h-4 w-4" aria-hidden="true" />
-                </Button>
-                <Button type="submit" size="icon" aria-label="发送消息">
-                  <SendHorizonal className="h-4 w-4" aria-hidden="true" />
-                </Button>
+              <div className="replay-agent-composer-balance-row" aria-label="Agent 居中输入区">
+                <div className="replay-agent-composer-frame" aria-label="Agent 中间输入框">
+                  <AgentBalanceSpacer side="left" active={agentContentMode === "centered"} />
+                  <div className="replay-agent-composer-readable-column" aria-label="Agent 输入阅读列">
+                    <textarea
+                      aria-label="Agent 对话输入框"
+                      value={composerValue}
+                      onChange={(event) => setComposerValue(event.currentTarget.value)}
+                      placeholder="Ask for follow-up changes"
+                      className="replay-agent-composer-input"
+                    />
+                    <div className="replay-agent-composer-actions">
+                      <Button type="button" variant="ghost" size="icon" aria-label="添加文件">
+                        <Paperclip className="h-4 w-4" aria-hidden="true" />
+                      </Button>
+                      <Button type="submit" size="icon" aria-label="发送消息">
+                        <SendHorizonal className="h-4 w-4" aria-hidden="true" />
+                      </Button>
+                    </div>
+                  </div>
+                  <AgentBalanceSpacer side="right" active={agentContentMode === "centered"} />
+                </div>
               </div>
             </form>
           </section>
@@ -534,35 +495,68 @@ export function ReplayReview({
 
         {shouldShowRightPanel ? (
           <>
-            <PanelResizeHandle
-              side="right"
-              width={rightPanelWidth}
-              onPointerDown={(event) => startPanelResize("right", event)}
-              onKeyDown={(event) => resizePanelByKeyboard("right", event)}
-            />
-            <aside className="replay-right-panel-slot">
-              {activeReviewTab ? (
-                <EvidenceReviewPanel
-                  tab={activeReviewTab}
-                  replay={replay}
-                  fields={replayFields}
-                  onClose={closeActiveReview}
+            {shouldShowFieldProgressPanel ? (
+              <>
+                <PanelResizeHandle
+                  side="field-progress"
+                  width={fieldProgressPanelWidth}
+                  onPointerDown={(event) => startPanelResize("field-progress", event)}
+                  onKeyDown={(event) => resizePanelByKeyboard("field-progress", event)}
                 />
-              ) : (
-                <ProgressPanel
-                  summary={summary}
-                  replay={replay}
-                  visibleActionCount={visibleActionCount}
-                  currentStep={agentStreamActions.length}
-                  actionIndex={index}
-                  actionCount={actions.length}
+                <aside className="replay-field-progress-panel-slot">
+                  <FieldProgressPanel
+                    fields={fieldProgressFields}
+                    selectedFieldName={selectedFieldName || defaultSelectedFieldName}
+                    onSelectField={openFieldReview}
+                  />
+                </aside>
+              </>
+            ) : null}
+            {shouldShowEvidenceReviewPanel ? (
+              <>
+                <PanelResizeHandle
+                  side="evidence-review"
+                  width={evidenceReviewPanelWidth}
+                  onPointerDown={(event) => startPanelResize("evidence-review", event)}
+                  onKeyDown={(event) => resizePanelByKeyboard("evidence-review", event)}
                 />
-              )}
-            </aside>
+                <aside className="replay-evidence-review-panel-slot">
+                  <EvidenceReviewPanel
+                    tabs={reviewTabs}
+                    activeTab={activeReviewTab}
+                    mode={activeReviewPanelMode}
+                    selectedField={selectedReviewField}
+                    replay={replay}
+                    fields={replayFields}
+                    taskId={taskId ?? replay.task_id}
+                    reviewValues={reviewValues}
+                    reviewComment={reviewComment}
+                    isSubmittingReview={isSubmittingReview}
+                    onSelectTab={selectEvidenceTab}
+                    onOpenEvidence={openEvidenceReview}
+                    onReviewValueChange={onReviewValueChange}
+                    onReviewCommentChange={onReviewCommentChange}
+                    onSubmitReview={onSubmitReview}
+                    onClose={closeEvidenceReview}
+                  />
+                </aside>
+              </>
+            ) : null}
           </>
         ) : null}
       </div>
     </section>
+  );
+}
+
+function AgentBalanceSpacer({ side, active }: { side: "left" | "right"; active: boolean }) {
+  return (
+    <span
+      className="replay-agent-balance-spacer"
+      data-agent-balance-spacer={side}
+      data-active={active ? "true" : "false"}
+      aria-hidden="true"
+    />
   );
 }
 
@@ -637,95 +631,230 @@ function TaskSidebar({
   );
 }
 
-function ProgressPanel({
-  summary,
-  replay,
-  visibleActionCount,
-  currentStep,
-  actionIndex,
-  actionCount,
+function FieldProgressPanel({
+  fields,
+  selectedFieldName,
+  onSelectField,
 }: {
-  summary?: TaskSummary | null;
-  replay: TaskReplay;
-  visibleActionCount: number;
-  currentStep: number;
-  actionIndex: number;
-  actionCount: number;
+  fields: ReplayField[];
+  selectedFieldName: string;
+  onSelectField: (fieldName: string) => void;
 }) {
-  const stream = summary?.stream;
-  const items = [
-    { label: "status", value: summary?.status ?? replay.status },
-    { label: "stage", value: summary?.stage ?? replay.stage },
-    { label: "route", value: summary?.route ?? replay.audit?.route ?? "pending" },
-    { label: "stream", value: stream?.state ?? (isTerminalStatus(summary?.status ?? replay.status) ? "ended" : "running") },
-    { label: "last seq", value: String(stream?.last_event_seq ?? 0) },
-    { label: "replay", value: actionCount === 0 ? "0/0" : `${actionIndex + 1}/${actionCount}` },
-  ];
+  const selectedField = fields.find((field) => field.sourceName === selectedFieldName) ?? fields[0] ?? null;
+  const fieldGroups = groupFieldProgressFields(fields);
+
   return (
-    <section className="replay-progress-panel" aria-label="任务进度面板">
+    <section className="replay-field-progress-panel" aria-label="字段进度面板">
       <div className="replay-side-panel-header">
         <div>
-          <div className="replay-side-panel-title">Progress</div>
-          <div className="replay-side-panel-subtitle">
-            {currentStep} of {visibleActionCount} visible steps
-          </div>
+          <div className="replay-side-panel-title">Field Progress</div>
+          <div className="replay-side-panel-subtitle">{fields.length} field{fields.length === 1 ? "" : "s"}</div>
         </div>
       </div>
-      <ul className="replay-progress-list">
-        {items.map((item) => (
-          <li key={item.label} className="replay-progress-item">
-            <span className="replay-progress-label">{item.label}</span>
-            <span className="replay-progress-value">{item.label === "last seq" ? `last seq ${item.value}` : item.value}</span>
-          </li>
+      <div className="replay-field-progress-list">
+        {fieldGroups.map((group) => (
+          <section
+            key={group.key}
+            className="replay-field-progress-group"
+            aria-label={`${group.label} 字段分组`}
+          >
+            <h3 className="replay-field-progress-group-title">{group.label}</h3>
+            <div className="replay-field-progress-group-items">
+              {group.fields.map((field) => (
+                <FieldProgressRow
+                  key={field.sourceName}
+                  field={field}
+                  isSelected={field.sourceName === selectedField?.sourceName}
+                  onSelect={() => onSelectField(field.sourceName)}
+                />
+              ))}
+            </div>
+          </section>
         ))}
-      </ul>
+        {fields.length === 0 ? (
+          <p className="replay-field-progress-empty">暂无字段进度。</p>
+        ) : null}
+      </div>
     </section>
   );
 }
 
+function orderReplayFieldsForProgress(fields: ReplayField[]): ReplayField[] {
+  return FIELD_PROGRESS_GROUPS.flatMap((group) =>
+    fields.filter((field) => getFieldProgressGroupKey(field) === group.key),
+  );
+}
+
+function groupFieldProgressFields(fields: ReplayField[]): Array<{
+  key: FieldProgressGroupKey;
+  label: string;
+  fields: ReplayField[];
+}> {
+  return FIELD_PROGRESS_GROUPS.map((group) => ({
+    ...group,
+    fields: fields.filter((field) => getFieldProgressGroupKey(field) === group.key),
+  })).filter((group) => group.fields.length > 0);
+}
+
+function getFieldProgressGroupKey(field: ReplayField): FieldProgressGroupKey {
+  if (field.needsReview || field.route === "review") {
+    return "review";
+  }
+  if (field.route === "reject") {
+    return "reject";
+  }
+  return "accept";
+}
+
+function FieldProgressRow({
+  field,
+  isSelected,
+  onSelect,
+}: {
+  field: ReplayField;
+  isSelected: boolean;
+  onSelect: () => void;
+}) {
+  const routeLabel = field.route ?? field.status;
+  const valuePreview = truncateText(formatFieldDisplayValue(field), 88);
+  const evidenceText = field.evidenceIds.length === 1 ? "1 evidence" : `${field.evidenceIds.length} evidence`;
+  return (
+    <button
+      type="button"
+      className={isSelected ? "replay-field-progress-row is-selected" : "replay-field-progress-row"}
+      aria-pressed={isSelected}
+      aria-label={`${field.fieldName} ${routeLabel} ${field.status}`}
+      title={field.routeReason || field.fieldName}
+      onClick={onSelect}
+    >
+      <span className="replay-field-row-main">
+        <span className="replay-field-row-title">{field.fieldName}</span>
+        <span className="replay-field-row-value">{valuePreview || "等待人工补录"}</span>
+      </span>
+      <span className="replay-field-row-meta">
+        <ReplayFieldRouteBadge field={field} />
+        <span>{field.status}</span>
+        <span>{evidenceText}</span>
+      </span>
+    </button>
+  );
+}
+
 function EvidenceReviewPanel({
-  tab,
+  tabs,
+  activeTab,
+  mode,
+  selectedField,
   replay,
   fields,
+  taskId,
+  reviewValues,
+  reviewComment,
+  isSubmittingReview,
+  onSelectTab,
+  onOpenEvidence,
+  onReviewValueChange,
+  onReviewCommentChange,
+  onSubmitReview,
   onClose,
 }: {
-  tab: EvidenceReviewTab;
+  tabs: EvidenceReviewTab[];
+  activeTab: EvidenceReviewTab | null;
+  mode: ReviewPanelMode | null;
+  selectedField: ReplayField | null;
   replay: TaskReplay;
   fields: ReplayField[];
+  taskId: string;
+  reviewValues: Record<string, unknown>;
+  reviewComment: string;
+  isSubmittingReview: boolean;
+  onSelectTab: (tabId: string) => void;
+  onOpenEvidence: (uri: string, label: string) => void;
+  onReviewValueChange?: (fieldName: string, value: unknown) => void;
+  onReviewCommentChange?: (value: string) => void;
+  onSubmitReview?: () => void;
   onClose: () => void;
 }) {
-  const evidenceText = getEvidenceText(replay.actions, tab.evidenceId);
+  const evidenceText = activeTab ? getEvidenceText(replay.actions, activeTab.evidenceId) : "";
+  const isFieldMode = mode === "field" && selectedField;
+  const isEvidenceMode = mode === "evidence" && activeTab;
   return (
-    <section className="replay-evidence-review-panel" aria-label="证据 Review 面板">
+    <section className="replay-evidence-review-panel" aria-label="Review 面板">
       <div className="replay-side-panel-header">
         <div>
           <div className="replay-side-panel-title">Review</div>
-          <div className="replay-side-panel-subtitle">{tab.label}</div>
+          <div className="replay-side-panel-subtitle">
+            {isFieldMode ? selectedField.fieldName : activeTab ? activeTab.label : `${tabs.length} evidence tab${tabs.length === 1 ? "" : "s"}`}
+          </div>
         </div>
         <Button type="button" variant="ghost" size="icon" aria-label="关闭 Review" onClick={onClose}>
           <X className="h-4 w-4" aria-hidden="true" />
         </Button>
       </div>
-      <div className="replay-evidence-uri">{tab.uri}</div>
-      <div className="replay-evidence-review-body">
-        <section className="replay-evidence-block" aria-label="证据内容">
-          <div className="replay-evidence-block-label">Evidence</div>
-          <p>{evidenceText || "当前证据只包含 URI，backend 未返回可直接展示的证据文本。"}</p>
-        </section>
-        {fields.length > 0 ? (
-          <section className="replay-evidence-field-list" aria-label="相关字段">
-            <div className="replay-evidence-block-label">Fields</div>
-            {fields.map((field) => (
-              <div key={field.sourceName} className="replay-evidence-field-row">
-                <span>{field.fieldName}</span>
-                <Badge variant={field.route === "reject" ? "destructive" : field.route === "review" ? "warning" : "secondary"}>
-                  {field.route ?? field.status}
-                </Badge>
-              </div>
-            ))}
+      {tabs.length > 0 ? (
+        <div className="replay-evidence-tabs" role="tablist" aria-label="Evidence tabs">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              id={`evidence-tab-${stableDomId(tab.id)}`}
+              type="button"
+              role="tab"
+              aria-selected={tab.id === activeTab?.id}
+              aria-controls={`evidence-panel-${stableDomId(tab.id)}`}
+              className={tab.id === activeTab?.id ? "replay-evidence-tab is-active" : "replay-evidence-tab"}
+              onClick={() => onSelectTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {isFieldMode ? (
+        <div className="replay-review-field-body" aria-label="字段展开详情">
+          <ReplayFieldWriteCard
+            field={selectedField}
+            reviewValue={
+              reviewValues[selectedField.sourceName] ??
+              selectedField.reviewField?.agent_value ??
+              stringifyValue(selectedField.value)
+            }
+            reviewComment={reviewComment}
+            isSubmittingReview={isSubmittingReview}
+            onOpenEvidence={(evidenceId) => onOpenEvidence(`evidence://${taskId}/${evidenceId}`, evidenceId)}
+            onReviewValueChange={onReviewValueChange}
+            onReviewCommentChange={onReviewCommentChange}
+            onSubmitReview={onSubmitReview}
+          />
+        </div>
+      ) : isEvidenceMode ? (
+        <div
+          id={`evidence-panel-${stableDomId(activeTab.id)}`}
+          role="tabpanel"
+          aria-labelledby={`evidence-tab-${stableDomId(activeTab.id)}`}
+          className="replay-evidence-review-body"
+        >
+          <div className="replay-evidence-uri">{activeTab.uri}</div>
+          <section className="replay-evidence-block" aria-label="证据内容">
+            <div className="replay-evidence-block-label">Evidence</div>
+            <p>{evidenceText || "当前证据只包含 URI，backend 未返回可直接展示的证据文本。"}</p>
           </section>
-        ) : null}
-      </div>
+          {fields.length > 0 ? (
+            <section className="replay-evidence-field-list" aria-label="相关字段">
+              <div className="replay-evidence-block-label">Fields</div>
+              {fields.map((field) => (
+                <div key={field.sourceName} className="replay-evidence-field-row">
+                  <span>{field.fieldName}</span>
+                  <Badge variant={field.route === "reject" ? "destructive" : field.route === "review" ? "warning" : "secondary"}>
+                    {field.route ?? field.status}
+                  </Badge>
+                </div>
+              ))}
+            </section>
+          ) : null}
+        </div>
+      ) : (
+        <div className="replay-evidence-empty">选择一个字段或 evidence 链接查看详情</div>
+      )}
     </section>
   );
 }
@@ -779,11 +908,9 @@ function EvidenceReasonText({
 function AgentToolLine({
   action,
   ok,
-  onClick,
 }: {
   action: ReplayAction;
   ok: boolean;
-  onClick: () => void;
 }) {
   const toolName = getActionType(action) || "tool";
   const summary = formatAgentToolSummary(action, ok);
@@ -792,8 +919,7 @@ function AgentToolLine({
   const ToolIcon = isReadTool ? Search : SquareTerminal;
   const lineText = [summary, ...meta].filter(Boolean).join(" · ");
   return (
-    <button
-      type="button"
+    <div
       className={[
         "replay-agent-tool-line",
         isReadTool ? "is-read-tool" : "",
@@ -801,11 +927,10 @@ function AgentToolLine({
       ].filter(Boolean).join(" ")}
       aria-label={`tool ${toolName}`}
       data-tool-icon={isReadTool ? "search" : "terminal"}
-      onClick={onClick}
     >
       <ToolIcon className="replay-agent-tool-icon" aria-hidden="true" />
       <span className="replay-agent-tool-summary">{lineText}</span>
-    </button>
+    </div>
   );
 }
 
@@ -838,7 +963,13 @@ function ReplayFieldWriteCard({
       onWheel={(event) => event.stopPropagation()}
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="replay-field-write-title">写入字段：{field.fieldName}</div>
+        <div>
+          <div className="replay-field-write-title">写入字段：{field.fieldName}</div>
+          <div className="replay-field-progress-meta">
+            <span>{field.status}</span>
+            {field.route ? <span>{field.route}</span> : null}
+          </div>
+        </div>
         {field.route ? <ReplayFieldRouteBadge field={field} /> : null}
       </div>
       <div className="replay-field-write-body" aria-label="字段写入内容">
@@ -1166,27 +1297,6 @@ function shouldDisplayAgentAction(action: ReplayAction): boolean {
   return getActionType(action) !== "anchors";
 }
 
-function getNextVisibleActionIndex(actions: ReplayAction[], currentIndex: number): number {
-  if (actions.length === 0) {
-    return 0;
-  }
-  for (let actionIndex = Math.min(currentIndex + 1, actions.length - 1); actionIndex < actions.length; actionIndex += 1) {
-    if (shouldDisplayAgentAction(actions[actionIndex])) {
-      return actionIndex;
-    }
-  }
-  for (let actionIndex = Math.min(currentIndex, actions.length - 1); actionIndex >= 0; actionIndex -= 1) {
-    if (shouldDisplayAgentAction(actions[actionIndex])) {
-      return actionIndex;
-    }
-  }
-  return clampActionIndex(actions, currentIndex);
-}
-
-function clampActionIndex(actions: ReplayAction[], actionIndex: number): number {
-  return Math.max(0, Math.min(actionIndex, Math.max(actions.length - 1, 0)));
-}
-
 function clampPanelWidth(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(value)));
 }
@@ -1424,6 +1534,18 @@ function getEvidenceIdFromUri(uri: string): string {
   }
 }
 
+function truncateText(value: string, maxLength: number): string {
+  const text = value.replace(/\s+/g, " ").trim();
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function stableDomId(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]+/g, "-");
+}
+
 function formatFieldDisplayValue(field: ReplayField): string {
   if (isTaggedEnumValue(field.value)) {
     return `${field.value.variant}${field.value.value === null ? "" : `: ${stringifyValue(field.value.value)}`}`;
@@ -1511,10 +1633,6 @@ function parseLooseJsonValue(raw: string): unknown {
   } catch {
     return raw;
   }
-}
-
-function isTerminalStatus(status: TaskSummary["status"] | string | undefined): boolean {
-  return status === "completed" || status === "failed" || status === "rejected";
 }
 
 function readObject(value: unknown): Record<string, unknown> | null {

@@ -5,13 +5,15 @@
 
 import { forwardBackendRequest } from "@/lib/backend-proxy";
 
+type FetcherMock = jest.Mock<Promise<Response>, Parameters<typeof fetch>>;
+
 it("会把 multipart 表单转发到 backend 目标路径", async () => {
   const formData = new FormData();
   formData.set("task_type", "civilized_dormitory");
   formData.set("task_spec", JSON.stringify({ task_name: "civilized_dormitory" }));
   formData.set("file", new File(["%PDF-1.4 fake"], "sample.pdf", { type: "application/pdf" }));
 
-  const fetcher = jest.fn(async () =>
+  const fetcher: FetcherMock = jest.fn(async (_input, _init) =>
     Response.json({ task_id: "task-001", status: "completed", stage: "done" })
   );
   const request = new Request("http://frontend.test/api/backend/tasks", {
@@ -39,7 +41,7 @@ it("会把 multipart 表单转发到 backend 目标路径", async () => {
 });
 
 it("会保留 backend 错误状态和 detail 响应", async () => {
-  const fetcher = jest.fn(async () =>
+  const fetcher: FetcherMock = jest.fn(async (_input, _init) =>
     Response.json({ detail: "task_spec is required" }, { status: 422 })
   );
   const request = new Request("http://frontend.test/api/backend/tasks", {
@@ -58,7 +60,7 @@ it("会保留 backend 错误状态和 detail 响应", async () => {
 });
 
 it("backend 不可达时会返回明确的 502 detail", async () => {
-  const fetcher = jest.fn(async () => {
+  const fetcher: FetcherMock = jest.fn(async (_input, _init) => {
     throw new TypeError("fetch failed");
   });
   const request = new Request("http://frontend.test/api/backend/capabilities");

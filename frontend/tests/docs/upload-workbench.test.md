@@ -1,30 +1,31 @@
 # `upload-workbench.test.tsx`
 
-这组测试覆盖前端上传工作台的第一版行为，使用注入的 `createTask` 和 `getTaskSummary` 函数隔离真实 backend。
+这组测试覆盖首页新的 Codex 式新任务界面。测试用注入的 `createTask`、`getTaskSummary` 和 `listTasks` 隔离真实 backend，只验证首页任务栏、居中新任务 composer 和 `task_spec` 提交流程的可观察行为。
 
 ## 测试链路
 
 ```text
-用户在上传工作台选择一个或多个 PDF
-  -> 顶部单个主题按钮可在 Codex Light/Dark 间切换
-  -> 主题切换会写入 `agent-gate.theme`，并同步到 html[data-theme]
-  -> 填写 task_type、task_spec JSON 和可选 metadata JSON
-  -> 前端先校验 JSON 必须是 object
-  -> 校验通过后用重复 files 字段组装 FormData
-  -> 调用 createTask
-  -> 创建成功后把任务写入右侧最近任务列表并显示处理中
-  -> 调用 getTaskSummary 轮询任务结果
-  -> summary 进入终态后右侧列表显示处理结果和 route/失败状态
+用户打开 /
+  -> 首页直接渲染 Codex New Chat 形态的新任务界面，不再显示旧上传工作台首屏
+  -> 左侧任务栏从 backend GET /tasks 加载最近任务
+  -> 中间区域显示居中的新任务标题和 composer，不展示正在执行的 Agent 文字流
+  -> 用户关闭左侧任务栏时，新任务界面仍然不自动显示右侧 Progress 或 Review
+  -> composer 通过纸夹按钮选择 PDF
+  -> 用户把 task_spec JSON 粘贴到对话框
+  -> 前端校验 task_spec 是 object 且 task_spec.task_name 非空
+  -> 用 task_spec.task_name 作为 backend 需要的 task_type
+  -> 用重复 files 字段和 task_spec 组装 FormData
+  -> POST /tasks 创建任务
+  -> 左侧任务栏立即显示处理中
+  -> 轮询 GET /tasks/{task_id} 后更新为处理结果
 ```
 
 ## 测试函数
 
-- `默认 task_spec 不预置字段`：验证上传工作台默认 JSON 只有空 `task_name` 和空 `fields`，不会把文明寝室或其他业务字段写死到前端。
-- `默认 task_type 为空且不展示内置类型提示`：验证 `task_type` 输入框没有默认值，也没有看起来像默认任务类型的 placeholder。
-- `上传工作台用一个按钮切换 Codex light/dark 主题`：验证上传工作台只提供一个主题按钮，点击后在 Light/Dark 间切换，同时更新 `html[data-theme]` 和 localStorage。
-- `非法 task_spec 会阻止提交并提示 JSON object 错误`：验证 `task_spec` 不是合法 JSON object 时不会调用创建接口，并在界面显示明确错误。
-- `合法 PDF 和 JSON 会构造 backend 需要的 FormData`：验证前端提交的 `FormData` 包含重复 `files`、`task_type`、`task_spec` 和 `metadata`，并在创建成功后回调新任务。
-- `创建任务后右侧列表先显示处理中，轮询完成后显示处理结果`：验证 `createTask` 返回 `pending/uploaded` 后，工作台不会等待 pipeline 完成或跳转详情页，而是立即把任务加到右侧列表；随后 `getTaskSummary` 返回 `completed/accept` 时，列表更新为“处理结果”和 route。
-- `启动时从 backend 任务列表加载数据库任务`：验证工作台挂载时会调用 backend 任务列表接口，把数据库中已有的任务同步到右侧最近任务栏，避免只显示当前浏览器 localStorage 里打开过的任务。
-- `轮询旧任务完成时不会把它移动到最新任务上方`：验证连续创建任务时最新任务保持在列表顶部；旧任务后续轮询完成只更新自己的状态，不会因为状态刷新重新置顶。
-- `能力边界会显示支持文件类型和 external task_spec 约束`：验证工作台会展示 backend 能力边界，提醒调用方必须显式传入 `task_spec`，标明支持多文件任务，并把前端提交接口说明为重复 `files` 字段而不是旧版单文件 `file` 字段。
+- `首页默认就是 Codex 式新任务界面，不再显示旧上传首屏`：验证首屏保留任务栏和居中新任务 composer，旧的“上传工作台/能力边界/task_type/metadata”界面以及执行态 Agent 文字流不存在。
+- `New Chat 关闭左侧任务栏后不自动显示右侧 Progress`：验证新任务界面关闭左侧任务栏后只保留中央 composer，不弹出右侧进度栏。
+- `启动时从 backend 任务列表加载左侧任务栏`：验证首页挂载后会从 backend 任务列表同步数据库任务到左侧任务栏。
+- `task_spec composer 会用 task_name 作为 task_type 并提交 PDF files`：验证 composer 提交时从 `task_spec.task_name` 推导 `task_type`，并用重复 `files` 字段发送多个 PDF。
+- `没有 PDF 或缺少 task_name 时不会创建任务`：验证创建任务前会拦截缺少 PDF 和缺少 `task_spec.task_name` 的输入。
+- `创建任务后左侧任务栏先显示处理中，轮询完成后显示处理结果`：验证新任务先进入左侧任务栏，轮询拿到终态后更新 route。
+- `主题切换仍在任务工作台顶部生效`：验证顶部单个主题按钮仍写入 `html[data-theme]` 和 localStorage。
