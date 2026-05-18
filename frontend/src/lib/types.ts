@@ -45,6 +45,7 @@ export interface TaskCreated {
   status: TaskStatus;
   stage: TaskStage;
   error_message?: string | null;
+  stream?: TaskStreamState;
 }
 
 export interface TaskSummary {
@@ -59,6 +60,12 @@ export interface TaskSummary {
   needs_review?: boolean;
   created_at?: string;
   updated_at?: string;
+  stream?: TaskStreamState;
+}
+
+export interface TaskStreamState {
+  state: "running" | "ended" | string;
+  last_event_seq: number;
 }
 
 export interface TaskList {
@@ -75,6 +82,7 @@ export interface TaskResultField {
   final_value: unknown;
   field_status?: string;
   route?: RouteDecision | null;
+  route_reason?: string | null;
   source?: "agent" | "human" | string | null;
   committed?: boolean;
 }

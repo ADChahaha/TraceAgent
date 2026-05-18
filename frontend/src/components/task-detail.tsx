@@ -6,11 +6,12 @@ import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 
 import {
+  listTasks as defaultListTasks,
   loadTaskDetail as defaultLoadTaskDetail,
   submitTaskReview as defaultSubmitReview
 } from "@/lib/api";
 import { stringifyValue } from "@/lib/json";
-import { updateRecentTask } from "@/lib/task-store";
+import { getRecentTasks, syncRecentTaskSummaries, updateRecentTask, type RecentTask } from "@/lib/task-store";
 import type {
   ReviewSubmitPayload,
   TaskDetailData,
@@ -24,6 +25,7 @@ export interface TaskDetailProps {
   taskId: string;
   initialSummary?: TaskSummary;
   loadTaskDetail?: (taskId: string) => Promise<TaskDetailData>;
+  listTasks?: () => Promise<TaskSummary[]>;
   submitReview?: (taskId: string, payload: ReviewSubmitPayload) => Promise<TaskSummary>;
 }
 
@@ -31,6 +33,7 @@ export function TaskDetail({
   taskId,
   initialSummary,
   loadTaskDetail = defaultLoadTaskDetail,
+  listTasks = defaultListTasks,
   submitReview = defaultSubmitReview
 }: TaskDetailProps) {
   const [detail, setDetail] = React.useState<TaskDetailData | null>(
@@ -43,13 +46,14 @@ export function TaskDetail({
   const [isLoading, setIsLoading] = React.useState(true);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [recentTasks, setRecentTasks] = React.useState<RecentTask[]>(() => getRecentTasks());
 
   const refresh = React.useCallback(async () => {
     setError(null);
     try {
       const loaded = await loadTaskDetail(taskId);
       setDetail(loaded);
-      updateRecentTask(loaded.summary);
+      setRecentTasks(updateRecentTask(loaded.summary));
       setReviewValues((current) => {
         if (!loaded.review) {
           return current;
@@ -74,6 +78,22 @@ export function TaskDetail({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void refresh();
   }, [refresh]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    listTasks()
+      .then((tasks) => {
+        if (!cancelled && tasks.length > 0) {
+          setRecentTasks(syncRecentTaskSummaries(tasks));
+        }
+      })
+      .catch(() => {
+        // 左侧任务栏可以继续使用本地缓存；详情加载错误由主流程暴露。
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [listTasks]);
 
   async function handleSubmitReview() {
     if (!detail?.review) {
@@ -150,6 +170,7 @@ export function TaskDetail({
           taskId={taskId}
           summary={summary}
           replay={detail.replay}
+          recentTasks={recentTasks}
           finalFields={detail.result?.fields ?? []}
           reviewFields={detail.review?.fields ?? []}
           reviewValues={reviewValues}
