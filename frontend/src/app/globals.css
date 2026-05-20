@@ -914,6 +914,47 @@ html[data-theme="dark"] .home-task-composer {
   word-break: break-word;
 }
 
+.replay-agent-reason-text p,
+.replay-agent-reason-text ul,
+.replay-agent-reason-text ol,
+.replay-agent-reason-text pre {
+  margin: 0;
+  color: inherit;
+}
+
+.replay-agent-reason-text > * + * {
+  margin-top: 8px;
+}
+
+.replay-agent-reason-text ul,
+.replay-agent-reason-text ol {
+  display: grid;
+  gap: 4px;
+  padding-left: 1.25rem;
+}
+
+.replay-agent-reason-text ul {
+  list-style: disc;
+}
+
+.replay-agent-reason-text ol {
+  list-style: decimal;
+}
+
+.replay-agent-reason-text strong {
+  color: var(--replay-foreground);
+  font-weight: 680;
+}
+
+.replay-agent-reason-text code {
+  border-radius: 4px;
+  background: var(--replay-tool-row);
+  color: var(--replay-foreground);
+  padding: 1px 4px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, ui-monospace, monospace;
+  font-size: 12px;
+}
+
 .replay-agent-stream {
   display: block;
   flex: 1 1 auto;

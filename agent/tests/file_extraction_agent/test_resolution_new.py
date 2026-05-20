@@ -145,6 +145,19 @@ def test_resolution_prompt_requires_parenthesized_markdown_evidence_links():
     assert "Do not write [evidence://...]" in tools["write_field"].description
 
 
+def test_resolution_prompt_asks_model_to_share_task_relevant_outline_after_tree():
+    messages = build_resolution_messages(_state())
+    system_content = messages[0].content
+
+    assert "After the first useful tree result" in system_content
+    assert "share a short user-facing reading map" in system_content
+    assert "Use Markdown bullets" in system_content
+    assert "not a complete directory dump" in system_content
+    assert "only include structure relevant to task_spec fields" in system_content
+    assert "The reading map explains your current plan; it does not lock the later reading order" in system_content
+    assert "Keep the reading map in the task_spec language" in system_content
+
+
 def test_resolution_messages_do_not_inline_initial_tree():
     messages = build_resolution_messages(_state())
     content = "\n\n".join(message.content for message in messages)

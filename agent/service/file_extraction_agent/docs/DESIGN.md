@@ -2,7 +2,7 @@
 
 本文记录 `file_extraction_agent` 当前的架构方向：把语义 HTML 暴露成只读虚拟文件树，让模型按用户给定 schema 从多文件文档中抽取字段，并用 paragraph 句子编号、list item 编号和 table row 编号做 inline 证据归因。
 
-本文不设计模型自由书写的 plan 或面向用户的计划叙事。
+本文不设计独立的 plan UI；面向用户的计划叙事只作为 `model_message` 进入现有 Agent 文字流。模型首次拿到有用的 `tree` 结构后，会用 `task_spec` 语言输出一小段 Markdown bullet 阅读地图，把和字段相关的文档结构共享给用户，但它不是完整目录，也不锁定后续阅读顺序。
 
 ## 核心思路
 
@@ -13,6 +13,7 @@
   -> 构建只读 semantic HTML virtual tree
   -> resolution 初始上下文只写入 task fields 和“先用 tree 导航”的指令，不内联任何 tree 正文
   -> 模型先调用 tree 展开目录，再用 read 浏览文件、章节和段落；模型可见 locator 统一显示为 `evidence://...`
+  -> 首次有用 tree 结果后，模型用 Markdown bullet 输出短阅读地图，只说明与 task_spec 字段有关的结构和下一步阅读方向
   -> 模型像人类读文档一样推进；assistant content 是按信息增量触发的用户可见进度更新，不是工具调用日志
   -> read 一次只打开一个 paragraph/list/table；需要继续看相邻内容时，模型必须再次调用 read
   -> read 调用前通常不说话；read 返回后如果内容有意义，下一轮用 task_spec 主语言自然概括看了什么、是否有价值
@@ -102,7 +103,7 @@ write_field(field_id, value, final_evidence, status?)  # final_evidence 必须�
 submit_result()
 ```
 
-系统 prompt 只保留全局约束：agent 身份和最终 `submit_result` 目标、第一轮工具调用前先用 `task_spec` 主语言写一句简短开场、assistant content 是给 reviewer 的进度更新而不是工具调用日志、单轮单工具调用节奏、`task_spec` 主语言输出，以及 `evidence://` locator 和 source citation 边界。`read`、`add_candidate_evidence`、`review_evidences`、`write_field`、`submit_result` 的具体参数、证据规则和何时值得输出进度更新写在各 tool description 中，并通过 LangGraph `bind_tools` 暴露给模型。这样模型在选择某个工具时能直接看到该工具的局部规则，例如 `read` 只能读取 tree 输出中 `.md/.list/.table` 文件对应的 evidence link，目录 evidence link 必须先用 `tree` 展开。
+系统 prompt 只保留全局约束：agent 身份和最终 `submit_result` 目标、第一轮工具调用前先用 `task_spec` 主语言写一句简短开场、首次有用 tree 后输出用户可读 Markdown 阅读地图、assistant content 是给 reviewer 的进度更新而不是工具调用日志、单轮单工具调用节奏、`task_spec` 主语言输出，以及 `evidence://` locator 和 source citation 边界。`read`、`add_candidate_evidence`、`review_evidences`、`write_field`、`submit_result` 的具体参数、证据规则和何时值得输出进度更新写在各 tool description 中，并通过 LangGraph `bind_tools` 暴露给模型。这样模型在选择某个工具时能直接看到该工具的局部规则，例如 `read` 只能读取 tree 输出中 `.md/.list/.table` 文件对应的 evidence link，目录 evidence link 必须先用 `tree` 展开。
 
 工具参数不再包含 `reason`。assistant content 不是每轮工具调用都必须输出的理由，也不是工具调用日志。除第一轮工具调用前固定先说一句开场外，后续按“最新观察是否改变 reviewer 的理解”动态决定：
 

@@ -824,6 +824,41 @@ it("点击 evidence 链接会打开顶层原文 tab，并定位高亮对应位�
   expect(screen.queryByLabelText("Inspector 面板")).not.toBeInTheDocument();
 });
 
+it("Agent model_message 用受控 Markdown 渲染面向用户的 outline", async () => {
+  const user = userEvent.setup();
+  const outlineDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      actions: [
+        modelMessage(
+          [
+            "我先把结构分成几块：",
+            "",
+            "- **募集概要**：确认 [募集人員](evidence://0001.0000.0001)",
+            "- `修士課程`：继续核对出愿条件"
+          ].join("\n")
+        )
+      ]
+    }
+  };
+  renderTaskDetail(outlineDetail);
+
+  const agentArea = await screen.findByLabelText("Agent 中间工作区");
+  expect(within(agentArea).getByText("募集概要", { selector: "strong" })).toBeInTheDocument();
+  expect(within(agentArea).getByText("修士課程", { selector: "code" })).toBeInTheDocument();
+  expect(within(agentArea).getAllByRole("listitem")).toHaveLength(2);
+
+  await user.click(within(agentArea).getByRole("link", { name: "募集人員" }));
+
+  const rightPanel = screen.getByLabelText("右侧 Review 工作栏");
+  expect(within(rightPanel).getByRole("tab", { name: "sample.pdf" })).toHaveAttribute("aria-selected", "true");
+  expect(getSourceFrameHtml(within(rightPanel).getByLabelText("原文查看器"))).toContain(
+    'id="0001.0000.0001" class="is-current-evidence" data-current-evidence="true"'
+  );
+  expect(within(agentArea).queryByText("evidence://0001.0000.0001")).not.toBeInTheDocument();
+});
+
 it("点击连续 block range evidence 链接会打开原文并高亮整段连续 block", async () => {
   const user = userEvent.setup();
   const evidenceDetail: TaskDetailData = {

@@ -23,6 +23,7 @@ import {
 import { stringifyValue } from "@/lib/json";
 import type { RecentTask } from "@/lib/task-store";
 import type { ReplayAction, TaskEvent, TaskReplay, TaskResultField, TaskSummary } from "@/lib/types";
+import { MarkdownEvidence } from "@/components/markdown-evidence";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
@@ -1010,9 +1011,11 @@ function ReviewWorkspacePanel({
                           className="replay-agent-turn replay-agent-message-turn"
                         >
                           <div className="replay-agent-message">
-                            <span className="replay-agent-reason-text">
-                              <EvidenceReasonText text={streamItem.reason} onOpenEvidence={onOpenEvidence} />
-                            </span>
+                            <MarkdownEvidence
+                              markdown={streamItem.reason}
+                              className="replay-agent-reason-text"
+                              onOpenEvidence={onOpenEvidence}
+                            />
                           </div>
                         </div>
                       );
@@ -1150,39 +1153,6 @@ function ReplayStatusBadge({ status }: { status: TaskSummary["status"] }) {
     return <Badge variant="destructive">{status}</Badge>;
   }
   return <Badge variant="secondary">{status}</Badge>;
-}
-
-function EvidenceReasonText({
-  text,
-  onOpenEvidence,
-}: {
-  text: string;
-  onOpenEvidence: (uri: string, label: string) => void;
-}) {
-  const parts = React.useMemo(() => parseEvidenceMarkdownLinks(text), [text]);
-  return (
-    <>
-      {parts.map((part, partIndex) => {
-        if (part.href) {
-          return (
-            <a
-              key={`${part.href}-${partIndex}`}
-              href={part.href}
-              className="replay-evidence-link"
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                onOpenEvidence(part.href ?? "", part.text);
-              }}
-            >
-              {part.text}
-            </a>
-          );
-        }
-        return <React.Fragment key={`${part.text}-${partIndex}`}>{part.text}</React.Fragment>;
-      })}
-    </>
-  );
 }
 
 function AgentToolLine({
@@ -2176,24 +2146,6 @@ function normalizeComparableText(value: string): string {
     .replace(/\s+/g, "")
     .trim()
     .toLowerCase();
-}
-
-function parseEvidenceMarkdownLinks(text: string): Array<{ text: string; href?: string }> {
-  const parts: Array<{ text: string; href?: string }> = [];
-  const linkPattern = /\[([^\]]+)\]\((evidence:\/\/[^)\s]+)\)/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = linkPattern.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push({ text: text.slice(lastIndex, match.index) });
-    }
-    parts.push({ text: match[1], href: match[2] });
-    lastIndex = match.index + match[0].length;
-  }
-  if (lastIndex < text.length) {
-    parts.push({ text: text.slice(lastIndex) });
-  }
-  return parts.length > 0 ? parts : [{ text }];
 }
 
 function getEvidenceIdFromUri(uri: string): string {

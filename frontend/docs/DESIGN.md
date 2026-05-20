@@ -149,6 +149,7 @@ frontend/
   -> Replay stage 在窄视口也保持左栏 / Agent / 右侧 Review 的列布局，不把右侧 Review 原文栏堆到 Agent 下方
   -> 顶部工具栏左侧展示任务栏 toggle 和任务标题，右侧展示任务 status badge 和 Review 图标按钮，当前文件名只出现在右侧 Review 工作栏的文件 tab
   -> Agent 工具调用先按 action 顺序过滤掉 anchors/submit_result；空的 model_message 不进入文字流，非空 model_message 只作为文字段展示，不作为 tool 行；真实 tool 不包含也不消费 reason，连续 tool 直接按 run 折叠
+  -> Agent model_message 作为受控 Markdown 渲染，只支持段落、列表、加粗、行内 code 和 `[label](evidence://...)`；这样模型可以在首次 tree 后输出面向用户的阅读地图，同时 evidence 链接仍按原规则打开右侧原文
   -> Agent 文字流根据用户当前位置决定是否跟随 liveActions：用户已经在底部时追加输出会继续滚到最新底部，用户离开底部阅读旧内容时保持当前 scrollTop；只有用户点击 evidence/read/add_candidate_evidence 打开原文时，右侧 iframe 才滚到对应原文节点
   -> 每个 tool run 如果只有 1 个 tool 就保持直出；如果连续包含多个 tool，就整组默认折叠成 tool group，不会先直出第一条 tool；用户手动展开后，同一组里后续 live tool 继续追加时保持展开，不会因为组内数量变化重新折叠
   -> tool group 折叠态显示一条类似 Codex 的自然语言摘要，概括这一段做了什么、涉及多少个文件/证据/字段；展开后恢复每个 tool 的单行明细

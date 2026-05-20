@@ -4,6 +4,8 @@ import * as React from "react";
 
 interface MarkdownEvidenceProps {
   markdown: string;
+  className?: string;
+  onOpenEvidence?: (uri: string, label: string) => void;
 }
 
 type MarkdownBlock =
@@ -14,21 +16,25 @@ type MarkdownBlock =
   | { type: "table"; headers: string[]; rows: string[][] }
   | { type: "code"; code: string };
 
-export function MarkdownEvidence({ markdown }: MarkdownEvidenceProps) {
+export function MarkdownEvidence({ markdown, className, onOpenEvidence }: MarkdownEvidenceProps) {
   const blocks = parseMarkdownBlocks(markdown);
   return (
-    <div className="space-y-3 text-sm leading-6 text-foreground">
-      {blocks.map((block, index) => renderBlock(block, index))}
+    <div className={className ?? "space-y-3 text-sm leading-6 text-foreground"}>
+      {blocks.map((block, index) => renderBlock(block, index, onOpenEvidence))}
     </div>
   );
 }
 
-function renderBlock(block: MarkdownBlock, index: number) {
+function renderBlock(
+  block: MarkdownBlock,
+  index: number,
+  onOpenEvidence?: (uri: string, label: string) => void
+) {
   if (block.type === "heading") {
     const Tag = (`h${Math.min(block.level + 1, 6)}`) as keyof React.JSX.IntrinsicElements;
     return (
       <Tag key={index} className="text-sm font-semibold text-foreground">
-        {renderInline(block.text)}
+        {renderInline(block.text, onOpenEvidence)}
       </Tag>
     );
   }
@@ -36,7 +42,7 @@ function renderBlock(block: MarkdownBlock, index: number) {
   if (block.type === "paragraph") {
     return (
       <p key={index} className="whitespace-pre-wrap text-muted-foreground">
-        {renderInline(block.lines.join("\n"))}
+        {renderInline(block.lines.join("\n"), onOpenEvidence)}
       </p>
     );
   }
@@ -45,7 +51,7 @@ function renderBlock(block: MarkdownBlock, index: number) {
     return (
       <ul key={index} className="list-disc space-y-1 pl-5 text-muted-foreground">
         {block.items.map((item, itemIndex) => (
-          <li key={`${item}-${itemIndex}`}>{renderInline(item)}</li>
+          <li key={`${item}-${itemIndex}`}>{renderInline(item, onOpenEvidence)}</li>
         ))}
       </ul>
     );
@@ -55,7 +61,7 @@ function renderBlock(block: MarkdownBlock, index: number) {
     return (
       <ol key={index} className="list-decimal space-y-1 pl-5 text-muted-foreground">
         {block.items.map((item, itemIndex) => (
-          <li key={`${item}-${itemIndex}`}>{renderInline(item)}</li>
+          <li key={`${item}-${itemIndex}`}>{renderInline(item, onOpenEvidence)}</li>
         ))}
       </ol>
     );
@@ -69,7 +75,7 @@ function renderBlock(block: MarkdownBlock, index: number) {
             <tr>
               {block.headers.map((header, headerIndex) => (
                 <th key={`${header}-${headerIndex}`} className="border-b border-border px-3 py-2 font-medium">
-                  {renderInline(header)}
+                  {renderInline(header, onOpenEvidence)}
                 </th>
               ))}
             </tr>
@@ -79,7 +85,7 @@ function renderBlock(block: MarkdownBlock, index: number) {
               <tr key={rowIndex} className="border-t border-border">
                 {block.headers.map((_header, cellIndex) => (
                   <td key={cellIndex} className="px-3 py-2 align-top text-foreground">
-                    {renderInline(row[cellIndex] ?? "")}
+                    {renderInline(row[cellIndex] ?? "", onOpenEvidence)}
                   </td>
                 ))}
               </tr>
@@ -267,7 +273,10 @@ function splitTableCells(line: string): string[] {
     .map((cell) => cell.trim());
 }
 
-function renderInline(text: string): React.ReactNode[] {
+function renderInline(
+  text: string,
+  onOpenEvidence?: (uri: string, label: string) => void
+): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
   let cursor = 0;
 
@@ -276,6 +285,34 @@ function renderInline(text: string): React.ReactNode[] {
       nodes.push(<br key={nodes.length} />);
       cursor += 1;
       continue;
+    }
+
+    if (text.startsWith("[", cursor)) {
+      const linkMatch = /^\[([^\]]+)\]\((evidence:\/\/[^)\s]+)\)/.exec(text.slice(cursor));
+      if (linkMatch) {
+        const label = linkMatch[1];
+        const href = linkMatch[2];
+        nodes.push(
+          <a
+            key={nodes.length}
+            href={href}
+            className="replay-evidence-link"
+            onClick={
+              onOpenEvidence
+                ? (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onOpenEvidence(href, label);
+                  }
+                : undefined
+            }
+          >
+            {label}
+          </a>
+        );
+        cursor += linkMatch[0].length;
+        continue;
+      }
     }
 
     if (text.startsWith("`", cursor)) {
@@ -313,7 +350,7 @@ function renderInline(text: string): React.ReactNode[] {
 }
 
 function findNextSpecial(text: string, start: number): number {
-  const indexes = ["\n", "`", "**"]
+  const indexes = ["\n", "[", "`", "**"]
     .map((token) => text.indexOf(token, start))
     .filter((index) => index >= 0);
   return indexes.length > 0 ? Math.min(...indexes) : text.length;

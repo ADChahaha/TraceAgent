@@ -27,6 +27,7 @@
   -> tool group 折叠态显示一条类似 Codex 的自然语言摘要，概括这一段做了什么、涉及多少个文件/证据/字段，不再拼接工具动作摘要
   -> 工具行使用短英文动作摘要和轻量语义图标：ListTree、BookUser、BookmarkPlus、FileCheck、PenLine；tree 只显示 Viewed outline，read 只显示 Read passage，submit_result 不进入文字流
   -> Agent model_message 中的 `[文本](evidence://...)` 被点击时打开右侧对应文件的完整原文 tab，路径式 selector 和点号 locator 都会跳到对应原文节点并高亮，不替换中央 Agent 工作区
+  -> Agent model_message 使用受控 Markdown 渲染段落、列表、加粗、行内 code 和 evidence 链接，让模型输出的阅读地图可以直接给用户看
   -> 切回或关闭原文 tab 后，右侧 `Review` 在已打开的右侧栏内恢复字段 Progress
   -> 中央 Agent 文字流和底部 composer 使用同一动态内容框；整页没有侧栏或只有一个侧栏时内容框用 `弹性留白 / 阅读列 / 弹性留白`，中间区变窄时先连续压缩两侧留白，留白归零后才压缩阅读列本身
   -> 中间 Agent 区底部保留对话输入框，左下角加文件，右下角发送
@@ -52,6 +53,7 @@
 - `顶部最右侧 Review 按钮打开右侧字段 Progress，字段列表只按字段排序`：验证右上角 Review 图标按钮在不改变左栏状态的情况下显式打开右侧 Review 工作栏，展示字段 Progress，并可再次点击关闭。
 - `字段 Progress 显示字段摘要，点击字段不会占用 Review 工作区`：验证字段 summary 留在 Progress 行里，点击字段只改变选中态，不打开 Inspector 或固定子 tab。
 - `点击 evidence 链接会打开顶层原文 tab，并定位高亮对应位置`：验证 evidence:// 链接会在右侧 Review 工作栏打开对应文件的完整原文 tab，渲染 replay.display_html 的全文，跳到对应原文节点并高亮，同时不展示字段值、证据文本、原文位置或内部 evidence URI 等实现字段，并保留中央 Agent 工作区。
+- `Agent model_message 用受控 Markdown 渲染面向用户的 outline`：验证模型输出的阅读地图会在 Agent 流里渲染成 Markdown 列表、加粗和行内 code，同时其中的标准 evidence 链接仍能打开右侧原文并高亮对应 block。
 - `点击连续 block range evidence 链接会打开原文并高亮整段连续 block`：验证 `evidence://range/<start>/<end>` 会按 `start` 所属文件打开原文 tab，把 `start` 作为滚动定位点，并同时高亮这段连续 block。
 - `原文文件 tab 只显示解码后的文件名，原文内容上方不再重复文件标题`：验证带目录的文件名只在右侧 tab 显示解码后的 basename，`%20` 会显示成空格，并且原文 iframe 上方不再额外渲染重复标题栏。
 - `点号 evidence URI 会打开原文文件 tab 并映射到真实 DOM 位置`：验证真实任务里的 `evidence://0001.0000.0009` 这类 locator 会先查 replay 里的 `source_selectors`，再高亮 replay HTML 里同名虚拟 path_id DOM 节点，打开同一份原文文件 tab。
