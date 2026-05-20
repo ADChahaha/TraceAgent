@@ -35,10 +35,11 @@ class UploadedFilePayload:
 
 
 class _ReplayDisplayHtmlSanitizer(HTMLParser):
-    def __init__(self):
+    def __init__(self, source_id_replacements: dict[str, str] | None = None):
         super().__init__(convert_charrefs=False)
         self.parts: list[str] = []
         self.skip_depth = 0
+        self.source_id_replacements = source_id_replacements or {}
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if self.skip_depth > 0:
@@ -47,12 +48,18 @@ class _ReplayDisplayHtmlSanitizer(HTMLParser):
         if _is_replay_chrome_attrs(attrs):
             self.skip_depth = 1
             return
-        self.parts.append(self.get_starttag_text() or _format_start_tag(tag, attrs))
+        replaced_attrs, changed = _replace_replay_source_attrs(attrs, self.source_id_replacements)
+        self.parts.append(_format_start_tag(tag, replaced_attrs) if changed else self.get_starttag_text() or _format_start_tag(tag, attrs))
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if self.skip_depth > 0 or _is_replay_chrome_attrs(attrs):
             return
-        self.parts.append(self.get_starttag_text() or _format_start_tag(tag, attrs, self_closing=True))
+        replaced_attrs, changed = _replace_replay_source_attrs(attrs, self.source_id_replacements)
+        self.parts.append(
+            _format_start_tag(tag, replaced_attrs, self_closing=True)
+            if changed
+            else self.get_starttag_text() or _format_start_tag(tag, attrs, self_closing=True)
+        )
 
     def handle_endtag(self, tag: str) -> None:
         if self.skip_depth > 0:
@@ -88,8 +95,8 @@ class _ReplayDisplayHtmlSanitizer(HTMLParser):
         return "".join(self.parts)
 
 
-def sanitize_replay_display_html(display_html: str) -> str:
-    parser = _ReplayDisplayHtmlSanitizer()
+def sanitize_replay_display_html(display_html: str, source_id_replacements: dict[str, str] | None = None) -> str:
+    parser = _ReplayDisplayHtmlSanitizer(source_id_replacements=source_id_replacements)
     parser.feed(display_html)
     parser.close()
     return _sanitize_replay_display_css(parser.get_html())
@@ -117,12 +124,87 @@ def _format_start_tag(tag: str, attrs: list[tuple[str, str | None]], *, self_clo
     return f"<{tag}{attr_text}{closing}>"
 
 
+def _replace_replay_source_attrs(
+    attrs: list[tuple[str, str | None]],
+    source_id_replacements: dict[str, str],
+) -> tuple[list[tuple[str, str | None]], bool]:
+    if not source_id_replacements:
+        return attrs, False
+    changed = False
+    next_attrs: list[tuple[str, str | None]] = []
+    replacement_for_element = ""
+    has_data_element_id = False
+    for name, value in attrs:
+        lower_name = name.lower()
+        if lower_name == "data-element-id":
+            has_data_element_id = True
+        replacement = source_id_replacements.get(value or "") if lower_name in {"id", "data-element-id"} else None
+        if replacement:
+            next_attrs.append((name, replacement))
+            replacement_for_element = replacement
+            changed = True
+            continue
+        next_attrs.append((name, value))
+    if replacement_for_element and not has_data_element_id:
+        next_attrs.append(("data-element-id", replacement_for_element))
+        changed = True
+    return next_attrs, changed
+
+
 def _sanitize_replay_display_css(html: str) -> str:
-    return re.sub(
-        r"[^{}]*\.(?:page-number|block-page_footer|block-page_header)[^{]*\{[^{}]*\}",
-        "",
-        html,
-        flags=re.IGNORECASE,
+    output: list[str] = []
+    cursor = 0
+    lower_html = html.lower()
+    while True:
+        style_start = lower_html.find("<style", cursor)
+        if style_start == -1:
+            output.append(html[cursor:])
+            break
+        style_open_end = lower_html.find(">", style_start)
+        if style_open_end == -1:
+            output.append(html[cursor:])
+            break
+        style_close = lower_html.find("</style>", style_open_end + 1)
+        if style_close == -1:
+            output.append(html[cursor:])
+            break
+
+        output.append(html[cursor:style_open_end + 1])
+        output.append(_sanitize_replay_css_rules(html[style_open_end + 1:style_close]))
+        output.append(html[style_close:style_close + len("</style>")])
+        cursor = style_close + len("</style>")
+    return "".join(output)
+
+
+def _sanitize_replay_css_rules(css: str) -> str:
+    output: list[str] = []
+    cursor = 0
+    css_length = len(css)
+    while cursor < css_length:
+        open_brace = css.find("{", cursor)
+        if open_brace == -1:
+            output.append(css[cursor:])
+            break
+        close_brace = css.find("}", open_brace + 1)
+        if close_brace == -1:
+            output.append(css[cursor:])
+            break
+
+        selector_start = cursor
+        selector = css[selector_start:open_brace]
+        if _is_replay_chrome_css_selector(selector):
+            output.append(css[cursor:selector_start])
+        else:
+            output.append(css[cursor:close_brace + 1])
+        cursor = close_brace + 1
+    return "".join(output)
+
+
+def _is_replay_chrome_css_selector(selector: str) -> bool:
+    normalized = selector.lower()
+    return any(
+        class_name in normalized
+        for class_name in (".page-number", ".block-page_footer", ".block-page_header")
     )
 
 
@@ -343,6 +425,13 @@ class TaskService:
             self.connection,
             task_id,
         )
+        live_source_index = self._latest_live_source_index(task_id)
+        raw_source_selectors = trace_payload.get("source_selectors") or live_source_index.get("source_selectors") or {}
+        source_selectors = {
+            path_id: path_id
+            for path_id, source_id in raw_source_selectors.items()
+            if isinstance(path_id, str) and isinstance(source_id, str) and path_id and source_id
+        } if isinstance(raw_source_selectors, dict) else {}
         return {
             "task_id": task["id"],
             "status": task["status"],
@@ -354,11 +443,11 @@ class TaskService:
                 }
                 for document in documents
             ],
-            "display_html": self._build_replay_display_html(agent_stage_runs),
-            "outline_tree": trace_payload.get("document_tree") or [],
-            "source_selectors": trace_payload.get("source_selectors") or {},
+            "display_html": self._build_replay_display_html(agent_stage_runs, source_selectors=raw_source_selectors),
+            "outline_tree": trace_payload.get("document_tree") or live_source_index.get("document_tree") or [],
+            "source_selectors": source_selectors,
             "broad_plan": trace_payload.get("broad_plan"),
-            "actions": trace_payload.get("actions") or [],
+            "actions": self._serialize_replay_actions(trace_payload.get("actions") or []),
             "result": result_payload,
             "field_states": trace_payload.get("field_states") or {},
             "audit": {},
@@ -407,6 +496,34 @@ class TaskService:
             "payload": loads_json(event["payload_json"], {}),
             "created_at": event["created_at"],
         }
+
+    def _serialize_replay_actions(self, actions: Any) -> list[Any]:
+        if not isinstance(actions, list):
+            return []
+        serialized: list[Any] = []
+        for action in actions:
+            if isinstance(action, dict):
+                serialized.append({key: value for key, value in action.items() if key != "reason"})
+            else:
+                serialized.append(action)
+        return serialized
+
+    def _latest_live_source_index(self, task_id: str) -> dict[str, Any]:
+        source_index: dict[str, Any] = {}
+        for event in task_events_crud.list_task_events(
+            self.connection,
+            task_id=task_id,
+            after_sequence=0,
+        ):
+            if event["event_type"] != "agent.event":
+                continue
+            payload = loads_json(event["payload_json"], {})
+            if payload.get("type") != "source_indexed":
+                continue
+            result = payload.get("result")
+            if isinstance(result, dict):
+                source_index = result
+        return source_index
 
     def _emit_task_event(
         self,
@@ -513,7 +630,8 @@ class TaskService:
             "metadata": extraction_metadata,
             "run_options": None,
         }
-        extraction_result = self.agent_client.extract_fields(
+        extraction_result = self._extract_fields_with_agent_events(
+            task_id=task_id,
             html=document_bundle["html"],
             task_spec=task_spec,
             run_options=None,
@@ -700,6 +818,65 @@ class TaskService:
             "html": html,
             "metadata": metadata,
             "next_trace_sequence": next_trace_sequence,
+        }
+
+    def _extract_fields_with_agent_events(
+        self,
+        *,
+        task_id: str,
+        html: str,
+        task_spec: dict[str, Any],
+        run_options: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        extract_stream = getattr(self.agent_client, "extract_fields_stream", None)
+        if not callable(extract_stream):
+            return self.agent_client.extract_fields(
+                html=html,
+                task_spec=task_spec,
+                run_options=run_options,
+            )
+
+        result_completed: dict[str, Any] | None = None
+        for event in extract_stream(
+            html=html,
+            task_spec=task_spec,
+            run_options=run_options,
+        ):
+            if not isinstance(event, dict):
+                continue
+            self._emit_agent_stream_event(task_id=task_id, event=event)
+            if event.get("type") == "result_completed":
+                result_completed = event
+
+        if result_completed is None:
+            raise AgentServiceError("file_extraction_agent stream ended without result_completed")
+        return self._extract_result_from_stream_event(result_completed)
+
+    def _emit_agent_stream_event(self, *, task_id: str, event: dict[str, Any]) -> None:
+        event_type = str(event.get("type") or "agent.event")
+        if event_type == "result_completed":
+            return
+        payload = {
+            "agent": "file_extraction_agent",
+            "type": event_type,
+            "tool": event.get("tool") or event.get("tool_name"),
+            "content": event.get("content"),
+            "args": event.get("args"),
+            "result": event.get("result"),
+        }
+        self._emit_task_event(
+            self.get_task_or_raise(task_id),
+            event_type="agent.event",
+            payload={key: value for key, value in payload.items() if value is not None},
+            now=utc_now(),
+        )
+
+    def _extract_result_from_stream_event(self, event: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "status": event.get("status") or "completed",
+            "failure_reason": event.get("failure_reason"),
+            "result": event.get("result") or {},
+            "trace": event.get("trace") or {},
         }
 
     def _save_extraction_result(
@@ -1035,7 +1212,17 @@ class TaskService:
             "finished_at": stage_run["finished_at"],
         }
 
-    def _build_replay_display_html(self, stage_runs: list[dict[str, Any]]) -> str:
+    def _build_replay_display_html(
+        self,
+        stage_runs: list[dict[str, Any]],
+        *,
+        source_selectors: dict[str, Any] | None = None,
+    ) -> str:
+        source_id_replacements = {
+            source_id: path_id
+            for path_id, source_id in (source_selectors or {}).items()
+            if isinstance(path_id, str) and isinstance(source_id, str) and path_id and source_id
+        }
         html_parts: list[str] = []
         for stage_run in stage_runs:
             if stage_run["agent_name"] != "document_processor":
@@ -1043,7 +1230,7 @@ class TaskService:
             response = loads_json(stage_run["response_json"], {})
             display_html = response.get("display_html") or response.get("html")
             if isinstance(display_html, str) and display_html.strip():
-                html_parts.append(sanitize_replay_display_html(display_html))
+                html_parts.append(sanitize_replay_display_html(display_html, source_id_replacements=source_id_replacements))
         return "\n\n".join(html_parts)
 
     def _serialize_trace_steps(

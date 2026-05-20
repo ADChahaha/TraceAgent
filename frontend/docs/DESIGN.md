@@ -20,11 +20,14 @@
   -> composer 用纸夹选择 PDF，把 textarea 中的 task_spec JSON 作为任务定义
   -> 前端校验 task_spec 是 object 且 task_spec.task_name 非空，用 task_spec.task_name 推导 backend task_type
   -> POST /tasks 返回 task_id 后写入左侧任务栏并轮询 GET /tasks/{task_id}
+  -> HomeWorkspace 收到 created task 后立即跳转到 /tasks/{task_id}
   -> 用户点击左侧任务进入 /tasks/{task_id}
-  -> TaskDetail 读取 summary/result/replay
-  -> ReplayReview 展示原顶部工具栏、左侧任务栏、中间 Agent 流和右侧 Review 工作栏
+  -> TaskDetail 读取 summary/result/replay；处理中任务即使 has_trace=false 也会尝试读取 partial replay，让 document_processor 已产出的原文可以先显示
+  -> TaskDetail 如果任务仍在 pending/processing 或 stream.state=running，每次进入或刷新详情页都会从 after_seq=0 打开 GET /tasks/{task_id}/events 的 EventSource，前端用事件 seq 去重并重建完整 live 流；没有 replay 时也渲染常规 Agent 工作区并显示 `Thinking`
+  -> backend SSE 的命名事件会被 TaskDetail 直接消费，`agent.event` 先追加到 liveActions 实时渲染；ReplayReview 只把非空 model_message 和 tool_completed/tool_failed 转成可见 live action，tool_started/source_indexed 不进入 Agent 流；partial replay.actions 与 liveActions 会按 seq 和工具参数指纹合并，避免刷新从头重放时同一工具在 replay、started、completed 之间重复显示，同时保证已有 partial replay 时后续 read/write_field 仍会实时进入 Agent 流和字段 Progress；收到 `source_indexed` 后刷新 partial replay，终态事件再刷新 detail 收口
+  -> ReplayReview 展示原顶部工具栏、左侧任务栏、中间 Agent 流和可由右上角按钮打开的右侧 Review 工作栏
   -> 字段 Progress 只按字段名排序展示紧凑字段列表，只负责导航和状态，不再展示 route 结论或人工编辑入口
-  -> 用户点击字段 Progress 里的字段行时只在 Progress 内选中并查看字段摘要；用户点击 evidence://、read 或 add_candidate_evidence 时，在右侧 Review 工作栏按文件打开完整原文 tab，通过 replay.source_selectors 的 path_id -> DOM id 映射跳到对应原文节点并高亮
+  -> 用户点击字段 Progress 里的字段行时只在 Progress 内选中并查看字段摘要；用户点击 evidence://、read 或 add_candidate_evidence 时，在右侧 Review 工作栏按文件打开完整原文 tab，通过 replay.source_selectors 确认可定位的 path_id，再用 replay.display_html 中同名虚拟 path_id DOM id 跳到对应原文节点并高亮
   -> 刷新任务详情，并用最新 summary 回写最近任务列表
 ```
 
@@ -105,8 +108,9 @@ frontend/
   -> FormData 重复追加 files，写入 task_spec，并把 task_spec.task_name trim 后写为 task_type
   -> 不再提交 metadata 字段，也不再显示 task_type 独立输入框
   -> createTask POST /tasks 成功后 addRecentTask 立即更新左侧任务栏
+  -> HomeWorkspace 通过 onCreated 调用 Next router 跳到 /tasks/{task_id}
   -> refreshTaskSummary 轮询 GET /tasks/{task_id}，直到 completed/failed 后停止
-  -> 用户点击 task_id 进入 /tasks/{task_id}
+  -> 左侧任务栏仍允许用户点击任意 task_id 进入 /tasks/{task_id}
 ```
 
 任务详情流程：
@@ -116,29 +120,35 @@ frontend/
   -> TaskDetail 调用 loadTaskDetail(task_id)
   -> 先 GET /tasks/{task_id} 读取 summary
   -> summary.has_result 不是 false 时读取 result
-  -> summary.has_result 或 summary.has_trace 不是 false 时读取 replay
+  -> summary.has_result 或 summary.has_trace 不是 false 时读取 replay；如果任务仍在 running/pending/processing，也读取 replay 以拿到 partial display_html 和 live source_selectors
+  -> 如果 summary 仍未终态，TaskDetail 在进入或刷新详情页时固定用 after_seq=0 打开 GET /tasks/{task_id}/events，让 backend 从头重放当前任务事件；内部游标只记录已见最大 seq，ReplayReview 再按 seq 合并 replay.actions 和 liveActions 去重
+  -> TaskDetail 同时监听 `task.stage_changed`、`agent.event`、`task.completed`、`task.failed` 等 backend SSE 命名事件；内部游标随事件 seq 前进，但不会因为每条 live event 重建 EventSource
+  -> ReplayReview 把 replay.actions 和 liveActions 转成同一条 action 流，优先保留 replay.actions，再追加 replay 中没有同 seq、也没有同工具参数指纹的 live action；因此刷新重放不会把同一工具显示两三次，字段 Progress 仍会随着新的 live write_field / set_field 即时更新，不等终态 result
+  -> replay 仍为空且任务未终态时，ReplayReview 仍渲染常规任务工作台；中央 Agent 流显示 `Thinking`，后续 `agent.event` 会作为 liveActions 追加显示；如果 replay 已有 display_html 但 actions 仍为空，也继续显示 `Thinking`
+  -> 如果当前浏览器环境没有可用事件流或暂时还没有 liveActions，TaskDetail 保留 1.5 秒轮询作为兜底，直到 replay/result 可用
   -> 如果 summary.status=failed 且带有 error_message，在详情页顶部展示失败原因
   -> 页面不渲染 result/trace/audit Tabs，只渲染 ReplayReview
   -> TaskDetail 让 replay 作为整页全屏工作台渲染，跳出根布局的最大宽度和页面 padding
   -> TaskDetail 同步 GET /tasks 和 localStorage 最近任务，作为工作台左侧任务栏数据
   -> ReplayReview 使用 Codex 式任务工作台：原顶部工具栏、左侧任务栏、中央 Agent 文字流和右侧 Review 工作栏
-  -> 顶部工具栏不承载 `Review` 文件 tab 或当前文件名，只保留左侧任务栏 toggle、任务标题和右侧 status badge
+  -> 顶部工具栏不承载 `Review` 文件 tab 或当前文件名，只保留左侧任务栏 toggle、任务标题、右侧 status badge 和一个最右侧图标按钮用于开关右侧 Review 工作栏
   -> 右侧 Review 工作栏内部有文件式动态 tab，默认 tab 是 `Review`；证据链接和可定位工具行会在这里追加原文 tab
   -> 默认状态是左侧任务栏 + 中央 Agent 工作区；左侧任务栏只由用户点击顶部左侧 toggle 手动开关
-  -> 在任务详情页，左侧任务栏打开时自动隐藏右侧 Review 工作栏；左侧任务栏关闭且当前仍在 `Review` 时自动显示字段 Progress
+  -> 右侧 Review 工作栏只由用户点击顶部最右侧图标按钮显式开关，或者由 evidence://、read、add_candidate_evidence 这类可定位入口自动打开；关闭左侧任务栏不会自动显示右侧 Review 工作栏
   -> 字段 Progress 是靠中间的右侧竖栏，主体是按字段名排序的紧凑字段列表：每行展示字段名、field status、短值、字段 summary 和证据数量
   -> 字段 Progress 不承载展开区，也不打开独立 Inspector；点击字段行只更新 Progress 内的选中态
   -> Agent 输出中的 Markdown 证据链接 `[文本](evidence://...)` 会阻止默认跳转，在右侧 Review 工作栏打开或切换对应文件的完整原文 tab
-  -> read 和 add_candidate_evidence 工具行如果能解析到证据定位，会以 evidence href 的链接式工具行呈现，点击时复用同一套右侧原文 tab 打开逻辑
+  -> read 和 add_candidate_evidence 工具行如果能解析到证据定位，会以 evidence href 的链接式工具行呈现，点击时复用同一套右侧原文 tab 打开逻辑；工具参数里的裸虚拟 path_id，例如 `0001.0000.0001`，会先规范成 `evidence://0001.0000.0001`
   -> 原文 tab 按 task_id 和文件隔离保存，tab 标题只显示解码后的 basename 文件名，不显示目录、URL 编码或 `%20`；同一文件只存在一个 tab，点击同一文件里的不同证据只更新该文件 tab 的 evidence selector 并重新定位高亮，多文件才打开多个文件 tab
   -> 原文查看器主体只显示完整原文渲染，不在 iframe 上方重复显示文件标题；原文内容按右侧框体 100% 宽度铺满重排，去掉纸张式灰底、外层留白、圆角和阴影，长表格、媒体、长词和预格式文本都收进框内，不保留固定纸面宽度或横向滚动条
-  -> 原文 tab 用 iframe 隔离渲染 replay.display_html 的完整文档，先用 replay.source_selectors 把 `evidence://0000.0001.0009` 这类虚拟 path_id 映射成原文 DOM id，再滚动到该节点并高亮；旧 replay 没有映射时只用工具返回文本做兜底匹配，不把点号 locator 硬算成 `p001_b009` 这类 DOM id；用户点击 Markdown 短 quote 链接时在定位到的原文块内部只高亮 quote 文本本身，工具行等 block 级点击才高亮整块；界面不展示内部 evidence URI、selector、字段映射或实现细节
+  -> 原文 tab 用 iframe 隔离渲染 replay.display_html 的完整文档；backend 已把可读 block 的 DOM id 改写成虚拟 path_id，前端只在 replay.source_selectors 明确包含该 path_id 时滚动并高亮，例如 `evidence://0001.0000.0009` 只定位到 `id="0001.0000.0009"`；旧 replay 没有 source_selectors 时只打开原文文件 tab，不做 DOM id 或文本匹配兜底；用户点击 Markdown 短 quote 链接时也必须先有 source_selectors 定位到 block，才会在该 block 内部高亮 quote 文本本身；界面不展示内部 evidence URI、selector、字段映射或实现细节
   -> 中央 Agent 区底部固定对话输入框，左下角是加文件按钮，右下角是发送按钮；当前阶段只提供 UI 骨架，不直接创建新任务或追加消息
   -> 中央 Agent 文字流使用中间 Agent 工作区自己的动态三列布局：左侧弹性留白 / 阅读列 / 右侧弹性留白，阅读列在 Agent 自己的内容框内居中
-  -> 当整页只有一个侧栏可见时，Agent 中间文字框和输入框使用 `弹性留白 / 阅读列 / 弹性留白`；中间区变窄时先连续压缩两侧留白，留白归零后才压缩阅读列本身
+  -> 当整页没有侧栏或只有一个侧栏可见时，Agent 中间文字框和输入框使用 `弹性留白 / 阅读列 / 弹性留白`；中间区变窄时先连续压缩两侧留白，留白归零后才压缩阅读列本身
   -> Replay stage 在窄视口也保持左栏 / Agent / 右侧 Review 的列布局，不把右侧 Review 原文栏堆到 Agent 下方
-  -> 顶部工具栏左侧展示任务栏 toggle 和任务标题，右侧展示任务 status badge，当前文件名只出现在右侧 Review 工作栏的文件 tab
-  -> Agent 工具调用先按 action 顺序过滤掉 anchors/submit_result；带 reason 的 action 先渲染文字段，并作为下一串 tool run 的起点
+  -> 顶部工具栏左侧展示任务栏 toggle 和任务标题，右侧展示任务 status badge 和 Review 图标按钮，当前文件名只出现在右侧 Review 工作栏的文件 tab
+  -> Agent 工具调用先按 action 顺序过滤掉 anchors/submit_result；空的 model_message 不进入文字流，非空 model_message 只作为文字段展示，不作为 tool 行；真实 tool 不包含也不消费 reason，连续 tool 直接按 run 折叠
+  -> Agent 文字流不会因为 liveActions 增加或 detail refresh 自动滚动到底部；默认保持用户当前阅读位置，只有用户点击 evidence/read/add_candidate_evidence 打开原文时，右侧 iframe 才滚到对应原文节点
   -> 每个 tool run 如果只有 1 个 tool 就保持直出；如果连续包含多个 tool，就整组默认折叠成 tool group，不会先直出第一条 tool
   -> tool group 折叠态显示一条类似 Codex 的自然语言摘要，概括这一段做了什么、涉及多少个文件/证据/字段；展开后恢复每个 tool 的单行明细
   -> tool 明细采用 Codex 风格的淡化运行文字行：tree/read/add_candidate_evidence/review_evidences/write_field 用语义图标，图标后是一句短英文摘要；tree 只显示 `Viewed outline`，read 只显示 `Read passage`，submit_result 不进入文字流

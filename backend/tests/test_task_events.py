@@ -113,6 +113,42 @@ class FakeAgentClient:
         }
 
 
+class FakeStreamingAgentClient(FakeAgentClient):
+    def extract_fields_stream(
+        self,
+        *,
+        html: str,
+        task_spec: dict[str, Any],
+        run_options: dict[str, Any] | None = None,
+    ):
+        yield {
+            "seq": 1,
+            "type": "tool_completed",
+            "tool": "tree",
+            "reason": "查看目录",
+            "result": {"ok": True},
+        }
+        yield {
+            "seq": 2,
+            "type": "field_written",
+            "tool": "write_field",
+            "reason": "写入字段",
+            "result": {
+                "field_id": "room_numbers",
+                "status": "resolved",
+                "value": "1-101",
+            },
+        }
+        extraction_result = self.extract_fields(html=html, task_spec=task_spec, run_options=run_options)
+        yield {
+            "seq": 3,
+            "type": "result_completed",
+            "tool": "submit_result",
+            "result": extraction_result["result"],
+            "trace": extraction_result["trace"],
+        }
+
+
 def build_app(tmp_path: Path):
     app = create_app(
         settings=BackendSettings(database_path=tmp_path / "backend.sqlite3"),
@@ -280,3 +316,29 @@ def test_removed_manual_check_endpoint_is_not_available_and_does_not_append_even
     all_events = [json.loads(line) for line in all_lines]
     assert all_events[-1]["type"] == "task.completed"
     assert "route" not in all_events[-1]["payload"]
+
+
+def test_backend_consumes_file_extraction_stream_and_persists_agent_events(tmp_path: Path):
+    app = create_app(
+        settings=BackendSettings(database_path=tmp_path / "backend.sqlite3"),
+        agent_client=FakeStreamingAgentClient(),
+    )
+
+    with TestClient(app) as client:
+        task_id = create_task(client)
+        events_response = client.get(f"/tasks/{task_id}/events?after_seq=0")
+
+    lines = [
+        line.removeprefix("data: ")
+        for line in events_response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    events = [json.loads(line) for line in lines]
+    agent_events = [event for event in events if event["type"] == "agent.event"]
+
+    assert events_response.status_code == 200
+    assert [event["seq"] for event in events] == list(range(1, len(events) + 1))
+    assert any(event["payload"]["type"] == "tool_completed" for event in agent_events)
+    assert any(event["payload"]["type"] == "field_written" for event in agent_events)
+    assert all("reason" not in event["payload"] for event in agent_events)
+    assert events[-1]["type"] == "task.completed"

@@ -27,11 +27,12 @@ POST /tasks 创建任务
   -> backend 通过 HTTP 逐个调用 document_processor，把上传文件转成 markdown + blocks
   -> backend 保存标准化文本结果，不保存原始文件
   -> backend 合并多个文件的 html 作为字段抽取输入，markdown、md_list 和 blocks 留作展示和证据回填
-  -> backend 通过 HTTP 调用 file_extraction_agent
-  -> agent service 返回 ExtractionResult(result + trace)，其中 trace.source_selectors 保存虚拟 path_id 到原文 DOM id 的映射
+  -> backend 通过 HTTP 调用 file_extraction_agent 的 `/v1/file-extraction-agent/extract/stream`
+  -> backend 消费 NDJSON stream，把工具过程事件写入 task_events，并用 `result_completed` 作为抽取结果收口
+  -> file_extraction_agent stream 开始时先写入 `source_indexed` 事件，提前提供虚拟 path_id 到 document_processor 原始 DOM id 的内部映射；终态 ExtractionResult(result + trace) 里也保留 trace.source_selectors
   -> task_service 对照 task_spec.fields 补齐 agent 没返回的预期字段，写成 failed/None 占位
   -> backend 直接提交 resolved 字段，failed/None 字段保持未提交
-  -> backend 保存抽取结果、trace 和 audit；GET /tasks/{task_id}/replay 会把 trace.source_selectors 原样透传给前端用于 evidence 跳转
+  -> backend 保存抽取结果、trace 和 audit；GET /tasks/{task_id}/replay 会优先用 trace.source_selectors，处理中无 trace 时用 task_events 中最新 `source_indexed` 的 source_selectors，把 replay display_html 的可读 block id 改写成虚拟 path_id，再把 path_id -> path_id 的 source_selectors 透传给前端用于 evidence 跳转，并剥掉 replay action 顶层 reason
 ```
 
 职责边界：
@@ -116,7 +117,8 @@ POST /tasks 上传一个或多个文件
   -> task_service 为每个文件生成 document_id，并为 blocks 补 document_id / block_id
   -> SQLite 为每个文件写入 documents(markdown / md_list_json / blocks_json / meta_info_json / warnings_json)
   -> task_service 合并全部 html 作为字段抽取输入，同时保留 markdown、md_list 和 blocks
-  -> agent_client 再通过 HTTP 调用 agent service 的字段抽取接口，发送文档 html、task_spec 和可选 run_options
+  -> agent_client 再通过 HTTP 调用 agent service 的字段抽取 stream 接口，发送 documents(filename + html)、task_spec 和可选 run_options
+  -> task_service 把 stream 中的 source_indexed/tool/field 过程事件归一成 task_events，前端可以通过 GET /tasks/{task_id}/events 实时补拉
   -> file_extraction_agent 按 heading stack 重建虚拟 section 树
   -> SQLite 为 file_extraction_agent 调用写入 agent_stage_runs
   -> SQLite 写入 agent_runs / extracted_fields / field_traces；task_spec 中存在但 agent 未返回的字段会补 failed/None 占位
@@ -273,13 +275,13 @@ trace 只展示 document_processing 和 extraction 两段。
 ```text
 agent_run.trace_json
   -> outline_tree / actions / field_states
-  -> source_selectors(path_id -> 原文 DOM id)
+  -> source_selectors(path_id -> document_processor 原始 DOM id)
 agent_stage_runs(document_processor)
   -> display_html
   -> 过滤页码、页眉、页脚版本号等旧任务文档 chrome
 ```
 
-`source_selectors` 不参与字段判定，只用于前端把 `evidence://0000.0001...` 这类虚拟 locator 定位到 `display_html` 里的真实 DOM 节点。backend 不重新生成这张表，只透传 file_extraction_agent trace 中的映射。
+`source_selectors` 不参与字段判定。file_extraction_agent trace 里的原始映射是 `path_id -> document_processor DOM id`；抽取运行中还会先通过 `source_indexed` task event 暂存同一张映射。backend 生成 replay 时优先使用终态 trace，终态还没写入时使用最新 live source index，把 `display_html` 里的可读 block `id/data-element-id` 改写成虚拟 path_id，并对前端返回 `path_id -> path_id`。这样前端点击 `evidence://0001.0000.0001` 时直接定位到 `id="0001.0000.0001"`，不需要知道 `p001_b001` 这类内部 DOM id，也不做文本或 DOM 猜测兜底。
 
 ### `GET /tasks/{task_id}/audit`
 
@@ -323,7 +325,7 @@ task.completed
 task.failed
 ```
 
-`agent.event` 用于承载 agent service 的原始或归一化 stream 事件，例如 `tool_started`、`tool_completed`、`tool_failed`、`candidate_evidence_added`、`field_written` 和 `result_completed`。
+`agent.event` 用于承载 agent service 的原始或归一化 stream 事件，例如 `tool_started`、`tool_completed`、`tool_failed`、`candidate_evidence_added`、`field_written` 和 `result_completed`。backend 转发时不生成或保留 tool 顶层 `reason`；模型可见文字由独立的 `model_message.content` 事件承载。
 
 ## 8. 数据表
 

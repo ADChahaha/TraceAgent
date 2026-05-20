@@ -17,6 +17,10 @@ def run_extraction_graph_stream(
 ) -> Iterable[str]:
     state = build_graph_state(extraction_input)
     emitted = 0
+    _append_source_index_event(state)
+    while emitted < len(state.events):
+        yield json.dumps(_plain(state.events[emitted]), ensure_ascii=False) + "\n"
+        emitted += 1
     outcome: Any = {"ok": False, "errors": [{"message": "resolution did not run"}]}
     try:
         for outcome in run_resolution_stream(state, resolution_model):
@@ -42,7 +46,6 @@ def run_extraction_graph_stream(
             "seq": state.next_seq,
             "type": "result_completed",
             "tool": "submit_result",
-            "reason": "resolution failed before successful submit_result",
             "result": result.result,
             "trace": result.trace,
         }
@@ -79,8 +82,23 @@ def _append_failure_event(state: GraphState, exc: Exception) -> None:
             "seq": state.next_seq,
             "type": "tool_failed",
             "tool": "resolution",
-            "reason": "resolution raised an exception",
             "result": {"ok": False, "errors": [{"message": str(exc)}]},
+        }
+    )
+    state.next_seq += 1
+
+
+def _append_source_index_event(state: GraphState) -> None:
+    state.events.append(
+        {
+            "seq": state.next_seq,
+            "type": "source_indexed",
+            "tool": "source_index",
+            "result": {
+                "ok": True,
+                "document_tree": state.document.tree_text("/", depth=3),
+                "source_selectors": state.document.source_selectors(),
+            },
         }
     )
     state.next_seq += 1

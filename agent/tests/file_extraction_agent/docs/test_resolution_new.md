@@ -22,13 +22,14 @@ documents + task_spec
   -> 校验真实模型调用默认使用 Responses API stream，并在失败时依次降级到 chat/completions stream 和非流调用
   -> build_tools
   -> 校验具体工具规则进入 tool description，且工具 schema 不再暴露 reason 参数
+  -> 校验工具 action/event 不再保存兼容 reason；用户可见文字只保留在 model_message.content
 ```
 
 ## 测试函数
 
 - `test_resolution_messages_describe_candidate_policy_without_tool_manual`：确认 system prompt 只保留高层规则；assistant content 必须短、可读并绑定当前动作，具体本轮说明模板下沉到当前 tool docstring；同时确认引用原文必须使用 Markdown evidence link。
 - `test_resolution_messages_do_not_inline_initial_tree`：确认初始 resolution 上下文不再内联 root depth=3 虚拟树正文，只保留 task fields 和提示模型先调用 `tree` 导航的简短指令。
-- `test_tool_descriptions_carry_candidate_and_review_contracts`：确认 `read` 一次只读一个 block，并提供 `Read / Finding / Next` 读后模板；`add_candidate_evidence` 只接受一个字段和一个 block link，并提供 `Saving candidate / Why relevant / Next` 候选保存模板；`review_evidences` 展开 inline evidence links，并提供 `Review / Sufficiency / Next` 复核模板；`write_field` 只能复制同字段当前 review snapshot 返回的 inline evidence links，并提供 `Write / Why supported / Next` 写入模板。
+- `test_tool_descriptions_carry_candidate_and_review_contracts`：确认 `tree` 说明根目录使用空 path_id、文档目录示例为 `evidence://0001`；`read` 一次只读一个 block，并提供 `Read / Finding / Next` 读后模板；`add_candidate_evidence` 只接受一个字段和一个 block link，并提供 `Saving candidate / Why relevant / Next` 候选保存模板；`review_evidences` 展开 inline evidence links，并提供 `Review / Sufficiency / Next` 复核模板；`write_field` 只能复制同字段当前 review snapshot 返回的 inline evidence links，并提供 `Write / Why supported / Next` 写入模板。
 - `test_resolution_messages_expand_enum_variants`：确认 prompt 会把 enum 字段 variants 展开给模型，并说明 `write_field` 的 tagged enum value 形态。
 - `test_resolution_graph_exposes_new_tools_only`：确认模型可见工具集是 `tree/read/add_candidate_evidence/review_evidences/write_field/submit_result`。
 - `test_resolution_graph_executes_only_first_model_tool_call_per_turn`：确认运行时向模型绑定工具时传入 `parallel_tool_calls=False`；如果模型仍然同轮返回多个 tool call，trace 和工具执行都只保留第一个。
@@ -36,5 +37,5 @@ documents + task_spec
 - `test_resolution_falls_back_from_responses_stream_to_chat_stream_then_invoke`：确认 Responses stream 失败后按顺序降级到 chat/completions stream 和非流 invoke。
 - `test_resolution_records_text_from_responses_api_content_blocks`：确认 Responses API content block 列表会抽取 `type=text` 文本并写入 `model_message.content`。
 - `test_resolution_records_model_message_content_and_tool_calls_without_reasoning`：确认 trace 保存普通 content 和 tool call 摘要，不保存 DeepSeek `reasoning_content`。
-- `test_tool_action_reason_comes_from_model_message_content`：确认工具 action/event 的兼容 `reason` 字段来自最近一轮 `model_message.content`。
-- `test_tool_action_reason_allows_empty_stage_content`：确认空 assistant content 会作为空字符串兼容写入 action/event 的 `reason`，不会被工具层当作错误。
+- `test_tool_actions_do_not_store_model_message_content_as_reason`：确认工具 action/event 不再把最近一轮 `model_message.content` 派生成 `reason`，工具记录只保留工具名、参数和结果。
+- `test_tool_actions_do_not_write_empty_reason`：确认空 assistant content 不会让工具 action/event 写入空 `reason` 字段，也不会被工具层当作错误。

@@ -13,6 +13,7 @@ import {
   Paperclip,
   PanelLeftClose,
   PanelLeftOpen,
+  PanelRight,
   PenLine,
   Plus,
   SendHorizonal,
@@ -21,7 +22,7 @@ import {
 
 import { stringifyValue } from "@/lib/json";
 import type { RecentTask } from "@/lib/task-store";
-import type { ReplayAction, TaskReplay, TaskResultField, TaskSummary } from "@/lib/types";
+import type { ReplayAction, TaskEvent, TaskReplay, TaskResultField, TaskSummary } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
@@ -73,6 +74,7 @@ const RIGHT_PANEL_MIN_WIDTH = 300;
 const RIGHT_PANEL_MAX_WIDTH = 920;
 const PANEL_RESIZE_KEY_STEP = 16;
 const REVIEW_TAB_ID = "review";
+const LIVE_REPLAY_TOOL_EVENT_TYPES = new Set(["tool_completed", "tool_failed"]);
 
 export function ReplayReview({
   taskId,
@@ -80,15 +82,27 @@ export function ReplayReview({
   replay,
   recentTasks = [],
   finalFields,
+  liveActions = [],
 }: {
   taskId?: string;
   summary?: TaskSummary | null;
   replay: TaskReplay | null;
   recentTasks?: RecentTask[];
   finalFields: TaskResultField[];
+  liveActions?: TaskEvent[];
 }) {
-  const actions = React.useMemo(() => replay?.actions ?? [], [replay?.actions]);
+  const actions = React.useMemo(
+    () =>
+      mergeReplayAndLiveActions(
+        replay?.actions ?? [],
+        liveActions
+          .map(taskEventToReplayAction)
+          .filter((action): action is ReplayAction => action !== null),
+      ),
+    [liveActions, replay?.actions],
+  );
   const [isLeftPanelOpen, setIsLeftPanelOpen] = React.useState(true);
+  const [isRightReviewPanelOpen, setIsRightReviewPanelOpen] = React.useState(false);
   const [sourceTabsByTask, setSourceTabsByTask] = React.useState<Record<string, WorkspaceSourceTab[]>>({});
   const [activeWorkspaceTabByTask, setActiveWorkspaceTabByTask] = React.useState<Record<string, string>>({});
   const [selectedFieldName, setSelectedFieldName] = React.useState("");
@@ -99,13 +113,6 @@ export function ReplayReview({
 
   const currentTaskId = taskId ?? replay?.task_id ?? "";
 
-  React.useEffect(() => {
-    const stream = agentStreamRef.current;
-    if (stream) {
-      stream.scrollTop = stream.scrollHeight;
-    }
-  }, [actions.length]);
-
   const visibleActions = React.useMemo(
     () =>
       actions
@@ -115,7 +122,7 @@ export function ReplayReview({
     [actions],
   );
   const agentStreamItems = React.useMemo(() => groupAgentStreamItems(visibleActions), [visibleActions]);
-  const visibleActionCount = visibleActions.length;
+  const visibleActionCount = visibleActions.filter(({ action }) => !isAgentMessageAction(action)).length;
   const replayFields = React.useMemo(
     () => reduceReplayFields(actions, finalFields),
     [actions, finalFields],
@@ -136,13 +143,11 @@ export function ReplayReview({
     () => sourceTabs.find((tab) => tab.id === activeWorkspaceTabId) ?? null,
     [activeWorkspaceTabId, sourceTabs],
   );
-  const isSourceTabActive = activeWorkspaceTabId !== REVIEW_TAB_ID;
-  const shouldShowFieldProgressPanel = !isLeftPanelOpen && activeWorkspaceTabId === REVIEW_TAB_ID;
-  const shouldShowRightReviewPanel = shouldShowFieldProgressPanel || isSourceTabActive;
+  const shouldShowRightReviewPanel = isRightReviewPanelOpen;
   const visibleSidePanelCount = (isLeftPanelOpen ? 1 : 0) + (shouldShowRightReviewPanel ? 1 : 0);
   const agentBalanceSide: AgentBalanceSide =
     visibleSidePanelCount === 1 ? (isLeftPanelOpen ? "right" : "left") : "none";
-  const agentContentMode = visibleSidePanelCount === 1 ? "centered" : "full";
+  const agentContentMode = visibleSidePanelCount <= 1 ? "centered" : "full";
   const replayTitle = taskId ?? replay?.task_id ?? "";
   const stageColumns = React.useMemo(
     () =>
@@ -170,6 +175,7 @@ export function ReplayReview({
     if (!replay) {
       return;
     }
+    setIsRightReviewPanelOpen(true);
     const evidenceId = getEvidenceIdFromUri(uri);
     const documentIndex = getEvidenceDocumentIndex(replay, evidenceId);
     const documentTitle = getEvidenceDocumentTitle(replay, evidenceId);
@@ -201,6 +207,18 @@ export function ReplayReview({
 
   function openFieldReview(fieldName: string) {
     setSelectedFieldName(fieldName);
+  }
+
+  function toggleRightReviewPanel() {
+    if (isRightReviewPanelOpen) {
+      setIsRightReviewPanelOpen(false);
+      return;
+    }
+    setActiveWorkspaceTabByTask((current) => ({
+      ...current,
+      [currentTaskId]: REVIEW_TAB_ID,
+    }));
+    setIsRightReviewPanelOpen(true);
   }
 
   function selectWorkspaceTab(tabId: string) {
@@ -323,6 +341,105 @@ export function ReplayReview({
   }
 
   if (!replay) {
+	    if (summary && !isTaskTerminal(summary)) {
+	      const pendingStageStyle = {
+	        "--replay-left-panel-width": `${leftPanelWidth}px`,
+	        "--replay-field-progress-panel-width": `${fieldProgressPanelWidth}px`,
+	        "--replay-stage-columns": [
+	          ...(isLeftPanelOpen ? ["var(--replay-left-panel-width)", "10px"] : []),
+	          "minmax(0, 1fr)",
+	          ...(isRightReviewPanelOpen ? ["10px", "var(--replay-field-progress-panel-width)"] : []),
+	        ].join(" "),
+	      } as React.CSSProperties;
+      return (
+        <section
+          aria-label="Replay 全屏文档工作台"
+          className="replay-review-root replay-review-root-fullscreen replay-task-workbench bg-background"
+        >
+          <div className="replay-topbar" aria-label="Replay 顶部工具栏">
+            <div className="replay-topbar-main">
+              <button
+                type="button"
+                className="replay-topbar-back"
+                aria-label={isLeftPanelOpen ? "关闭任务栏" : "打开任务栏"}
+                title={isLeftPanelOpen ? "关闭任务栏" : "打开任务栏"}
+                onClick={() => setIsLeftPanelOpen((current) => !current)}
+              >
+                {isLeftPanelOpen ? <PanelLeftClose className="h-4 w-4" aria-hidden="true" /> : <PanelLeftOpen className="h-4 w-4" aria-hidden="true" />}
+              </button>
+              <div className="replay-topbar-title" title={replayTitle || currentTaskId}>
+                {replayTitle || currentTaskId}
+              </div>
+            </div>
+            <div className="replay-topbar-status">
+              <ReplayStatusBadge status={summary.status} />
+              <ReviewPanelToggleButton
+                isOpen={isRightReviewPanelOpen}
+                onToggle={toggleRightReviewPanel}
+              />
+            </div>
+          </div>
+          <div
+            className="replay-stage replay-stage-fullscreen grid"
+            data-left-panel-open={isLeftPanelOpen ? "true" : "false"}
+            data-right-panel-open={isRightReviewPanelOpen ? "true" : "false"}
+            style={pendingStageStyle}
+          >
+            {isLeftPanelOpen ? (
+              <aside className="replay-task-sidebar overflow-hidden bg-background" aria-label="任务工作台左侧任务栏">
+                <TaskSidebar tasks={recentTasks} activeTaskId={currentTaskId} />
+              </aside>
+            ) : null}
+            {isLeftPanelOpen ? (
+              <PanelResizeHandle
+                side="left"
+                width={leftPanelWidth}
+                onPointerDown={(event) => startPanelResize("left", event)}
+                onKeyDown={(event) => resizePanelByKeyboard("left", event)}
+              />
+            ) : null}
+            <ReviewWorkspacePanel
+              agentStreamRef={agentStreamRef}
+              agentStreamItems={agentStreamItems}
+              visibleActionCount={visibleActionCount}
+              composerValue={composerValue}
+              agentBalanceSide={agentBalanceSide}
+              agentContentMode={agentContentMode}
+              pendingLabel="Thinking"
+              onComposerChange={setComposerValue}
+              onComposerSubmit={() => setComposerValue("")}
+              onOpenEvidence={openEvidenceReview}
+              onOpenActionSource={openActionSource}
+            />
+            {isRightReviewPanelOpen ? (
+              <>
+                <PanelResizeHandle
+                  side="field-progress"
+                  width={fieldProgressPanelWidth}
+                  onPointerDown={(event) => startPanelResize("field-progress", event)}
+                  onKeyDown={(event) => resizePanelByKeyboard("field-progress", event)}
+                />
+                <aside className="replay-review-side-panel-slot" aria-label="右侧 Review 工作栏">
+                  <WorkspaceTabStrip
+                    sourceTabs={[]}
+                    activeTabId={REVIEW_TAB_ID}
+                    onSelectTab={selectWorkspaceTab}
+                    onCloseTab={closeSourceTab}
+                  />
+                  <div className="replay-review-side-panel-body">
+                    <FieldProgressPanel
+                      fields={[]}
+                      selectedFieldName=""
+                      onSelectField={openFieldReview}
+                    />
+                  </div>
+                </aside>
+              </>
+            ) : null}
+          </div>
+        </section>
+      );
+    }
     return (
       <div className="rounded-md border border-dashed p-8 text-sm text-muted-foreground">
         暂无 replay 数据。
@@ -357,6 +474,10 @@ export function ReplayReview({
         </div>
         <div className="replay-topbar-status">
           {summary ? <ReplayStatusBadge status={summary.status} /> : null}
+          <ReviewPanelToggleButton
+            isOpen={isRightReviewPanelOpen}
+            onToggle={toggleRightReviewPanel}
+          />
         </div>
       </div>
       <div
@@ -390,6 +511,7 @@ export function ReplayReview({
           onComposerSubmit={() => setComposerValue("")}
           onOpenEvidence={openEvidenceReview}
           onOpenActionSource={openActionSource}
+          pendingLabel={summary && !isTaskTerminal(summary) ? "Thinking" : undefined}
         />
 
         {shouldShowRightReviewPanel ? (
@@ -427,6 +549,29 @@ export function ReplayReview({
         ) : null}
       </div>
     </section>
+  );
+}
+
+function ReviewPanelToggleButton({
+  isOpen,
+  onToggle,
+}: {
+  isOpen: boolean;
+  onToggle: () => void;
+}) {
+  const label = isOpen ? "关闭右侧 Review" : "打开右侧 Review";
+  return (
+    <button
+      type="button"
+      className="replay-topbar-review-toggle"
+      aria-label={label}
+      aria-pressed={isOpen}
+      title={label}
+      data-active={isOpen ? "true" : "false"}
+      onClick={onToggle}
+    >
+      <PanelRight className="h-4 w-4" aria-hidden="true" />
+    </button>
   );
 }
 
@@ -551,6 +696,120 @@ function orderReplayFieldsForProgress(fields: ReplayField[]): ReplayField[] {
   return [...fields].sort((left, right) => left.fieldName.localeCompare(right.fieldName));
 }
 
+function isTaskTerminal(summary: TaskSummary): boolean {
+  return summary.status === "completed" || summary.status === "failed" || summary.stream?.state === "ended";
+}
+
+function taskEventToReplayAction(event: TaskEvent): ReplayAction | null {
+  const payload = readObject(event.payload) ?? {};
+  const payloadType = readString(payload.type);
+  if (payloadType === "model_message") {
+    const content = readString(payload.content).trim();
+    if (!content) {
+      return null;
+    }
+    return {
+      tool_name: "model_message",
+      reason: content,
+      result: { ok: true },
+      metadata: {
+        seq: event.seq,
+        event_type: payloadType,
+      },
+    };
+  }
+  if (!LIVE_REPLAY_TOOL_EVENT_TYPES.has(payloadType)) {
+    return null;
+  }
+  const toolName = readString(payload.tool) || readString(payload.tool_name);
+  if (!toolName) {
+    return null;
+  }
+  return {
+    tool_name: toolName,
+    result: payload.result,
+    args: readObject(payload.args) ?? undefined,
+    metadata: {
+      seq: event.seq,
+      event_type: readString(payload.type) || event.type,
+    },
+  };
+}
+
+function mergeReplayAndLiveActions(replayActions: ReplayAction[], liveReplayActions: ReplayAction[]): ReplayAction[] {
+  if (replayActions.length === 0) {
+    return liveReplayActions;
+  }
+  if (liveReplayActions.length === 0) {
+    return replayActions;
+  }
+  const replaySeqs = new Set(replayActions.map(getReplayActionSeq).filter((seq): seq is number => seq !== null));
+  const replayIdentities = new Set(replayActions.map(getReplayActionIdentity).filter(Boolean));
+  const uniqueLiveActions = liveReplayActions.filter((action) => {
+    const seq = getReplayActionSeq(action);
+    if (seq !== null && replaySeqs.has(seq)) {
+      return false;
+    }
+    const identity = getReplayActionIdentity(action);
+    return !identity || !replayIdentities.has(identity);
+  });
+  return [...replayActions, ...uniqueLiveActions];
+}
+
+function getReplayActionSeq(action: ReplayAction): number | null {
+  const seq = readObject(action.metadata)?.seq;
+  return typeof seq === "number" && Number.isFinite(seq) ? seq : null;
+}
+
+function getReplayActionIdentity(action: ReplayAction): string {
+  const actionType = getActionType(action);
+  if (!actionType || actionType === "model_message") {
+    return "";
+  }
+  const args = readObject(action.args) ?? {};
+  const result = readObject(action.result);
+  const resultField = readObject(result?.field);
+  return stableStringify({
+    tool: actionType,
+    args,
+    target: [
+      readString(args.path_id),
+      readString(args.locator),
+      readString(args.path),
+      readString(args.field_id),
+      readString(args.name),
+      readString(args.query),
+      readString(result?.locator),
+      readString(result?.path_id),
+      readString(result?.path),
+      readString(resultField?.field_id),
+      readString(resultField?.name),
+    ].filter(Boolean),
+  });
+}
+
+function stableStringify(value: unknown): string {
+  return JSON.stringify(toStableJsonValue(value));
+}
+
+function toStableJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(toStableJsonValue);
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  return Object.keys(value as Record<string, unknown>)
+    .sort()
+    .reduce<Record<string, unknown>>((stable, key) => {
+      const item = (value as Record<string, unknown>)[key];
+      if (item !== undefined) {
+        stable[key] = toStableJsonValue(item);
+      }
+      return stable;
+    }, {});
+}
+
 function FieldProgressRow({
   field,
   isSelected,
@@ -650,6 +909,7 @@ function ReviewWorkspacePanel({
   onComposerSubmit,
   onOpenEvidence,
   onOpenActionSource,
+  pendingLabel,
 }: {
   agentStreamRef: React.RefObject<HTMLDivElement | null>;
   agentStreamItems: AgentStreamItem[];
@@ -661,6 +921,7 @@ function ReviewWorkspacePanel({
   onComposerSubmit: () => void;
   onOpenEvidence: (uri: string, label: string) => void;
   onOpenActionSource: (action: ReplayAction, label: string) => void;
+  pendingLabel?: string;
 }) {
   return (
     <div
@@ -728,7 +989,7 @@ function ReviewWorkspacePanel({
                   })
                 ) : (
                   <div className="replay-agent-turn is-current">
-                    <div className="replay-agent-empty">等待工具调用。</div>
+                    <div className="replay-agent-empty">{pendingLabel ?? "等待工具调用。"}</div>
                   </div>
                 )}
               </div>
@@ -783,7 +1044,7 @@ function SourceTabPanel({
   evidenceDetailsById: Map<string, EvidenceDetail>;
 }) {
   const activeEvidenceDetail = getEvidenceDetailById(evidenceDetailsById, tab.evidenceId);
-  const highlightSelector = activeEvidenceDetail?.selector || getEvidenceSelector(tab.evidenceId);
+  const highlightSelector = activeEvidenceDetail?.selector || "";
   const sourceFrameRef = React.useRef<HTMLIFrameElement | null>(null);
   const renderedDocumentHtml = React.useMemo(
     () => renderSourceDocumentHtml(replay.display_html, highlightSelector, tab.quote),
@@ -1045,7 +1306,7 @@ function getSetFieldPayload(action: ReplayAction): {
     value: args?.value ?? resultField?.value,
     status: readString(args?.status) || readString(resultField?.status) || "resolved",
     evidenceIds: normalizeEvidenceIds(fieldEvidence ?? argsEvidence),
-    reason: readString(resultField?.reason) || readString(action.reason),
+    reason: readString(resultField?.reason),
   };
 }
 
@@ -1080,7 +1341,10 @@ function normalizeEvidenceIds(values: unknown[] | null): string[] {
 }
 
 function shouldDisplayAgentAction(action: ReplayAction): boolean {
-  return !["anchors", "submit_result"].includes(getActionType(action));
+  if (isAgentMessageAction(action)) {
+    return Boolean(getActionReason(action));
+  }
+  return !["anchors", "submit_result", "tool_started", "source_index", "source_indexed"].includes(getActionType(action));
 }
 
 function groupAgentStreamItems(actions: VisibleAgentAction[]): AgentStreamItem[] {
@@ -1101,9 +1365,12 @@ function groupAgentStreamItems(actions: VisibleAgentAction[]): AgentStreamItem[]
 
   for (const item of actions) {
     const reason = getActionReason(item.action);
-    if (reason) {
-      flushPendingTools();
-      items.push({ kind: "message", item, reason });
+    if (isAgentMessageAction(item.action)) {
+      if (reason) {
+        flushPendingTools();
+        items.push({ kind: "message", item, reason });
+      }
+      continue;
     }
     pendingTools.push(item);
   }
@@ -1123,8 +1390,12 @@ function getActionType(action: ReplayAction): string {
   return action.tool_name || action.action_type || "";
 }
 
+function isAgentMessageAction(action: ReplayAction): boolean {
+  return getActionType(action) === "model_message";
+}
+
 function getActionReason(action: ReplayAction): string {
-  return readString(action.reason);
+  return readString(action.reason).trim();
 }
 
 function getActionTarget(action: ReplayAction): string {
@@ -1183,7 +1454,11 @@ function isEvidenceLikeReference(value: string): boolean {
   if (!value) {
     return false;
   }
-  return value.startsWith("evidence://") || value.includes("#") || /^p\d+_b\d+/.test(value) || /^S\d+/.test(value);
+  return value.startsWith("evidence://") || value.includes("#") || isVirtualPathId(value) || /^p\d+_b\d+/.test(value) || /^S\d+/.test(value);
+}
+
+function isVirtualPathId(value: string): boolean {
+  return /^\d{4}(?:\.\d{4})+$/.test(stripEvidenceScheme(value));
 }
 
 function formatAgentToolSummary(action: ReplayAction, ok: boolean): string {
@@ -1252,14 +1527,39 @@ function getAgentToolIcon(toolName: string): { icon: React.ComponentType<{ class
 function buildEvidenceDetailsById(replay: TaskReplay, fields: ReplayField[]): Map<string, EvidenceDetail> {
   const details = new Map<string, EvidenceDetail>();
   const sourceBlocks = extractDisplayHtmlBlocks(replay.display_html);
-  const sourceSelectorByEvidenceId = buildSourceSelectorByEvidenceId(replay, sourceBlocks);
+  const sourceSelectorByEvidenceId = buildSourceSelectorByEvidenceId(replay);
   const fieldsByEvidenceId = new Map<string, ReplayField>();
 
   for (const field of fields) {
     for (const evidenceId of field.evidenceIds) {
       const sourceSelector = getMappedSourceSelector(sourceSelectorByEvidenceId, evidenceId);
       fieldsByEvidenceId.set(evidenceId, field);
-      fieldsByEvidenceId.set(sourceSelector || getEvidenceSelector(evidenceId), field);
+      if (sourceSelector) {
+        fieldsByEvidenceId.set(sourceSelector, field);
+      }
+    }
+  }
+
+  if (replay.source_selectors && typeof replay.source_selectors === "object") {
+    for (const [pathId, sourceSelector] of Object.entries(replay.source_selectors)) {
+      if (typeof sourceSelector !== "string") {
+        continue;
+      }
+      const selector = normalizeSourceSelector(sourceSelector);
+      if (!selector) {
+        continue;
+      }
+      const sourceText = sourceBlocks.get(selector) ?? "";
+      const detail: EvidenceDetail = {
+        id: pathId,
+        text: sourceText || pathId,
+        sourceText,
+        selector,
+        documentTitle: getEvidenceDocumentTitle(replay, pathId),
+        field: fieldsByEvidenceId.get(pathId) ?? fieldsByEvidenceId.get(selector) ?? null,
+      };
+      setEvidenceDetailAliases(details, pathId, detail);
+      details.set(selector, detail);
     }
   }
 
@@ -1272,26 +1572,15 @@ function buildEvidenceDetailsById(replay: TaskReplay, fields: ReplayField[]): Ma
     }
   }
 
-  for (const [selector, sourceText] of sourceBlocks) {
-    if (details.has(selector)) {
-      continue;
-    }
-    details.set(selector, {
-      id: selector,
-      text: sourceText,
-      sourceText,
-      selector,
-      documentTitle: getEvidenceDocumentTitle(replay, selector),
-      field: findFieldByEvidenceText(fields, sourceText),
-    });
-  }
-
   for (const field of fields) {
     for (const evidenceId of field.evidenceIds) {
       if (getEvidenceDetailById(details, evidenceId)) {
         continue;
       }
-      const selector = getMappedSourceSelector(sourceSelectorByEvidenceId, evidenceId) ?? getEvidenceSelector(evidenceId);
+      const selector = getMappedSourceSelector(sourceSelectorByEvidenceId, evidenceId);
+      if (!selector) {
+        continue;
+      }
       const sourceText = sourceBlocks.get(selector) ?? "";
       details.set(evidenceId, {
         id: evidenceId,
@@ -1307,7 +1596,7 @@ function buildEvidenceDetailsById(replay: TaskReplay, fields: ReplayField[]): Ma
   return details;
 }
 
-function buildSourceSelectorByEvidenceId(replay: TaskReplay, sourceBlocks: Map<string, string>): Map<string, string> {
+function buildSourceSelectorByEvidenceId(replay: TaskReplay): Map<string, string> {
   const selectors = new Map<string, string>();
   const remember = (evidenceId: string, sourceSelector: string) => {
     const normalizedSelector = normalizeSourceSelector(sourceSelector);
@@ -1329,23 +1618,6 @@ function buildSourceSelectorByEvidenceId(replay: TaskReplay, sourceBlocks: Map<s
     }
   }
 
-  for (const action of replay.actions) {
-    const result = readObject(action.result);
-    if (!result) {
-      continue;
-    }
-    const resultLocator = readString(result.locator) || readString(result.path_id) || readString(result.path);
-    const resultText = readString(result.text);
-    const resultSelector = findSourceSelectorForEvidence(sourceBlocks, "", resultText);
-    if (resultLocator && resultSelector) {
-      remember(resultLocator, resultSelector);
-    }
-    const resultField = readObject(result.field);
-    for (const value of [result.evidence_texts, resultField?.evidence_texts]) {
-      collectSourceSelectorsFromEvidenceTexts(value, sourceBlocks, remember);
-    }
-  }
-
   return selectors;
 }
 
@@ -1361,33 +1633,6 @@ function getMappedSourceSelector(sourceSelectorByEvidenceId: Map<string, string>
 
 function normalizeSourceSelector(sourceSelector: string): string {
   return sourceSelector.trim().replace(/^#/, "");
-}
-
-function collectSourceSelectorsFromEvidenceTexts(
-  value: unknown,
-  sourceBlocks: Map<string, string>,
-  remember: (evidenceId: string, sourceSelector: string) => void,
-) {
-  if (!Array.isArray(value)) {
-    return;
-  }
-  for (const item of value) {
-    const objectItem = readObject(item);
-    if (!objectItem) {
-      continue;
-    }
-    const locator = readString(objectItem.locator);
-    const selector = readString(objectItem.selector);
-    const path = readString(objectItem.path);
-    const text = readString(objectItem.text);
-    const sourceSelector = findSourceSelectorForEvidence(sourceBlocks, selector, text);
-    if (!sourceSelector) {
-      continue;
-    }
-    for (const evidenceId of [locator, path, path && selector ? `${path}#${selector}` : ""]) {
-      remember(evidenceId, sourceSelector);
-    }
-  }
 }
 
 function collectReadResultEvidenceDetail(
@@ -1406,7 +1651,7 @@ function collectReadResultEvidenceDetail(
   if (!locator || !text) {
     return;
   }
-  const selector = getMappedSourceSelector(sourceSelectorByEvidenceId, locator) ?? findSourceSelectorForEvidence(sourceBlocks, "", text);
+  const selector = getMappedSourceSelector(sourceSelectorByEvidenceId, locator);
   if (!selector) {
     return;
   }
@@ -1446,9 +1691,10 @@ function collectEvidenceDetails(
     if (!id) {
       continue;
     }
-    const sourceSelector =
-      getMappedSourceSelector(sourceSelectorByEvidenceId, id) ??
-      (findSourceSelectorForEvidence(sourceBlocks, selector, text) || selector);
+    const sourceSelector = getMappedSourceSelector(sourceSelectorByEvidenceId, id);
+    if (!sourceSelector) {
+      continue;
+    }
     const sourceText = sourceBlocks.get(sourceSelector) || text;
     const detail: EvidenceDetail = {
       id,
@@ -1459,14 +1705,7 @@ function collectEvidenceDetails(
       field: fieldsByEvidenceId.get(id) ?? fieldsByEvidenceId.get(stripEvidenceScheme(id)) ?? fieldsByEvidenceId.get(sourceSelector) ?? fieldsByEvidenceId.get(selector) ?? null,
     };
     setEvidenceDetailAliases(details, id, detail);
-    if (selector) {
-      details.set(selector, detail);
-    }
-    for (const [fieldEvidenceId, field] of fieldsByEvidenceId) {
-      if (selector && (fieldEvidenceId.endsWith(selector) || fieldEvidenceId.endsWith(`#${selector}`))) {
-        details.set(fieldEvidenceId, { ...detail, id: fieldEvidenceId, field });
-      }
-    }
+    details.set(sourceSelector, detail);
   }
 }
 
@@ -1477,17 +1716,7 @@ function setEvidenceDetailAliases(details: Map<string, EvidenceDetail>, evidence
 }
 
 function getEvidenceDetailById(details: Map<string, EvidenceDetail>, evidenceId: string): EvidenceDetail | null {
-  const exact = getEvidenceLookupKeys(evidenceId).map((key) => details.get(key)).find(Boolean) ?? details.get(getEvidenceSelector(evidenceId));
-  if (exact) {
-    return exact;
-  }
-  const selector = getEvidenceSelector(evidenceId);
-  for (const [id, detail] of details) {
-    if (id.endsWith(selector) || id.endsWith(`#${selector}`)) {
-      return detail;
-    }
-  }
-  return null;
+  return getEvidenceLookupKeys(evidenceId).map((key) => details.get(key)).find(Boolean) ?? null;
 }
 
 function getEvidenceLookupKeys(evidenceId: string): string[] {
@@ -1509,32 +1738,6 @@ function getEvidenceLookupKeys(evidenceId: string): string[] {
 
 function stripEvidenceScheme(evidenceId: string): string {
   return evidenceId.replace(/^evidence:\/\//, "");
-}
-
-function findSourceSelectorForEvidence(sourceBlocks: Map<string, string>, selector: string, text: string): string {
-  if (selector && sourceBlocks.has(selector)) {
-    return selector;
-  }
-  return findSourceSelectorByText(sourceBlocks, text);
-}
-
-function findSourceSelectorByText(sourceBlocks: Map<string, string>, text: string): string {
-  const normalizedText = normalizeComparableText(text);
-  if (normalizedText.length < 12) {
-    return "";
-  }
-  for (const [selector, sourceText] of sourceBlocks) {
-    if (normalizeComparableText(sourceText) === normalizedText) {
-      return selector;
-    }
-  }
-  for (const [selector, sourceText] of sourceBlocks) {
-    const normalizedSourceText = normalizeComparableText(sourceText);
-    if (normalizedSourceText.includes(normalizedText) || normalizedText.includes(normalizedSourceText)) {
-      return selector;
-    }
-  }
-  return "";
 }
 
 function extractDisplayHtmlBlocks(displayHtml: string): Map<string, string> {
@@ -1631,7 +1834,6 @@ function renderSourceDocumentHtml(displayHtml: string, highlightSelector: string
     return wrapSourceDocumentHtml("<p>No source document is available.</p>");
   }
   let renderedHtml = displayHtml;
-  const escapedSelector = escapeRegExp(highlightSelector);
   if (highlightSelector) {
     renderedHtml = markSourceDocumentEvidence(displayHtml, highlightSelector, quote);
   }
@@ -1728,12 +1930,6 @@ function decodeHtmlText(value: string): string {
     .trim();
 }
 
-function getEvidenceSelector(evidenceId: string): string {
-  const withoutHash = evidenceId.split("#").at(-1) ?? evidenceId;
-  const locator = withoutHash.split("/").filter(Boolean).at(-1) ?? withoutHash;
-  return normalizeEvidenceSelector(locator);
-}
-
 function getEvidenceDocumentTitle(replay: TaskReplay, evidenceId: string): string {
   const documentIndex = getEvidenceDocumentIndex(replay, evidenceId);
   return formatSourceFilename(replay.documents[documentIndex]?.filename || replay.documents[0]?.filename || "Source");
@@ -1776,60 +1972,12 @@ function getEvidenceDocumentIndex(replay: TaskReplay, evidenceId: string): numbe
   return Math.min(parsedDocumentIndex, Math.max(replay.documents.length - 1, 0));
 }
 
-function normalizeEvidenceSelector(locator: string): string {
-  return locator.replace(/^#/, "");
-}
-
-function findFieldByEvidenceText(fields: ReplayField[], evidenceText: string): ReplayField | null {
-  const normalizedEvidenceText = normalizeComparableText(evidenceText);
-  if (!normalizedEvidenceText) {
-    return null;
-  }
-  return (
-    fields.find((field) => {
-      const normalizedValue = normalizeComparableText(formatFieldDisplayValue(field));
-      return normalizedValue ? normalizedEvidenceText.includes(normalizedValue) : false;
-    }) ?? null
-  );
-}
-
 function normalizeComparableText(value: string): string {
   return value
     .replace(/[，、]/g, ",")
     .replace(/\s+/g, "")
     .trim()
     .toLowerCase();
-}
-
-function getEvidenceText(actions: ReplayAction[], evidenceId: string): string {
-  for (const action of actions) {
-    const result = readObject(action.result);
-    const resultField = readObject(result?.field);
-    const evidenceText = findEvidenceTextInValue(result?.evidence_texts, evidenceId) || findEvidenceTextInValue(resultField?.evidence_texts, evidenceId);
-    if (evidenceText) {
-      return evidenceText;
-    }
-  }
-  return "";
-}
-
-function findEvidenceTextInValue(value: unknown, evidenceId: string): string {
-  if (!Array.isArray(value)) {
-    return "";
-  }
-  for (const item of value) {
-    const objectItem = readObject(item);
-    if (!objectItem) {
-      continue;
-    }
-    const selector = readString(objectItem.selector);
-    const path = readString(objectItem.path);
-    const text = readString(objectItem.text);
-    if (text && (selector === evidenceId || `${path}#${selector}` === evidenceId || evidenceId.endsWith(selector))) {
-      return text;
-    }
-  }
-  return "";
 }
 
 function parseEvidenceMarkdownLinks(text: string): Array<{ text: string; href?: string }> {
@@ -1870,10 +2018,6 @@ function truncateText(value: string, maxLength: number): string {
     return text;
   }
   return `${text.slice(0, Math.max(0, maxLength - 1))}…`;
-}
-
-function stableDomId(value: string): string {
-  return value.replace(/[^a-zA-Z0-9_-]+/g, "-");
 }
 
 function formatFieldDisplayValue(field: ReplayField): string {

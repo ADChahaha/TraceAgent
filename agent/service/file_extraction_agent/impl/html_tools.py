@@ -19,11 +19,12 @@ def build_tools(state: Any) -> list[Any]:
     """Build model-facing tools bound to the current graph state."""
 
     @tool
-    def tree(path_id: str = "evidence://0000", depth: int = 3) -> dict[str, Any]:
+    def tree(path_id: str = "", depth: int = 3) -> dict[str, Any]:
         """Expand the virtual semantic HTML file tree at a directory evidence link.
 
-        Use this for directories: root, document directories, and section directories. Use
-        evidence links such as evidence://0000.0001 copied from tree output. Directory names
+        Use this for directories: root, document directories, and section directories. Leave
+        path_id empty for the root. Use evidence links such as evidence://0001 copied
+        from tree output for document or section directories. Directory names
         are shown with a trailing slash in tree output. tree returns child directories and
         readable .md/.list/.table evidence links; it does not return file text. If you need
         content inside a directory, call tree on that directory first, then call read on one
@@ -36,7 +37,7 @@ def build_tools(state: Any) -> list[Any]:
     def read(path_id: str) -> dict[str, Any]:
         """Only read file evidence links ending in .md, .list, or .table in tree output.
 
-        Use evidence links such as evidence://0000.0001.0002 copied from tree output. Never
+        Use evidence links such as evidence://0001.0001.0002 copied from tree output. Never
         call read on document or section directories. If tree shows a directory ending with
         /, call tree on that directory first, then read a child .md/.list/.table evidence
         link.
@@ -80,10 +81,10 @@ def build_tools(state: Any) -> list[Any]:
         Next: say whether you will keep reading, review this field, or save another candidate.
         This candidate is not the final field decision; it is a note for later review.
         When source text is available, include a Markdown evidence link to the same block path_id you are saving, for example
-        ["quoted words"](evidence://0000.0001.0014). Do not leave source words as plain quoted text.
+        ["quoted words"](evidence://0001.0014.0001). Do not leave source words as plain quoted text.
         Explain why the linked text may support, contradict, or qualify the field.
         If inline selectors are not available yet, block-level evidence links such as
-        evidence://0000.0001.0014 are acceptable.
+        evidence://0001.0014.0001 are acceptable.
         Do not pass sentence/item/row inline links; add_candidate_evidence records only block-level
         evidence links. The evidence link must point to a readable .md/.list/.table file,
         not a directory.
@@ -140,12 +141,12 @@ def build_tools(state: Any) -> list[Any]:
         Why supported: cite reviewed evidence or explain the reviewed absence basis.
         Next: say the next field, review, or submit action.
 
-        Assistant content citations should use Markdown links like ["short source quote"](evidence://0000.0001/S002).
+        Assistant content citations should use Markdown links like ["short source quote"](evidence://0001.0014.0001/S002).
         For non-empty final_evidence, assistant content must include a short quote from reviewed evidence_texts
         and a Markdown evidence link to either the inline selector or its paragraph/list/table block.
         Quote the source words as the link label when possible, and explain why the linked text supports the field decision.
         Block-level evidence links are acceptable in assistant content when they are clearer,
-        for example ["short source quote"](evidence://0000.0001.0014), but final_evidence
+        for example ["short source quote"](evidence://0001.0014.0001), but final_evidence
         must still use inline selectors from review_evidences.
         For multiple selectors, repeat separate
         links. Tool arguments and final_evidence must use evidence:// links.
@@ -173,8 +174,8 @@ PATH_ID_RE = re.compile(r"(?<![A-Za-z0-9_/:])(\d{4}(?:\.\d{4})*)(?![A-Za-z0-9_.]
 INLINE_SELECTOR_KEYS = {"S": "sentences", "I": "items", "R": "rows"}
 
 
-def _tree(state: Any, path_id: str = "evidence://0000", *, depth: int = 3) -> dict[str, Any]:
-    canonical_path_id = _block_path_id_from_locator(path_id)
+def _tree(state: Any, path_id: str = "", *, depth: int = 3) -> dict[str, Any]:
+    canonical_path_id = _tree_path_id_from_locator(path_id)
     return _run_tool(
         state,
         "tree",
@@ -243,8 +244,6 @@ def _add_candidate_evidence(
     *,
     path_id: str = "",
 ) -> dict[str, Any]:
-    action_text = _current_action_text(state)
-
     def execute() -> dict[str, Any]:
         errors: list[dict[str, Any]] = []
         if not isinstance(field_id, str) or not field_id:
@@ -261,7 +260,7 @@ def _add_candidate_evidence(
                     "field_id": field_id,
                     "path_id": path_id,
                     "code": "BAD_LOCATOR",
-                    "message": "use a block evidence link like evidence://0000.0001 copied from tree output",
+                    "message": "use a block evidence link like evidence://0001.0001.0001 copied from tree output",
                 }
             )
         else:
@@ -288,7 +287,6 @@ def _add_candidate_evidence(
         state.evidence_states[field_id] = {
             "field_id": field_id,
             "evidence": combined,
-            "reason": action_text,
         }
         state.review_states.pop(field_id, None)
         return {
@@ -309,7 +307,6 @@ def _add_candidate_evidence(
             {
                 "type": "candidate_evidence_added",
                 "tool": "add_candidate_evidence",
-                "reason": action_text,
                 "field_id": result["field_id"],
                 "candidate_evidence": result["candidate_evidence"],
             },
@@ -360,7 +357,6 @@ def _write_field(
             {
                 "type": "field_written",
                 "tool": "write_field",
-                "reason": action_text,
                 "field": result["field"],
             },
         )
@@ -368,8 +364,6 @@ def _write_field(
 
 
 def _review_evidences(state: Any, field_id: str) -> dict[str, Any]:
-    action_text = _current_action_text(state)
-
     def execute() -> dict[str, Any]:
         field = field_definition(state, field_id)
         if field is None:
@@ -384,7 +378,6 @@ def _review_evidences(state: Any, field_id: str) -> dict[str, Any]:
             "candidate_evidence": candidate_evidence,
             "evidence": evidence,
             "evidence_units": sorted(_selector_units(evidence)),
-            "reason": action_text,
         }
         return {
             "ok": True,
@@ -409,7 +402,6 @@ def _review_evidences(state: Any, field_id: str) -> dict[str, Any]:
 
 
 def _submit_result(state: Any) -> dict[str, Any]:
-    action_text = _current_action_text(state)
     result = _run_tool(
         state,
         "submit_result",
@@ -424,7 +416,6 @@ def _submit_result(state: Any) -> dict[str, Any]:
             {
                 "type": "result_completed",
                 "tool": "submit_result",
-                "reason": action_text,
                 "result": result["result"],
                 "trace": trace,
             },
@@ -454,7 +445,7 @@ def _locator_error(locator: Any, canonical_path_id: str | None) -> dict[str, Any
         "errors": [
             {
                 "code": "BAD_LOCATOR",
-                "message": "use an evidence link like evidence://0000.0001 copied from tree output",
+                "message": "use an evidence link like evidence://0001 copied from tree output",
             }
         ],
     }
@@ -468,6 +459,14 @@ def _block_path_id_from_locator(locator: Any) -> str | None:
     if selector is not None:
         return None
     return path_id
+
+
+def _tree_path_id_from_locator(locator: Any) -> str | None:
+    if locator in ("", None):
+        return "0000"
+    if isinstance(locator, str) and locator.strip() == "/":
+        return "0000"
+    return _block_path_id_from_locator(locator)
 
 
 def _parse_evidence_locator(locator: Any) -> tuple[str, str | None] | None:
@@ -525,7 +524,7 @@ def _canonicalize_final_evidence_links(final_evidence: Any) -> tuple[list[dict[s
                 {
                     "index": index,
                     "code": "BAD_FINAL_EVIDENCE_LOCATOR",
-                    "message": "final_evidence entries must be inline evidence links like evidence://0000.0001/S001",
+                    "message": "final_evidence entries must be inline evidence links like evidence://0001.0001.0001/S001",
                 }
             )
             continue
@@ -858,26 +857,23 @@ def _run_tool(
     *,
     emit_result_completed: bool = True,
 ) -> dict[str, Any]:
-    action_text = _current_action_text(state)
     _emit_event(
         state,
         {
             "type": "tool_started",
             "tool": tool_name,
-            "reason": action_text,
             "args": args,
         },
     )
     ordering_error = validate_tool_order(state, tool_name)
     if ordering_error:
         result = {"ok": False, "errors": [ordering_error]}
-        _record_action(state, tool_name, args, action_text, result)
+        _record_action(state, tool_name, args, result)
         _emit_event(
             state,
             {
                 "type": "tool_failed",
                 "tool": tool_name,
-                "reason": action_text,
                 "args": args,
                 "result": result,
             },
@@ -891,14 +887,13 @@ def _run_tool(
     event_result = result
     if tool_name == "submit_result" and result.get("ok") is True:
         event_result = {"ok": True, "result": result.get("result")}
-    _record_action(state, tool_name, args, action_text, event_result)
+    _record_action(state, tool_name, args, event_result)
     _update_tool_cursor(state, tool_name, event_result)
     _emit_event(
         state,
         {
             "type": event_type,
             "tool": tool_name,
-            "reason": action_text,
             "args": args,
             "result": event_result,
         },
@@ -910,12 +905,11 @@ def validate_tool_order(state: Any, tool_name: str) -> dict[str, Any] | None:
     return None
 
 
-def _record_action(state: Any, tool_name: str, args: dict[str, Any], action_text: str, result: dict[str, Any]) -> None:
+def _record_action(state: Any, tool_name: str, args: dict[str, Any], result: dict[str, Any]) -> None:
     state.actions.append(
         {
             "tool_name": tool_name,
             "args": args,
-            "reason": action_text,
             "result": result,
         }
     )

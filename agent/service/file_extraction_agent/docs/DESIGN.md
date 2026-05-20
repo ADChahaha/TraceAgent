@@ -55,38 +55,42 @@
 示例：
 
 ```text
-evidence://0000 /
-└── evidence://0000.0001 file1-项目设计说明/
-    ├── evidence://0000.0001.0001 背景/
-    │   ├── evidence://0000.0001.0001.0001 这个项目最初是为了.md
-    │   └── evidence://0000.0001.0001.0002 后来我们发现模型.md
-    └── evidence://0000.0001.0002 实现方案/
-        ├── evidence://0000.0001.0002.0001 系统会先解析HTML.md
-        ├── evidence://0000.0001.0002.0002 关键步骤.list
-        ├── evidence://0000.0001.0002.0003 费用明细.table
-        └── evidence://0000.0001.0002.0004 虚拟树不会落盘.md
+/
+└── evidence://0001 file1-项目设计说明/
+    ├── evidence://0001.0000.0001 封面上未归入 section 的段落.md
+    ├── evidence://0001.0001 背景/
+    │   ├── evidence://0001.0001.0001 这个项目最初是为了.md
+    │   └── evidence://0001.0001.0002 后来我们发现模型.md
+    └── evidence://0001.0002 实现方案/
+        ├── evidence://0001.0002.0001 系统会先解析HTML.md
+        ├── evidence://0001.0002.0002 关键步骤.list
+        ├── evidence://0001.0002.0003 费用明细.table
+        └── evidence://0001.0002.0004 虚拟树不会落盘.md
 ```
 
 编号是路径稳定性的基础：
 
-- 文档目录使用 `001-...`、`002-...` 区分多个输入文件。
-- section 目录使用同级编号区分相同 header。
-- paragraph、list 和 table 文件使用同级编号保留原文 block 顺序并避免 snippet 重复。
+- 文档目录的模型可见 path_id 使用 `0001`、`0002` 区分多个输入文件，根目录 `/` 不再暴露成 `evidence://0000`。
+- 文档目录直下、尚未归入任何 section 的 paragraph/list/table 使用 `文档 path_id.0000.xxxx`，例如 `0001.0000.0001`。
+- section 目录使用文档或上级 section 内的同级编号区分相同 header。
+- paragraph、list 和 table 文件使用所在目录内的同级编号保留原文 block 顺序并避免 snippet 重复。
 
 这些 `001-` / `002-` 同级编号只存在于内部 raw path。模型可见的 `tree` 行使用 `evidence://<path_id>` 承担去重和定位职责，所以显示名会去掉同级编号前缀，避免重复噪音。显示名还会 percent-decode，例如把 `Confidentiality%20Agreement` 显示为 `Confidentiality Agreement`；内部 raw path 保持原样，避免破坏已有索引兼容。
 
-raw virtual path 是内部索引，不再作为模型可见 locator。`HtmlDocument` 会同时维护 `nodes_by_path` 和 `nodes_by_path_id`：raw path 用于内部调试和兼容底层查询，`path_id` 是内部稳定编号。模型看到和传入工具的 locator 是 `evidence://<path_id>`，例如根为 `evidence://0000`，第一个文档为 `evidence://0000.0001`，文档下第一个 section 为 `evidence://0000.0001.0001`。旧的方括号格式 `[0000.0001]` 不是别名，工具参数会直接拒绝。
+raw virtual path 是内部索引，不再作为模型可见 locator。`HtmlDocument` 会同时维护 `nodes_by_path` 和 `nodes_by_path_id`：raw path 用于内部调试和兼容底层查询，`path_id` 是内部稳定编号。模型看到和传入工具的 locator 是 `evidence://<path_id>`，例如第一个文档为 `evidence://0001`，文档直下第一个可读 block 为 `evidence://0001.0000.0001`，文档下第一个 section 为 `evidence://0001.0001`。旧的方括号格式 `[0001.0001]` 不是别名，工具参数会直接拒绝。
 
-`HtmlDocument.source_selectors()` 会从虚拟节点对应的原始 HTML 节点上读取 `id`，如果没有 `id` 再看 `data-element-id`，生成 `path_id -> DOM id` 映射。这个映射只服务 replay 和前端定位，不改变 `tree/read/add_candidate_evidence/review_evidences/write_field` 的证据语义。
+`HtmlDocument.source_selectors()` 只为 paragraph/list/table 可读叶子节点生成映射；section、document 和 root 目录不进入映射，避免前端把一个目录高亮成一大片原文。它会从虚拟节点对应的原始 HTML 节点上读取 `id`，如果没有 `id` 再看 `data-element-id`，生成内部 `path_id -> 原始 DOM id` 映射。backend 生成 replay 时会用这张表把展示 HTML 的节点 id 改写成虚拟 `path_id`，前端最终只需要用 path_id 定位。
 
-模型只能复制 tree 输出里的 `evidence://` locator。工具返回给模型的候选 evidence、`review_evidences.evidence` 和 `write_field(final_evidence=...)` 都使用 evidence links；工具内部会把这些 link 转成 canonical `path_id` selector，最终结果和 scorer 仍使用 `path_id + Sxxx/Ixxx/Rxxx` 反查原文。`validate_and_build_result` 还会在 trace 里附带 `source_selectors`，把虚拟 `path_id` 映射到原文 DOM id，供 backend replay 和 frontend evidence 跳转使用。
+`run_extraction_graph_stream` 在进入模型 resolution 前会先输出 `source_indexed` 事件，其中包含当前 `document_tree` 和 `source_selectors`。backend 可以在任务还在运行时先用这张映射改写 replay HTML，让前端点击 live read/add_candidate_evidence 工具行也能打开原文并高亮。最终 `validate_and_build_result` 仍会在 trace 里附带同样的内部 `source_selectors`，作为终态 replay 的权威映射。
+
+模型只能复制 tree 输出里的 `evidence://` locator。工具返回给模型的候选 evidence、`review_evidences.evidence` 和 `write_field(final_evidence=...)` 都使用 evidence links；工具内部会把这些 link 转成 canonical `path_id` selector，最终结果和 scorer 仍使用 `path_id + Sxxx/Ixxx/Rxxx` 反查原文。
 
 ## 工具边界
 
 面向模型的最小工具集合：
 
 ```text
-tree(path_id="evidence://0000", depth=3)
+tree(path_id="", depth=3)
 read(path_id="evidence://...")
 add_candidate_evidence(field_id, path_id="evidence://...")
 review_evidences(field_id)
@@ -122,7 +126,7 @@ write_field
 
 这个分层避免只有 `add_candidate_evidence` 的轮次写成“我刚读到了什么”。候选保存轮只说明“保存哪个候选、为什么相关”，读后概括只属于 `read` 轮。
 
-只要 assistant content 使用了文档原文或原文语义来解释阅读、候选记录、复核或写入动作，就必须写成 Markdown evidence link，并尽可能引用原文说明模型正在做什么，不能只把原文放在裸引号里。还没有 Sxxx/Ixxx/Rxxx selector 时，用 paragraph/list/table block 链接，例如 `["strictest of confidence"](evidence://0000.0001.0012)`；已经有 inline selector 时优先用 inline 链接，例如 `["only in connection"](evidence://0000.0001.0014/S002)`。调用 `add_candidate_evidence` 前，如果引用正在保存的 block 内容，content 必须包含指向同一个 block path_id 的 Markdown evidence link。`write_field` 是字段定案动作；非空 `final_evidence` 的 write content 应包含简短原文 quote，并链接到对应 inline selector 或它所在的 paragraph/list/table block。可信证据仍只来自虚拟路径和文件内编号，assistant content 不是模型隐藏推理链。
+只要 assistant content 使用了文档原文或原文语义来解释阅读、候选记录、复核或写入动作，就必须写成 Markdown evidence link，并尽可能引用原文说明模型正在做什么，不能只把原文放在裸引号里。还没有 Sxxx/Ixxx/Rxxx selector 时，用 paragraph/list/table block 链接，例如 `["strictest of confidence"](evidence://0001.0012.0001)`；已经有 inline selector 时优先用 inline 链接，例如 `["only in connection"](evidence://0001.0014.0001/S002)`。调用 `add_candidate_evidence` 前，如果引用正在保存的 block 内容，content 必须包含指向同一个 block path_id 的 Markdown evidence link。`write_field` 是字段定案动作；非空 `final_evidence` 的 write content 应包含简短原文 quote，并链接到对应 inline selector 或它所在的 paragraph/list/table block。可信证据仍只来自虚拟路径和文件内编号，assistant content 不是模型隐藏推理链。
 
 resolution system prompt 要求每轮只调用一个工具，避免模型批量扫、批量 review、批量写，保持接近人类阅读节奏。运行时也会在 `bind_tools` 时请求关闭 provider 侧 parallel tool calls；如果模型仍然同轮返回多个 tool call，运行时只保留并执行第一个，再把截断后的单个 tool call 写入 `model_message` trace。依赖前一个工具输出的动作必须等结果回来后再做，例如 `write_field` 不能和它所依赖的 `review_evidences` 放在同一轮。模型应把 `review_evidences` 当成复看候选证据的判断点：只有 review 后觉得证据足够支撑字段决定，或者足够判断 missing/null，才写字段；不够就继续读或继续添加候选证据。
 
@@ -150,6 +154,8 @@ submit_result
 resolution trace 同时记录模型回复和工具动作：
 
 ```text
+build_graph_state(documents + task_spec)
+  -> 先输出 source_indexed(document_tree + source_selectors)，供前端运行中打开原文和高亮
 model.stream(messages)
   -> 真实模型优先使用 Responses API streaming 形态，保留同轮 assistant content 和 tool_call
   -> 如果 Responses stream 失败，降级到 chat/completions stream
@@ -161,13 +167,13 @@ model.stream(messages)
   -> 记录 tool_started / tool_completed 以及字段或结果事件
 ```
 
-`model_message` 用来调试模型是否在同一轮既输出普通文本又发起 tool call。模型工厂构造一个按顺序尝试的 fallback chain：`responses_stream -> chat_completions_stream -> responses_invoke -> chat_completions_invoke`。resolution graph 优先使用 stream 语义；如果当前 stream attempt 抛错或没有返回任何 chunk，才尝试下一种 transport。运行时把 stream chunk 合并成一个普通 `AIMessage` 后再交给 trace 和 ToolNode，因此 trace 能保存用户可见 assistant content，工具执行仍使用完整 tool call 参数。普通 chat-completions tool-call stream 不是主路径，因为该路径在部分 provider 上只返回 function-call delta，不返回 assistant text；它只作为 Responses stream 失败后的备用。`model_message` 只保存模型返回的普通 `content` 和工具调用摘要，不保存 DeepSeek `reasoning_content` 这类隐藏思考内容。为了兼容旧前端和实验脚本，工具 action/event 里仍保留 `reason` 字段，但它由最近一轮 `model_message.content` 派生；如果该轮没有 content，`reason` 为空字符串。
+`model_message` 用来调试模型是否在同一轮既输出普通文本又发起 tool call。模型工厂构造一个按顺序尝试的 fallback chain：`responses_stream -> chat_completions_stream -> responses_invoke -> chat_completions_invoke`。resolution graph 优先使用 stream 语义；如果当前 stream attempt 抛错或没有返回任何 chunk，才尝试下一种 transport。运行时把 stream chunk 合并成一个普通 `AIMessage` 后再交给 trace 和 ToolNode，因此 trace 能保存用户可见 assistant content，工具执行仍使用完整 tool call 参数。普通 chat-completions tool-call stream 不是主路径，因为该路径在部分 provider 上只返回 function-call delta，不返回 assistant text；它只作为 Responses stream 失败后的备用。`model_message` 只保存模型返回的普通 `content` 和工具调用摘要，不保存 DeepSeek `reasoning_content` 这类隐藏思考内容。工具 action/event 不再保存 `reason` 字段；用户可见文字只来自 `model_message.content`，工具记录只表达工具名、参数和结果。
 
 候选证据记录是 provisional collection，不是最终字段分类或定案。`add_candidate_evidence` 使用显式 `evidence://` block link 保存 block 级候选 evidence，不依赖上一轮是不是 `read`，也不接受 Sxxx/Ixxx/Rxxx inline selector。一次 `add_candidate_evidence` 只保存一个字段和一个 paragraph/list/table block；如果同一个对象可能支持多个字段，或者同一字段需要继续补充更多对象，模型需要分多次调用。模型看到某个 paragraph/list/table 可能支持、反驳或限定某个字段时，可以直接把该 block link 记入候选集合；不确定但可能相关的对象也应该先保存为候选笔记。每次调用前，assistant content 使用 `Saving candidate / Why relevant / Next` 说明保存哪个候选和为什么相关；如果引用原文，必须用 Markdown evidence link 指向正在保存的同一个 block path_id，不能只写裸引号，也不能把本轮写成刚刚完成的新阅读。候选 evidence 可以比最终 evidence 更宽、更粗，也可能包含后续会被筛掉的对象；`final_evidence` 必须等 `review_evidences` 展开 inline selector 后再选择，通常是候选 block 里的更小或不同的 inline 子集。`task_spec` 只描述字段语义和输出类型，不负责说明工具调用顺序。
 
 ### `tree`
 
-resolution 的初始 human message 不再直接包含 `tree("0000", depth=3)` 等价的导航树。模型只能先看到字段定义和一条“先用 tree 导航”的简短指令，因此第一步如果需要定位文档内容，应主动调用 `tree`。这样首轮导航也会进入 trace，便于人类 reviewer 看到模型是如何打开目录的。
+resolution 的初始 human message 不再直接包含 `tree(depth=3)` 等价的导航树。模型只能先看到字段定义和一条“先用 tree 导航”的简短指令，因此第一步如果需要定位文档内容，应主动调用 `tree`。这样首轮导航也会进入 trace，便于人类 reviewer 看到模型是如何打开目录的。
 
 初始 prompt 输入链路是：
 
@@ -175,18 +181,19 @@ resolution 的初始 human message 不再直接包含 `tree("0000", depth=3)` �
 documents + task_spec
   -> 构建 HtmlDocument 虚拟树索引
   -> build_resolution_messages 只写入 Task fields 和 tree-first 指令
-  -> 模型调用 tree(evidence://0000, depth=3) 或按需选择更小 depth
+  -> 模型调用 tree(path_id="", depth=3) 或按需选择更小 depth
   -> tree 返回目录和 paragraph/list/table 文件 evidence link
   -> 模型再 read 具体文件
 ```
 
-如果模型调用 `tree("0000", depth=3)`，层级覆盖根目录、文档目录、一级 section，以及一级 section 下的 paragraph/list/table 文件：
+如果模型调用 `tree(path_id="", depth=3)`，层级覆盖根目录、文档目录、一级 section，以及一级 section 下的 paragraph/list/table 文件：
 
 ```text
-0000 /
-  -> 0000.0001 文档目录/
-  -> 0000.0001.0001 一级 section/
-  -> 0000.0001.0001.0001 可读 paragraph/list/table 文件
+/
+  -> 0001 文档目录/
+  -> 0001.0000.0001 文档直下可读 paragraph/list/table 文件
+  -> 0001.0001 一级 section/
+  -> 0001.0001.0001 section 内可读 paragraph/list/table 文件
 ```
 
 这样当 OCR 或语义解析把实质条款挂到标题看似无关的目录下时，模型可以通过显式 `tree` 调用看到该目录下的可读文件。`tree` 只提供导航，不返回 paragraph 正文，不作为最终 evidence。结果 trace 仍会保存 `document_tree=state.document.tree_text("/", depth=3)`，但这只是调试和前端展示记录，不代表这些 tree 行被注入给模型。
@@ -194,10 +201,10 @@ documents + task_spec
 `tree` 返回虚拟文件树的目录和 paragraph 文件名，是模型继续展开更深目录的入口。
 
 ```text
-tree("0000", depth=1)
+tree(path_id="", depth=1)
   -> 返回所有文档目录
 
-tree("0000.0001", depth=2)
+tree("0001", depth=2)
   -> 返回该文档下的 section 和 paragraph/list/table 文件
 ```
 
@@ -219,7 +226,7 @@ read(evidence://...)
 这样 trace 不会把多个相邻对象打包进一次读取；人类 reviewer 能逐块看到模型读了什么、为什么读、以及后续是否保存为候选。
 
 ```text
-read("evidence://0000.0001.0002.0001")
+read("evidence://0001.0002.0001")
   -> "系统会先解析 HTML，并按 heading 层级生成语义树。..."
 ```
 
@@ -239,7 +246,7 @@ list 返回 Markdown list，前置少量 metadata，并给每个 item 稳定编�
 ```markdown
 ---
 kind: list
-path_id: 0000.0001.0002.0002
+path_id: 0001.0002.0002
 title: 关键步骤
 showing: 1-3
 ---
@@ -255,7 +262,7 @@ table 返回 Markdown table，前置少量 metadata，并给每行稳定编号�
 ```markdown
 ---
 kind: table
-path_id: 0000.0001.0002.0003
+path_id: 0001.0002.0003
 title: 费用明细
 rows: 238
 columns: 项目 | 金额 | 日期
@@ -276,7 +283,7 @@ showing: 1-238
 `add_candidate_evidence` 用来把一个显式 `evidence://` block link 指向的 paragraph/list/table 对象保存到一个 schema 字段的候选 evidence buffer，但不提交字段值：
 
 ```text
-add_candidate_evidence(field_id, path_id="evidence://0000.0001.0002.0001")
+add_candidate_evidence(field_id, path_id="evidence://0001.0002.0001")
 ```
 
 它解决的是“模型看到一个可能有用的对象，但还没完全决定字段值或 enum 分类”的场景。只要某个 paragraph/list/table evidence link 可能是字段证据，就可以调用 `add_candidate_evidence` 把这个对象记录为候选 block evidence，不等字段值或 enum decision 最终确定；后续看到同一字段的更多证据时，再次调用 `add_candidate_evidence(field_id, path_id=...)` 追加到该字段的 evidence buffer。
@@ -285,13 +292,13 @@ add_candidate_evidence(field_id, path_id="evidence://0000.0001.0002.0001")
 
 ```text
 paragraph:
-  add_candidate_evidence(field_id="founded_year", path_id="evidence://0000.0001.0002.0001")
+  add_candidate_evidence(field_id="founded_year", path_id="evidence://0001.0002.0001")
 
 list:
-  add_candidate_evidence(field_id="service_items", path_id="evidence://0000.0001.0002.0002")
+  add_candidate_evidence(field_id="service_items", path_id="evidence://0001.0002.0002")
 
 table:
-  add_candidate_evidence(field_id="fees", path_id="evidence://0000.0001.0002.0003")
+  add_candidate_evidence(field_id="fees", path_id="evidence://0001.0002.0003")
 ```
 
 如果一个对象可能支持多个字段，不要在同一次工具调用里批量保存；应分别调用多次 `add_candidate_evidence`。如果一个字段需要多个 block，也应每个 block 调用一次。每次保存前都要用 assistant content 写一句候选保存理由，并在引用原文时把短原文写成指向该 block 的 Markdown evidence link。这样 trace 会呈现“看到一个相关对象就记一条候选笔记”的节奏，而不是读完整篇后跨字段批量整理，也不会让候选判断隐藏在静默工具调用里。`add_candidate_evidence` 成功后不改变阅读权限；它只更新字段候选 evidence buffer，并让该字段已有 review snapshot 失效。
@@ -302,7 +309,7 @@ table:
 - 每次调用必须提供一个 `path_id` 参数，参数值必须是 `evidence://` block link。
 - evidence link 必须指向 paragraph/list/table 文件，不能是根、文档目录、section 目录或 inline selector。
 - `add_candidate_evidence` 只接受 block selector，不接受 `sentences/items/rows` inline selector。
-- 校验通过后，工具会保存 block selector，例如 `{"path_id": "0000.0001.0002.0001"}`。
+- 校验通过后，工具会保存 block selector，例如 `{"path_id": "0001.0002.0001"}`。
 
 如果字段值已经通过 `write_field` 写过，后续 `add_candidate_evidence` 只会更新该字段的候选 evidence buffer，并让已有 review snapshot 失效；它不会自动改写字段结果里的最终 evidence。模型需要重新 `review_evidences`，再用 `write_field` 覆盖字段值和 `final_evidence`。
 
@@ -351,15 +358,15 @@ write_field(field_id, value, final_evidence, status?)
 ```json
 [
   {
-    "path_id": "0000.0001.0001.0001",
+    "path_id": "0001.0001.0001",
     "sentences": ["S001"]
   },
   {
-    "path_id": "0000.0001.0002.0004",
+    "path_id": "0001.0002.0004",
     "items": ["I002", "I002.001"]
   },
   {
-    "path_id": "0000.0001.0003.0002",
+    "path_id": "0001.0003.0002",
     "rows": ["R002", "R078"]
   }
 ]
@@ -521,13 +528,13 @@ write_field(field_id, value, final_evidence)
       "value": "Acme Inc.",
       "evidence": [
         {
-          "path_id": "0000.0001.0001.0001",
+          "path_id": "0001.0001.0001",
           "sentences": ["S001"]
         }
       ],
       "evidence_texts": [
         {
-          "path_id": "0000.0001.0001.0001",
+          "path_id": "0001.0001.0001",
           "selector": "S001",
           "text": "公司名称为 Acme Inc."
         }
@@ -540,13 +547,13 @@ write_field(field_id, value, final_evidence)
       "value": 2020,
       "evidence": [
         {
-          "path_id": "0000.0001.0001.0002",
+          "path_id": "0001.0001.0002",
           "sentences": ["S001"]
         }
       ],
       "evidence_texts": [
         {
-          "path_id": "0000.0001.0001.0002",
+          "path_id": "0001.0001.0002",
           "selector": "S001",
           "text": "公司成立于2020年。"
         }

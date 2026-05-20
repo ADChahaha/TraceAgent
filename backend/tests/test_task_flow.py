@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,7 @@ from fastapi.testclient import TestClient
 from backend.core.config import BackendSettings
 from backend.main import create_app
 from backend.services.agent_process import build_field_agent_process
+from backend.services.task_service import sanitize_replay_display_html
 
 
 TASK_SPEC = {
@@ -122,7 +124,15 @@ class FakeAgentClient:
                         "children": [],
                     }
                 ],
-                "source_selectors": {"0000.0001.0001": "dp-p-1"},
+                "source_selectors": {"0001.0001.0001": "dp-p-1"},
+                "actions": [
+                    {
+                        "tool_name": "read",
+                        "reason": "旧工具文字不应出现在 replay action",
+                        "args": {"path_id": "evidence://0001.0001.0001"},
+                        "result": {"ok": True},
+                    }
+                ],
                 "fields": [
                     {
                         "field_name": "room_numbers",
@@ -460,11 +470,118 @@ def test_create_task_commits_resolved_agent_fields_without_routing(tmp_path: Pat
         assert "428249v2" not in replay["display_html"]
         assert "page-number" not in replay["display_html"]
         assert "page_footer" not in replay["display_html"]
-        assert replay["source_selectors"] == {"0000.0001.0001": "dp-p-1"}
+        assert 'id="0001.0001.0001"' in replay["display_html"]
+        assert 'data-element-id="0001.0001.0001"' in replay["display_html"]
+        assert 'id="dp-p-1"' not in replay["display_html"]
+        assert replay["source_selectors"] == {"0001.0001.0001": "0001.0001.0001"}
+        assert replay["actions"] == [
+            {
+                "tool_name": "read",
+                "args": {"path_id": "evidence://0001.0001.0001"},
+                "result": {"ok": True},
+            }
+        ]
 
         extract_call = fake_agent.extraction_calls[0]
         assert extract_call["task_spec"] == TASK_SPEC
         assert "dp-p-1" in extract_call["html"]
+
+
+def test_replay_uses_live_source_index_before_extraction_finishes(tmp_path: Path):
+    app, _fake_agent = build_app(tmp_path)
+
+    with TestClient(app) as client:
+        service = app.state.task_service
+        upload = service.upload_file_payload(
+            file_bytes=b"%PDF-1.4 fake",
+            filename="sample.pdf",
+            content_type="application/pdf",
+        )
+        created = service.create_task(
+            files=[upload],
+            task_type="civilized_dormitory",
+            task_spec=TASK_SPEC,
+            metadata={},
+            run_pipeline=False,
+        )
+        task_id = created["task_id"]
+        task = service.get_task_or_raise(task_id)
+        service._save_agent_stage_run(
+            task_id=task_id,
+            sequence=1,
+            stage="document_processing",
+            agent_name="document_processor",
+            status="completed",
+            failure_reason=None,
+            request={"filename": "sample.pdf"},
+            response={
+                "filename": "sample.pdf",
+                "html": '<h1 id="dp-h1-1">测试文档</h1><p id="dp-p-1">1-101 被列为文明寝室</p>',
+                "display_html": '<main><h1 id="dp-h1-1">测试文档</h1><p id="dp-p-1">1-101 被列为文明寝室</p></main>',
+            },
+            trace={},
+            started_at=task["created_at"],
+            finished_at=task["created_at"],
+        )
+        service._emit_task_event(
+            task,
+            event_type="agent.event",
+            payload={
+                "agent": "file_extraction_agent",
+                "type": "source_indexed",
+                "tool": "source_index",
+                "result": {
+                    "ok": True,
+                    "document_tree": "/\n└── 0001 sample.pdf/",
+                    "source_selectors": {"0001.0000.0001": "dp-p-1"},
+                },
+            },
+            now=task["created_at"],
+        )
+
+        replay_response = client.get(f"/tasks/{task_id}/replay")
+
+    assert replay_response.status_code == 200
+    replay = replay_response.json()
+    assert replay["outline_tree"] == "/\n└── 0001 sample.pdf/"
+    assert replay["source_selectors"] == {"0001.0000.0001": "0001.0000.0001"}
+    assert 'id="0001.0000.0001"' in replay["display_html"]
+    assert 'data-element-id="0001.0000.0001"' in replay["display_html"]
+    assert 'id="dp-p-1"' not in replay["display_html"]
+
+
+def test_replay_display_html_sanitizer_keeps_large_css_fast():
+    large_css = (".not-target " + ("x" * 20) + " ") * 700
+    no_target_html = f"<style>{large_css}</style><body><p>正文内容</p></body>"
+
+    started_at = time.perf_counter()
+    sanitized = sanitize_replay_display_html(no_target_html)
+    elapsed = time.perf_counter() - started_at
+
+    assert elapsed < 0.2
+    assert "正文内容" in sanitized
+    assert ".not-target" in sanitized
+
+    chrome_html = (
+        "<!doctype html><html><head><style>"
+        ".page-number { color: #737373; }"
+        ".block-page_footer { color: #999; }"
+        ".content { font-weight: 600; }"
+        "</style></head><body>"
+        '<div class="page-number">Page 1</div>'
+        '<p id="dp-p-1">正文内容</p>'
+        '<div class="block-page_footer" data-type="page_footer">428249v2</div>'
+        "</body></html>"
+    )
+
+    sanitized = sanitize_replay_display_html(chrome_html)
+
+    assert "正文内容" in sanitized
+    assert ".content" in sanitized
+    assert "Page 1" not in sanitized
+    assert "428249v2" not in sanitized
+    assert "page-number" not in sanitized
+    assert "block-page_footer" not in sanitized
 
 
 def test_create_task_accepts_multiple_files_and_merges_document_blocks(tmp_path: Path):

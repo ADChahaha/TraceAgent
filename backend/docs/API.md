@@ -30,8 +30,9 @@
   -> 前端打开 GET /tasks/{task_id}/events?after_seq=n 接收实时事件
   -> backend 后台逐个调用 document_processor，把上传文件转成 markdown/html/blocks
   -> backend 保存每个文件的标准化结果，不保存原始文件 bytes
-  -> backend 将文档 html 和 task_spec 传给 file_extraction_agent
-  -> backend 保存抽取结果和 trace，并把关键阶段归一成 task_events
+  -> backend 将 documents(filename + html) 和 task_spec 传给 file_extraction_agent stream 入口
+  -> backend 消费 NDJSON stream，把工具过程事件归一成 task_events
+  -> backend 用 result_completed 保存抽取结果和 trace
   -> backend 对照 task_spec.fields 补齐 agent 没返回的字段，占位写成 failed/None
   -> backend 直接提交 resolved 字段，failed/None 字段保持未提交
   -> backend 保存最终结果和 audit
@@ -113,7 +114,7 @@ task.completed
 task.failed
 ```
 
-`agent.event` 用于承载 agent service 的原始或归一化 stream 事件，例如 `tool_started`、`tool_completed`、`tool_failed`、`candidate_evidence_added`、`field_written` 和 `result_completed`。如果某类 agent 事件已经被 backend 提升成业务事件，例如字段写入，也可以同时写入 `field.written`，但前端要以 `seq` 去重。
+`agent.event` 用于承载 agent service 的原始或归一化 stream 事件，例如 `tool_started`、`tool_completed`、`tool_failed`、`candidate_evidence_added`、`field_written` 和 `result_completed`。backend 不转发 tool 顶层 `reason`；模型可见文字由 `model_message.content` 事件承载。如果某类 agent 事件已经被 backend 提升成业务事件，例如字段写入，也可以同时写入 `field.written`，但前端要以 `seq` 去重。
 
 ## `POST /tasks`
 
@@ -273,7 +274,7 @@ documents + agent_runs + agent_stage_runs
   -> display_html
   -> outline_tree
   -> broad_plan
-  -> actions
+  -> actions，剥掉 tool action 顶层 reason
   -> result
 ```
 

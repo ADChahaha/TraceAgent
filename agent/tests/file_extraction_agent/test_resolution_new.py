@@ -65,9 +65,9 @@ def test_resolution_messages_do_not_inline_initial_tree():
     assert "Task fields:" in content
     assert "Initial virtual tree:" not in content
     assert "evidence://0000 /" not in content
-    assert "evidence://0000.0001 company-公司资料/" not in content
-    assert "evidence://0000.0001.0001 概况/" not in content
-    assert "evidence://0000.0001.0001.0001 公司成立于2020年.md" not in content
+    assert "evidence://0001 company-公司资料/" not in content
+    assert "evidence://0001.0001 概况/" not in content
+    assert "evidence://0001.0001.0001 公司成立于2020年.md" not in content
     assert "Use tree first to inspect the virtual file tree" in content
 
 
@@ -75,9 +75,10 @@ def test_tool_descriptions_carry_candidate_and_review_contracts():
     tools = {getattr(tool, "name", getattr(tool, "__name__", "")): tool for tool in build_tools(_state())}
 
     assert "Use this for directories" in tools["tree"].description
-    assert "evidence://0000.0001 copied from tree output" in tools["tree"].description
+    assert "path_id empty for the root" in tools["tree"].description
+    assert "evidence://0001 copied" in tools["tree"].description
     assert "Only read file evidence links ending in .md, .list, or .table" in tools["read"].description
-    assert "Use evidence links such as evidence://0000.0001.0002" in tools["read"].description
+    assert "Use evidence links such as evidence://0001.0001.0002" in tools["read"].description
     assert "Use a short reading note when this turn reports a read result" in tools["read"].description
     assert "Read:" in tools["read"].description
     assert "Finding:" in tools["read"].description
@@ -110,7 +111,7 @@ def test_tool_descriptions_carry_candidate_and_review_contracts():
     assert "final_evidence is selected later after review" in tools["add_candidate_evidence"].description
     assert "Assistant content is not optional when you call add_candidate_evidence" in tools["add_candidate_evidence"].description
     assert "include a Markdown evidence link to the same block path_id you are saving" in tools["add_candidate_evidence"].description
-    assert "[\"quoted words\"](evidence://0000.0001.0014)" in tools["add_candidate_evidence"].description
+    assert "[\"quoted words\"](evidence://0001.0014.0001)" in tools["add_candidate_evidence"].description
     assert "Do not leave source words as plain quoted text" in tools["add_candidate_evidence"].description
     assert "This candidate is not the final field decision" in tools["add_candidate_evidence"].description
     assert "Assistant content is optional for routine candidate additions" not in tools["add_candidate_evidence"].description
@@ -138,7 +139,7 @@ def test_tool_descriptions_carry_candidate_and_review_contracts():
     assert "final_evidence must copy inline" in tools["write_field"].description
     assert "evidence:// links from review_evidences.evidence" in tools["write_field"].description
     assert "CRITICAL" not in tools["write_field"].description
-    assert "Assistant content citations should use Markdown links like [\"short source quote\"](evidence://0000.0001/S002)" in tools["write_field"].description
+    assert "Assistant content citations should use Markdown links like [\"short source quote\"](evidence://0001.0014.0001/S002)" in tools["write_field"].description
     assert "For non-empty final_evidence, assistant content must include a short quote from reviewed evidence_texts" in tools["write_field"].description
     assert "and a Markdown evidence link to either the inline selector or its paragraph/list/table block" in tools["write_field"].description
     assert "explain why the linked text supports the field decision" in tools["write_field"].description
@@ -425,7 +426,7 @@ def test_resolution_records_model_message_content_and_tool_calls_without_reasoni
     assert "reasoning_content" not in event
 
 
-def test_tool_action_reason_comes_from_model_message_content():
+def test_tool_actions_do_not_store_model_message_content_as_reason():
     state = _state()
     tools = {getattr(tool, "name", getattr(tool, "__name__", "")): tool for tool in build_tools(state)}
     _record_model_message(
@@ -448,13 +449,13 @@ def test_tool_action_reason_comes_from_model_message_content():
     action = state.actions[-1]
     assert action["tool_name"] == "tree"
     assert action["args"] == {"path_id": "evidence://0000", "depth": 1}
-    assert action["reason"] == "The initial tree is visible, so I will inspect the root directory."
+    assert "reason" not in action
     completed = state.events[-1]
     assert completed["type"] == "tool_completed"
-    assert completed["reason"] == "The initial tree is visible, so I will inspect the root directory."
+    assert "reason" not in completed
 
 
-def test_tool_action_reason_allows_empty_stage_content():
+def test_tool_actions_do_not_write_empty_reason():
     state = _state()
     tools = {getattr(tool, "name", getattr(tool, "__name__", "")): tool for tool in build_tools(state)}
     _record_model_message(
@@ -476,7 +477,7 @@ def test_tool_action_reason_allows_empty_stage_content():
     assert result["ok"] is True
     action = state.actions[-1]
     assert action["tool_name"] == "tree"
-    assert action["reason"] == ""
+    assert "reason" not in action
     completed = state.events[-1]
     assert completed["type"] == "tool_completed"
-    assert completed["reason"] == ""
+    assert "reason" not in completed
