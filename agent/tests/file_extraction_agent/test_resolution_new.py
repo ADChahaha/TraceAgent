@@ -41,6 +41,9 @@ def test_resolution_messages_describe_candidate_policy_without_tool_manual():
     assert "Your goal is to extract fields according to task_spec and finally call submit_result" in system_content
     assert "Assistant content is a progress update for a human reviewer, not a tool-call log" in system_content
     assert "Write assistant content only when the latest observation changes what the reviewer understands" in system_content
+    assert "Before the first tool call, write one brief sentence" in system_content
+    assert "what task fields you are going to extract" in system_content
+    assert "Then continue with the dynamic content rules below" in system_content
     assert "Leave assistant content empty for mechanical tree navigation" in system_content
     assert "calling read before seeing the content" in system_content
     assert "routine candidate saves" in system_content
@@ -58,8 +61,10 @@ def test_resolution_messages_describe_candidate_policy_without_tool_manual():
     assert "Tool-specific argument rules are provided in the tool descriptions" in system_content
     assert "In assistant content, use evidence:// links for source or path references" in system_content
     assert "When assistant content cites source text, use Markdown evidence links" in system_content
+    assert "sentence-level paragraph evidence, use evidence://<block>/Sxxx" in system_content
+    assert "list items use evidence://<block>/Ixxx" in system_content
+    assert "table rows use evidence://<block>/Rxxx" in system_content
     assert "Do not quote source words in plain quotation marks without an evidence link" in system_content
-    assert "Before the first tool call" not in system_content
     assert "Before starting a new reading cluster" not in system_content
     assert "When saving candidate evidence" not in system_content
     assert "Read:" not in system_content

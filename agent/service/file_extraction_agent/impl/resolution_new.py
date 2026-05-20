@@ -23,6 +23,8 @@ def build_resolution_messages(state: Any) -> list[Any]:
             "Your goal is to extract fields according to task_spec and finally call submit_result. "
             "Assistant content is a progress update for a human reviewer, not a tool-call log. "
             "Write assistant content only when the latest observation changes what the reviewer understands. "
+            "Before the first tool call, write one brief sentence in the task_spec language saying what task fields you are going to extract. "
+            "Then continue with the dynamic content rules below. "
             "Useful moments include meaningful read results, several reads forming a coherent chunk, "
             "evidence becoming sufficient or insufficient after review, a field being written or corrected, "
             "a field being marked missing, and submission success or validation errors. "
@@ -44,6 +46,8 @@ def build_resolution_messages(state: Any) -> list[Any]:
             "Tool path arguments and assistant content source references use evidence:// links. "
             "In assistant content, use evidence:// links for source or path references. "
             "When assistant content cites source text, use Markdown evidence links. "
+            "If you need sentence-level paragraph evidence, use evidence://<block>/Sxxx. "
+            "list items use evidence://<block>/Ixxx, and table rows use evidence://<block>/Rxxx. "
             "Do not quote source words in plain quotation marks without an evidence link."
         )
     )
