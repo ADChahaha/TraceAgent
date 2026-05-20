@@ -7,10 +7,13 @@
 ```text
 用户打开 /
   -> 首页直接渲染 Codex New Chat 形态的新任务界面，不再显示旧上传工作台首屏
+  -> 服务端首帧不读取 localStorage 中的 recent tasks 或 theme，避免 SSR HTML 与客户端 hydrate 首帧不一致
+  -> 浏览器挂载后通过 useSyncExternalStore 读取本地 recent tasks 和主题快照，并继续请求 backend 任务列表
   -> 左侧任务栏从 backend GET /tasks 加载最近任务
   -> 中间区域显示居中的新任务标题和 composer，不展示正在执行的 Agent 文字流
   -> 用户关闭左侧任务栏时，新任务界面仍然不自动显示右侧 Progress 或 Review
   -> composer 通过纸夹按钮选择 PDF
+  -> 已选择 PDF 以 chip 展示，用户可以在创建任务前逐个移除误选文件
   -> 用户把 task_spec JSON 粘贴到对话框
   -> 前端校验 task_spec 是 object 且 task_spec.task_name 非空
   -> 用 task_spec.task_name 作为 backend 需要的 task_type
@@ -23,9 +26,11 @@
 ## 测试函数
 
 - `首页默认就是 Codex 式新任务界面，不再显示旧上传首屏`：验证首屏保留任务栏和居中新任务 composer，旧的“上传工作台/能力边界/task_type/metadata”界面以及执行态 Agent 文字流不存在。
+- `首页服务端首帧不读取 localStorage，避免服务端 HTML 与客户端 hydrate 不一致`：验证 server render 不会把浏览器 localStorage 中的最近任务写进首帧 HTML，客户端挂载后才同步本地任务。
 - `New Chat 关闭左侧任务栏后不自动显示右侧 Progress`：验证新任务界面关闭左侧任务栏后只保留中央 composer，不弹出右侧进度栏。
 - `启动时从 backend 任务列表加载左侧任务栏`：验证首页挂载后会从 backend 任务列表同步数据库任务到左侧任务栏。
 - `task_spec composer 会用 task_name 作为 task_type 并提交 PDF files`：验证 composer 提交时从 `task_spec.task_name` 推导 `task_type`，并用重复 `files` 字段发送多个 PDF。
 - `没有 PDF 或缺少 task_name 时不会创建任务`：验证创建任务前会拦截缺少 PDF 和缺少 `task_spec.task_name` 的输入。
-- `创建任务后左侧任务栏先显示处理中，轮询完成后显示处理结果`：验证新任务先进入左侧任务栏，轮询拿到终态后更新 route。
+- `已选择的 PDF 可以逐个移除`：验证用户误选多个 PDF 后，每个文件 chip 都有可访问的移除按钮，点击后只删除对应文件。
+- `创建任务后左侧任务栏先显示处理中，轮询完成后显示处理结果`：验证新任务先进入左侧任务栏，轮询拿到终态后更新终态标签。
 - `主题切换仍在任务工作台顶部生效`：验证顶部单个主题按钮仍写入 `html[data-theme]` 和 localStorage。

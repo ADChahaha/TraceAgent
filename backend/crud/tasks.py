@@ -63,8 +63,6 @@ def update_task(
     now: str,
     status: str | None = None,
     stage: str | None = None,
-    route: str | None = None,
-    route_reason: str | None = None,
     error_message: str | None = None,
     completed_at: str | None = None,
 ) -> dict[str, Any]:
@@ -73,10 +71,6 @@ def update_task(
         updates["status"] = status
     if stage is not None:
         updates["stage"] = stage
-    if route is not None:
-        updates["route"] = route
-    if route_reason is not None:
-        updates["route_reason"] = route_reason
     if error_message is not None:
         updates["error_message"] = error_message
     if completed_at is not None:

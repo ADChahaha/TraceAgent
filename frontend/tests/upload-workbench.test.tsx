@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as React from "react";
+import { renderToString } from "react-dom/server";
 
 import { UploadWorkbench } from "@/components/upload-workbench";
 import type { TaskCreated, TaskSummary } from "@/lib/types";
@@ -20,12 +21,9 @@ const defaultCompletedSummary: TaskSummary = {
   task_id: "task-created",
   status: "completed",
   stage: "done",
-  route: "accept",
-  route_reason: null,
   error_message: null,
   has_result: true,
   has_trace: true,
-  needs_review: false
 };
 
 function setup(
@@ -76,6 +74,27 @@ it("首页默认就是 Codex 式新任务界面，不再显示旧上传首屏", 
   expect(screen.queryByLabelText("metadata JSON")).not.toBeInTheDocument();
 });
 
+it("首页服务端首帧不读取 localStorage，避免服务端 HTML 与客户端 hydrate 不一致", async () => {
+  window.localStorage.setItem(
+    "agent-gate.recent-tasks",
+    JSON.stringify([
+      {
+        task_id: "local-task-before-hydration",
+        status: "completed",
+        stage: "done",
+        created_at: "2026-05-18T00:00:00Z"
+      }
+    ])
+  );
+
+  const serverHtml = renderToString(<UploadWorkbench listTasks={async () => []} />);
+  expect(serverHtml).not.toContain("local-task-before-hydration");
+
+  setup(undefined, undefined, async () => []);
+
+  expect(await screen.findByText("local-task-before-hydration")).toBeInTheDocument();
+});
+
 it("New Chat 关闭左侧任务栏后不自动显示右侧 Progress", async () => {
   const user = userEvent.setup();
   setup();
@@ -95,14 +114,11 @@ it("启动时从 backend 任务列表加载左侧任务栏", async () => {
   const listTasks = jest.fn(async () => [
     {
       task_id: "task_contract_nli_hard5_enum_final_evidence_72",
-      status: "waiting_review",
-      stage: "review",
-      route: "review",
-      route_reason: "需要人工复核",
+      status: "processing",
+      stage: "extraction",
       error_message: null,
       has_result: true,
       has_trace: true,
-      needs_review: true,
       created_at: "2026-05-14T03:36:34Z",
       updated_at: "2026-05-14T16:50:44Z"
     },
@@ -110,12 +126,9 @@ it("启动时从 backend 任务列表加载左侧任务栏", async () => {
       task_id: "task_contract_nli_hard5_enum_final_evidence_27",
       status: "completed",
       stage: "done",
-      route: "accept",
-      route_reason: null,
       error_message: null,
       has_result: true,
       has_trace: true,
-      needs_review: false,
       created_at: "2026-05-14T03:36:32Z",
       updated_at: "2026-05-14T16:50:44Z"
     }
@@ -197,6 +210,29 @@ it("没有 PDF 或缺少 task_name 时不会创建任务", async () => {
   expect(createTask).not.toHaveBeenCalled();
 });
 
+it("已选择的 PDF 可以逐个移除", async () => {
+  const user = userEvent.setup();
+  setup();
+
+  await user.upload(
+    screen.getByLabelText("PDF 文件输入"),
+    [
+      new File(["%PDF-1.4 fake"], "contract.pdf", { type: "application/pdf" }),
+      new File(["%PDF-1.4 appendix"], "appendix.pdf", { type: "application/pdf" })
+    ]
+  );
+
+  expect(screen.getByText("contract.pdf")).toBeInTheDocument();
+  expect(screen.getByText("appendix.pdf")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "移除 contract.pdf" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "移除 appendix.pdf" })).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "移除 contract.pdf" }));
+
+  expect(screen.queryByText("contract.pdf")).not.toBeInTheDocument();
+  expect(screen.getByText("appendix.pdf")).toBeInTheDocument();
+});
+
 it("创建任务后左侧任务栏先显示处理中，轮询完成后显示处理结果", async () => {
   const user = userEvent.setup();
   window.localStorage.clear();
@@ -245,16 +281,13 @@ it("创建任务后左侧任务栏先显示处理中，轮询完成后显示处�
     task_id: "task-queue",
     status: "completed",
     stage: "done",
-    route: "accept",
-    route_reason: null,
     error_message: null,
     has_result: true,
-    has_trace: true,
-    needs_review: false
+    has_trace: true
   });
 
   expect(await screen.findByText("处理结果")).toBeInTheDocument();
-  expect(screen.getByText("accept")).toBeInTheDocument();
+  expect(screen.getByText("completed")).toBeInTheDocument();
 });
 
 it("主题切换仍在任务工作台顶部生效", async () => {

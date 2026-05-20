@@ -14,11 +14,7 @@ def create_field_commit(
     task_id: str,
     field_name: str,
     final_value: Any,
-    route: str,
-    reviewed: bool,
-    review_decision: str | None,
     agent_value: Any,
-    review_value: Any,
     evidence_refs: list[dict[str, Any]],
     used_global_lookup: bool,
     used_validation_rule: bool,
@@ -29,23 +25,18 @@ def create_field_commit(
     connection.execute(
         """
         INSERT INTO field_commits (
-            id, task_id, field_name, final_value_json, route, reviewed,
-            review_decision, agent_value_json, review_value_json,
+            id, task_id, field_name, final_value_json, agent_value_json,
             evidence_refs_json, used_global_lookup, used_validation_rule,
             related_fields_json, committed_by, committed_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             commit_id,
             task_id,
             field_name,
             dumps_json(final_value) if final_value is not None else None,
-            route,
-            1 if reviewed else 0,
-            review_decision,
             dumps_json(agent_value) if agent_value is not None else None,
-            dumps_json(review_value) if review_value is not None else None,
             dumps_json(evidence_refs),
             1 if used_global_lookup else 0,
             1 if used_validation_rule else 0,
@@ -90,4 +81,3 @@ def field_commit_exists(
         (task_id, field_name),
     ).fetchone()
     return row is not None
-

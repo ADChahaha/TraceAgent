@@ -14,7 +14,6 @@ from backend.core.storage import compute_sha256
 from backend.crud import agent_stage_runs as agent_stage_runs_crud
 from backend.crud import audit as audit_crud
 from backend.crud import extraction as extraction_crud
-from backend.crud import reviews as reviews_crud
 from backend.crud import task_events as task_events_crud
 from backend.crud import tasks as tasks_crud
 from backend.crud.json_utils import loads_json
@@ -25,7 +24,6 @@ from backend.services.agent_process import (
 )
 from backend.services.audit_service import AuditService
 from backend.services.errors import AgentServiceError, NotFoundError, ValidationError
-from backend.services.route_policy import build_route_policy_request
 from backend.services.time_utils import utc_now
 
 
@@ -263,18 +261,13 @@ class TaskService:
         task_id = task["id"]
         fields = extraction_crud.list_extracted_fields(self.connection, task_id)
         traces = extraction_crud.list_field_traces(self.connection, task_id)
-        routes = extraction_crud.list_field_routes(self.connection, task_id)
-        needs_review = task["status"] == "waiting_review"
         return {
             "task_id": task_id,
             "status": task["status"],
             "stage": task["stage"],
-            "route": task["route"],
-            "route_reason": task["route_reason"],
             "error_message": task["error_message"],
             "has_result": bool(fields),
             "has_trace": bool(traces),
-            "needs_review": needs_review,
             "stream": self._serialize_stream_state(task),
             "created_at": task["created_at"],
             "updated_at": task["updated_at"],
@@ -283,14 +276,6 @@ class TaskService:
     def get_result(self, task_id: str) -> dict[str, Any]:
         task = self.get_task_or_raise(task_id)
         fields = extraction_crud.list_extracted_fields(self.connection, task_id)
-        routes = {
-            route["field_name"]: route
-            for route in extraction_crud.list_field_routes(self.connection, task_id)
-        }
-        review_fields = {
-            field["field_name"]: field
-            for field in reviews_crud.list_latest_review_fields(self.connection, task_id)
-        }
         committed_fields = {
             commit["field_name"]
             for commit in audit_crud.list_field_commits(self.connection, task_id)
@@ -298,12 +283,9 @@ class TaskService:
         return {
             "task_id": task["id"],
             "status": task["status"],
-            "route": task["route"],
             "fields": [
                 self._serialize_result_field(
                     field,
-                    routes.get(field["field_name"]),
-                    review_fields.get(field["field_name"]),
                     field["field_name"] in committed_fields,
                 )
                 for field in fields
@@ -319,8 +301,6 @@ class TaskService:
         }
         traces = extraction_crud.list_field_traces(self.connection, task_id)
         trace_payload = loads_json(agent_run["trace_json"], {}) if agent_run else {}
-        routes = extraction_crud.list_field_routes(self.connection, task_id)
-        routes_by_name = {route["field_name"]: route for route in routes}
         documents = tasks_crud.list_documents_by_task(self.connection, task_id)
         block_lookup = build_document_block_lookup(documents)
         agent_stage_runs = agent_stage_runs_crud.list_agent_stage_runs(
@@ -336,7 +316,6 @@ class TaskService:
                 documents=documents,
                 agent_run=agent_run,
                 trace_payload=trace_payload,
-                routes=routes,
                 block_lookup=block_lookup,
             ),
             "agent_trace": [
@@ -348,7 +327,6 @@ class TaskService:
                     trace,
                     fields.get(trace["field_name"]),
                     block_lookup=block_lookup,
-                    route=routes_by_name.get(trace["field_name"]),
                 )
                 for trace in traces
             ],
@@ -382,10 +360,7 @@ class TaskService:
             "actions": trace_payload.get("actions") or [],
             "result": result_payload,
             "field_states": trace_payload.get("field_states") or {},
-            "audit": {
-                "route": task["route"],
-                "route_reason": task["route_reason"],
-            },
+            "audit": {},
         }
 
     def get_task_or_raise(self, task_id: str) -> dict[str, Any]:
@@ -415,7 +390,7 @@ class TaskService:
         ]
 
     def _serialize_stream_state(self, task: dict[str, Any]) -> dict[str, Any]:
-        state = "ended" if task["status"] in {"completed", "rejected", "failed"} else "running"
+        state = "ended" if task["status"] in {"completed", "failed"} else "running"
         return {
             "state": state,
             "last_event_seq": task_events_crud.get_last_sequence(self.connection, task["id"]),
@@ -609,89 +584,10 @@ class TaskService:
         )
         fields = extraction_crud.list_extracted_fields(self.connection, task_id)
         traces = extraction_crud.list_field_traces(self.connection, task_id)
-        route_documents = tasks_crud.list_documents_by_task(self.connection, task_id)
-        route_block_lookup = build_document_block_lookup(route_documents)
-
-        route_started_at = utc_now()
-        task = tasks_crud.update_task(
-            self.connection,
-            task_id=task_id,
-            stage="route_policy",
-            now=route_started_at,
-        )
-        self._emit_task_event(
-            task,
-            event_type="route_policy.started",
-            payload={},
-            now=route_started_at,
-        )
-        route_request = build_route_policy_request(
-            task_spec=task_spec,
-            extracted_fields=fields,
-            field_traces=traces,
-            metadata={
-                **metadata,
-                "task_id": task_id,
-                "task_type": task_type,
-                **document_bundle["metadata"],
-            },
-            block_lookup=route_block_lookup,
-        )
-        route_result = self.agent_client.evaluate_route_policy(**route_request)
-        route_finished_at = utc_now()
-        self._emit_task_event(
-            self.get_task_or_raise(task_id),
-            event_type="route_policy.completed",
-            payload={
-                "status": route_result.get("status") or "completed",
-                "field_routes": route_result.get("field_routes") or [],
-            },
-            now=route_finished_at,
-        )
-        self._save_agent_stage_run(
-            task_id=task_id,
-            sequence=next_trace_sequence,
-            stage="route_policy",
-            agent_name="route_policy_agent",
-            status=route_result.get("status") or "completed",
-            failure_reason=route_result.get("failure_reason"),
-            request=route_request,
-            response=route_result,
-            trace=route_result.get("trace") or {
-                "field_routes": route_result.get("field_routes") or [],
-                "warnings": route_result.get("warnings") or [],
-                "metadata": route_result.get("metadata") or {},
-            },
-            started_at=route_started_at,
-            finished_at=route_finished_at,
-        )
-        if route_result.get("status") == "failed":
-            failed_task = tasks_crud.update_task(
-                self.connection,
-                task_id=task_id,
-                status="failed",
-                stage="done",
-                error_message=route_result.get("failure_reason"),
-                completed_at=route_finished_at,
-                now=route_finished_at,
-            )
-            self._emit_task_event(
-                failed_task,
-                event_type="task.failed",
-                payload={"error_message": route_result.get("failure_reason")},
-                now=route_finished_at,
-            )
-            return failed_task
-        routes = self._save_field_routes(
-            task_id=task_id,
-            field_routes=route_result.get("field_routes") or [],
-            now=utc_now(),
-        )
-        return self._apply_route_outcome(
+        return self._commit_extraction_outcome(
             task_id=task_id,
             fields=fields,
             traces=traces,
-            routes=routes,
         )
 
     def _process_documents(
@@ -987,152 +883,50 @@ class TaskService:
                 return matched
         return []
 
-    def _save_field_routes(
-        self,
-        *,
-        task_id: str,
-        field_routes: list[dict[str, Any]],
-        now: str,
-    ) -> list[dict[str, Any]]:
-        saved_routes = []
-        for route in field_routes:
-            route_name = route["route"]
-            saved_routes.append(
-                extraction_crud.create_field_route(
-                    self.connection,
-                    route_id=f"route_{uuid.uuid4().hex}",
-                    task_id=task_id,
-                    field_name=route["field_name"],
-                    route=route_name,
-                    route_reason=route["route_reason"],
-                    needs_review=route.get("needs_review", route_name != "accept"),
-                    now=now,
-                )
-            )
-        return saved_routes
-
-    def _apply_route_outcome(
+    def _commit_extraction_outcome(
         self,
         *,
         task_id: str,
         fields: list[dict[str, Any]],
         traces: list[dict[str, Any]],
-        routes: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        route_summary = self._summarize_routes(routes)
-        route_reason = self._summarize_route_reason(routes)
-        field_by_name = {field["field_name"]: field for field in fields}
         trace_by_name = {trace["field_name"]: trace for trace in traces}
-
-        if route_summary == "accept":
-            committed_at = utc_now()
-            for route in routes:
-                field = field_by_name[route["field_name"]]
-                final_value = loads_json(field["agent_value_json"], None)
-                extraction_crud.update_field_final_value(
-                    self.connection,
-                    task_id=task_id,
-                    field_name=field["field_name"],
-                    final_value=final_value,
-                    source="agent",
-                    now=committed_at,
-                )
-                self.audit_service.commit_field(
-                    task_id=task_id,
-                    field=field,
-                    trace=trace_by_name.get(field["field_name"]),
-                    route=route,
-                    final_value=final_value,
-                    reviewed=False,
-                    review_decision=None,
-                    review_value=None,
-                    committed_by="agent",
-                    committed_at=committed_at,
-                )
-            completed_task = tasks_crud.update_task(
+        committed_at = utc_now()
+        for field in fields:
+            if field["agent_status"] != "resolved":
+                continue
+            final_value = loads_json(field["agent_value_json"], None)
+            extraction_crud.update_field_final_value(
                 self.connection,
                 task_id=task_id,
-                status="completed",
-                stage="done",
-                route="accept",
-                route_reason=route_reason,
-                completed_at=committed_at,
+                field_name=field["field_name"],
+                final_value=final_value,
+                source="agent",
                 now=committed_at,
             )
-            self._emit_task_event(
-                completed_task,
-                event_type="task.completed",
-                payload={"route": "accept"},
-                now=committed_at,
-            )
-            return completed_task
-
-        if route_summary == "review":
-            reviewed_at = utc_now()
-            for route in routes:
-                if route["route"] != "accept":
-                    continue
-                field = field_by_name[route["field_name"]]
-                final_value = loads_json(field["agent_value_json"], None)
-                extraction_crud.update_field_final_value(
-                    self.connection,
-                    task_id=task_id,
-                    field_name=field["field_name"],
-                    final_value=final_value,
-                    source="agent",
-                    now=reviewed_at,
-                )
-                if not self.audit_service.has_commit(
-                    task_id=task_id,
-                    field_name=field["field_name"],
-                ):
-                    self.audit_service.commit_field(
-                        task_id=task_id,
-                        field=field,
-                        trace=trace_by_name.get(field["field_name"]),
-                        route=route,
-                        final_value=final_value,
-                        reviewed=False,
-                        review_decision=None,
-                        review_value=None,
-                        committed_by="agent",
-                        committed_at=reviewed_at,
-                    )
-            review_task = tasks_crud.update_task(
-                self.connection,
+            self.audit_service.commit_field(
                 task_id=task_id,
-                status="waiting_review",
-                stage="review",
-                route="review",
-                route_reason=route_reason,
-                now=reviewed_at,
+                field=field,
+                trace=trace_by_name.get(field["field_name"]),
+                final_value=final_value,
+                committed_by="agent",
+                committed_at=committed_at,
             )
-            self._emit_task_event(
-                review_task,
-                event_type="review.required",
-                payload={"route": "review", "route_reason": route_reason},
-                now=reviewed_at,
-            )
-            return review_task
-
-        rejected_at = utc_now()
-        rejected_task = tasks_crud.update_task(
+        completed_task = tasks_crud.update_task(
             self.connection,
             task_id=task_id,
-            status="rejected",
+            status="completed",
             stage="done",
-            route="reject",
-            route_reason=route_reason,
-            completed_at=rejected_at,
-            now=rejected_at,
+            completed_at=committed_at,
+            now=committed_at,
         )
         self._emit_task_event(
-            rejected_task,
-            event_type="task.rejected",
-            payload={"route": "reject", "route_reason": route_reason},
-            now=rejected_at,
+            completed_task,
+            event_type="task.completed",
+            payload={},
+            now=committed_at,
         )
-        return rejected_task
+        return completed_task
 
     def _infer_file_type(self, filename: str) -> str:
         suffix = Path(filename).suffix.lower().lstrip(".")
@@ -1194,38 +988,17 @@ class TaskService:
             )
         return normalized
 
-    def _summarize_routes(self, routes: list[dict[str, Any]]) -> str:
-        route_names = {route["route"] for route in routes}
-        if "reject" in route_names:
-            return "reject"
-        if "review" in route_names:
-            return "review"
-        return "accept"
-
-    def _summarize_route_reason(self, routes: list[dict[str, Any]]) -> str | None:
-        for expected_route in ("reject", "review", "accept"):
-            for route in routes:
-                if route["route"] == expected_route:
-                    return route["route_reason"]
-        return None
-
     def _serialize_result_field(
         self,
         field: dict[str, Any],
-        route: dict[str, Any] | None,
-        review_field: dict[str, Any] | None,
         committed: bool,
     ) -> dict[str, Any]:
         return {
             "field_name": field["field_name"],
             "display_name": field["display_name"],
             "agent_value": loads_json(field["agent_value_json"], None),
-            "review_value": loads_json(review_field["review_value_json"], None)
-            if review_field
-            else None,
             "final_value": loads_json(field["final_value_json"], None),
             "field_status": field["agent_status"],
-            "route": route["route"] if route else None,
             "source": field["source"],
             "committed": committed,
         }
@@ -1236,14 +1009,12 @@ class TaskService:
         field: dict[str, Any] | None = None,
         *,
         block_lookup: dict[str, dict[str, Any]] | None = None,
-        route: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         value = loads_json(field["agent_value_json"], None) if field else None
         serialized = serialize_field_agent_process(
             trace,
             value=value,
             block_lookup=block_lookup,
-            route=route,
         )
         assert serialized is not None
         return serialized
@@ -1281,7 +1052,6 @@ class TaskService:
         documents: list[dict[str, Any]],
         agent_run: dict[str, Any] | None,
         trace_payload: dict[str, Any],
-        routes: list[dict[str, Any]],
         block_lookup: dict[str, dict[str, Any]],
     ) -> list[dict[str, Any]]:
         steps = [
@@ -1292,13 +1062,10 @@ class TaskService:
                 self._serialize_extraction_step(
                     agent_run=agent_run,
                     trace_payload=trace_payload,
-                    routes=routes,
                     block_lookup=block_lookup,
                 )
             )
-        if routes:
-            steps.append(self._serialize_route_policy_step(routes))
-        if task["status"] in {"completed", "waiting_review", "rejected", "failed"}:
+        if task["status"] in {"completed", "failed"}:
             steps[-1]["is_terminal_step"] = task["stage"] == "done"
         return steps
 
@@ -1342,7 +1109,6 @@ class TaskService:
         *,
         agent_run: dict[str, Any],
         trace_payload: dict[str, Any],
-        routes: list[dict[str, Any]],
         block_lookup: dict[str, dict[str, Any]],
     ) -> dict[str, Any]:
         result_payload = loads_json(agent_run["result_json"], {})
@@ -1364,7 +1130,6 @@ class TaskService:
             "field_decisions": self._serialize_extraction_field_decisions(
                 trace_payload=trace_payload,
                 result_payload=result_payload,
-                routes=routes,
                 block_lookup=block_lookup,
             ),
             "warnings": warnings,
@@ -1376,7 +1141,6 @@ class TaskService:
         *,
         trace_payload: dict[str, Any],
         result_payload: dict[str, Any],
-        routes: list[dict[str, Any]],
         block_lookup: dict[str, dict[str, Any]],
     ) -> list[dict[str, Any]]:
         result_fields = (
@@ -1389,7 +1153,6 @@ class TaskService:
             for field in result_fields
             if isinstance(field, dict)
         }
-        routes_by_name = {route["field_name"]: route for route in routes}
         decisions = []
         for trace in trace_payload.get("fields") or []:
             if not isinstance(trace, dict):
@@ -1406,35 +1169,6 @@ class TaskService:
                 reason=trace.get("reason"),
                 failure_reason=trace.get("failure_reason"),
                 block_lookup=block_lookup,
-                route=routes_by_name.get(field_name),
             )
             decisions.append(decision)
         return decisions
-
-    def _serialize_route_policy_step(self, routes: list[dict[str, Any]]) -> dict[str, Any]:
-        route_counts = {"accept": 0, "review": 0, "reject": 0}
-        serialized_routes = []
-        for route in routes:
-            route_name = route["route"]
-            if route_name in route_counts:
-                route_counts[route_name] += 1
-            serialized_routes.append(
-                {
-                    "field_name": route["field_name"],
-                    "route": route_name,
-                    "needs_review": bool(route["needs_review"]),
-                    "route_reason": route["route_reason"],
-                }
-            )
-        return {
-            "stage": "route_policy",
-            "agent": "route_policy_agent",
-            "status": "completed",
-            "started_at": routes[0]["created_at"],
-            "finished_at": routes[-1]["created_at"],
-            "summary": {
-                "field_count": len(routes),
-                "routes": route_counts,
-            },
-            "routes": serialized_routes,
-        }

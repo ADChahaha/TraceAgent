@@ -24,11 +24,7 @@ class AuditService:
         task_id: str,
         field: dict[str, Any],
         trace: dict[str, Any] | None,
-        route: dict[str, Any],
         final_value: Any,
-        reviewed: bool,
-        review_decision: str | None,
-        review_value: Any,
         committed_by: str,
         committed_at: str,
     ) -> dict[str, Any]:
@@ -42,11 +38,7 @@ class AuditService:
             task_id=task_id,
             field_name=field["field_name"],
             final_value=final_value,
-            route=route["route"],
-            reviewed=reviewed,
-            review_decision=review_decision,
             agent_value=loads_json(field["agent_value_json"], None),
-            review_value=review_value,
             evidence_refs=evidence.get("refs") or [],
             used_global_lookup="global_lookup" in action_types,
             used_validation_rule="validation_rule" in action_types,
@@ -61,10 +53,6 @@ class AuditService:
             trace["field_name"]: trace
             for trace in extraction_crud.list_field_traces(self.connection, task["id"])
         }
-        routes = {
-            route["field_name"]: route
-            for route in extraction_crud.list_field_routes(self.connection, task["id"])
-        }
         block_lookup = build_document_block_lookup(
             tasks_crud.list_documents_by_task(self.connection, task["id"])
         )
@@ -75,7 +63,6 @@ class AuditService:
                 self._serialize_commit(
                     commit,
                     traces.get(commit["field_name"]),
-                    routes.get(commit["field_name"]),
                     block_lookup=block_lookup,
                 )
                 for commit in commits
@@ -93,7 +80,6 @@ class AuditService:
         self,
         commit: dict[str, Any],
         trace: dict[str, Any] | None,
-        route: dict[str, Any] | None,
         *,
         block_lookup: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
@@ -102,11 +88,7 @@ class AuditService:
         return {
             "field_name": commit["field_name"],
             "final_value": loads_json(commit["final_value_json"], None),
-            "route": commit["route"],
-            "reviewed": bool(commit["reviewed"]),
-            "review_decision": commit["review_decision"],
             "agent_value": agent_value,
-            "review_value": loads_json(commit["review_value_json"], None),
             "evidence_refs": loads_json(commit["evidence_refs_json"], []),
             "used_global_lookup": bool(commit["used_global_lookup"]),
             "used_validation_rule": bool(commit["used_validation_rule"]),
@@ -122,6 +104,5 @@ class AuditService:
                 trace,
                 value=agent_value,
                 block_lookup=block_lookup,
-                route=route,
             ),
         }

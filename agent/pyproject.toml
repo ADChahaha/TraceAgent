@@ -36,8 +36,6 @@ packages = [
     "service.document_processor",
     "service.file_extraction_agent",
     "service.file_extraction_agent.impl",
-    "service.route_policy_agent",
-    "service.route_policy_agent.impl",
     "routes",
 ]
 

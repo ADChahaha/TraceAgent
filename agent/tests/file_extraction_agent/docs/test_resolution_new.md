@@ -1,8 +1,8 @@
 # test_resolution_new.py
 
-这份测试覆盖新 resolution prompt、工具说明和工具暴露顺序。系统 prompt 只负责四类高层规则：agent 身份和最终 `submit_result` 目标、assistant content 的 Codex-style 用户可见进度说明、单轮单工具调用边界、`evidence://` locator/source citation 边界。`read`、`add_candidate_evidence`、`review_evidences`、`write_field` 和 `submit_result` 的具体参数与证据规则放在各 tool description 中。
+这份测试覆盖新 resolution prompt、工具说明和工具暴露顺序。系统 prompt 只负责全局规则：agent 身份和最终 `submit_result` 目标、assistant content 必须短且绑定当前动作、单轮单工具调用边界、`evidence://` locator/source citation 边界。`read`、`add_candidate_evidence`、`review_evidences`、`write_field` 和 `submit_result` 的具体参数、证据规则与本轮可见说明模板放在各 tool description 中。
 
-当前候选证据动作叫 `add_candidate_evidence`，强调它只是宽松的候选笔记：只要某个显式 `evidence://` block link 可能相关，就可以随时保存；一次只记录一个字段和一个 paragraph/list/table block。`review_evidences` 再把 block 展开成 inline link，让模型判断当前候选是否足够写入或还需要继续找证据。assistant content 在首轮工具调用前必须先给人类 reviewer 一个短 preamble；开始新的阅读组前要说明准备看哪里和为什么看；机械导航和连续相邻 read 可以留空，但连续 `tree/read` 超过十步且有新发现时不能继续沉默。调用 `add_candidate_evidence` 前必须用一两句说明为什么这个 block 值得为该字段保存；如果引用原文，必须写成 `["原文短语"](evidence://...)` 这样的 Markdown evidence link，不能只用裸引号。
+当前候选证据动作叫 `add_candidate_evidence`，强调它只是宽松的候选笔记：只要某个显式 `evidence://` block link 可能相关，就可以随时保存；一次只记录一个字段和一个 paragraph/list/table block。`review_evidences` 再把 block 展开成 inline link，让模型判断当前候选是否足够写入或还需要继续找证据。assistant content 按当前工具选择模板：`read` 用 `Read / Finding / Next` 报告这轮读到的内容，`add_candidate_evidence` 用 `Saving candidate / Why relevant / Next` 说明保存候选，不伪装成新阅读，`review_evidences` 用 `Review / Sufficiency / Next` 汇报复核状态，`write_field` 用 `Write / Why supported / Next` 说明写入依据。如果引用原文，必须写成 `["原文短语"](evidence://...)` 这样的 Markdown evidence link，不能只用裸引号。
 
 实现链路：
 
@@ -11,14 +11,12 @@ documents + task_spec
   -> build_graph_state
   -> build_resolution_messages 生成系统级抽取策略
   -> 校验初始上下文只包含 task fields 和 tree-first 指令，不内联 root depth=3 导航树正文
-  -> 校验 assistant content 是短的人类进度说明，不是工具调用日志
-  -> 校验首轮工具调用前必须有短 preamble，开始新阅读组前要说明意图，长导航/read 过程不能一直静默
-  -> 校验完成短局部阅读块、字段相关发现、review/write 转换或错误修正时，才需要说明具体发现和下一步
-  -> 校验 read/candidate/review/write 的局部约束主要存在于 tool description，而不是 system prompt
+  -> 校验 system prompt 只保留全局规则，并要求本轮说明跟随当前 tool docstring
+  -> 校验 read/candidate/review/write 的局部约束和可见说明模板主要存在于 tool description，而不是 system prompt
   -> 校验 read 后可以自由继续浏览，并确认公开 read 只暴露 path_id 参数
-  -> 校验 add_candidate_evidence 通过显式 evidence:// block link 随时保存单字段、单 block 候选笔记，并要求调用前说明保存理由
-  -> 校验 review 用来判断候选是否足够写，普通 review 可静默，阶段变化时 assistant content 可以说明缺什么
-  -> 校验 write 只能在 review 后判断证据足够时发生，并且 final_evidence 复制同字段当前 review snapshot 的 inline evidence links
+  -> 校验 add_candidate_evidence 通过显式 evidence:// block link 随时保存单字段、单 block 候选笔记，并要求使用候选保存模板
+  -> 校验 review 用来判断候选是否足够写，并要求使用 review 充分性模板
+  -> 校验 write 只能在 review 后判断证据足够时发生，并要求使用写入依据模板
   -> 校验模型工具绑定时请求 provider 关闭 parallel tool calls
   -> 校验每轮模型返回会先截断到第一个 tool call，再记录 model_message trace event
   -> 校验真实模型调用默认使用 Responses API stream，并在失败时依次降级到 chat/completions stream 和非流调用
@@ -28,9 +26,9 @@ documents + task_spec
 
 ## 测试函数
 
-- `test_resolution_messages_describe_candidate_policy_without_tool_manual`：确认 system prompt 只保留高层规则；assistant content 是 Codex-style 的短进度说明，首轮工具调用前必须说明先看目录和可能相关条款，开始新阅读组前要说明意图，连续 `tree/read` 最多十步后如果有新发现要更新；短局部阅读块、字段相关发现、候选组 review/write 转换或错误修正时说明具体发现和下一步；同时确认引用原文必须使用 Markdown evidence link，旧 `bind_evidence` 词不会出现在候选工具说明里。
+- `test_resolution_messages_describe_candidate_policy_without_tool_manual`：确认 system prompt 只保留高层规则；assistant content 必须短、可读并绑定当前动作，具体本轮说明模板下沉到当前 tool docstring；同时确认引用原文必须使用 Markdown evidence link。
 - `test_resolution_messages_do_not_inline_initial_tree`：确认初始 resolution 上下文不再内联 root depth=3 虚拟树正文，只保留 task fields 和提示模型先调用 `tree` 导航的简短指令。
-- `test_tool_descriptions_carry_candidate_and_review_contracts`：确认 `read` 一次只读一个 block，`add_candidate_evidence` 只接受一个字段和一个 block link，且调用前要用 assistant content 说明为什么为该字段保存这个候选，并用 Markdown evidence link 指向正在保存的 block；`review_evidences` 展开 inline evidence links，`write_field` 只能复制同字段当前 review snapshot 返回的 inline evidence links。
+- `test_tool_descriptions_carry_candidate_and_review_contracts`：确认 `read` 一次只读一个 block，并提供 `Read / Finding / Next` 读后模板；`add_candidate_evidence` 只接受一个字段和一个 block link，并提供 `Saving candidate / Why relevant / Next` 候选保存模板；`review_evidences` 展开 inline evidence links，并提供 `Review / Sufficiency / Next` 复核模板；`write_field` 只能复制同字段当前 review snapshot 返回的 inline evidence links，并提供 `Write / Why supported / Next` 写入模板。
 - `test_resolution_messages_expand_enum_variants`：确认 prompt 会把 enum 字段 variants 展开给模型，并说明 `write_field` 的 tagged enum value 形态。
 - `test_resolution_graph_exposes_new_tools_only`：确认模型可见工具集是 `tree/read/add_candidate_evidence/review_evidences/write_field/submit_result`。
 - `test_resolution_graph_executes_only_first_model_tool_call_per_turn`：确认运行时向模型绑定工具时传入 `parallel_tool_calls=False`；如果模型仍然同轮返回多个 tool call，trace 和工具执行都只保留第一个。

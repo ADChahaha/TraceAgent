@@ -1,12 +1,12 @@
 # Document Processor Design
 
 `service.document_processor` converts PDF file objects into HTML that is usable
-by the extraction agent and by the review UI.
+by the extraction agent and by the backend replay view.
 
 ## Scope
 
-The module only handles PDF. It does not extract task fields, route human review,
-or provide multiple OCR engines.
+The module only handles PDF. It does not extract task fields or provide
+multiple OCR engines.
 
 ## Pipeline
 

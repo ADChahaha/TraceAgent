@@ -11,11 +11,8 @@ def get_capabilities(request: Request):
     return {
         "supported_file_types": list(settings.supported_file_types),
         "task_types": [],
-        "routes": ["accept", "review", "reject"],
-        "review_decisions": ["approve", "revise_and_approve", "reject"],
         "features": {
             "trace": True,
-            "review": True,
             "audit": True,
             "external_task_spec": True,
             "multiple_files": True,

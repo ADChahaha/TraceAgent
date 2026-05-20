@@ -5,7 +5,6 @@ from fastapi import FastAPI
 from routes import (
     document_processor_router,
     file_extraction_agent_router,
-    route_policy_agent_router,
 )
 
 
@@ -16,7 +15,6 @@ def create_app() -> FastAPI:
     )
     app.include_router(document_processor_router)
     app.include_router(file_extraction_agent_router)
-    app.include_router(route_policy_agent_router)
     return app
 
 

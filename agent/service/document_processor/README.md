@@ -1,7 +1,7 @@
 # Document Processor
 
 `service.document_processor` receives a PDF file object, runs MinerU pipeline,
-and returns traceable HTML for extraction plus display HTML for review.
+and returns traceable HTML for extraction plus display HTML for inspection.
 
 ## Supported Input
 
@@ -51,7 +51,7 @@ Source files:
 `blocks` 使用和 HTML 一致的可追踪 id。普通 block id 形如
 `p001_b000`，列表项形如 `p001_b000_item_000`，表格行形如
 `p001_b000_tr_000`。backend 会再补上自己的 `document_id`，用于
-route policy 证据文本回填和 replay/audit 展示。
+replay/audit 展示和字段证据定位。
 
 `semantic_document` 是 MinerU 后处理出的三层语义结构：
 

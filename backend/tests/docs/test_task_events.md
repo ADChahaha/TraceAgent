@@ -17,4 +17,4 @@ TestClient 提交 POST /tasks
 - `test_task_summary_includes_stream_cursor_after_pipeline_finishes`：验证任务跑完后，summary 仍返回 `stream.state=ended` 和最后一条事件序号，前端可以先读快照再决定是否续传事件。
 - `test_task_events_endpoint_replays_persisted_events_and_respects_after_seq`：验证事件接口返回 `text/event-stream`，`after_seq=0` 会按顺序回放完整事件，`after_seq=n` 只补发 `seq > n` 的事件。
 - `test_task_events_endpoint_waits_for_new_events_until_task_ends`：验证任务仍在运行时，事件接口会在补完历史事件后等待新事件，直到收到终态事件再结束响应。
-- `test_submit_review_appends_terminal_task_event`：验证人工复核提交后会继续写入终态事件，前端可以从复核前的 `last_event_seq` 续传到 `task.completed`。
+- `test_removed_manual_check_endpoint_is_not_available_and_does_not_append_events`：验证旧人工检查入口不可用，调用后不会追加新事件；完整事件流最终停在 `task.completed`，payload 不再带 route 信息。

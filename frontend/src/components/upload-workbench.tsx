@@ -14,7 +14,8 @@ import {
   PanelLeftOpen,
   Plus,
   SendHorizonal,
-  Sun
+  Sun,
+  X
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -24,10 +25,18 @@ import {
   listTasks as defaultListTasks
 } from "@/lib/api";
 import { parseJsonObject } from "@/lib/json";
-import { applyStoredTheme, getStoredTheme, type AppTheme } from "@/lib/theme";
+import {
+  applyStoredTheme,
+  getServerThemeSnapshot,
+  getThemeSnapshot,
+  subscribeTheme,
+  type AppTheme
+} from "@/lib/theme";
 import {
   addRecentTask,
-  getRecentTasks,
+  getRecentTasksSnapshot,
+  getServerRecentTasksSnapshot,
+  subscribeRecentTasks,
   syncRecentTaskSummaries,
   updateRecentTask,
   type RecentTask
@@ -48,7 +57,7 @@ const DEFAULT_TASK_SPEC = {
   fields: []
 };
 
-const TERMINAL_STATUSES = new Set(["waiting_review", "completed", "rejected", "failed"]);
+const TERMINAL_STATUSES = new Set(["completed", "failed"]);
 const POLL_INTERVAL_MS = 1500;
 const MAX_POLL_ATTEMPTS = 120;
 
@@ -62,8 +71,12 @@ export function UploadWorkbench({
   const [files, setFiles] = React.useState<File[]>([]);
   const [error, setError] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
-  const [recentTasks, setRecentTasks] = React.useState<RecentTask[]>(() => getRecentTasks());
-  const [theme, setTheme] = React.useState<AppTheme>(() => getStoredTheme());
+  const recentTasks = React.useSyncExternalStore(
+    subscribeRecentTasks,
+    getRecentTasksSnapshot,
+    getServerRecentTasksSnapshot,
+  );
+  const theme = React.useSyncExternalStore(subscribeTheme, getThemeSnapshot, getServerThemeSnapshot);
   const [isLeftPanelOpen, setIsLeftPanelOpen] = React.useState(true);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const pollTimeouts = React.useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -90,7 +103,7 @@ export function UploadWorkbench({
     listTasks()
       .then((tasks) => {
         if (tasks.length > 0 && !cancelled && mounted.current) {
-          setRecentTasks(syncRecentTaskSummaries(tasks));
+          syncRecentTaskSummaries(tasks);
         }
       })
       .catch(() => {
@@ -109,7 +122,7 @@ export function UploadWorkbench({
           if (!mounted.current) {
             return;
           }
-          setRecentTasks(updateRecentTask(summary));
+          updateRecentTask(summary);
           if (isTaskTerminal(summary)) {
             return;
           }
@@ -161,7 +174,7 @@ export function UploadWorkbench({
     setIsSubmitting(true);
     try {
       const created = await createTask(formData);
-      setRecentTasks(addRecentTask(created));
+      addRecentTask(created);
       void refreshTaskSummary(created.task_id);
       toast.success("任务已创建", {
         description: `${created.task_id} / ${created.status}`
@@ -179,6 +192,14 @@ export function UploadWorkbench({
   function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     setFiles(Array.from(event.currentTarget.files ?? []));
     setError(null);
+  }
+
+  function removeFile(fileToRemove: File) {
+    setFiles((currentFiles) => currentFiles.filter((file) => file !== fileToRemove));
+    setError(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
   }
 
   return (
@@ -205,7 +226,7 @@ export function UploadWorkbench({
           <div className="replay-topbar-title">Agent Gate / New task</div>
         </div>
         <div className="replay-topbar-status">
-          <ThemeModeButton theme={theme} onThemeChange={setTheme} />
+          <ThemeModeButton theme={theme} onThemeChange={applyStoredTheme} />
         </div>
       </div>
 
@@ -251,7 +272,16 @@ export function UploadWorkbench({
                   {files.map((file) => (
                     <span key={`${file.name}-${file.size}`} className="home-task-file-chip">
                       <FileText className="h-3.5 w-3.5" aria-hidden="true" />
-                      {file.name}
+                      <span className="home-task-file-name">{file.name}</span>
+                      <button
+                        type="button"
+                        className="home-task-file-remove"
+                        aria-label={`移除 ${file.name}`}
+                        title={`移除 ${file.name}`}
+                        onClick={() => removeFile(file)}
+                      >
+                        <X className="h-3 w-3" aria-hidden="true" />
+                      </button>
                     </span>
                   ))}
                 </div>
@@ -353,9 +383,6 @@ function isTaskTerminal(task: Pick<RecentTask, "status"> | TaskSummary): boolean
 }
 
 function getTaskResultLabel(task: RecentTask): string {
-  if (task.route) {
-    return task.route;
-  }
   if (task.status === "failed") {
     return "failed";
   }

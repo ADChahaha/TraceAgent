@@ -1,22 +1,15 @@
 export type TaskStatus =
   | "pending"
   | "processing"
-  | "waiting_review"
   | "completed"
-  | "rejected"
   | "failed";
 
 export type TaskStage =
   | "uploaded"
   | "document_processing"
   | "extraction"
-  | "route_policy"
-  | "review"
-  | "field_commit"
   | "done";
 
-export type RouteDecision = "accept" | "review" | "reject";
-export type ReviewDecision = "approve" | "revise_and_approve" | "reject";
 export type BasicFieldType = "string" | "number" | "boolean" | "list[string]" | "list[number]" | "null";
 export type TaskFieldType = BasicFieldType | "enum";
 
@@ -29,11 +22,8 @@ export interface EnumVariantDefinition {
 export interface Capabilities {
   supported_file_types: string[];
   task_types: string[];
-  routes: RouteDecision[];
-  review_decisions: ReviewDecision[];
   features: {
     trace: boolean;
-    review: boolean;
     audit: boolean;
     external_task_spec: boolean;
     multiple_files?: boolean;
@@ -53,11 +43,8 @@ export interface TaskSummary {
   status: TaskStatus;
   stage: TaskStage;
   error_message?: string | null;
-  route?: RouteDecision | null;
-  route_reason?: string | null;
   has_result?: boolean;
   has_trace?: boolean;
-  needs_review?: boolean;
   created_at?: string;
   updated_at?: string;
   stream?: TaskStreamState;
@@ -78,19 +65,15 @@ export interface TaskResultField {
   field_type?: TaskFieldType | string | null;
   variants?: EnumVariantDefinition[];
   agent_value: unknown;
-  review_value: unknown;
   final_value: unknown;
   field_status?: string;
-  route?: RouteDecision | null;
-  route_reason?: string | null;
-  source?: "agent" | "human" | string | null;
+  source?: "agent" | string | null;
   committed?: boolean;
 }
 
 export interface TaskResult {
   task_id: string;
   status: TaskStatus;
-  route?: RouteDecision | null;
   fields: TaskResultField[];
 }
 
@@ -150,8 +133,6 @@ export interface AgentProcessStep {
   related_fields?: string[];
   actions?: TraceAction[];
   output_fields?: AgentProcessOutputField[];
-  route?: string | null;
-  needs_review?: boolean;
   notes?: string[];
   value?: unknown;
   reason?: string | null;
@@ -196,12 +177,6 @@ export interface TraceStep {
     warning_count?: number;
     processed_at?: string | null;
   }>;
-  routes?: Array<{
-    field_name: string;
-    route: RouteDecision | string;
-    needs_review?: boolean;
-    route_reason?: string | null;
-  }>;
   field_decisions?: AgentProcess[];
   warnings?: string[];
   metadata?: Record<string, unknown>;
@@ -232,40 +207,10 @@ export interface TaskTrace {
   metadata?: Record<string, unknown>;
 }
 
-export interface ReviewField {
-  field_name: string;
-  display_name?: string | null;
-  field_type?: TaskFieldType | string | null;
-  variants?: EnumVariantDefinition[];
-  agent_value: unknown;
-  field_status?: string;
-  needs_review: boolean;
-  review_reason?: string | null;
-  evidence_texts?: string[];
-  evidence_refs?: EvidenceRef[];
-  related_fields?: string[];
-  actions?: string[];
-  reason?: string | null;
-  failure_reason?: string | null;
-  agent_process?: AgentProcess | null;
-}
-
-export interface ReviewHandoff {
-  task_id: string;
-  status: TaskStatus;
-  route?: RouteDecision | null;
-  route_reason?: string | null;
-  fields: ReviewField[];
-}
-
 export interface AuditCommit {
   field_name: string;
   final_value: unknown;
-  route?: RouteDecision | null;
-  reviewed?: boolean;
-  review_decision?: ReviewDecision | null;
   agent_value?: unknown;
-  review_value?: unknown;
   evidence_refs?: EvidenceRef[];
   used_global_lookup?: boolean;
   used_validation_rule?: boolean;
@@ -287,7 +232,6 @@ export interface TaskDetailData {
   result: TaskResult | null;
   trace: TaskTrace | null;
   replay: TaskReplay | null;
-  review: ReviewHandoff | null;
   audit: AuditResult | null;
 }
 
@@ -308,10 +252,7 @@ export interface TaskReplay {
     [key: string]: unknown;
   } | Record<string, unknown>;
   field_states?: Record<string, ReplayFieldState>;
-  audit?: {
-    route?: RouteDecision | string | null;
-    route_reason?: string | null;
-  };
+  audit?: Record<string, unknown>;
 }
 
 export interface ReplayBroadPlan {
@@ -346,15 +287,4 @@ export interface ReplayFieldState {
   value?: unknown;
   evidence_ids?: string[];
   failure_reason?: string | null;
-}
-
-export interface ReviewSubmitPayload {
-  decision: ReviewDecision;
-  fields: Array<{
-    field_name: string;
-    review_value?: unknown;
-    comment?: string | null;
-  }>;
-  comment?: string | null;
-  reviewer?: string | null;
 }

@@ -1,12 +1,11 @@
 # Agent Service
 
-`agent/` 是 TraceAgent 的 AI 能力层，给 `backend` 提供三个 HTTP 阶段：
+`agent/` 是 TraceAgent 的 AI 能力层，给 `backend` 提供两个 HTTP 阶段：
 
 - `document_processor`：把 PDF 标准化成抽取友好的 HTML、展示用 HTML、markdown、blocks 和处理元信息。
 - `file_extraction_agent`：在多个语义 HTML 文档上按外部 `task_spec` 做字段抽取，并用 NDJSON stream 返回工具事件、字段写入和最终结果。
-- `route_policy_agent`：根据字段输出、证据文本和抽取过程摘要判断字段级 `accept / review / reject`。
 
-它不访问 backend SQLite，不保存任务状态，不执行人工复核，也不写最终结果。任务、review、audit 和字段提交都由 `backend` 负责。
+它不访问 backend SQLite，不保存任务状态，也不执行人工复核。任务、最终结果、审计和字段提交都由 `backend` 负责。
 
 ## 基本链路
 
@@ -17,10 +16,9 @@ backend 上传 PDF bytes
   -> backend 保存文档结构，并把多文档整理为 documents(filename + html)
   -> POST /v1/file-extraction-agent/extract/stream
   -> file_extraction_agent 流式返回工具事件和 result_completed
-  -> backend 从 result_completed、evidence selector 和工具事件组装 route policy 输入
-  -> POST /v1/route-policy-agent/evaluate
-  -> route_policy_agent 返回字段级 route 决策
-  -> backend 继续驱动 review / final result / audit
+  -> backend 从 result_completed、evidence selector 和工具事件组装最终字段结果
+  -> backend 直接提交 resolved 字段，failed/None 字段保持未提交
+  -> backend 写入 final result / audit
 ```
 
 ## 本地启动
@@ -40,7 +38,6 @@ pip install -e ".[dev]"
 export BASE_URL="https://your-model-endpoint/v1"
 export OPENAI_API_KEY="your-api-key"
 export RESOLUTION_MODEL="your-resolution-model"
-export ROUTE_POLICY_MODEL="your-route-policy-model"
 export MINERU_BIN="mineru"
 export DOCUMENT_PROCESSOR_MINERU_LANG="japan"
 ```
@@ -116,24 +113,6 @@ documents + task_spec
   -> 提交并校验结果
 ```
 
-```text
-POST /v1/route-policy-agent/evaluate
-```
-
-接收 `task_spec`、`field_outputs`、`refs_with_text`、`field_processes` 和可选模型覆盖配置。
-
-```text
-task_spec + field_outputs + refs_with_text + field_processes
-  -> input_validator 校验字段名、字段输出、证据文本和过程摘要
-  -> mapper 合并字段定义、字段值、证据文本和 resolution 过程摘要
-  -> 确定性缺失或失败先直接 review
-  -> query_audit/table_audit 作为事实观察进入 route policy prompt
-  -> route policy LLM 通过 tool_call 输出字段级 route
-  -> 返回 RoutePolicyResult(field_routes)
-```
-
-route policy 不重新抽取字段，不读取完整原文、工具返回正文、表格原始行、cell 值或 action refs，只消费 backend 组装好的证据文本和过程摘要。更细的输入契约见 [docs/API.md](docs/API.md)。
-
 ## 目录结构
 
 ```text
@@ -142,11 +121,9 @@ agent/
   routes/
     document_processor.py
     file_extraction_agent.py
-    route_policy_agent.py
   service/
     document_processor/
     file_extraction_agent/
-    route_policy_agent/
   tests/
   docs/
 ```
@@ -157,7 +134,6 @@ agent/
 - `routes/` 只做 HTTP 协议适配和错误状态映射。
 - `service/document_processor/` 放 PDF 标准化实现。
 - `service/file_extraction_agent/` 放字段抽取 graph、工具和 schema。
-- `service/route_policy_agent/` 放 route policy 输入校验、prompt 映射和模型调用。
 
 ## 参考文档
 
@@ -165,4 +141,3 @@ agent/
 - [docs/DESIGN.md](docs/DESIGN.md)：agent 服务模块边界和主链路。
 - [service/document_processor/docs/DESIGN.md](service/document_processor/docs/DESIGN.md)：PDF 标准化设计。
 - [service/file_extraction_agent/docs/DESIGN.md](service/file_extraction_agent/docs/DESIGN.md)：字段抽取设计。
-- [service/route_policy_agent/docs/DESIGN.md](service/route_policy_agent/docs/DESIGN.md)：route policy 设计。

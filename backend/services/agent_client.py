@@ -49,24 +49,6 @@ class AgentClient:
             payload["run_options"] = run_options
         return self._post("/v1/file-extraction-agent/extract", json=payload)
 
-    def evaluate_route_policy(
-        self,
-        *,
-        task_spec: dict[str, Any],
-        field_outputs: list[dict[str, Any]],
-        refs_with_text: list[dict[str, Any]],
-        field_processes: list[dict[str, Any]],
-        metadata: dict[str, Any],
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "task_spec": task_spec,
-            "field_outputs": field_outputs,
-            "refs_with_text": refs_with_text,
-            "field_processes": field_processes,
-            "metadata": metadata,
-        }
-        return self._post("/v1/route-policy-agent/evaluate", json=payload)
-
     def _post(self, path: str, **kwargs) -> dict[str, Any]:
         url = f"{self.base_url}{path}"
         try:

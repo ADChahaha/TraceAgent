@@ -29,9 +29,6 @@ TASK_SPEC = {
 
 
 class FakeAgentClient:
-    def __init__(self, *, route: str = "accept"):
-        self.route = route
-
     def process_document(
         self,
         *,
@@ -115,33 +112,11 @@ class FakeAgentClient:
             },
         }
 
-    def evaluate_route_policy(
-        self,
-        *,
-        task_spec: dict[str, Any],
-        field_outputs: list[dict[str, Any]],
-        refs_with_text: list[dict[str, Any]],
-        field_processes: list[dict[str, Any]],
-        metadata: dict[str, Any],
-    ) -> dict[str, Any]:
-        return {
-            "status": "completed",
-            "failure_reason": None,
-            "field_routes": [
-                {
-                    "field_name": "room_numbers",
-                    "route": self.route,
-                    "route_reason": "证据充分",
-                    "needs_review": self.route != "accept",
-                }
-            ],
-        }
 
-
-def build_app(tmp_path: Path, *, route: str = "accept"):
+def build_app(tmp_path: Path):
     app = create_app(
         settings=BackendSettings(database_path=tmp_path / "backend.sqlite3"),
-        agent_client=FakeAgentClient(route=route),
+        agent_client=FakeAgentClient(),
     )
     return app
 
@@ -244,7 +219,7 @@ def test_task_events_endpoint_waits_for_new_events_until_task_ends(tmp_path: Pat
             service._emit_task_event(
                 finished_task,
                 event_type="task.completed",
-                payload={"route": "accept"},
+                payload={},
                 now=finished_at,
             )
 
@@ -263,28 +238,30 @@ def test_task_events_endpoint_waits_for_new_events_until_task_ends(tmp_path: Pat
     assert events[-1]["type"] == "task.completed"
 
 
-def test_submit_review_appends_terminal_task_event(tmp_path: Path):
-    app = build_app(tmp_path, route="review")
+def test_removed_manual_check_endpoint_is_not_available_and_does_not_append_events(tmp_path: Path):
+    app = build_app(tmp_path)
 
     with TestClient(app) as client:
         task_id = create_task(client)
         summary_response = client.get(f"/tasks/{task_id}")
-        assert summary_response.json()["status"] == "waiting_review"
+        assert summary_response.json()["status"] == "completed"
+        assert summary_response.json()["stage"] == "done"
         last_seq = summary_response.json()["stream"]["last_event_seq"]
 
-        review_response = client.post(
-            f"/tasks/{task_id}/review",
+        unavailable_response = client.post(
+            f"/tasks/{task_id}/manual-check",
             json={
                 "decision": "revise_and_approve",
                 "fields": [
                     {
                         "field_name": "room_numbers",
-                        "review_value": "1-101",
+                        "manual_value": "1-101",
                     }
                 ],
             },
         )
         events_response = client.get(f"/tasks/{task_id}/events?after_seq={last_seq}")
+        all_events_response = client.get(f"/tasks/{task_id}/events?after_seq=0")
 
     lines = [
         line.removeprefix("data: ")
@@ -292,7 +269,14 @@ def test_submit_review_appends_terminal_task_event(tmp_path: Path):
         if line.startswith("data: ")
     ]
     events = [json.loads(line) for line in lines]
-    assert review_response.status_code == 200
-    assert review_response.json()["status"] == "completed"
-    assert events[-1]["type"] == "task.completed"
-    assert events[-1]["payload"]["review_decision"] == "revise_and_approve"
+    assert unavailable_response.status_code == 404
+    assert events == []
+
+    all_lines = [
+        line.removeprefix("data: ")
+        for line in all_events_response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    all_events = [json.loads(line) for line in all_lines]
+    assert all_events[-1]["type"] == "task.completed"
+    assert "route" not in all_events[-1]["payload"]

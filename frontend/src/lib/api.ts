@@ -1,8 +1,6 @@
 import type {
   AuditResult,
   Capabilities,
-  ReviewHandoff,
-  ReviewSubmitPayload,
   TaskReplay,
   TaskCreated,
   TaskDetailData,
@@ -55,36 +53,18 @@ export async function getTaskReplay(taskId: string): Promise<TaskReplay> {
   return requestJson<TaskReplay>(`/api/backend/tasks/${encodeURIComponent(taskId)}/replay`);
 }
 
-export async function getReviewHandoff(taskId: string): Promise<ReviewHandoff> {
-  return requestJson<ReviewHandoff>(`/api/backend/tasks/${encodeURIComponent(taskId)}/review`);
-}
-
-export async function submitTaskReview(
-  taskId: string,
-  payload: ReviewSubmitPayload
-): Promise<TaskSummary> {
-  return requestJson<TaskSummary>(`/api/backend/tasks/${encodeURIComponent(taskId)}/review`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-    headers: {
-      "content-type": "application/json"
-    }
-  });
-}
-
 export async function getTaskAudit(taskId: string): Promise<AuditResult> {
   return requestJson<AuditResult>(`/api/backend/tasks/${encodeURIComponent(taskId)}/audit`);
 }
 
 export async function loadTaskDetail(taskId: string): Promise<TaskDetailData> {
   const summary = await getTaskSummary(taskId);
-  const [result, replay, review] = await Promise.all([
+  const [result, replay] = await Promise.all([
     optionalFetch(() => getTaskResult(taskId), summary.has_result !== false),
     optionalFetch(
       () => getTaskReplay(taskId),
       summary.has_trace !== false || summary.has_result !== false,
-    ),
-    optionalFetch(() => getReviewHandoff(taskId), summary.status === "waiting_review")
+    )
   ]);
 
   return {
@@ -92,7 +72,6 @@ export async function loadTaskDetail(taskId: string): Promise<TaskDetailData> {
     result,
     trace: null,
     replay,
-    review,
     audit: null
   };
 }

@@ -15,7 +15,6 @@ def serialize_field_agent_process(
     *,
     value: Any = _MISSING,
     block_lookup: BlockLookup | None = None,
-    route: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if trace is None:
         return None
@@ -29,7 +28,6 @@ def serialize_field_agent_process(
         failure_reason=trace["failure_reason"],
         value=value,
         block_lookup=block_lookup,
-        route=route,
     )
 
 
@@ -44,7 +42,6 @@ def build_field_agent_process(
     failure_reason: str | None,
     value: Any = _MISSING,
     block_lookup: BlockLookup | None = None,
-    route: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     enriched_evidence = enrich_evidence_blocks(evidence, block_lookup or {})
     process = {
@@ -64,7 +61,6 @@ def build_field_agent_process(
             reason=reason,
             failure_reason=failure_reason,
             value=value,
-            route=route,
         ),
     }
     if value is not _MISSING:
@@ -82,7 +78,6 @@ def build_field_process_steps(
     reason: str | None,
     failure_reason: str | None,
     value: Any = _MISSING,
-    route: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     broad_actions, resolution_actions = _split_process_actions(actions)
     resolution_step: dict[str, Any] = {
@@ -106,7 +101,7 @@ def build_field_process_steps(
 
     final_step: dict[str, Any] = {
         "stage": "final_result",
-        "title": "第三步 agent result（route 前）",
+        "title": "第三步 agent result",
         "status": status,
         "reason": reason,
         "failure_reason": failure_reason,
@@ -125,9 +120,6 @@ def build_field_process_steps(
         resolution_step,
         final_step,
     ]
-    route_step = _build_route_validation_step(route)
-    if route_step is not None:
-        steps.append(route_step)
     return steps
 
 
@@ -150,32 +142,6 @@ def _action_belongs_to_broad(action: dict[str, Any]) -> bool:
     if stage:
         return stage == "broad"
     return action.get("action_type") in {"search_grep", "add_broad_candidate", "finish_broad"}
-
-
-def _build_route_validation_step(route: dict[str, Any] | None) -> dict[str, Any] | None:
-    if not route:
-        return None
-    route_name = route.get("route")
-    route_reason = route.get("route_reason")
-    needs_review = bool(route.get("needs_review"))
-    notes = []
-    if route_name == "accept":
-        notes.append("route_policy_agent 判定该字段可自动提交。")
-    elif route_name == "review":
-        notes.append("route_policy_agent 判定该字段需要人工复核。")
-    elif route_name == "reject":
-        notes.append("route_policy_agent 判定该字段不可提交。")
-    else:
-        notes.append("route_policy_agent 已完成字段路由判断。")
-    return {
-        "stage": "route_validation",
-        "title": "第四步 route validation",
-        "status": route_name,
-        "route": route_name,
-        "needs_review": needs_review,
-        "reason": route_reason,
-        "notes": notes,
-    }
 
 
 def _build_resolution_output_fields(

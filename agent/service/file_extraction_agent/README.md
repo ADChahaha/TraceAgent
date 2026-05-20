@@ -10,11 +10,15 @@ documents + task_spec + run_options
   -> html_index 解析 HTML，生成 /001-filename-title/... 内部虚拟树、path -> node 索引和模型可见 path_id
   -> paragraph/list/table 分别建成 .md/.list/.table 文件，section header 建成目录
   -> resolution_new 生成抽取提示并挂载 tree/read/add_candidate_evidence/review_evidences/write_field/submit_result
-  -> 模型按 schema 浏览材料；机械导航和连续相邻 read 可以不说话，完成语义块或小阶段时才在 assistant content 里给人类 reviewer 简短说明
+  -> 模型按 schema 浏览材料；assistant content 绑定当前工具动作，不是工具调用日志
   -> read 一次只打开一个 paragraph/list/table；需要继续看相邻内容时必须再次调用 read
+  -> read 的可见说明用 Read / Finding / Next，只概括本轮读到的 block
   -> add_candidate_evidence 用单个显式 evidence:// block link 把一个字段的一个可能相关对象保存为候选 block
+  -> add_candidate_evidence 的可见说明用 Saving candidate / Why relevant / Next，只说明候选保存，不伪装成新阅读
   -> review_evidences 把字段候选 block 展开成 Sxxx/Ixxx/Rxxx inline selector 和 evidence_texts
+  -> review_evidences 的可见说明用 Review / Sufficiency / Next 判断是否足够写
   -> 模型判断 review 结果足够支撑字段决定后，write_field 基于同字段当前 review snapshot 覆盖写入字段值、状态和 final_evidence
+  -> write_field 的可见说明用 Write / Why supported / Next 说明字段定案依据
   -> submit_result 校验必填字段、类型和最终 evidence selector
   -> graph 按顺序输出 NDJSON 工具事件，最后输出 result_completed
 ```
@@ -46,7 +50,7 @@ paragraph 文件名只是预览，不代表截断正文。完整正文由 `read(
 | `write_field(field_id, value, final_evidence, status)` | 基于同字段当前 `review_evidences` snapshot，写入或覆盖一个 schema 字段的最终值和最终证据。 |
 | `submit_result()` | 校验当前字段缓冲区，成功返回最终 `fields[]`，失败返回结构化错误。 |
 
-工具参数不再包含 `reason`。assistant content 是可选的用户可见阶段性说明：机械 `tree`、连续相邻 `read`、常规候选记录或普通 review 检查可以留空；读完一个语义块、收集完一组候选证据、从阅读切到 review/write、写字段结论，或修正失败工具时再输出一句短说明。它会被 trace 记录为用户可见说明，并兼容填入工具 action/event 的 `reason` 字段；没有 content 时 `reason` 为空字符串。如果 content 使用了文档原文或原文语义，就必须写成 Markdown evidence link，并解释为什么这段文字支持当前动作。可以引用 inline selector，例如 `["only in connection"](evidence://0000.0001.0014/S002)`；必要时也可以引用整个 paragraph/list/table block，例如 `["strictest of confidence"](evidence://0000.0001.0012)`。`write_field` 的可见引用也可以链到 inline selector 或它所在的 paragraph/list/table block；工具参数和 `final_evidence` 都使用 `evidence://` 链接。
+工具参数不再包含 `reason`。assistant content 是可选的用户可见阶段性说明，并兼容填入工具 action/event 的 `reason` 字段；没有 content 时 `reason` 为空字符串。system prompt 只保留全局约束，具体本轮说明模板写在 tool docstring 中：`read` 用 `Read / Finding / Next`，`add_candidate_evidence` 用 `Saving candidate / Why relevant / Next`，`review_evidences` 用 `Review / Sufficiency / Next`，`write_field` 用 `Write / Why supported / Next`。这样只有候选保存的轮次只说明“保存哪个候选、为什么相关”，不会写成“刚读到了什么”。如果 content 使用了文档原文或原文语义，就必须写成 Markdown evidence link，并解释为什么这段文字支持当前动作。可以引用 inline selector，例如 `["only in connection"](evidence://0000.0001.0014/S002)`；必要时也可以引用整个 paragraph/list/table block，例如 `["strictest of confidence"](evidence://0000.0001.0012)`。`write_field` 的可见引用也可以链到 inline selector 或它所在的 paragraph/list/table block；工具参数和 `final_evidence` 都使用 `evidence://` 链接。
 
 resolution 关闭并发工具调用：prompt 要求每轮只调用一个工具，`bind_tools` 会请求 provider 侧 `parallel_tool_calls=False`，运行时如果仍收到多个 tool call，只保留并执行第一个。这样模型必须等待每次 `read/review/write` 的结果再继续下一步，避免批量读取或批量写入破坏证据反馈链。
 

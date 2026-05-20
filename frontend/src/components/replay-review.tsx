@@ -3,68 +3,75 @@
 import * as React from "react";
 import Link from "next/link";
 import {
+  BookUser,
+  BookmarkPlus,
+  ChevronDown,
+  ChevronRight,
+  FileCheck,
+  FileSearch,
+  ListTree,
   Paperclip,
   PanelLeftClose,
   PanelLeftOpen,
+  PenLine,
   Plus,
-  Search,
   SendHorizonal,
-  SquareTerminal,
-  X
+  X,
 } from "lucide-react";
 
 import { stringifyValue } from "@/lib/json";
 import type { RecentTask } from "@/lib/task-store";
-import type { EnumVariantDefinition, ReplayAction, TaskReplay, TaskResultField, TaskSummary } from "@/lib/types";
-import type { ReviewField } from "@/lib/types";
+import type { ReplayAction, TaskReplay, TaskResultField, TaskSummary } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 
-type SidebarResizeSide = "left" | "field-progress" | "evidence-review";
+type SidebarResizeSide = "left" | "field-progress";
 
 type ReplayField = {
   sourceName: string;
   fieldName: string;
-  fieldType?: string | null;
-  variants: EnumVariantDefinition[];
   status: string;
   value: unknown;
   evidenceIds: string[];
-  route?: string | null;
-  routeReason?: string | null;
-  needsReview: boolean;
-  reviewField?: ReviewField;
+  summary: string;
 };
 
-type EvidenceReviewTab = {
+type WorkspaceSourceTab = {
   id: string;
   uri: string;
   label: string;
   evidenceId: string;
+  documentIndex: number;
 };
 
-type ReviewPanelMode = "field" | "evidence";
+type EvidenceDetail = {
+  id: string;
+  text: string;
+  sourceText: string;
+  selector: string;
+  documentTitle: string;
+  field: ReplayField | null;
+};
+
 type AgentBalanceSide = "left" | "right" | "none";
-
-type FieldProgressGroupKey = "review" | "reject" | "accept";
-
-const FIELD_PROGRESS_GROUPS: Array<{ key: FieldProgressGroupKey; label: string }> = [
-  { key: "review", label: "Review" },
-  { key: "reject", label: "Reject" },
-  { key: "accept", label: "Accept" },
-];
+type VisibleAgentAction = {
+  action: ReplayAction;
+  actionIndex: number;
+  visibleStepNumber: number;
+};
+type AgentStreamItem =
+  | { kind: "message"; item: VisibleAgentAction; reason: string }
+  | { kind: "tool"; item: VisibleAgentAction }
+  | { kind: "tool-group"; items: VisibleAgentAction[] };
 
 const DEFAULT_LEFT_PANEL_WIDTH = 224;
 const DEFAULT_FIELD_PROGRESS_PANEL_WIDTH = 320;
-const DEFAULT_EVIDENCE_REVIEW_PANEL_WIDTH = 384;
 const LEFT_PANEL_MIN_WIDTH = 176;
 const LEFT_PANEL_MAX_WIDTH = 360;
 const RIGHT_PANEL_MIN_WIDTH = 300;
-const RIGHT_PANEL_MAX_WIDTH = 560;
+const RIGHT_PANEL_MAX_WIDTH = 920;
 const PANEL_RESIZE_KEY_STEP = 16;
+const REVIEW_TAB_ID = "review";
 
 export function ReplayReview({
   taskId,
@@ -72,45 +79,24 @@ export function ReplayReview({
   replay,
   recentTasks = [],
   finalFields,
-  reviewFields = [],
-  reviewValues = {},
-  reviewComment = "",
-  isSubmittingReview = false,
-  onReviewValueChange,
-  onReviewCommentChange,
-  onSubmitReview,
 }: {
   taskId?: string;
   summary?: TaskSummary | null;
   replay: TaskReplay | null;
   recentTasks?: RecentTask[];
   finalFields: TaskResultField[];
-  reviewFields?: ReviewField[];
-  reviewValues?: Record<string, unknown>;
-  reviewComment?: string;
-  isSubmittingReview?: boolean;
-  onReviewValueChange?: (fieldName: string, value: unknown) => void;
-  onReviewCommentChange?: (value: string) => void;
-  onSubmitReview?: () => void;
 }) {
   const actions = React.useMemo(() => replay?.actions ?? [], [replay?.actions]);
   const [isLeftPanelOpen, setIsLeftPanelOpen] = React.useState(true);
-  const [isEvidenceReviewOpen, setIsEvidenceReviewOpen] = React.useState(false);
-  const [reviewTabsByTask, setReviewTabsByTask] = React.useState<Record<string, EvidenceReviewTab[]>>({});
-  const [activeReviewTabByTask, setActiveReviewTabByTask] = React.useState<Record<string, string>>({});
-  const [reviewPanelModeByTask, setReviewPanelModeByTask] = React.useState<Record<string, ReviewPanelMode>>({});
+  const [sourceTabsByTask, setSourceTabsByTask] = React.useState<Record<string, WorkspaceSourceTab[]>>({});
+  const [activeWorkspaceTabByTask, setActiveWorkspaceTabByTask] = React.useState<Record<string, string>>({});
   const [selectedFieldName, setSelectedFieldName] = React.useState("");
   const [composerValue, setComposerValue] = React.useState("");
   const [leftPanelWidth, setLeftPanelWidth] = React.useState(DEFAULT_LEFT_PANEL_WIDTH);
   const [fieldProgressPanelWidth, setFieldProgressPanelWidth] = React.useState(DEFAULT_FIELD_PROGRESS_PANEL_WIDTH);
-  const [evidenceReviewPanelWidth, setEvidenceReviewPanelWidth] = React.useState(DEFAULT_EVIDENCE_REVIEW_PANEL_WIDTH);
   const agentStreamRef = React.useRef<HTMLDivElement | null>(null);
 
   const currentTaskId = taskId ?? replay?.task_id ?? "";
-
-  React.useEffect(() => {
-    setIsEvidenceReviewOpen(false);
-  }, [currentTaskId]);
 
   React.useEffect(() => {
     const stream = agentStreamRef.current;
@@ -123,132 +109,132 @@ export function ReplayReview({
     () =>
       actions
         .map((action, actionIndex) => ({ action, actionIndex }))
-        .filter(({ action }) => shouldDisplayAgentAction(action)),
+        .filter(({ action }) => shouldDisplayAgentAction(action))
+        .map((item, visibleIndex) => ({ ...item, visibleStepNumber: visibleIndex + 1 })),
     [actions],
   );
-  const agentStreamActions = visibleActions;
+  const agentStreamItems = React.useMemo(() => groupAgentStreamItems(visibleActions), [visibleActions]);
   const visibleActionCount = visibleActions.length;
   const replayFields = React.useMemo(
-    () => reduceReplayFields(actions, finalFields, reviewFields),
-    [actions, finalFields, reviewFields],
+    () => reduceReplayFields(actions, finalFields),
+    [actions, finalFields],
   );
   const fieldProgressFields = React.useMemo(() => orderReplayFieldsForProgress(replayFields), [replayFields]);
   const hasFieldProgressFields = fieldProgressFields.length > 0;
-  const defaultSelectedFieldName =
-    fieldProgressFields.find((field) => field.needsReview)?.sourceName ??
-    fieldProgressFields[0]?.sourceName ??
-    "";
-  React.useEffect(() => {
-    if (!defaultSelectedFieldName) {
-      setSelectedFieldName("");
-      return;
-    }
-    setSelectedFieldName((current) =>
-      fieldProgressFields.some((field) => field.sourceName === current) ? current : defaultSelectedFieldName,
-    );
-  }, [defaultSelectedFieldName, fieldProgressFields]);
-  const reviewTabs = reviewTabsByTask[currentTaskId] ?? [];
-  const activeReviewTabId = activeReviewTabByTask[currentTaskId] ?? "";
-  const activeReviewTab = React.useMemo(
-    () => reviewTabs.find((tab) => tab.id === activeReviewTabId) ?? null,
-    [activeReviewTabId, reviewTabs],
+  const defaultSelectedFieldName = fieldProgressFields[0]?.sourceName ?? "";
+  const effectiveSelectedFieldName = fieldProgressFields.some((field) => field.sourceName === selectedFieldName)
+    ? selectedFieldName
+    : defaultSelectedFieldName;
+  const evidenceDetailsById = React.useMemo(
+    () => (replay ? buildEvidenceDetailsById(replay, fieldProgressFields) : new Map<string, EvidenceDetail>()),
+    [fieldProgressFields, replay],
   );
-  const selectedReviewField = React.useMemo(
-    () => fieldProgressFields.find((field) => field.sourceName === selectedFieldName) ?? null,
-    [fieldProgressFields, selectedFieldName],
+  const sourceTabs = React.useMemo(() => sourceTabsByTask[currentTaskId] ?? [], [currentTaskId, sourceTabsByTask]);
+  const activeWorkspaceTabId = activeWorkspaceTabByTask[currentTaskId] ?? REVIEW_TAB_ID;
+  const activeSourceTab = React.useMemo(
+    () => sourceTabs.find((tab) => tab.id === activeWorkspaceTabId) ?? null,
+    [activeWorkspaceTabId, sourceTabs],
   );
-  const activeReviewPanelMode = reviewPanelModeByTask[currentTaskId] ?? null;
-  const shouldShowFieldProgressPanel = !isLeftPanelOpen;
-  const shouldShowEvidenceReviewPanel = isEvidenceReviewOpen;
-  const shouldShowRightPanel = shouldShowFieldProgressPanel || shouldShowEvidenceReviewPanel;
-  const visibleSidePanelCount =
-    (isLeftPanelOpen ? 1 : 0) + (shouldShowFieldProgressPanel ? 1 : 0) + (shouldShowEvidenceReviewPanel ? 1 : 0);
+  const isSourceTabActive = activeWorkspaceTabId !== REVIEW_TAB_ID;
+  const shouldShowFieldProgressPanel = !isLeftPanelOpen && activeWorkspaceTabId === REVIEW_TAB_ID;
+  const shouldShowRightReviewPanel = shouldShowFieldProgressPanel || isSourceTabActive;
+  const visibleSidePanelCount = (isLeftPanelOpen ? 1 : 0) + (shouldShowRightReviewPanel ? 1 : 0);
   const agentBalanceSide: AgentBalanceSide =
     visibleSidePanelCount === 1 ? (isLeftPanelOpen ? "right" : "left") : "none";
   const agentContentMode = visibleSidePanelCount === 1 ? "centered" : "full";
-  const currentDocumentTitle = getCurrentDocumentTitle(replay, null);
+  const replayTitle = taskId ?? replay?.task_id ?? "";
   const stageColumns = React.useMemo(
     () =>
       [
         ...(isLeftPanelOpen ? ["var(--replay-left-panel-width)", "10px"] : []),
         "minmax(0, 1fr)",
-        ...(shouldShowFieldProgressPanel ? ["10px", "var(--replay-field-progress-panel-width)"] : []),
-        ...(shouldShowEvidenceReviewPanel ? ["10px", "var(--replay-evidence-review-panel-width)"] : []),
+        ...(shouldShowRightReviewPanel ? ["10px", "var(--replay-field-progress-panel-width)"] : []),
       ].join(" "),
-    [isLeftPanelOpen, shouldShowEvidenceReviewPanel, shouldShowFieldProgressPanel],
+    [isLeftPanelOpen, shouldShowRightReviewPanel],
   );
   const stageStyle = React.useMemo(
     () => ({
       "--replay-left-panel-width": `${leftPanelWidth}px`,
       "--replay-field-progress-panel-width": `${fieldProgressPanelWidth}px`,
-      "--replay-evidence-review-panel-width": `${evidenceReviewPanelWidth}px`,
       "--replay-stage-columns": stageColumns,
     }) as React.CSSProperties,
-    [evidenceReviewPanelWidth, fieldProgressPanelWidth, leftPanelWidth, stageColumns],
+    [fieldProgressPanelWidth, leftPanelWidth, stageColumns],
   );
 
   function openEvidenceReview(uri: string, label: string) {
+    openSourceTab(uri, label);
+  }
+
+  function openSourceTab(uri: string, label: string) {
+    if (!replay) {
+      return;
+    }
     const evidenceId = getEvidenceIdFromUri(uri);
-    const tabId = uri || evidenceId || `evidence-${reviewTabs.length + 1}`;
-    const nextTab: EvidenceReviewTab = {
+    const documentIndex = getEvidenceDocumentIndex(replay, evidenceId);
+    const documentTitle = getEvidenceDocumentTitle(replay, evidenceId);
+    const tabId = getSourceDocumentTabId(documentIndex);
+    const nextTab: WorkspaceSourceTab = {
       id: tabId,
       uri,
-      label: label || evidenceId || "Evidence",
+      label: documentTitle || label || evidenceId || "Source",
       evidenceId,
+      documentIndex,
     };
-    setReviewTabsByTask((current) => {
+    setSourceTabsByTask((current) => {
       const currentTabs = current[currentTaskId] ?? [];
       const exists = currentTabs.some((tab) => tab.id === tabId);
       return {
         ...current,
-        [currentTaskId]: exists ? currentTabs : [...currentTabs, nextTab],
+        [currentTaskId]: exists
+          ? currentTabs.map((tab) => (tab.id === tabId ? { ...tab, uri, evidenceId, label: tab.label || nextTab.label, documentIndex } : tab))
+          : [...currentTabs, nextTab],
       };
     });
-    setActiveReviewTabByTask((current) => ({
+    setActiveWorkspaceTabByTask((current) => ({
       ...current,
       [currentTaskId]: tabId,
     }));
-    setReviewPanelModeByTask((current) => ({
-      ...current,
-      [currentTaskId]: "evidence",
-    }));
-    setIsEvidenceReviewOpen(true);
   }
 
   function openFieldReview(fieldName: string) {
     setSelectedFieldName(fieldName);
-    setReviewPanelModeByTask((current) => ({
-      ...current,
-      [currentTaskId]: "field",
-    }));
-    setIsEvidenceReviewOpen(true);
   }
 
-  function closeEvidenceReview() {
-    setIsEvidenceReviewOpen(false);
-  }
-
-  function selectEvidenceTab(tabId: string) {
-    setActiveReviewTabByTask((current) => ({
+  function selectWorkspaceTab(tabId: string) {
+    setActiveWorkspaceTabByTask((current) => ({
       ...current,
       [currentTaskId]: tabId,
     }));
-    setReviewPanelModeByTask((current) => ({
+  }
+
+  function closeSourceTab(tabId: string) {
+    setSourceTabsByTask((current) => ({
       ...current,
-      [currentTaskId]: "evidence",
+      [currentTaskId]: (current[currentTaskId] ?? []).filter((tab) => tab.id !== tabId),
     }));
+    setActiveWorkspaceTabByTask((current) => {
+      if (current[currentTaskId] !== tabId) {
+        return current;
+      }
+      return {
+        ...current,
+        [currentTaskId]: REVIEW_TAB_ID,
+      };
+    });
+  }
+
+  function openActionSource(action: ReplayAction, label: string) {
+    const uri = getActionEvidenceUri(action);
+    if (uri) {
+      openSourceTab(uri, label);
+    }
   }
 
   function startPanelResize(side: SidebarResizeSide, event: React.PointerEvent<HTMLButtonElement>) {
     event.preventDefault();
     const handle = event.currentTarget;
     const startX = event.clientX;
-    const startWidth =
-      side === "left"
-        ? leftPanelWidth
-        : side === "field-progress"
-          ? fieldProgressPanelWidth
-          : evidenceReviewPanelWidth;
+    const startWidth = side === "left" ? leftPanelWidth : fieldProgressPanelWidth;
     const pointerId = event.pointerId;
 
     const updateWidth = (clientX: number) => {
@@ -258,11 +244,7 @@ export function ReplayReview({
         return;
       }
       const nextWidth = clampPanelWidth(startWidth - deltaX, RIGHT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH);
-      if (side === "field-progress") {
-        setFieldProgressPanelWidth(nextWidth);
-      } else {
-        setEvidenceReviewPanelWidth(nextWidth);
-      }
+      setFieldProgressPanelWidth(nextWidth);
     };
     const stopResize = () => {
       window.removeEventListener("pointermove", handlePointerMove);
@@ -324,7 +306,6 @@ export function ReplayReview({
       setFieldProgressPanelWidth((current) => clampPanelWidth(current - delta, RIGHT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH));
       return;
     }
-    setEvidenceReviewPanelWidth((current) => clampPanelWidth(current - delta, RIGHT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH));
   }
 
   function setPanelWidthToBoundary(side: SidebarResizeSide, width: number) {
@@ -336,7 +317,6 @@ export function ReplayReview({
       setFieldProgressPanelWidth(width);
       return;
     }
-    setEvidenceReviewPanelWidth(width);
   }
 
   if (!replay) {
@@ -367,27 +347,19 @@ export function ReplayReview({
           >
             {isLeftPanelOpen ? <PanelLeftClose className="h-4 w-4" aria-hidden="true" /> : <PanelLeftOpen className="h-4 w-4" aria-hidden="true" />}
           </button>
-          <div className="replay-topbar-title" title={`${taskId ?? replay.task_id} / ${currentDocumentTitle}`}>
-            {`${taskId ?? replay.task_id} / ${currentDocumentTitle}`}
+          <div className="replay-topbar-title" title={replayTitle}>
+            {replayTitle}
           </div>
           <span className="sr-only">AI extraction replay</span>
         </div>
         <div className="replay-topbar-status">
-          <button
-            type="button"
-            className={isEvidenceReviewOpen ? "replay-review-tab-button is-active" : "replay-review-tab-button"}
-            aria-label={isEvidenceReviewOpen ? "关闭 evidence Review" : "打开 evidence Review"}
-            onClick={() => setIsEvidenceReviewOpen((current) => !current)}
-          >
-            Review
-          </button>
           {summary ? <ReplayStatusBadge status={summary.status} /> : null}
         </div>
       </div>
       <div
         className="replay-stage replay-stage-fullscreen grid"
         data-left-panel-open={isLeftPanelOpen ? "true" : "false"}
-        data-right-panel-open={shouldShowRightPanel ? "true" : "false"}
+        data-right-panel-open={shouldShowRightReviewPanel ? "true" : "false"}
         style={stageStyle}
       >
         {isLeftPanelOpen ? (
@@ -404,144 +376,50 @@ export function ReplayReview({
           />
         ) : null}
 
-        <div
-          className="replay-agent-panel-slot"
-          aria-label="Agent 中间工作区"
-          data-agent-balance-side={agentBalanceSide}
-          data-agent-content-mode={agentContentMode}
-          data-agent-gutter={agentContentMode === "centered" ? "compact" : "none"}
-        >
-          <section className="replay-agent-panel" aria-label="Agent 工具回放">
-            <div className="replay-agent-header">
-              <span className="replay-agent-title">AI</span>
-              <span className="replay-agent-step">
-                {visibleActionCount === 0 ? "0 tool calls" : `${visibleActionCount} tool calls`}
-              </span>
-            </div>
-            <div ref={agentStreamRef} className="replay-agent-stream" aria-label="Agent 文字流">
-              <div className="replay-agent-centered-content" aria-label="Agent 居中文字流内容">
-                <div className="replay-agent-content-frame" aria-label="Agent 中间文字框">
-                  <AgentBalanceSpacer side="left" active={agentContentMode === "centered"} />
-                  <div className="replay-agent-readable-column" aria-label="Agent 阅读列">
-                    {agentStreamActions.length > 0 ? (
-                      agentStreamActions.map(({ action, actionIndex }, visibleIndex) => {
-                        const visibleStepNumber = visibleIndex + 1;
-                        const reason = getActionReason(action);
-                        const toolName = getActionType(action) || "tool";
-                        const target = getActionTarget(action);
-                        const result = readObject(action.result);
-                        const ok = result?.ok !== false;
-                        return (
-                          <div
-                            key={`${actionIndex}-${toolName}-${target}`}
-                            aria-label={`第 ${visibleStepNumber} 步 ${toolName}`}
-                            className="replay-agent-turn"
-                          >
-                            {reason ? (
-                              <div className="replay-agent-message">
-                                <span className="replay-agent-reason-text">
-                                  <EvidenceReasonText text={reason} onOpenEvidence={openEvidenceReview} />
-                                </span>
-                              </div>
-                            ) : null}
-                            <AgentToolLine action={action} ok={ok} />
-                          </div>
-                        );
-                      })
-                    ) : (
-                      <div className="replay-agent-turn is-current">
-                        <div className="replay-agent-empty">等待工具调用。</div>
-                      </div>
-                    )}
-                  </div>
-                  <AgentBalanceSpacer side="right" active={agentContentMode === "centered"} />
-                </div>
-              </div>
-            </div>
-            <form
-              className="replay-agent-composer"
-              aria-label="Agent 对话区"
-              onSubmit={(event) => {
-                event.preventDefault();
-                setComposerValue("");
-              }}
-            >
-              <div className="replay-agent-composer-balance-row" aria-label="Agent 居中输入区">
-                <div className="replay-agent-composer-frame" aria-label="Agent 中间输入框">
-                  <AgentBalanceSpacer side="left" active={agentContentMode === "centered"} />
-                  <div className="replay-agent-composer-readable-column" aria-label="Agent 输入阅读列">
-                    <textarea
-                      aria-label="Agent 对话输入框"
-                      value={composerValue}
-                      onChange={(event) => setComposerValue(event.currentTarget.value)}
-                      placeholder="Ask for follow-up changes"
-                      className="replay-agent-composer-input"
-                    />
-                    <div className="replay-agent-composer-actions">
-                      <Button type="button" variant="ghost" size="icon" aria-label="添加文件">
-                        <Paperclip className="h-4 w-4" aria-hidden="true" />
-                      </Button>
-                      <Button type="submit" size="icon" aria-label="发送消息">
-                        <SendHorizonal className="h-4 w-4" aria-hidden="true" />
-                      </Button>
-                    </div>
-                  </div>
-                  <AgentBalanceSpacer side="right" active={agentContentMode === "centered"} />
-                </div>
-              </div>
-            </form>
-          </section>
-        </div>
+        <ReviewWorkspacePanel
+          agentStreamRef={agentStreamRef}
+          agentStreamItems={agentStreamItems}
+          visibleActionCount={visibleActionCount}
+          composerValue={composerValue}
+          agentBalanceSide={agentBalanceSide}
+          agentContentMode={agentContentMode}
+          onComposerChange={setComposerValue}
+          onComposerSubmit={() => setComposerValue("")}
+          onOpenEvidence={openEvidenceReview}
+          onOpenActionSource={openActionSource}
+        />
 
-        {shouldShowRightPanel ? (
+        {shouldShowRightReviewPanel ? (
           <>
-            {shouldShowFieldProgressPanel ? (
-              <>
-                <PanelResizeHandle
-                  side="field-progress"
-                  width={fieldProgressPanelWidth}
-                  onPointerDown={(event) => startPanelResize("field-progress", event)}
-                  onKeyDown={(event) => resizePanelByKeyboard("field-progress", event)}
-                />
-                <aside className="replay-field-progress-panel-slot">
+            <PanelResizeHandle
+              side="field-progress"
+              width={fieldProgressPanelWidth}
+              onPointerDown={(event) => startPanelResize("field-progress", event)}
+              onKeyDown={(event) => resizePanelByKeyboard("field-progress", event)}
+            />
+            <aside className="replay-review-side-panel-slot" aria-label="右侧 Review 工作栏">
+              <WorkspaceTabStrip
+                sourceTabs={sourceTabs}
+                activeTabId={activeWorkspaceTabId}
+                onSelectTab={selectWorkspaceTab}
+                onCloseTab={closeSourceTab}
+              />
+              <div className="replay-review-side-panel-body">
+                {activeWorkspaceTabId === REVIEW_TAB_ID ? (
                   <FieldProgressPanel
                     fields={fieldProgressFields}
-                    selectedFieldName={selectedFieldName || defaultSelectedFieldName}
+                    selectedFieldName={effectiveSelectedFieldName}
                     onSelectField={openFieldReview}
                   />
-                </aside>
-              </>
-            ) : null}
-            {shouldShowEvidenceReviewPanel ? (
-              <>
-                <PanelResizeHandle
-                  side="evidence-review"
-                  width={evidenceReviewPanelWidth}
-                  onPointerDown={(event) => startPanelResize("evidence-review", event)}
-                  onKeyDown={(event) => resizePanelByKeyboard("evidence-review", event)}
-                />
-                <aside className="replay-evidence-review-panel-slot">
-                  <EvidenceReviewPanel
-                    tabs={reviewTabs}
-                    activeTab={activeReviewTab}
-                    mode={activeReviewPanelMode}
-                    selectedField={selectedReviewField}
+                ) : (
+                  <SourceTabPanel
+                    tab={activeSourceTab ?? sourceTabs[0] ?? { id: REVIEW_TAB_ID, uri: "", label: "Review", evidenceId: "", documentIndex: 0 }}
                     replay={replay}
-                    fields={replayFields}
-                    taskId={taskId ?? replay.task_id}
-                    reviewValues={reviewValues}
-                    reviewComment={reviewComment}
-                    isSubmittingReview={isSubmittingReview}
-                    onSelectTab={selectEvidenceTab}
-                    onOpenEvidence={openEvidenceReview}
-                    onReviewValueChange={onReviewValueChange}
-                    onReviewCommentChange={onReviewCommentChange}
-                    onSubmitReview={onSubmitReview}
-                    onClose={closeEvidenceReview}
+                    evidenceDetailsById={evidenceDetailsById}
                   />
-                </aside>
-              </>
-            ) : null}
+                )}
+              </div>
+            </aside>
           </>
         ) : null}
       </div>
@@ -619,7 +497,6 @@ function TaskSidebar({
               <span className="replay-task-meta">
                 {task.status} / {task.stage}
               </span>
-              {task.route ? <span className="replay-task-route">{task.route}</span> : null}
               {task.error_message ? <span className="replay-task-error">{task.error_message}</span> : null}
             </Link>
           ))
@@ -641,7 +518,6 @@ function FieldProgressPanel({
   onSelectField: (fieldName: string) => void;
 }) {
   const selectedField = fields.find((field) => field.sourceName === selectedFieldName) ?? fields[0] ?? null;
-  const fieldGroups = groupFieldProgressFields(fields);
 
   return (
     <section className="replay-field-progress-panel" aria-label="字段进度面板">
@@ -652,24 +528,13 @@ function FieldProgressPanel({
         </div>
       </div>
       <div className="replay-field-progress-list">
-        {fieldGroups.map((group) => (
-          <section
-            key={group.key}
-            className="replay-field-progress-group"
-            aria-label={`${group.label} 字段分组`}
-          >
-            <h3 className="replay-field-progress-group-title">{group.label}</h3>
-            <div className="replay-field-progress-group-items">
-              {group.fields.map((field) => (
-                <FieldProgressRow
-                  key={field.sourceName}
-                  field={field}
-                  isSelected={field.sourceName === selectedField?.sourceName}
-                  onSelect={() => onSelectField(field.sourceName)}
-                />
-              ))}
-            </div>
-          </section>
+        {fields.map((field) => (
+          <FieldProgressRow
+            key={field.sourceName}
+            field={field}
+            isSelected={field.sourceName === selectedField?.sourceName}
+            onSelect={() => onSelectField(field.sourceName)}
+          />
         ))}
         {fields.length === 0 ? (
           <p className="replay-field-progress-empty">暂无字段进度。</p>
@@ -680,30 +545,7 @@ function FieldProgressPanel({
 }
 
 function orderReplayFieldsForProgress(fields: ReplayField[]): ReplayField[] {
-  return FIELD_PROGRESS_GROUPS.flatMap((group) =>
-    fields.filter((field) => getFieldProgressGroupKey(field) === group.key),
-  );
-}
-
-function groupFieldProgressFields(fields: ReplayField[]): Array<{
-  key: FieldProgressGroupKey;
-  label: string;
-  fields: ReplayField[];
-}> {
-  return FIELD_PROGRESS_GROUPS.map((group) => ({
-    ...group,
-    fields: fields.filter((field) => getFieldProgressGroupKey(field) === group.key),
-  })).filter((group) => group.fields.length > 0);
-}
-
-function getFieldProgressGroupKey(field: ReplayField): FieldProgressGroupKey {
-  if (field.needsReview || field.route === "review") {
-    return "review";
-  }
-  if (field.route === "reject") {
-    return "reject";
-  }
-  return "accept";
+  return [...fields].sort((left, right) => left.fieldName.localeCompare(right.fieldName));
 }
 
 function FieldProgressRow({
@@ -715,24 +557,24 @@ function FieldProgressRow({
   isSelected: boolean;
   onSelect: () => void;
 }) {
-  const routeLabel = field.route ?? field.status;
   const valuePreview = truncateText(formatFieldDisplayValue(field), 88);
   const evidenceText = field.evidenceIds.length === 1 ? "1 evidence" : `${field.evidenceIds.length} evidence`;
+  const summaryPreview = truncateText(field.summary, 132);
   return (
     <button
       type="button"
       className={isSelected ? "replay-field-progress-row is-selected" : "replay-field-progress-row"}
       aria-pressed={isSelected}
-      aria-label={`${field.fieldName} ${routeLabel} ${field.status}`}
-      title={field.routeReason || field.fieldName}
+      aria-label={`${field.fieldName} ${field.status}`}
+      title={field.fieldName}
       onClick={onSelect}
     >
       <span className="replay-field-row-main">
         <span className="replay-field-row-title">{field.fieldName}</span>
-        <span className="replay-field-row-value">{valuePreview || "等待人工补录"}</span>
+        <span className="replay-field-row-value">{valuePreview || "暂无字段值"}</span>
+        {summaryPreview ? <span className="replay-field-row-summary">{summaryPreview}</span> : null}
       </span>
       <span className="replay-field-row-meta">
-        <ReplayFieldRouteBadge field={field} />
         <span>{field.status}</span>
         <span>{evidenceText}</span>
       </span>
@@ -740,122 +582,236 @@ function FieldProgressRow({
   );
 }
 
-function EvidenceReviewPanel({
-  tabs,
-  activeTab,
-  mode,
-  selectedField,
-  replay,
-  fields,
-  taskId,
-  reviewValues,
-  reviewComment,
-  isSubmittingReview,
+function WorkspaceTabStrip({
+  sourceTabs,
+  activeTabId,
   onSelectTab,
-  onOpenEvidence,
-  onReviewValueChange,
-  onReviewCommentChange,
-  onSubmitReview,
-  onClose,
+  onCloseTab,
 }: {
-  tabs: EvidenceReviewTab[];
-  activeTab: EvidenceReviewTab | null;
-  mode: ReviewPanelMode | null;
-  selectedField: ReplayField | null;
-  replay: TaskReplay;
-  fields: ReplayField[];
-  taskId: string;
-  reviewValues: Record<string, unknown>;
-  reviewComment: string;
-  isSubmittingReview: boolean;
+  sourceTabs: WorkspaceSourceTab[];
+  activeTabId: string;
   onSelectTab: (tabId: string) => void;
-  onOpenEvidence: (uri: string, label: string) => void;
-  onReviewValueChange?: (fieldName: string, value: unknown) => void;
-  onReviewCommentChange?: (value: string) => void;
-  onSubmitReview?: () => void;
-  onClose: () => void;
+  onCloseTab: (tabId: string) => void;
 }) {
-  const evidenceText = activeTab ? getEvidenceText(replay.actions, activeTab.evidenceId) : "";
-  const isFieldMode = mode === "field" && selectedField;
-  const isEvidenceMode = mode === "evidence" && activeTab;
   return (
-    <section className="replay-evidence-review-panel" aria-label="Review 面板">
-      <div className="replay-side-panel-header">
-        <div>
-          <div className="replay-side-panel-title">Review</div>
-          <div className="replay-side-panel-subtitle">
-            {isFieldMode ? selectedField.fieldName : activeTab ? activeTab.label : `${tabs.length} evidence tab${tabs.length === 1 ? "" : "s"}`}
+    <div className="replay-workspace-tabs" role="tablist" aria-label="右侧工作栏选项卡">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTabId === REVIEW_TAB_ID}
+        className={activeTabId === REVIEW_TAB_ID ? "replay-workspace-tab is-active" : "replay-workspace-tab"}
+        onClick={() => onSelectTab(REVIEW_TAB_ID)}
+      >
+        <FileSearch className="h-4 w-4" aria-hidden="true" />
+        <span>Review</span>
+      </button>
+      {sourceTabs.map((tab) => (
+        <span
+          key={tab.id}
+          className={activeTabId === tab.id ? "replay-workspace-tab-shell is-active" : "replay-workspace-tab-shell"}
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTabId === tab.id}
+            className="replay-workspace-tab replay-workspace-source-tab"
+            onClick={() => onSelectTab(tab.id)}
+          >
+            {tab.label}
+          </button>
+          <button
+            type="button"
+            className="replay-workspace-tab-close"
+            aria-label={`关闭 ${tab.label}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onCloseTab(tab.id);
+            }}
+          >
+            <X className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function ReviewWorkspacePanel({
+  agentStreamRef,
+  agentStreamItems,
+  visibleActionCount,
+  composerValue,
+  agentBalanceSide,
+  agentContentMode,
+  onComposerChange,
+  onComposerSubmit,
+  onOpenEvidence,
+  onOpenActionSource,
+}: {
+  agentStreamRef: React.RefObject<HTMLDivElement | null>;
+  agentStreamItems: AgentStreamItem[];
+  visibleActionCount: number;
+  composerValue: string;
+  agentBalanceSide: AgentBalanceSide;
+  agentContentMode: "centered" | "full";
+  onComposerChange: (value: string) => void;
+  onComposerSubmit: () => void;
+  onOpenEvidence: (uri: string, label: string) => void;
+  onOpenActionSource: (action: ReplayAction, label: string) => void;
+}) {
+  return (
+    <div
+      className="replay-agent-panel-slot"
+      aria-label="Agent 中间工作区"
+      data-agent-balance-side={agentBalanceSide}
+      data-agent-content-mode={agentContentMode}
+      data-agent-gutter={agentContentMode === "centered" ? "compact" : "none"}
+    >
+      <section className="replay-agent-panel" aria-label="Agent 工具回放">
+        <div className="replay-agent-header">
+          <span className="replay-agent-title">AI</span>
+          <span className="replay-agent-step">
+            {visibleActionCount === 0 ? "0 tool calls" : `${visibleActionCount} tool calls`}
+          </span>
+        </div>
+        <div ref={agentStreamRef} className="replay-agent-stream" aria-label="Agent 文字流">
+          <div className="replay-agent-centered-content" aria-label="Agent 居中文字流内容">
+            <div className="replay-agent-content-frame" aria-label="Agent 中间文字框">
+              <AgentBalanceSpacer side="left" active={agentContentMode === "centered"} />
+              <div className="replay-agent-readable-column" aria-label="Agent 阅读列">
+                {agentStreamItems.length > 0 ? (
+                  agentStreamItems.map((streamItem) => {
+                    if (streamItem.kind === "message") {
+                      const { action, actionIndex, visibleStepNumber } = streamItem.item;
+                      const toolName = getActionType(action) || "tool";
+                      const target = getActionTarget(action);
+                      return (
+                        <div
+                          key={`message-${actionIndex}-${toolName}-${target}`}
+                          aria-label={`第 ${visibleStepNumber} 步 ${toolName} 文字`}
+                          className="replay-agent-turn replay-agent-message-turn"
+                        >
+                          <div className="replay-agent-message">
+                            <span className="replay-agent-reason-text">
+                              <EvidenceReasonText text={streamItem.reason} onOpenEvidence={onOpenEvidence} />
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    }
+                    if (streamItem.kind === "tool-group") {
+                      const firstItem = streamItem.items[0];
+                      return (
+                        <AgentToolGroup
+                          key={`tool-group-${firstItem.actionIndex}-${streamItem.items.length}`}
+                          items={streamItem.items}
+                          onOpenActionSource={onOpenActionSource}
+                        />
+                      );
+                    }
+                    const { action, actionIndex, visibleStepNumber } = streamItem.item;
+                    const toolName = getActionType(action) || "tool";
+                    const target = getActionTarget(action);
+                    const ok = isAgentActionOk(action);
+                    return (
+                      <div
+                        key={`${actionIndex}-${toolName}-${target}`}
+                        aria-label={`第 ${visibleStepNumber} 步 ${toolName}`}
+                        className="replay-agent-turn"
+                      >
+                        <AgentToolLine action={action} ok={ok} onOpenActionSource={onOpenActionSource} />
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="replay-agent-turn is-current">
+                    <div className="replay-agent-empty">等待工具调用。</div>
+                  </div>
+                )}
+              </div>
+              <AgentBalanceSpacer side="right" active={agentContentMode === "centered"} />
+            </div>
           </div>
         </div>
-        <Button type="button" variant="ghost" size="icon" aria-label="关闭 Review" onClick={onClose}>
-          <X className="h-4 w-4" aria-hidden="true" />
-        </Button>
-      </div>
-      {tabs.length > 0 ? (
-        <div className="replay-evidence-tabs" role="tablist" aria-label="Evidence tabs">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              id={`evidence-tab-${stableDomId(tab.id)}`}
-              type="button"
-              role="tab"
-              aria-selected={tab.id === activeTab?.id}
-              aria-controls={`evidence-panel-${stableDomId(tab.id)}`}
-              className={tab.id === activeTab?.id ? "replay-evidence-tab is-active" : "replay-evidence-tab"}
-              onClick={() => onSelectTab(tab.id)}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-      ) : null}
-      {isFieldMode ? (
-        <div className="replay-review-field-body" aria-label="字段展开详情">
-          <ReplayFieldWriteCard
-            field={selectedField}
-            reviewValue={
-              reviewValues[selectedField.sourceName] ??
-              selectedField.reviewField?.agent_value ??
-              stringifyValue(selectedField.value)
-            }
-            reviewComment={reviewComment}
-            isSubmittingReview={isSubmittingReview}
-            onOpenEvidence={(evidenceId) => onOpenEvidence(`evidence://${taskId}/${evidenceId}`, evidenceId)}
-            onReviewValueChange={onReviewValueChange}
-            onReviewCommentChange={onReviewCommentChange}
-            onSubmitReview={onSubmitReview}
-          />
-        </div>
-      ) : isEvidenceMode ? (
-        <div
-          id={`evidence-panel-${stableDomId(activeTab.id)}`}
-          role="tabpanel"
-          aria-labelledby={`evidence-tab-${stableDomId(activeTab.id)}`}
-          className="replay-evidence-review-body"
+        <form
+          className="replay-agent-composer"
+          aria-label="Agent 对话区"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onComposerSubmit();
+          }}
         >
-          <div className="replay-evidence-uri">{activeTab.uri}</div>
-          <section className="replay-evidence-block" aria-label="证据内容">
-            <div className="replay-evidence-block-label">Evidence</div>
-            <p>{evidenceText || "当前证据只包含 URI，backend 未返回可直接展示的证据文本。"}</p>
-          </section>
-          {fields.length > 0 ? (
-            <section className="replay-evidence-field-list" aria-label="相关字段">
-              <div className="replay-evidence-block-label">Fields</div>
-              {fields.map((field) => (
-                <div key={field.sourceName} className="replay-evidence-field-row">
-                  <span>{field.fieldName}</span>
-                  <Badge variant={field.route === "reject" ? "destructive" : field.route === "review" ? "warning" : "secondary"}>
-                    {field.route ?? field.status}
-                  </Badge>
+          <div className="replay-agent-composer-balance-row" aria-label="Agent 居中输入区">
+            <div className="replay-agent-composer-frame" aria-label="Agent 中间输入框">
+              <AgentBalanceSpacer side="left" active={agentContentMode === "centered"} />
+              <div className="replay-agent-composer-readable-column" aria-label="Agent 输入阅读列">
+                <textarea
+                  aria-label="Agent 对话输入框"
+                  value={composerValue}
+                  onChange={(event) => onComposerChange(event.currentTarget.value)}
+                  placeholder="Ask for follow-up changes"
+                  className="replay-agent-composer-input"
+                />
+                <div className="replay-agent-composer-actions">
+                  <Button type="button" variant="ghost" size="icon" aria-label="添加文件">
+                    <Paperclip className="h-4 w-4" aria-hidden="true" />
+                  </Button>
+                  <Button type="submit" size="icon" aria-label="发送消息">
+                    <SendHorizonal className="h-4 w-4" aria-hidden="true" />
+                  </Button>
                 </div>
-              ))}
-            </section>
-          ) : null}
-        </div>
-      ) : (
-        <div className="replay-evidence-empty">选择一个字段或 evidence 链接查看详情</div>
-      )}
-    </section>
+              </div>
+              <AgentBalanceSpacer side="right" active={agentContentMode === "centered"} />
+            </div>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function SourceTabPanel({
+  tab,
+  replay,
+  evidenceDetailsById,
+}: {
+  tab: WorkspaceSourceTab;
+  replay: TaskReplay;
+  evidenceDetailsById: Map<string, EvidenceDetail>;
+}) {
+  const activeEvidenceDetail = getEvidenceDetailById(evidenceDetailsById, tab.evidenceId);
+  const highlightSelector = activeEvidenceDetail?.selector || getEvidenceSelector(tab.evidenceId);
+  const sourceFrameRef = React.useRef<HTMLIFrameElement | null>(null);
+  const renderedDocumentHtml = React.useMemo(
+    () => renderSourceDocumentHtml(replay.display_html, highlightSelector),
+    [highlightSelector, replay.display_html],
+  );
+  const scrollToCurrentEvidence = React.useCallback(() => {
+    const target = sourceFrameRef.current?.contentDocument?.querySelector<HTMLElement>("[data-current-evidence='true']");
+    if (target && typeof target.scrollIntoView === "function") {
+      target.scrollIntoView({ block: "center", inline: "nearest" });
+    }
+  }, []);
+
+  React.useEffect(() => {
+    scrollToCurrentEvidence();
+  }, [renderedDocumentHtml, scrollToCurrentEvidence]);
+
+  return (
+    <div
+      className="replay-source-panel-slot"
+      aria-label="原文查看器"
+      data-highlight-selector={highlightSelector}
+    >
+      <iframe
+        ref={sourceFrameRef}
+        title="原文文档"
+        className="replay-source-document replay-source-frame"
+        srcDoc={renderedDocumentHtml}
+        referrerPolicy="no-referrer"
+        onLoad={scrollToCurrentEvidence}
+      />
+    </div>
   );
 }
 
@@ -863,10 +819,10 @@ function ReplayStatusBadge({ status }: { status: TaskSummary["status"] }) {
   if (status === "completed") {
     return <Badge variant="success">{status}</Badge>;
   }
-  if (status === "waiting_review" || status === "processing" || status === "pending") {
+  if (status === "processing" || status === "pending") {
     return <Badge variant="warning">{status}</Badge>;
   }
-  if (status === "failed" || status === "rejected") {
+  if (status === "failed") {
     return <Badge variant="destructive">{status}</Badge>;
   }
   return <Badge variant="secondary">{status}</Badge>;
@@ -907,312 +863,144 @@ function EvidenceReasonText({
 
 function AgentToolLine({
   action,
-  ok,
+  ok = isAgentActionOk(action),
+  onOpenActionSource,
 }: {
   action: ReplayAction;
-  ok: boolean;
+  ok?: boolean;
+  onOpenActionSource?: (action: ReplayAction, label: string) => void;
 }) {
   const toolName = getActionType(action) || "tool";
   const summary = formatAgentToolSummary(action, ok);
   const meta = collectAgentToolMeta(action, ok);
-  const isReadTool = isReadToolName(toolName);
-  const ToolIcon = isReadTool ? Search : SquareTerminal;
+  const toolIcon = getAgentToolIcon(toolName);
+  const ToolIcon = toolIcon.icon;
   const lineText = [summary, ...meta].filter(Boolean).join(" · ");
-  return (
-    <div
-      className={[
-        "replay-agent-tool-line",
-        isReadTool ? "is-read-tool" : "",
-        ok ? "" : "is-failed",
-      ].filter(Boolean).join(" ")}
-      aria-label={`tool ${toolName}`}
-      data-tool-icon={isReadTool ? "search" : "terminal"}
-    >
+  const evidenceUri = getActionEvidenceUri(action);
+  const canOpenSource = Boolean(onOpenActionSource && evidenceUri);
+  const content = (
+    <>
       <ToolIcon className="replay-agent-tool-icon" aria-hidden="true" />
       <span className="replay-agent-tool-summary">{lineText}</span>
-    </div>
+    </>
   );
-}
-
-function ReplayFieldWriteCard({
-  field,
-  reviewValue,
-  reviewComment,
-  isSubmittingReview,
-  onOpenEvidence,
-  onReviewValueChange,
-  onReviewCommentChange,
-  onSubmitReview,
-}: {
-  field: ReplayField;
-  reviewValue: unknown;
-  reviewComment: string;
-  isSubmittingReview: boolean;
-  onOpenEvidence: (evidenceId: string) => void;
-  onReviewValueChange?: (fieldName: string, value: unknown) => void;
-  onReviewCommentChange?: (value: string) => void;
-  onSubmitReview?: () => void;
-}) {
-  const valueText = formatFieldDisplayValue(field);
+  const className = [
+    "replay-agent-tool-line",
+    toolIcon.isReading ? "is-read-tool" : "",
+    ok ? "" : "is-failed",
+  ].filter(Boolean).join(" ");
+  if (canOpenSource) {
+    return (
+      <a
+        href={evidenceUri}
+        className={className}
+        aria-label={`tool ${toolName}`}
+        data-tool-icon={toolIcon.name}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onOpenActionSource?.(action, summary);
+        }}
+      >
+        {content}
+      </a>
+    );
+  }
   return (
     <div
-      className="replay-field-write"
-      aria-label="字段写入区"
-      onClick={(event) => event.stopPropagation()}
-      onPointerDown={(event) => event.stopPropagation()}
-      onWheel={(event) => event.stopPropagation()}
+      className={className}
+      aria-label={`tool ${toolName}`}
+      data-tool-icon={toolIcon.name}
     >
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <div className="replay-field-write-title">写入字段：{field.fieldName}</div>
-          <div className="replay-field-progress-meta">
-            <span>{field.status}</span>
-            {field.route ? <span>{field.route}</span> : null}
-          </div>
-        </div>
-        {field.route ? <ReplayFieldRouteBadge field={field} /> : null}
-      </div>
-      <div className="replay-field-write-body" aria-label="字段写入内容">
-        <div className="replay-field-write-value">
-          {valueText || <span className="text-muted-foreground">等待人工补录</span>}
-        </div>
-        {field.routeReason ? (
-          <div className="replay-field-route-reason">{field.routeReason}</div>
-        ) : null}
-        {field.evidenceIds.length > 0 ? (
-          <div className="replay-field-evidence">
-            {field.evidenceIds.map((evidenceId) => (
-              <button
-                key={evidenceId}
-                type="button"
-                className="replay-field-evidence-chip"
-                title={evidenceId}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onOpenEvidence(evidenceId);
-                }}
-              >
-                {evidenceId}
-              </button>
-            ))}
-          </div>
-        ) : null}
-      </div>
-      {field.needsReview ? (
-        <InlineFieldReviewEditor
-          field={field}
-          value={reviewValue}
-          comment={reviewComment}
-          isSubmitting={isSubmittingReview}
-          onValueChange={onReviewValueChange}
-          onCommentChange={onReviewCommentChange}
-          onSubmit={onSubmitReview}
-        />
-      ) : null}
+      {content}
     </div>
   );
 }
 
-function InlineFieldReviewEditor({
-  field,
-  value,
-  comment,
-  isSubmitting,
-  onValueChange,
-  onCommentChange,
-  onSubmit,
+function AgentToolGroup({
+  items,
+  onOpenActionSource,
 }: {
-  field: ReplayField;
-  value: unknown;
-  comment: string;
-  isSubmitting: boolean;
-  onValueChange?: (fieldName: string, value: unknown) => void;
-  onCommentChange?: (value: string) => void;
-  onSubmit?: () => void;
+  items: VisibleAgentAction[];
+  onOpenActionSource?: (action: ReplayAction, label: string) => void;
 }) {
-  const editorValue = normalizeReviewEditorValue(field, value);
+  const [isExpanded, setIsExpanded] = React.useState(false);
+  const summaryText = summarizeAgentToolGroup(items);
   return (
-    <div className="replay-inline-review" aria-label="字段复核区" onClick={(event) => event.stopPropagation()}>
-      <div className="space-y-2">
-        {isEnumReviewField(field) ? (
-          <EnumFieldReviewEditor field={field} value={editorValue} onValueChange={onValueChange} />
+    <div className="replay-agent-tool-group" role="group" aria-label={`${items.length} collapsed tools`}>
+      <button
+        type="button"
+        className="replay-agent-tool-group-toggle"
+        aria-expanded={isExpanded}
+        aria-label={`${isExpanded ? "收起" : "展开"} ${items.length} 个工具调用`}
+        onClick={() => setIsExpanded((current) => !current)}
+      >
+        {isExpanded ? (
+          <ChevronDown className="replay-agent-tool-group-icon" aria-hidden="true" />
         ) : (
-          <>
-            <Label htmlFor={`review-${field.sourceName}`} className="text-xs">
-              {field.fieldName} 复核值
-            </Label>
-            <Textarea
-              id={`review-${field.sourceName}`}
-              value={stringifyValue(editorValue)}
-              onChange={(event) => onValueChange?.(field.sourceName, event.currentTarget.value)}
-              className="min-h-16 text-xs"
-            />
-          </>
+          <ChevronRight className="replay-agent-tool-group-icon" aria-hidden="true" />
         )}
-      </div>
-      <div className="space-y-2">
-        <Label htmlFor="review-comment" className="text-xs">
-          复核备注
-        </Label>
-        <Textarea
-          id="review-comment"
-          value={comment}
-          onChange={(event) => onCommentChange?.(event.currentTarget.value)}
-          className="min-h-12 text-xs"
-        />
-      </div>
-      <Button type="button" className="w-full" onClick={onSubmit} disabled={isSubmitting}>
-        {isSubmitting ? "提交中..." : "提交修正并通过"}
-      </Button>
-    </div>
-  );
-}
-
-function EnumFieldReviewEditor({
-  field,
-  value,
-  onValueChange,
-}: {
-  field: ReplayField;
-  value: unknown;
-  onValueChange?: (fieldName: string, value: unknown) => void;
-}) {
-  const enumValue = toEnumReviewValue(field, value);
-  const selectedVariant = enumValue.variant;
-  const selectedDefinition = field.variants.find((variant) => variant.name === selectedVariant) ?? field.variants[0];
-  const payloadType = selectedDefinition?.type ?? null;
-  const payloadId = `review-${field.sourceName}-payload`;
-  const variantId = `review-${field.sourceName}-variant`;
-  const hasVariants = field.variants.length > 0;
-
-  return (
-    <div className="space-y-2">
-      <Label htmlFor={`review-${field.sourceName}`} className="text-xs">
-        {field.fieldName} 枚举选项
-      </Label>
-      {hasVariants ? (
-        <select
-          id={`review-${field.sourceName}`}
-          aria-label={`${field.fieldName} 枚举选项`}
-          value={selectedVariant}
-          onChange={(event) => {
-            const nextVariant = field.variants.find((variant) => variant.name === event.currentTarget.value);
-            onValueChange?.(field.sourceName, {
-              variant: event.currentTarget.value,
-              value: defaultEnumPayloadValue(nextVariant?.type)
-            });
-          }}
-          className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-xs shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          {field.variants.map((variant) => (
-            <option key={variant.name} value={variant.name}>
-              {variant.name}
-            </option>
+        <span className="replay-agent-tool-group-summary">{summaryText}</span>
+      </button>
+      {isExpanded ? (
+        <div className="replay-agent-tool-group-lines">
+          {items.map(({ action, actionIndex }) => (
+            <AgentToolLine
+              key={`${actionIndex}-${getActionType(action)}-${getActionTarget(action)}`}
+              action={action}
+              onOpenActionSource={onOpenActionSource}
+            />
           ))}
-        </select>
-      ) : (
-        <Input
-          id={variantId}
-          aria-label={`${field.fieldName} 枚举选项`}
-          value={selectedVariant}
-          onChange={(event) =>
-            onValueChange?.(field.sourceName, {
-              variant: event.currentTarget.value,
-              value: enumValue.value
-            })
-          }
-          className="h-9 text-xs"
-        />
-      )}
-      {selectedDefinition?.description ? (
-        <p className="text-xs leading-5 text-muted-foreground">{selectedDefinition.description}</p>
-      ) : null}
-      {payloadType !== null ? (
-        <div className="space-y-2">
-          <Label htmlFor={payloadId} className="text-xs">
-            {selectedVariant} payload
-          </Label>
-          <Textarea
-            id={payloadId}
-            value={stringifyValue(enumValue.value)}
-            onChange={(event) =>
-              onValueChange?.(field.sourceName, {
-                variant: selectedVariant,
-                value: parseEnumPayloadValue(payloadType, event.currentTarget.value)
-              })
-            }
-            className="min-h-14 text-xs"
-          />
-        </div>
-      ) : !hasVariants ? (
-        <div className="space-y-2">
-          <Label htmlFor={payloadId} className="text-xs">
-            {selectedVariant} payload
-          </Label>
-          <Textarea
-            id={payloadId}
-            value={stringifyValue(enumValue.value)}
-            onChange={(event) =>
-              onValueChange?.(field.sourceName, {
-                variant: selectedVariant,
-                value: parseLooseJsonValue(event.currentTarget.value)
-              })
-            }
-            className="min-h-14 text-xs"
-          />
         </div>
       ) : null}
     </div>
   );
 }
 
-function ReplayFieldRouteBadge({ field }: { field: ReplayField }) {
-  if (field.route === "accept") {
-    return <Badge variant="success">accept</Badge>;
+function summarizeAgentToolGroup(items: VisibleAgentAction[]): string {
+  const explorationCount = items.filter(({ action }) => isExplorationTool(getActionType(action))).length;
+  const savedEvidenceCount = items.filter(({ action }) => getActionType(action) === "add_candidate_evidence").length;
+  const reviewedEvidenceCount = items.filter(({ action }) => getActionType(action) === "review_evidences").length;
+  const fieldCount = items.filter(({ action }) => getActionType(action) === "write_field").length;
+  const unknownCount = items.length - explorationCount - savedEvidenceCount - reviewedEvidenceCount - fieldCount;
+  const clauses: string[] = [];
+
+  if (explorationCount > 0) {
+    clauses.push(`Explored ${explorationCount} file${explorationCount === 1 ? "" : "s"}`);
   }
-  if (field.route === "review") {
-    return <Badge variant="warning">review</Badge>;
+  if (savedEvidenceCount > 0) {
+    clauses.push(`${clauses.length > 0 ? "saved" : "Saved"} ${savedEvidenceCount} evidence item${savedEvidenceCount === 1 ? "" : "s"}`);
   }
-  if (field.route === "reject") {
-    return <Badge variant="destructive">reject</Badge>;
+  if (reviewedEvidenceCount > 0) {
+    clauses.push(`${clauses.length > 0 ? "reviewed" : "Reviewed"} ${reviewedEvidenceCount} evidence set${reviewedEvidenceCount === 1 ? "" : "s"}`);
   }
-  return <Badge variant="outline">{field.route}</Badge>;
+  if (fieldCount > 0) {
+    clauses.push(`${clauses.length > 0 ? "filled" : "Filled"} ${fieldCount} field${fieldCount === 1 ? "" : "s"}`);
+  }
+  if (unknownCount > 0) {
+    clauses.push(`${clauses.length > 0 ? "ran" : "Ran"} ${unknownCount} tool${unknownCount === 1 ? "" : "s"}`);
+  }
+
+  return clauses.length > 0 ? clauses.join(", ") : `Ran ${items.length} tools`;
+}
+
+function isExplorationTool(toolName: string): boolean {
+  return toolName === "tree" || toolName === "read";
 }
 
 function reduceReplayFields(
   visibleActions: ReplayAction[],
   finalFields: TaskResultField[],
-  reviewFields: ReviewField[],
 ): ReplayField[] {
   const byName = new Map<string, ReplayField>();
   for (const field of finalFields) {
     byName.set(field.field_name, {
       sourceName: field.field_name,
       fieldName: field.display_name || field.field_name,
-      fieldType: field.field_type,
-      variants: field.variants ?? [],
       status: field.field_status || "resolved",
-      value: field.final_value ?? field.review_value ?? field.agent_value,
+      value: field.final_value ?? field.agent_value,
       evidenceIds: [],
-      route: field.route,
-      routeReason: readString(field.route_reason),
-      needsReview: field.route === "review",
-    });
-  }
-  for (const field of reviewFields) {
-    const existing = byName.get(field.field_name);
-    byName.set(field.field_name, {
-      sourceName: field.field_name,
-      fieldName: field.display_name || existing?.fieldName || field.field_name,
-      fieldType: field.field_type ?? existing?.fieldType,
-      variants: field.variants ?? existing?.variants ?? [],
-      status: field.field_status || existing?.status || "needs_review",
-      value: existing?.value ?? field.agent_value,
-      evidenceIds: existing?.evidenceIds ?? [],
-      route: existing?.route ?? "review",
-      routeReason: field.review_reason || existing?.routeReason || null,
-      needsReview: field.needs_review,
-      reviewField: field,
+      summary: "",
     });
   }
   for (const action of visibleActions) {
@@ -1228,15 +1016,10 @@ function reduceReplayFields(
     byName.set(payload.name, {
       sourceName: payload.name,
       fieldName: existing?.fieldName || payload.name,
-      fieldType: existing?.fieldType,
-      variants: existing?.variants ?? [],
       status: payload.status || existing?.status || "resolved",
       value: payload.value ?? existing?.value,
       evidenceIds: payload.evidenceIds.length > 0 ? payload.evidenceIds : existing?.evidenceIds ?? [],
-      route: existing?.route,
-      routeReason: existing?.routeReason || payload.reason || null,
-      needsReview: existing?.needsReview ?? false,
-      reviewField: existing?.reviewField,
+      summary: payload.reason || existing?.summary || "",
     });
   }
   return Array.from(byName.values());
@@ -1294,7 +1077,39 @@ function normalizeEvidenceIds(values: unknown[] | null): string[] {
 }
 
 function shouldDisplayAgentAction(action: ReplayAction): boolean {
-  return getActionType(action) !== "anchors";
+  return !["anchors", "submit_result"].includes(getActionType(action));
+}
+
+function groupAgentStreamItems(actions: VisibleAgentAction[]): AgentStreamItem[] {
+  const items: AgentStreamItem[] = [];
+  let pendingTools: VisibleAgentAction[] = [];
+
+  const flushPendingTools = () => {
+    if (pendingTools.length === 0) {
+      return;
+    }
+    if (pendingTools.length === 1) {
+      items.push({ kind: "tool", item: pendingTools[0] });
+    } else {
+      items.push({ kind: "tool-group", items: pendingTools });
+    }
+    pendingTools = [];
+  };
+
+  for (const item of actions) {
+    const reason = getActionReason(item.action);
+    if (reason) {
+      flushPendingTools();
+      items.push({ kind: "message", item, reason });
+    }
+    pendingTools.push(item);
+  }
+  flushPendingTools();
+  return items;
+}
+
+function isAgentActionOk(action: ReplayAction): boolean {
+  return readObject(action.result)?.ok !== false;
 }
 
 function clampPanelWidth(value: number, min: number, max: number): number {
@@ -1325,150 +1140,458 @@ function getActionTarget(action: ReplayAction): string {
   );
 }
 
+function getActionEvidenceUri(action: ReplayAction): string {
+  const toolName = getActionType(action);
+  const args = readObject(action.args);
+  const result = readObject(action.result);
+  const resultField = readObject(result?.field);
+  const candidates = [
+    readString(args?.path_id),
+    readString(args?.locator),
+    readString(args?.path),
+    readString(result?.locator),
+    readString(result?.path_id),
+    readString(result?.path),
+    ...readStringArray(result?.candidate_evidence),
+    ...readStringArray(result?.evidence),
+    ...readStringArray(resultField?.candidate_evidence),
+    ...readStringArray(resultField?.evidence),
+  ];
+  const usable = candidates.find((value) => isEvidenceLikeReference(value));
+  if (!usable) {
+    return "";
+  }
+  if (usable.startsWith("evidence://")) {
+    return usable;
+  }
+  if (/^p\d+_b\d+/.test(usable) || /^S\d+/.test(usable)) {
+    return `evidence://${usable}`;
+  }
+  if (usable.includes("#")) {
+    return `evidence://${usable.split("#").at(-1) ?? usable}`;
+  }
+  if (toolName === "read" || toolName === "add_candidate_evidence") {
+    return `evidence://${usable}`;
+  }
+  return "";
+}
+
+function isEvidenceLikeReference(value: string): boolean {
+  if (!value) {
+    return false;
+  }
+  return value.startsWith("evidence://") || value.includes("#") || /^p\d+_b\d+/.test(value) || /^S\d+/.test(value);
+}
+
 function formatAgentToolSummary(action: ReplayAction, ok: boolean): string {
   const toolName = getActionType(action) || "tool";
   const args = readObject(action.args);
   const result = readObject(action.result);
   const resultField = readObject(result?.field);
-  const path = readString(args?.path) || readString(result?.path) || readString(resultField?.path);
   const field = readString(args?.field_id) || readString(result?.field_id) || readString(resultField?.field_id) || readString(args?.name) || readString(resultField?.name);
-  const target = readString(args?.element_id) || readString(args?.section_id) || readString(args?.table_id) || readString(result?.id) || readString(result?.table_id);
-  const query = readString(args?.query) || readString(result?.query);
-  const baseName = path ? getPathBasename(path) : "";
   if (toolName === "tree") {
-    return `Ran tree ${path || "/"}`;
+    return ok ? "Viewed outline" : "Outline failed";
   }
-  if (toolName === "read" || toolName === "read_element" || toolName === "read_section") {
-    const readKind = getReadActionKind(action);
-    const readLabel = formatReadTargetLabel(path) || target || "document";
-    return `Read ${readKind} ${readLabel}`;
+  if (toolName === "read") {
+    return ok ? "Read passage" : "Read failed";
   }
-  if (toolName === "query_table") {
-    return ok ? `Queried ${baseName || "table"}` : "查询失败";
+  if (toolName === "add_candidate_evidence") {
+    return field ? `Saved evidence for ${field}` : "Saved evidence";
   }
-  if (toolName === "table_extraction" || toolName === "custom_extraction") {
-    if (!ok) {
-      return "查询失败";
-    }
-    const rows = Array.isArray(result?.rows) ? result.rows : [];
-    const rowCount = readNumber(result?.row_count);
-    if (rows.length === 0 && rowCount === 0) {
-      return "未查到结果";
-    }
-    return `Queried ${target || "table"}`;
+  if (toolName === "review_evidences") {
+    return field ? `Reviewed evidence for ${field}` : "Reviewed evidence";
   }
-  if (toolName === "search_elements") {
-    return query ? `Searched for ${query}` : "Searched document";
-  }
-  if (toolName === "bind_evidence") {
-    return field ? `Bound evidence for ${field}` : "Bound evidence";
-  }
-  if (toolName === "review_field") {
-    return field ? `Reviewed ${field}` : "Reviewed field";
-  }
-  if (toolName === "write_field" || toolName === "set_field") {
-    return field ? `Wrote ${field}` : "Wrote field";
+  if (toolName === "write_field") {
+    return field ? `Filled ${field}` : "Filled field";
   }
   if (toolName === "submit_result") {
     return ok ? "Submitted result" : "Submit failed";
   }
-  if (path) {
-    return baseName || path;
-  }
   if (field) {
     return field;
-  }
-  if (target) {
-    return target;
   }
   return ok ? "Ran tool" : "Tool failed";
 }
 
 function collectAgentToolMeta(action: ReplayAction, ok: boolean): string[] {
-  const toolName = getActionType(action);
-  const args = readObject(action.args);
   const result = readObject(action.result);
   const meta: string[] = [];
-  const add = (value: unknown, suffix = "") => {
-    const text = readString(value);
-    if (text) {
-      meta.push(`${text}${suffix}`);
-    }
-  };
-  if (toolName === "search_elements") {
-    const count = readNumber(result?.match_count);
-    if (count !== null) {
-      meta.push(`${count} match${count === 1 ? "" : "es"}`);
+  if (!ok) {
+    const errors = Array.isArray(result?.errors) ? result.errors : [];
+    const firstError = readObject(errors[0]);
+    const message = readString(firstError?.message);
+    if (message) {
+      meta.push(message);
     }
   }
-  if (toolName === "query_table") {
-    const count = readNumber(result?.total) ?? readNumber(result?.matched_rows) ?? readNumber(result?.row_count);
-    if (count !== null && ok) {
-      meta.push(`${count} row${count === 1 ? "" : "s"}`);
-    }
-    if (!ok) {
-      add(result?.error || "query_table failed");
-    }
-  }
-  if (toolName === "table_extraction" || toolName === "custom_extraction") {
-    const rows = Array.isArray(result?.rows) ? result.rows.length : readNumber(result?.row_count);
-    if (typeof rows === "number" && ok) {
-      meta.push(`${rows} row${rows === 1 ? "" : "s"}`);
-    }
-    if (!ok) {
-      add(result?.error || "table query failed");
-    }
-    if (ok && rows === 0) {
-      meta.push("没有查到匹配行。");
-    }
-  }
-  add(args?.limit, " limit");
   return meta.slice(0, 2);
 }
 
-function isReadToolName(toolName: string): boolean {
-  return toolName === "read" || toolName === "read_element" || toolName === "read_section";
+function getAgentToolIcon(toolName: string): { icon: React.ComponentType<{ className?: string; "aria-hidden"?: "true" }>; name: string; isReading?: boolean } {
+  if (toolName === "tree") {
+    return { icon: ListTree, name: "list-tree", isReading: true };
+  }
+  if (toolName === "read") {
+    return { icon: BookUser, name: "book-user", isReading: true };
+  }
+  if (toolName === "add_candidate_evidence") {
+    return { icon: BookmarkPlus, name: "bookmark-plus" };
+  }
+  if (toolName === "review_evidences") {
+    return { icon: FileCheck, name: "file-check" };
+  }
+  if (toolName === "write_field") {
+    return { icon: PenLine, name: "pen-line" };
+  }
+  return { icon: PenLine, name: "tool" };
 }
 
-function getReadActionKind(action: ReplayAction): string {
-  const args = readObject(action.args);
-  const result = readObject(action.result);
-  const path = readString(args?.path) || readString(result?.path);
-  const kind = readString(result?.kind).toLowerCase();
-  if (kind.includes("table") || /\.table$/i.test(path)) {
-    return "table";
+function buildEvidenceDetailsById(replay: TaskReplay, fields: ReplayField[]): Map<string, EvidenceDetail> {
+  const details = new Map<string, EvidenceDetail>();
+  const sourceBlocks = extractDisplayHtmlBlocks(replay.display_html);
+  const fieldsByEvidenceId = new Map<string, ReplayField>();
+
+  for (const field of fields) {
+    for (const evidenceId of field.evidenceIds) {
+      fieldsByEvidenceId.set(evidenceId, field);
+      fieldsByEvidenceId.set(getEvidenceSelector(evidenceId), field);
+    }
   }
-  if (kind.includes("list") || /\.list$/i.test(path)) {
-    return "list";
+
+  for (const action of replay.actions) {
+    const result = readObject(action.result);
+    const resultField = readObject(result?.field);
+    for (const value of [result?.evidence_texts, resultField?.evidence_texts]) {
+      collectEvidenceDetails(value, replay, sourceBlocks, fieldsByEvidenceId, details);
+    }
   }
-  if (kind.includes("paragraph") || /\.md$/i.test(path)) {
-    return "paragraph";
+
+  for (const [selector, sourceText] of sourceBlocks) {
+    if (details.has(selector)) {
+      continue;
+    }
+    details.set(selector, {
+      id: selector,
+      text: sourceText,
+      sourceText,
+      selector,
+      documentTitle: getEvidenceDocumentTitle(replay, selector),
+      field: findFieldByEvidenceText(fields, sourceText),
+    });
   }
-  return "document";
+
+  for (const field of fields) {
+    for (const evidenceId of field.evidenceIds) {
+      if (getEvidenceDetailById(details, evidenceId)) {
+        continue;
+      }
+      const selector = getEvidenceSelector(evidenceId);
+      const sourceText = sourceBlocks.get(selector) ?? "";
+      details.set(evidenceId, {
+        id: evidenceId,
+        text: sourceText || evidenceId,
+        sourceText,
+        selector,
+        documentTitle: getEvidenceDocumentTitle(replay, evidenceId),
+        field,
+      });
+    }
+  }
+
+  return details;
 }
 
-function formatReadTargetLabel(path: string): string {
-  if (!path) {
-    return "";
+function collectEvidenceDetails(
+  value: unknown,
+  replay: TaskReplay,
+  sourceBlocks: Map<string, string>,
+  fieldsByEvidenceId: Map<string, ReplayField>,
+  details: Map<string, EvidenceDetail>,
+) {
+  if (!Array.isArray(value)) {
+    return;
   }
-  return getPathBasename(path)
-    .replace(/\.(md|table|list)$/i, "")
-    .replace(/^\d+-/, "");
+  for (const item of value) {
+    const objectItem = readObject(item);
+    if (!objectItem) {
+      continue;
+    }
+    const selector = readString(objectItem.selector);
+    const path = readString(objectItem.path);
+    const text = readString(objectItem.text);
+    const id = path && selector ? `${path}#${selector}` : selector || path;
+    if (!id) {
+      continue;
+    }
+    const sourceText = sourceBlocks.get(selector) || text;
+    const detail: EvidenceDetail = {
+      id,
+      text: text || sourceText || id,
+      sourceText,
+      selector,
+      documentTitle: getEvidenceDocumentTitle(replay, id),
+      field: fieldsByEvidenceId.get(id) ?? fieldsByEvidenceId.get(selector) ?? null,
+    };
+    details.set(id, detail);
+    if (selector) {
+      details.set(selector, detail);
+    }
+    for (const [fieldEvidenceId, field] of fieldsByEvidenceId) {
+      if (fieldEvidenceId.endsWith(selector) || fieldEvidenceId.endsWith(`#${selector}`)) {
+        details.set(fieldEvidenceId, { ...detail, id: fieldEvidenceId, field });
+      }
+    }
+  }
 }
 
-function getCurrentDocumentTitle(replay: TaskReplay | null, currentAction: ReplayAction | null): string {
-  if (!replay) {
-    return "no replay";
+function getEvidenceDetailById(details: Map<string, EvidenceDetail>, evidenceId: string): EvidenceDetail | null {
+  const exact = details.get(evidenceId) ?? details.get(getEvidenceSelector(evidenceId));
+  if (exact) {
+    return exact;
   }
-  const path = currentAction ? getActionTarget(currentAction) : "";
-  const firstPathPart = path.split("/").filter(Boolean)[0] ?? "";
+  const selector = getEvidenceSelector(evidenceId);
+  for (const [id, detail] of details) {
+    if (id.endsWith(selector) || id.endsWith(`#${selector}`)) {
+      return detail;
+    }
+  }
+  return null;
+}
+
+function extractDisplayHtmlBlocks(displayHtml: string): Map<string, string> {
+  const blocks = new Map<string, string>();
+  if (!displayHtml) {
+    return blocks;
+  }
+  const blockPattern = /<[^>]*\bid=["']([^"']+)["'][^>]*>([\s\S]*?)<\/[^>]+>/g;
+  let match: RegExpExecArray | null;
+  while ((match = blockPattern.exec(displayHtml)) !== null) {
+    blocks.set(match[1], decodeHtmlText(stripHtml(match[2])));
+  }
+  return blocks;
+}
+
+const SOURCE_FRAME_STYLE = `<style data-agent-gate-source-frame>
+html,
+body {
+  width: 100% !important;
+  max-width: 100% !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+}
+body {
+  margin: 0 !important;
+  background: #ffffff !important;
+}
+main {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  box-sizing: border-box !important;
+}
+.page {
+  box-sizing: border-box !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  padding: 24px !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  overflow-wrap: anywhere !important;
+  word-break: normal !important;
+}
+table {
+  width: 100% !important;
+  max-width: 100% !important;
+  table-layout: fixed !important;
+  border-collapse: collapse;
+}
+.table-wrap {
+  width: 100% !important;
+  max-width: 100% !important;
+  overflow-x: hidden !important;
+}
+.table-wrap table {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+img,
+svg,
+canvas,
+video {
+  max-width: 100% !important;
+  height: auto !important;
+}
+p,
+li,
+td,
+th,
+pre,
+code {
+  max-width: 100% !important;
+  white-space: pre-wrap !important;
+  overflow-wrap: anywhere !important;
+  word-break: normal !important;
+}
+.is-current-evidence,
+[data-current-evidence="true"] {
+  border-radius: 6px !important;
+  background: rgba(51, 156, 255, 0.18) !important;
+  color: #171717 !important;
+  outline: 2px solid rgba(51, 156, 255, 0.55) !important;
+  outline-offset: 2px !important;
+  scroll-margin: 48px !important;
+}
+</style>`;
+
+function renderSourceDocumentHtml(displayHtml: string, highlightSelector: string): string {
+  if (!displayHtml) {
+    return wrapSourceDocumentHtml("<p>No source document is available.</p>");
+  }
+  let renderedHtml = displayHtml;
+  const escapedSelector = escapeRegExp(highlightSelector);
+  const openingTagPattern = new RegExp(`(<[^>]*\\bid=(["'])${escapedSelector}\\2[^>]*)(>)`, "i");
+  if (highlightSelector) {
+    renderedHtml = displayHtml.replace(openingTagPattern, (match, openingTag: string, _quote: string, close: string) => {
+      if (/\bdata-current-evidence=/.test(openingTag)) {
+        return match;
+      }
+      const classMatch = /\bclass=(["'])([^"']*)\1/i.exec(openingTag);
+      if (classMatch) {
+        const nextClass = `${classMatch[2]} is-current-evidence`.trim();
+        const withClass = openingTag.replace(classMatch[0], `class=${classMatch[1]}${nextClass}${classMatch[1]}`);
+        return `${withClass} data-current-evidence="true"${close}`;
+      }
+      return `${openingTag} class="is-current-evidence" data-current-evidence="true"${close}`;
+    });
+  }
+  return wrapSourceDocumentHtml(renderedHtml);
+}
+
+function wrapSourceDocumentHtml(displayHtml: string): string {
+  const sanitizedHtml = stripExecutableSourceHtml(displayHtml);
+  const htmlWithMarker = /<html\b/i.test(sanitizedHtml)
+    ? sanitizedHtml.replace(/<html\b([^>]*)>/i, (match, attrs: string) => {
+        if (/\bdata-agent-gate-source-frame\b/i.test(attrs)) {
+          return match;
+        }
+        return `<html${attrs} data-agent-gate-source-frame>`;
+      })
+    : `<!doctype html><html data-agent-gate-source-frame><head><meta charset="utf-8"></head><body>${sanitizedHtml}</body></html>`;
+
+  if (/<\/head>/i.test(htmlWithMarker)) {
+    return htmlWithMarker.replace(/<\/head>/i, `${SOURCE_FRAME_STYLE}</head>`);
+  }
+  if (/<head\b[^>]*>/i.test(htmlWithMarker)) {
+    return htmlWithMarker.replace(/<head\b[^>]*>/i, (match) => `${match}${SOURCE_FRAME_STYLE}`);
+  }
+  return htmlWithMarker.replace(/<html\b[^>]*>/i, (match) => `${match}<head><meta charset="utf-8">${SOURCE_FRAME_STYLE}</head>`);
+}
+
+function stripExecutableSourceHtml(displayHtml: string): string {
+  return displayHtml.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripHtml(value: string): string {
+  return value.replace(/<[^>]*>/g, " ");
+}
+
+function decodeHtmlText(value: string): string {
+  return value
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getEvidenceSelector(evidenceId: string): string {
+  const withoutHash = evidenceId.split("#").at(-1) ?? evidenceId;
+  const locator = withoutHash.split("/").filter(Boolean).at(-1) ?? withoutHash;
+  return normalizeEvidenceSelector(locator);
+}
+
+function getEvidenceDocumentTitle(replay: TaskReplay, evidenceId: string): string {
+  const documentIndex = getEvidenceDocumentIndex(replay, evidenceId);
+  return formatSourceFilename(replay.documents[documentIndex]?.filename || replay.documents[0]?.filename || "Source");
+}
+
+function formatSourceFilename(filename: string): string {
+  if (!filename) {
+    return filename;
+  }
+  let decodedFilename = filename;
+  try {
+    decodedFilename = decodeURIComponent(filename);
+  } catch {
+    decodedFilename = filename;
+  }
+  const withoutUrlSuffix = decodedFilename.split(/[?#]/)[0] ?? decodedFilename;
+  const normalizedPath = withoutUrlSuffix.replace(/\\/g, "/");
+  return normalizedPath.split("/").filter(Boolean).at(-1) || decodedFilename;
+}
+
+function getSourceDocumentTabId(documentIndex: number): string {
+  return `source-document-${documentIndex}`;
+}
+
+function getEvidenceDocumentIndex(replay: TaskReplay, evidenceId: string): number {
+  const pathPrefix = evidenceId.split("#")[0] ?? "";
+  const firstPathPart = pathPrefix.split("/").filter(Boolean)[0] ?? "";
   const documentIndexMatch = firstPathPart.match(/^(\d+)/);
-  const documentIndex = documentIndexMatch ? Number(documentIndexMatch[1]) - 1 : 0;
-  return replay.documents[documentIndex]?.filename || replay.documents[0]?.filename || "workspace";
+  const parsedDocumentIndex = documentIndexMatch ? Number(documentIndexMatch[1]) - 1 : 0;
+  if (!Number.isFinite(parsedDocumentIndex) || parsedDocumentIndex < 0) {
+    return 0;
+  }
+  return Math.min(parsedDocumentIndex, Math.max(replay.documents.length - 1, 0));
 }
 
-function getPathBasename(path: string): string {
-  return path.split("/").filter(Boolean).at(-1) || path;
+function normalizeEvidenceSelector(locator: string): string {
+  const dottedMatch = locator.match(/^(?:\d+\.)+\d+$/);
+  if (!dottedMatch) {
+    return locator;
+  }
+  const parts = locator.split(".");
+  if (parts.length < 3) {
+    return locator;
+  }
+  const pageNumber = Number(parts[1]);
+  const blockNumber = Number(parts[2]);
+  if (!Number.isFinite(pageNumber) || !Number.isFinite(blockNumber)) {
+    return locator;
+  }
+  return `p${String(pageNumber).padStart(3, "0")}_b${String(blockNumber).padStart(3, "0")}`;
+}
+
+function findFieldByEvidenceText(fields: ReplayField[], evidenceText: string): ReplayField | null {
+  const normalizedEvidenceText = normalizeComparableText(evidenceText);
+  if (!normalizedEvidenceText) {
+    return null;
+  }
+  return (
+    fields.find((field) => {
+      const normalizedValue = normalizeComparableText(formatFieldDisplayValue(field));
+      return normalizedValue ? normalizedEvidenceText.includes(normalizedValue) : false;
+    }) ?? null
+  );
+}
+
+function normalizeComparableText(value: string): string {
+  return value
+    .replace(/[，、]/g, ",")
+    .replace(/\s+/g, "")
+    .trim()
+    .toLowerCase();
 }
 
 function getEvidenceText(actions: ReplayAction[], evidenceId: string): string {
@@ -1523,14 +1646,14 @@ function parseEvidenceMarkdownLinks(text: string): Array<{ text: string; href?: 
 function getEvidenceIdFromUri(uri: string): string {
   try {
     const parsed = new URL(uri);
-    const lastPathPart = parsed.pathname.split("/").filter(Boolean).at(-1) ?? "";
     if (parsed.hash) {
       return parsed.hash.slice(1);
     }
-    return lastPathPart || parsed.hostname;
+    const pathParts = parsed.pathname.split("/").filter(Boolean);
+    return [parsed.hostname, ...pathParts].filter(Boolean).join("/") || parsed.hostname;
   } catch {
     const withoutScheme = uri.replace(/^evidence:\/\//, "");
-    return withoutScheme.split("/").filter(Boolean).at(-1) ?? "";
+    return withoutScheme.split("/").filter(Boolean).join("/");
   }
 }
 
@@ -1553,31 +1676,6 @@ function formatFieldDisplayValue(field: ReplayField): string {
   return stringifyValue(field.value);
 }
 
-function isEnumReviewField(field: ReplayField): boolean {
-  return field.fieldType === "enum" || isTaggedEnumValue(field.value);
-}
-
-function toEnumReviewValue(field: ReplayField, value: unknown): { variant: string; value: unknown } {
-  if (isTaggedEnumValue(value)) {
-    return {
-      variant: field.variants.some((variant) => variant.name === value.variant) ? value.variant : field.variants[0]?.name || "",
-      value: value.value,
-    };
-  }
-  const fallbackVariant = field.variants[0]?.name || "";
-  return {
-    variant: fallbackVariant,
-    value,
-  };
-}
-
-function normalizeReviewEditorValue(field: ReplayField, value: unknown): unknown {
-  if (isEnumReviewField(field)) {
-    return toEnumReviewValue(field, value);
-  }
-  return value;
-}
-
 function isTaggedEnumValue(value: unknown): value is { variant: string; value: unknown } {
   return (
     value !== null &&
@@ -1587,52 +1685,6 @@ function isTaggedEnumValue(value: unknown): value is { variant: string; value: u
     typeof (value as { variant?: unknown }).variant === "string" &&
     "value" in value
   );
-}
-
-function defaultEnumPayloadValue(type?: string | null): unknown {
-  if (type === "string") {
-    return "";
-  }
-  if (type === "number") {
-    return 0;
-  }
-  if (type === "boolean") {
-    return false;
-  }
-  if (type === "list[string]" || type === "list[number]") {
-    return [];
-  }
-  return null;
-}
-
-function parseEnumPayloadValue(type: string, raw: string): unknown {
-  if (type === "string") {
-    return raw;
-  }
-  if (type === "number") {
-    const parsed = Number(raw);
-    return Number.isFinite(parsed) ? parsed : raw;
-  }
-  if (type === "boolean") {
-    return raw === "true";
-  }
-  if (type === "list[string]" || type === "list[number]") {
-    try {
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : raw;
-    } catch {
-      return raw;
-    }
-  }
-  return raw;
-}
-
-function parseLooseJsonValue(raw: string): unknown {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return raw;
-  }
 }
 
 function readObject(value: unknown): Record<string, unknown> | null {
@@ -1648,10 +1700,6 @@ function readArray(value: unknown): unknown[] | null {
 
 function readString(value: unknown): string {
   return typeof value === "string" ? value : "";
-}
-
-function readNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function readStringArray(value: unknown): string[] {

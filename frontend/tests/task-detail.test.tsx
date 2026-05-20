@@ -10,35 +10,31 @@ import {
 } from "@/lib/api";
 import { TaskDetail } from "@/components/task-detail";
 import type {
-  ReviewField,
-  ReviewSubmitPayload,
   TaskDetailData,
   TaskReplay,
   TaskResult,
   TaskSummary
 } from "@/lib/types";
 
-const waitingReviewSummary: TaskSummary = {
+const completedSummary: TaskSummary = {
   task_id: "task-001",
-  status: "waiting_review",
-  stage: "review",
-  route: "review",
-  route_reason: "关键字段证据较弱，需要人工确认",
+  status: "completed",
+  stage: "done",
   has_result: true,
   has_trace: true,
-  needs_review: true,
   stream: {
-    state: "running",
+    state: "ended",
     last_event_seq: 8
   }
 };
 
 const baseReplay: TaskReplay = {
   task_id: "task-001",
-  status: "waiting_review",
-  stage: "review",
+  status: "completed",
+  stage: "done",
   documents: [{ document_id: "doc-1", filename: "sample.pdf" }],
-  display_html: '<h1 id="p001_b000">文明寝室名单</h1><p id="p001_b001">1-101、1-102 被列为文明寝室</p>',
+  display_html:
+    '<h1 id="p001_b000">文明寝室名单</h1><p id="p001_b001">1-101、1-102 被列为文明寝室</p><p id="p001_b002">一号楼包含文明寝室</p>',
   outline_tree: [
     {
       id: "p001_b000",
@@ -58,7 +54,7 @@ const baseReplay: TaskReplay = {
         final_evidence: [
           {
             path: "/001-sample/001-Notice.md",
-            sentences: ["S001"]
+            sentences: ["p001_b001"]
           }
         ],
         status: "resolved"
@@ -72,13 +68,13 @@ const baseReplay: TaskReplay = {
           evidence: [
             {
               path: "/001-sample/001-Notice.md",
-              sentences: ["S001"]
+              sentences: ["p001_b001"]
             }
           ],
           evidence_texts: [
             {
               path: "/001-sample/001-Notice.md",
-              selector: "S001",
+              selector: "p001_b001",
               text: "1-101、1-102 被列为文明寝室"
             }
           ],
@@ -89,193 +85,49 @@ const baseReplay: TaskReplay = {
   ],
   result: { room_numbers: "1-101,1-102" },
   field_states: {},
-  audit: { route: "review", route_reason: "关键字段证据较弱，需要人工确认" }
+  audit: {}
 };
 
-const reviewResult: TaskResult = {
+const encodedFilenameReplay: TaskReplay = {
+  ...baseReplay,
+  documents: [{ document_id: "doc-1", filename: "/contracts/Confidentiality%20and%20Non-Disclosure%20Agreement.pdf" }]
+};
+
+const completedResult: TaskResult = {
   task_id: "task-001",
-  status: "waiting_review",
-  route: "review",
+  status: "completed",
   fields: [
     {
       field_name: "room_numbers",
       display_name: "文明寝室房间号",
       agent_value: "1-101,1-102",
-      review_value: null,
-      final_value: null,
+      final_value: "1-101,1-102",
       field_status: "resolved",
-      route: "review",
-      source: null,
-      committed: false
+      source: "agent",
+      committed: true
     }
   ]
 };
 
-const reviewFields: ReviewField[] = [
-  {
-    field_name: "room_numbers",
-    display_name: "文明寝室房间号",
-    agent_value: "1-101,1-102",
-    field_status: "resolved",
-    needs_review: true,
-    review_reason: "字段需要人工确认",
-    evidence_texts: [],
-    evidence_refs: [],
-    actions: [],
-    reason: "候选证据支持字段值",
-    failure_reason: null,
-    agent_process: null
-  }
-];
-
-function createMultiFieldDetail(taskId = "task-001"): TaskDetailData {
-  return {
-    ...detailData,
-    summary: {
-      ...waitingReviewSummary,
-      task_id: taskId
-    },
-    result: {
-      ...reviewResult,
-      task_id: taskId,
-      fields: [
-        reviewResult.fields[0],
-        {
-          field_name: "building_name",
-          display_name: "楼栋名称",
-          agent_value: "一号楼",
-          review_value: null,
-          final_value: null,
-          field_status: "resolved",
-          route: "accept",
-          route_reason: "证据充分",
-          source: null,
-          committed: false
-        },
-        {
-          field_name: "invalid_room",
-          display_name: "无效房间",
-          agent_value: "9-999",
-          review_value: null,
-          final_value: null,
-          field_status: "rejected",
-          route: "reject",
-          route_reason: "证据不足，拒绝写入",
-          source: null,
-          committed: false
-        }
-      ]
-    },
-    replay: {
-      ...baseReplay,
-      task_id: taskId,
-      actions: [
-        ...baseReplay.actions,
-        {
-          tool_name: "write_field",
-          reason: "楼栋证据充分",
-          args: {
-            field_id: "building_name",
-            value: "一号楼",
-            final_evidence: [
-              {
-                path: "/001-sample/001-Notice.md",
-                sentences: ["S002"]
-              }
-            ],
-            status: "resolved"
-          },
-          result: {
-            ok: true,
-            field: {
-              field_id: "building_name",
-              status: "resolved",
-              value: "一号楼",
-              evidence: [
-                {
-                  path: "/001-sample/001-Notice.md",
-                  sentences: ["S002"]
-                }
-              ],
-              evidence_texts: [
-                {
-                  path: "/001-sample/001-Notice.md",
-                  selector: "S002",
-                  text: "一号楼包含文明寝室"
-                }
-              ],
-              reason: "楼栋证据充分"
-            }
-          }
-        },
-        {
-          tool_name: "write_field",
-          reason: "无效房间证据不足",
-          args: {
-            field_id: "invalid_room",
-            value: "9-999",
-            final_evidence: [
-              {
-                path: "/001-sample/001-Notice.md",
-                sentences: ["S003"]
-              }
-            ],
-            status: "rejected"
-          },
-          result: {
-            ok: true,
-            field: {
-              field_id: "invalid_room",
-              status: "rejected",
-              value: "9-999",
-              evidence: [
-                {
-                  path: "/001-sample/001-Notice.md",
-                  sentences: ["S003"]
-                }
-              ],
-              evidence_texts: [
-                {
-                  path: "/001-sample/001-Notice.md",
-                  selector: "S003",
-                  text: "9-999 不在文明寝室名单中"
-                }
-              ],
-              reason: "无效房间证据不足"
-            }
-          }
-        }
-      ]
-    }
-  };
-}
+const processedDisplayHtml =
+  '<!doctype html><html lang="en"><head><meta charset="utf-8"><style>body { margin: 0; background: #f3f4f6; } main { max-width: 980px; margin: 0 auto; padding: 24px; } .page { background: #fff; padding: 44px 56px; }</style><script>window.__sourceScriptRan = true;</script></head><body><main><section class="page"><h1 id="p001_b000">文明寝室名单</h1><p id="p001_b001">1-101、1-102 被列为文明寝室</p><p id="p001_b002">一号楼包含文明寝室</p></section></main></body></html>';
 
 const detailData: TaskDetailData = {
-  summary: waitingReviewSummary,
-  result: reviewResult,
+  summary: completedSummary,
+  result: completedResult,
   trace: null,
   replay: baseReplay,
-  review: {
-    task_id: "task-001",
-    status: "waiting_review",
-    route: "review",
-    route_reason: "关键字段证据较弱，需要人工确认",
-    fields: reviewFields
-  },
   audit: null
 };
 
 const recentTaskSummaries: TaskSummary[] = [
-  waitingReviewSummary,
+  completedSummary,
   {
     task_id: "task-002",
     status: "processing",
     stage: "extraction",
-    route: null,
-    route_reason: null,
     has_result: false,
     has_trace: true,
-    needs_review: false,
     created_at: "2026-05-18T09:00:00Z"
   }
 ];
@@ -300,29 +152,15 @@ function renderTaskDetail(
     taskId?: string;
     loadTaskDetail?: (taskId: string) => Promise<TaskDetailData>;
     listTasks?: () => Promise<TaskSummary[]>;
-    submitReview?: (taskId: string, payload: ReviewSubmitPayload) => Promise<TaskSummary>;
   } = {}
 ) {
   const taskId = options.taskId ?? data.summary.task_id;
   const loadTaskDetailImpl = options.loadTaskDetail ?? (async () => data);
   const listTasksImpl = options.listTasks ?? (async () => recentTaskSummaries);
-  const submitReviewImpl =
-    options.submitReview ??
-    (async () =>
-      ({
-        ...data.summary,
-        status: "completed",
-        stage: "done",
-        needs_review: false
-      }) as TaskSummary);
-
   const injectedLoadTaskDetail = jest.fn(loadTaskDetailImpl) as jest.MockedFunction<
     (taskId: string) => Promise<TaskDetailData>
   >;
   const listTasks = jest.fn(listTasksImpl) as jest.MockedFunction<() => Promise<TaskSummary[]>>;
-  const submitReview = jest.fn(submitReviewImpl) as jest.MockedFunction<
-    (taskId: string, payload: ReviewSubmitPayload) => Promise<TaskSummary>
-  >;
 
   const renderResult = render(
     <TaskDetail
@@ -330,51 +168,131 @@ function renderTaskDetail(
       initialSummary={data.summary}
       loadTaskDetail={injectedLoadTaskDetail}
       listTasks={listTasks}
-      submitReview={submitReview}
     />
   );
 
-  return { injectedLoadTaskDetail, listTasks, submitReview, ...renderResult };
+  return { injectedLoadTaskDetail, listTasks, ...renderResult };
+}
+
+function getSourceFrameHtml(sourceViewer: HTMLElement): string {
+  const frame = within(sourceViewer).getByTitle("原文文档") as HTMLIFrameElement;
+  return frame.getAttribute("srcdoc") ?? "";
+}
+
+function createMultiFieldDetail(taskId = "task-001"): TaskDetailData {
+  return {
+    ...detailData,
+    summary: {
+      ...completedSummary,
+      task_id: taskId
+    },
+    result: {
+      ...completedResult,
+      task_id: taskId,
+      fields: [
+        completedResult.fields[0],
+        {
+          field_name: "building_name",
+          display_name: "楼栋名称",
+          agent_value: "一号楼",
+          final_value: "一号楼",
+          field_status: "resolved",
+          source: "agent",
+          committed: true
+        },
+        {
+          field_name: "missing_required",
+          display_name: "缺失字段",
+          agent_value: null,
+          final_value: null,
+          field_status: "failed",
+          source: null,
+          committed: false
+        }
+      ]
+    },
+    replay: {
+      ...baseReplay,
+      task_id: taskId,
+      actions: [
+        ...baseReplay.actions,
+        {
+          tool_name: "write_field",
+          reason: "楼栋证据充分",
+          args: {
+            field_id: "building_name",
+            value: "一号楼",
+            final_evidence: [
+              {
+                path: "/001-sample/001-Notice.md",
+                sentences: ["p001_b002"]
+              }
+            ],
+            status: "resolved"
+          },
+          result: {
+            ok: true,
+            field: {
+              field_id: "building_name",
+              status: "resolved",
+              value: "一号楼",
+              evidence: [
+                {
+                  path: "/001-sample/001-Notice.md",
+                  sentences: ["p001_b002"]
+                }
+              ],
+              evidence_texts: [
+                {
+                  path: "/001-sample/001-Notice.md",
+                  selector: "p001_b002",
+                  text: "一号楼包含文明寝室"
+                }
+              ],
+              reason: "楼栋证据充分"
+            }
+          }
+        }
+      ]
+    }
+  };
 }
 
 it("loadTaskDetail 只拉 replay 所需数据，不再加载 trace 和 audit", async () => {
   global.fetch = jest.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.endsWith("/tasks/task-001")) {
-      return jsonResponse(waitingReviewSummary);
+      return jsonResponse(completedSummary);
     }
     if (url.endsWith("/tasks/task-001/result")) {
-      return jsonResponse(reviewResult);
+      return jsonResponse(completedResult);
     }
     if (url.endsWith("/tasks/task-001/replay")) {
       return jsonResponse(baseReplay);
-    }
-    if (url.endsWith("/tasks/task-001/review")) {
-      return jsonResponse(detailData.review);
     }
     throw new Error(`unexpected fetch: ${url}`);
   });
 
   const loaded = await loadTaskDetail("task-001");
 
-  expect(loaded.summary).toEqual(waitingReviewSummary);
-  expect(loaded.result).toEqual(reviewResult);
+  expect(loaded.summary).toEqual(completedSummary);
+  expect(loaded.result).toEqual(completedResult);
   expect(loaded.replay).toEqual(baseReplay);
-  expect(loaded.review).toEqual(detailData.review);
   expect(loaded.trace).toBeNull();
   expect(loaded.audit).toBeNull();
   expect(global.fetch).not.toHaveBeenCalledWith(expect.stringContaining("/trace"), expect.anything());
   expect(global.fetch).not.toHaveBeenCalledWith(expect.stringContaining("/audit"), expect.anything());
+  expect(global.fetch).not.toHaveBeenCalledWith(expect.stringContaining("/review"), expect.anything());
 });
 
 it("低层 API 仍保留 trace 和 audit 读取能力", async () => {
   global.fetch = jest.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.endsWith("/tasks/task-001")) {
-      return jsonResponse(waitingReviewSummary);
+      return jsonResponse(completedSummary);
     }
     if (url.endsWith("/tasks/task-001/result")) {
-      return jsonResponse(reviewResult);
+      return jsonResponse(completedResult);
     }
     if (url.endsWith("/tasks/task-001/trace")) {
       return jsonResponse({ task_id: "task-001", fields: [] });
@@ -385,8 +303,8 @@ it("低层 API 仍保留 trace 和 audit 读取能力", async () => {
     throw new Error(`unexpected fetch: ${url}`);
   });
 
-  await expect(getTaskSummary("task-001")).resolves.toEqual(waitingReviewSummary);
-  await expect(getTaskResult("task-001")).resolves.toEqual(reviewResult);
+  await expect(getTaskSummary("task-001")).resolves.toEqual(completedSummary);
+  await expect(getTaskResult("task-001")).resolves.toEqual(completedResult);
   await expect(getTaskTrace("task-001")).resolves.toEqual({ task_id: "task-001", fields: [] });
   await expect(getTaskAudit("task-001")).resolves.toEqual({
     task_id: "task-001",
@@ -395,9 +313,14 @@ it("低层 API 仍保留 trace 和 audit 读取能力", async () => {
   });
 });
 
-it("任务详情默认显示左任务栏、Agent 工作区，不显示字段 Progress 或 evidence Review", async () => {
+it("任务详情默认显示左任务栏、Agent 工作区，不在全局顶栏显示 Review tab", async () => {
   renderTaskDetail();
 
+  const topbar = await screen.findByLabelText("Replay 顶部工具栏");
+  expect(within(topbar).queryByRole("tablist", { name: "右侧工作栏选项卡" })).not.toBeInTheDocument();
+  expect(within(topbar).queryByRole("tab", { name: "Review" })).not.toBeInTheDocument();
+  expect(within(topbar).getByText("task-001")).toHaveAttribute("title", "task-001");
+  expect(within(topbar).queryByText("task-001 / sample.pdf")).not.toBeInTheDocument();
   expect(await screen.findByLabelText("任务工作台左侧任务栏")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "关闭任务栏" })).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "新任务" })).toHaveAttribute("href", "/");
@@ -406,11 +329,9 @@ it("任务详情默认显示左任务栏、Agent 工作区，不显示字段 Pro
   expect(screen.getByLabelText("Agent 中间工作区")).toBeInTheDocument();
   expect(screen.getByText("候选证据支持字段值")).toBeInTheDocument();
   expect(screen.getByLabelText("Agent 对话输入框")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "添加文件" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "发送消息" })).toBeInTheDocument();
   expect(screen.queryByLabelText("字段进度面板")).not.toBeInTheDocument();
-  expect(within(screen.getByLabelText("Agent 中间工作区")).queryByText("写入字段：文明寝室房间号")).not.toBeInTheDocument();
-  expect(screen.queryByLabelText("Review 面板")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("右侧 Review 工作栏")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Inspector 面板")).not.toBeInTheDocument();
 });
 
 it("Agent 流直接显示完整文字和工具行，不再暴露 replay 播放控制", async () => {
@@ -453,56 +374,201 @@ it("Agent 流直接显示完整文字和工具行，不再暴露 replay 播放�
   expect(within(agentArea).getAllByText((_, element) => element?.textContent === "读取 文明寝室证据").length).toBeGreaterThan(0);
   expect(screen.getByRole("link", { name: "文明寝室证据" })).toBeInTheDocument();
   expect(screen.getByText("写入文明寝室字段")).toBeInTheDocument();
-  expect(screen.getByText(/Read paragraph Notice/)).toBeInTheDocument();
-  expect(screen.getByText(/Wrote room_numbers/)).toBeInTheDocument();
+  expect(screen.getByText("Read passage")).toBeInTheDocument();
+  expect(screen.getByText("Filled room_numbers")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "自动播放" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "暂停自动播放" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "下一步" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "播放速度" })).not.toBeInTheDocument();
   expect(screen.queryByRole("slider")).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: /只播放第/ })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: /tool read/ })).not.toBeInTheDocument();
 });
 
-it("Agent 文字流和底部输入框在中间内容框内居中，单侧栏时动态补旁侧留白", async () => {
+it("Agent 工具行按真实工具显示英文摘要和语义图标", async () => {
   const user = userEvent.setup();
-  renderTaskDetail();
+  const toolDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      actions: [
+        {
+          tool_name: "tree",
+          reason: "",
+          args: { path_id: "evidence://0000", depth: 3 },
+          result: { ok: true, locator: "evidence://0000" }
+        },
+        {
+          tool_name: "read",
+          reason: "",
+          args: { path_id: "evidence://0000.0001.0001.0001" },
+          result: {
+            ok: true,
+            locator: "evidence://0000.0001.0001.0001",
+            kind: "paragraph",
+            text: "1-101、1-102 被列为文明寝室"
+          }
+        },
+        {
+          tool_name: "add_candidate_evidence",
+          reason: "",
+          args: { field_id: "room_numbers", path_id: "evidence://0000.0001.0001.0001" },
+          result: { ok: true, field_id: "room_numbers", candidate_evidence: ["evidence://0000.0001.0001.0001"] }
+        },
+        {
+          tool_name: "review_evidences",
+          reason: "",
+          args: { field_id: "room_numbers" },
+          result: { ok: true, field_id: "room_numbers", evidence: ["evidence://0000.0001.0001.0001/S001"] }
+        },
+        {
+          tool_name: "write_field",
+          reason: "",
+          args: { field_id: "room_numbers", value: "1-101,1-102", final_evidence: [] },
+          result: {
+            ok: true,
+            field: {
+              field_id: "room_numbers",
+              status: "resolved",
+              value: "1-101,1-102",
+              evidence: []
+            }
+          }
+        },
+        {
+          tool_name: "submit_result",
+          reason: "",
+          args: {},
+          result: { ok: true }
+        }
+      ]
+    }
+  };
+  renderTaskDetail(toolDetail);
 
   const agentArea = await screen.findByLabelText("Agent 中间工作区");
-  expect(agentArea).toHaveAttribute("data-agent-balance-side", "right");
-  expect(agentArea).toHaveAttribute("data-agent-gutter", "compact");
-  expect(within(agentArea).getByLabelText("Agent 居中文字流内容")).toHaveClass("replay-agent-centered-content");
-  expect(within(agentArea).getByLabelText("Agent 居中输入区")).toHaveClass("replay-agent-composer-balance-row");
-  expect(within(agentArea).getByLabelText("Agent 中间文字框")).toHaveClass("replay-agent-content-frame");
-  expect(within(agentArea).getByLabelText("Agent 中间输入框")).toHaveClass("replay-agent-composer-frame");
-  expect(within(agentArea).getByLabelText("Agent 中间文字框")).toContainElement(
-    within(agentArea).getByLabelText("Agent 阅读列"),
-  );
-  expect(within(agentArea).getByLabelText("Agent 中间输入框")).toContainElement(
-    within(agentArea).getByLabelText("Agent 输入阅读列"),
-  );
-  expect(agentArea).toHaveAttribute("data-agent-content-mode", "centered");
-  expect(agentArea.querySelector('[data-agent-balance-spacer="right"]')).toHaveAttribute("data-active", "true");
-  expect(agentArea.querySelector('[data-agent-balance-spacer="left"]')).toHaveAttribute("data-active", "true");
+  const toolGroup = within(agentArea).getByRole("group", { name: "5 collapsed tools" });
+  expect(within(toolGroup).getByText("Explored 2 files, saved 1 evidence item, reviewed 1 evidence set, filled 1 field")).toBeInTheDocument();
+  expect(within(toolGroup).queryByText("Viewed outline -> Read passage -> Saved evidence for room_numbers")).not.toBeInTheDocument();
+  expect(within(agentArea).queryByText("Reviewed evidence for room_numbers")).not.toBeInTheDocument();
+  expect(within(agentArea).queryByText("Filled room_numbers")).not.toBeInTheDocument();
+  expect(within(agentArea).queryByText("Submitted result")).not.toBeInTheDocument();
 
-  await user.click(screen.getByRole("button", { name: "关闭任务栏" }));
+  await user.click(within(toolGroup).getByRole("button", { name: "展开 5 个工具调用" }));
 
-  expect(agentArea).toHaveAttribute("data-agent-balance-side", "left");
-  expect(agentArea).toHaveAttribute("data-agent-content-mode", "centered");
-  expect(agentArea.querySelector('[data-agent-balance-spacer="left"]')).toHaveAttribute("data-active", "true");
-  expect(agentArea.querySelector('[data-agent-balance-spacer="right"]')).toHaveAttribute("data-active", "true");
-
-  await user.click(screen.getByRole("button", { name: "打开 evidence Review" }));
-
-  expect(agentArea).toHaveAttribute("data-agent-balance-side", "none");
-  expect(agentArea).toHaveAttribute("data-agent-content-mode", "full");
-  expect(agentArea.querySelector('[data-agent-balance-spacer="left"]')).toHaveAttribute("data-active", "false");
-  expect(agentArea.querySelector('[data-agent-balance-spacer="right"]')).toHaveAttribute("data-active", "false");
+  expect(within(agentArea).getByText("Viewed outline")).toBeInTheDocument();
+  expect(within(agentArea).getByText("Read passage")).toBeInTheDocument();
+  expect(within(agentArea).getByText("Saved evidence for room_numbers")).toBeInTheDocument();
+  expect(within(agentArea).getByText("Reviewed evidence for room_numbers")).toBeInTheDocument();
+  expect(within(agentArea).getByText("Filled room_numbers")).toBeInTheDocument();
+  expect(within(agentArea).getByLabelText("tool tree")).toHaveAttribute("data-tool-icon", "list-tree");
+  expect(within(agentArea).getByLabelText("tool read")).toHaveAttribute("data-tool-icon", "book-user");
+  expect(within(agentArea).getByLabelText("tool add_candidate_evidence")).toHaveAttribute("data-tool-icon", "bookmark-plus");
+  expect(within(agentArea).getByLabelText("tool review_evidences")).toHaveAttribute("data-tool-icon", "file-check");
+  expect(within(agentArea).getByLabelText("tool write_field")).toHaveAttribute("data-tool-icon", "pen-line");
+  expect(within(agentArea).queryByLabelText("tool submit_result")).not.toBeInTheDocument();
 });
 
-it("关闭左任务栏后自动显示字段 Progress", async () => {
+it("单个 tool 保持直出，不会折叠成 group", async () => {
+  const singleToolDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      actions: [
+        {
+          tool_name: "read",
+          reason: "",
+          args: { path_id: "evidence://0000" },
+          result: { ok: true, locator: "evidence://0000", kind: "paragraph", text: "single tool evidence" }
+        }
+      ]
+    }
+  };
+  renderTaskDetail(singleToolDetail);
+
+  const agentArea = await screen.findByLabelText("Agent 中间工作区");
+  expect(within(agentArea).queryByRole("group", { name: /collapsed tools/ })).not.toBeInTheDocument();
+  expect(within(agentArea).getByLabelText("tool read")).toBeInTheDocument();
+  expect(within(agentArea).getByText("Read passage")).toBeInTheDocument();
+});
+
+it("Agent 文字后的连续多个 tool 整组折叠，不先直出第一条 tool", async () => {
   const user = userEvent.setup();
-  renderTaskDetail();
+  const foldedToolsDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      actions: [
+        {
+          tool_name: "read",
+          reason: "先读取总览文字",
+          args: { path_id: "evidence://0000" },
+          result: { ok: true, locator: "evidence://0000", kind: "paragraph" }
+        },
+        {
+          tool_name: "tree",
+          reason: "",
+          args: { path_id: "evidence://0000", depth: 2 },
+          result: { ok: true, locator: "evidence://0000" }
+        },
+        {
+          tool_name: "read",
+          reason: "",
+          args: { path_id: "evidence://0000.0001" },
+          result: { ok: true, locator: "evidence://0000.0001", kind: "paragraph" }
+        },
+        {
+          tool_name: "add_candidate_evidence",
+          reason: "",
+          args: { field_id: "room_numbers", path_id: "evidence://0000.0001" },
+          result: { ok: true, field_id: "room_numbers", candidate_evidence: ["evidence://0000.0001"] }
+        },
+        {
+          tool_name: "review_evidences",
+          reason: "",
+          args: { field_id: "room_numbers" },
+          result: { ok: true, field_id: "room_numbers", evidence: ["evidence://0000.0001/S001"] }
+        },
+        {
+          tool_name: "write_field",
+          reason: "最后写入字段",
+          args: { field_id: "room_numbers", value: "1-101,1-102", final_evidence: [] },
+          result: {
+            ok: true,
+            field: {
+              field_id: "room_numbers",
+              status: "resolved",
+              value: "1-101,1-102",
+              evidence: []
+            }
+          }
+        }
+      ]
+    }
+  };
+  renderTaskDetail(foldedToolsDetail);
+
+  const agentArea = await screen.findByLabelText("Agent 中间工作区");
+  expect(within(agentArea).getByText("先读取总览文字")).toBeInTheDocument();
+  expect(within(agentArea).getByText("最后写入字段")).toBeInTheDocument();
+  expect(within(agentArea).getByText("Filled room_numbers")).toBeInTheDocument();
+
+  const toolGroup = within(agentArea).getByRole("group", { name: "5 collapsed tools" });
+  expect(within(toolGroup).getByText("Explored 3 files, saved 1 evidence item, reviewed 1 evidence set")).toBeInTheDocument();
+  expect(within(toolGroup).queryByText("Read passage -> Viewed outline -> Saved evidence for room_numbers")).not.toBeInTheDocument();
+  expect(within(agentArea).queryByLabelText("tool read")).not.toBeInTheDocument();
+  expect(within(agentArea).queryByLabelText("tool tree")).not.toBeInTheDocument();
+  expect(within(agentArea).queryByLabelText("tool add_candidate_evidence")).not.toBeInTheDocument();
+  expect(within(agentArea).queryByLabelText("tool review_evidences")).not.toBeInTheDocument();
+
+  await user.click(within(toolGroup).getByRole("button", { name: "展开 5 个工具调用" }));
+
+  expect(within(agentArea).getAllByLabelText("tool read")).toHaveLength(2);
+  expect(within(agentArea).getByLabelText("tool tree")).toBeInTheDocument();
+  expect(within(agentArea).getByLabelText("tool add_candidate_evidence")).toBeInTheDocument();
+  expect(within(agentArea).getByLabelText("tool review_evidences")).toBeInTheDocument();
+});
+
+it("关闭左任务栏后自动显示字段 Progress，字段列表只按字段排序", async () => {
+  const user = userEvent.setup();
+  renderTaskDetail(createMultiFieldDetail());
 
   expect(await screen.findByLabelText("任务工作台左侧任务栏")).toBeInTheDocument();
   expect(screen.queryByLabelText("字段进度面板")).not.toBeInTheDocument();
@@ -510,83 +576,37 @@ it("关闭左任务栏后自动显示字段 Progress", async () => {
   await user.click(screen.getByRole("button", { name: "关闭任务栏" }));
 
   expect(screen.queryByLabelText("任务工作台左侧任务栏")).not.toBeInTheDocument();
+  const rightPanel = screen.getByLabelText("右侧 Review 工作栏");
+  const rightTabs = within(rightPanel).getByRole("tablist", { name: "右侧工作栏选项卡" });
+  expect(within(rightTabs).getByRole("tab", { name: "Review" })).toHaveAttribute("aria-selected", "true");
   const progress = screen.getByLabelText("字段进度面板");
   expect(progress).toBeInTheDocument();
-  expect(within(progress).getAllByText("resolved").length).toBeGreaterThan(0);
-  expect(within(progress).getAllByText("review").length).toBeGreaterThan(0);
   expect(within(progress).getByRole("button", { name: /文明寝室房间号/ })).toBeInTheDocument();
-  expect(within(progress).queryByLabelText("字段展开详情")).not.toBeInTheDocument();
-  expect(within(progress).queryByText("字段需要人工确认")).not.toBeInTheDocument();
-  expect(within(progress).queryByText("last seq 8")).not.toBeInTheDocument();
-  expect(within(progress).queryByText("running")).not.toBeInTheDocument();
-
-  await user.click(screen.getByRole("button", { name: "打开任务栏" }));
-
-  expect(screen.getByLabelText("任务工作台左侧任务栏")).toBeInTheDocument();
-  expect(screen.queryByLabelText("字段进度面板")).not.toBeInTheDocument();
+  expect(within(progress).getByRole("button", { name: /楼栋名称/ })).toBeInTheDocument();
+  expect(within(progress).getByRole("button", { name: /缺失字段/ })).toBeInTheDocument();
+  expect(within(progress).queryByRole("heading", { name: "Review" })).not.toBeInTheDocument();
+  expect(within(progress).queryByRole("heading", { name: "Reject" })).not.toBeInTheDocument();
+  expect(within(progress).queryByRole("heading", { name: "Accept" })).not.toBeInTheDocument();
 });
 
-it("字段 Progress 只做紧凑列表，点击字段会在最右侧 Review 打开详情", async () => {
+it("字段 Progress 显示字段摘要，点击字段不会占用 Review 工作区", async () => {
   const user = userEvent.setup();
   renderTaskDetail(createMultiFieldDetail());
 
   await user.click(await screen.findByRole("button", { name: "关闭任务栏" }));
-
   const progress = screen.getByLabelText("字段进度面板");
-  expect(within(progress).getByRole("button", { name: /文明寝室房间号/ })).toBeInTheDocument();
-  expect(within(progress).getByRole("button", { name: /楼栋名称/ })).toBeInTheDocument();
-  expect(within(progress).queryByLabelText("字段展开详情")).not.toBeInTheDocument();
-  expect(screen.queryByLabelText("Review 面板")).not.toBeInTheDocument();
-  expect(within(progress).queryByText("楼栋证据充分")).not.toBeInTheDocument();
+  expect(within(progress).getByText("候选证据支持字段值")).toBeInTheDocument();
+  expect(within(progress).getByText("楼栋证据充分")).toBeInTheDocument();
 
   await user.click(within(progress).getByRole("button", { name: /楼栋名称/ }));
 
-  const review = screen.getByLabelText("Review 面板");
-  expect(within(progress).queryByLabelText("字段展开详情")).not.toBeInTheDocument();
-  expect(within(progress).queryByText("证据充分")).not.toBeInTheDocument();
-  expect(within(review).getByLabelText("字段展开详情")).toBeInTheDocument();
-  expect(within(review).getByText("写入字段：楼栋名称")).toBeInTheDocument();
-  expect(within(review).getByText("证据充分")).toBeInTheDocument();
-  expect(screen.queryByLabelText("文明寝室房间号 复核值")).not.toBeInTheDocument();
+  expect(within(progress).getByRole("button", { name: /楼栋名称/ })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByLabelText("Agent 中间工作区")).toBeInTheDocument();
+  expect(screen.queryByLabelText("Inspector 面板")).not.toBeInTheDocument();
+  expect(screen.queryByRole("tablist", { name: "Inspector detail tabs" })).not.toBeInTheDocument();
 });
 
-it("字段 Progress 按 review、reject、accept 分组展示", async () => {
-  const user = userEvent.setup();
-  renderTaskDetail(createMultiFieldDetail());
-
-  await user.click(await screen.findByRole("button", { name: "关闭任务栏" }));
-
-  const progress = screen.getByLabelText("字段进度面板");
-  const groupHeadings = within(progress).getAllByRole("heading", { level: 3 });
-  expect(groupHeadings.map((heading) => heading.textContent)).toEqual(["Review", "Reject", "Accept"]);
-
-  const reviewGroup = within(progress).getByLabelText("Review 字段分组");
-  const rejectGroup = within(progress).getByLabelText("Reject 字段分组");
-  const acceptGroup = within(progress).getByLabelText("Accept 字段分组");
-  expect(within(reviewGroup).getByRole("button", { name: /文明寝室房间号/ })).toBeInTheDocument();
-  expect(within(rejectGroup).getByRole("button", { name: /无效房间/ })).toBeInTheDocument();
-  expect(within(acceptGroup).getByRole("button", { name: /楼栋名称/ })).toBeInTheDocument();
-
-  const reviewTop = reviewGroup.compareDocumentPosition(rejectGroup);
-  const rejectTop = rejectGroup.compareDocumentPosition(acceptGroup);
-  expect(reviewTop & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(rejectTop & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-});
-
-it("Review toggle 打开最右侧 evidence Review 空态，不影响字段 Progress", async () => {
-  const user = userEvent.setup();
-  renderTaskDetail();
-
-  await user.click(await screen.findByRole("button", { name: "关闭任务栏" }));
-  await user.click(screen.getByRole("button", { name: "打开 evidence Review" }));
-
-  expect(screen.getByLabelText("字段进度面板")).toBeInTheDocument();
-  const review = screen.getByLabelText("Review 面板");
-  expect(review).toBeInTheDocument();
-  expect(within(review).getByText("选择一个字段或 evidence 链接查看详情")).toBeInTheDocument();
-});
-
-it("点击 evidence 链接打开最右侧 Review，字段 Progress 和 evidence Review 是两个竖栏", async () => {
+it("点击 evidence 链接会打开顶层原文 tab，并定位高亮对应位置", async () => {
   const user = userEvent.setup();
   const evidenceDetail: TaskDetailData = {
     ...detailData,
@@ -613,28 +633,153 @@ it("点击 evidence 链接打开最右侧 Review，字段 Progress 和 evidence 
 
   expect(await screen.findByLabelText("任务工作台左侧任务栏")).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "关闭任务栏" }));
-  expect(screen.getByLabelText("字段进度面板")).toBeInTheDocument();
-
   await user.click(screen.getByRole("link", { name: "文明寝室证据" }));
 
-  const review = screen.getByLabelText("Review 面板");
-  expect(review).toBeInTheDocument();
-  expect(within(review).getByRole("tab", { name: "文明寝室证据" })).toBeInTheDocument();
-  expect(within(review).getByRole("tabpanel")).toHaveTextContent("evidence://task-001/p001_b001");
-  expect(within(review).getByText("evidence://task-001/p001_b001")).toBeInTheDocument();
-  const progress = screen.getByLabelText("字段进度面板");
-  expect(progress).toBeInTheDocument();
-  expect(progress).not.toContainElement(review);
-  expect(review).not.toContainElement(progress);
-  expect(screen.queryByLabelText("任务工作台左侧任务栏")).not.toBeInTheDocument();
+  const rightPanel = screen.getByLabelText("右侧 Review 工作栏");
+  const workspaceTabs = within(rightPanel).getByRole("tablist", { name: "右侧工作栏选项卡" });
+  expect(within(workspaceTabs).getByRole("tab", { name: "Review" })).toHaveAttribute("aria-selected", "false");
+  expect(within(workspaceTabs).getByRole("tab", { name: "sample.pdf" })).toHaveAttribute("aria-selected", "true");
+  const sourceViewer = within(rightPanel).getByLabelText("原文查看器");
+  const sourceFrameHtml = getSourceFrameHtml(sourceViewer);
+  expect(screen.getByLabelText("Agent 中间工作区")).toBeInTheDocument();
+  expect(sourceFrameHtml).not.toContain("Field value");
+  expect(sourceFrameHtml).not.toContain("Evidence text");
+  expect(sourceFrameHtml).not.toContain("Original location");
+  expect(sourceFrameHtml).toContain("文明寝室名单");
+  expect(sourceFrameHtml).toContain("一号楼包含文明寝室");
+  expect(sourceFrameHtml).toContain('id="p001_b001" class="is-current-evidence" data-current-evidence="true"');
+  expect(sourceFrameHtml).toContain("data-agent-gate-source-frame");
+  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "p001_b001");
+  expect(screen.queryByText("evidence://task-001/p001_b001")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Inspector 面板")).not.toBeInTheDocument();
 });
 
-it("不同 evidence 会在最右侧 Review 内打开 tab", async () => {
+it("原文文件 tab 只显示解码后的文件名，原文内容上方不再重复文件标题", async () => {
+  const user = userEvent.setup();
+  const evidenceDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...encodedFilenameReplay,
+      actions: [
+        {
+          tool_name: "read",
+          reason: "查看 [文明寝室证据](evidence://task-001/p001_b001)",
+          args: { path: "/001-sample/001-Notice.md" },
+          result: { ok: true, path: "/001-sample/001-Notice.md", kind: "paragraph", text: "1-101、1-102 被列为文明寝室" }
+        }
+      ]
+    }
+  };
+  renderTaskDetail(evidenceDetail);
+
+  await user.click(await screen.findByRole("button", { name: "关闭任务栏" }));
+  await user.click(screen.getByRole("link", { name: "文明寝室证据" }));
+
+  const rightPanel = screen.getByLabelText("右侧 Review 工作栏");
+  expect(within(rightPanel).getByRole("tab", { name: "Confidentiality and Non-Disclosure Agreement.pdf" })).toHaveAttribute("aria-selected", "true");
+  expect(within(rightPanel).queryByRole("tab", { name: /%20/ })).not.toBeInTheDocument();
+  expect(within(rightPanel).queryByRole("tab", { name: "/contracts/Confidentiality and Non-Disclosure Agreement.pdf" })).not.toBeInTheDocument();
+  const sourceViewer = within(rightPanel).getByLabelText("原文查看器");
+  expect(within(sourceViewer).queryByText("Confidentiality and Non-Disclosure Agreement.pdf")).not.toBeInTheDocument();
+  expect(within(sourceViewer).queryByText("Confidentiality%20and%20Non-Disclosure%20Agreement.pdf")).not.toBeInTheDocument();
+  expect(within(sourceViewer).queryByText("/contracts/Confidentiality and Non-Disclosure Agreement.pdf")).not.toBeInTheDocument();
+});
+
+it("点号 evidence URI 会打开原文文件 tab 并映射到真实 DOM 位置", async () => {
+  const user = userEvent.setup();
+  const evidenceDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...encodedFilenameReplay,
+      display_html:
+        '<main><section class="page"><p id="p001_b008">前一段</p><p id="p001_b009" data-element-id="p001_b009">ii) proprietary, non-public or confidential information</p></section></main>',
+      actions: [
+        {
+          tool_name: "read",
+          reason: "查看 [定义证据](evidence://0000.0001.0009)",
+          args: { path_id: "evidence://0000.0001.0009" },
+          result: {
+            ok: true,
+            locator: "evidence://0000.0001.0009",
+            kind: "paragraph",
+            text: "ii) proprietary, non-public or confidential information"
+          }
+        }
+      ]
+    }
+  };
+  renderTaskDetail(evidenceDetail);
+
+  await user.click(await screen.findByRole("button", { name: "关闭任务栏" }));
+  await user.click(screen.getByRole("link", { name: "定义证据" }));
+
+  const rightPanel = screen.getByLabelText("右侧 Review 工作栏");
+  expect(within(rightPanel).getByRole("tab", { name: "Confidentiality and Non-Disclosure Agreement.pdf" })).toHaveAttribute("aria-selected", "true");
+  const sourceViewer = within(rightPanel).getByLabelText("原文查看器");
+  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "p001_b009");
+  expect(getSourceFrameHtml(sourceViewer)).toContain('id="p001_b009" data-element-id="p001_b009" class="is-current-evidence" data-current-evidence="true"');
+});
+
+it("完整原文 tab 填满右侧框体，不再强制固定纸面宽度或横向滚动", async () => {
   const user = userEvent.setup();
   const evidenceDetail: TaskDetailData = {
     ...detailData,
     replay: {
       ...baseReplay,
+      display_html: processedDisplayHtml,
+      actions: [
+        {
+          tool_name: "read",
+          reason: "查看 [文明寝室证据](evidence://task-001/p001_b001)",
+          args: {
+            path: "/001-sample/001-Notice.md"
+          },
+          result: {
+            ok: true,
+            path: "/001-sample/001-Notice.md",
+            kind: "paragraph",
+            text: "1-101、1-102 被列为文明寝室"
+          }
+        }
+      ]
+    }
+  };
+  renderTaskDetail(evidenceDetail);
+
+  await user.click(await screen.findByRole("button", { name: "关闭任务栏" }));
+  await user.click(screen.getByRole("link", { name: "文明寝室证据" }));
+
+  const sourceViewer = screen.getByLabelText("原文查看器");
+  const sourceFrame = within(sourceViewer).getByTitle("原文文档");
+  const sourceFrameHtml = getSourceFrameHtml(sourceViewer);
+  expect(sourceFrame).toHaveClass("replay-source-frame");
+  expect(sourceFrameHtml).toContain("data-agent-gate-source-frame");
+  expect(sourceFrameHtml).toContain("width: 100% !important");
+  expect(sourceFrameHtml).toContain("max-width: 100% !important");
+  expect(sourceFrameHtml).toContain("box-sizing: border-box");
+  expect(sourceFrameHtml).toContain("overflow-x: hidden !important");
+  expect(sourceFrameHtml).toContain("background: #ffffff !important");
+  expect(sourceFrameHtml).toContain("padding: 0 !important");
+  expect(sourceFrameHtml).toContain("border-radius: 0 !important");
+  expect(sourceFrameHtml).toContain("box-shadow: none !important");
+  expect(sourceFrameHtml).toContain("overflow-x: hidden !important");
+  expect(sourceFrameHtml).toContain("table-layout: fixed !important");
+  expect(sourceFrameHtml).toContain("white-space: pre-wrap !important");
+  expect(sourceFrameHtml).toContain("overflow-wrap: anywhere !important");
+  expect(sourceFrameHtml).not.toContain("min-width: 1060px !important");
+  expect(sourceFrameHtml).not.toContain("width: 980px !important");
+  expect(sourceFrameHtml).not.toContain("min-width: 980px !important");
+  expect(sourceFrameHtml).toContain('id="p001_b001" class="is-current-evidence" data-current-evidence="true"');
+  expect(sourceFrameHtml).not.toContain("<script>");
+});
+
+it("同一文件内不同 evidence 复用同一个原文文件 tab，只更新定位高亮", async () => {
+  const user = userEvent.setup();
+  const multiFieldDetail = createMultiFieldDetail();
+  const evidenceDetail: TaskDetailData = {
+    ...multiFieldDetail,
+    replay: {
+      ...multiFieldDetail.replay!,
       actions: [
         {
           tool_name: "read",
@@ -649,340 +794,130 @@ it("不同 evidence 会在最右侧 Review 内打开 tab", async () => {
 
   await user.click(await screen.findByRole("button", { name: "关闭任务栏" }));
   await user.click(screen.getByRole("link", { name: "第一条证据" }));
+  await user.click(screen.getByRole("tab", { name: "Review" }));
   await user.click(screen.getByRole("link", { name: "第二条证据" }));
 
-  const review = screen.getByLabelText("Review 面板");
-  expect(within(review).getByRole("tab", { name: "第一条证据" })).toBeInTheDocument();
-  expect(within(review).getByRole("tab", { name: "第二条证据" })).toBeInTheDocument();
-  expect(within(review).getByRole("tabpanel")).toHaveTextContent("evidence://task-001/p001_b002");
-});
+  const rightPanel = screen.getByLabelText("右侧 Review 工作栏");
+  const workspaceTabs = within(rightPanel).getByRole("tablist", { name: "右侧工作栏选项卡" });
+  expect(within(workspaceTabs).getByRole("tab", { name: "sample.pdf" })).toHaveAttribute("aria-selected", "true");
+  expect(within(workspaceTabs).queryByRole("tab", { name: "第一条证据" })).not.toBeInTheDocument();
+  expect(within(workspaceTabs).queryByRole("tab", { name: "第二条证据" })).not.toBeInTheDocument();
+  expect(within(workspaceTabs).getAllByRole("tab")).toHaveLength(2);
+  const sourceViewer = within(rightPanel).getByLabelText("原文查看器");
+  const sourceFrameHtml = getSourceFrameHtml(sourceViewer);
+  expect(sourceFrameHtml).toContain("文明寝室名单");
+  expect(sourceFrameHtml).toContain("1-101、1-102 被列为文明寝室");
+  expect(sourceFrameHtml).toContain('id="p001_b002" class="is-current-evidence" data-current-evidence="true"');
+  expect(sourceFrameHtml).not.toContain("Field value");
+  expect(screen.queryByText("evidence://task-001/p001_b002")).not.toBeInTheDocument();
 
-it("evidence Review tabs 按 task 隔离，不同任务不共享 tab", async () => {
-  const user = userEvent.setup();
-  const firstTaskDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...baseReplay,
-      actions: [
-        {
-          tool_name: "read",
-          reason: "查看 [任务一证据](evidence://task-001/p001_b001)",
-          args: { path: "/001-sample/001-Notice.md" },
-          result: { ok: true, path: "/001-sample/001-Notice.md", kind: "paragraph", text: "task one evidence" }
-        }
-      ]
-    }
-  };
-  const secondTaskDetail: TaskDetailData = {
-    ...createMultiFieldDetail("task-002"),
-    summary: {
-      ...waitingReviewSummary,
-      task_id: "task-002"
-    },
-    replay: {
-      ...baseReplay,
-      task_id: "task-002",
-      actions: [
-        {
-          tool_name: "read",
-          reason: "查看 [任务二证据](evidence://task-002/p001_b010)",
-          args: { path: "/002-sample/Notice.md" },
-          result: { ok: true, path: "/002-sample/Notice.md", kind: "paragraph", text: "task two evidence" }
-        }
-      ]
-    }
-  };
-  const injectedLoadTaskDetail = jest
-    .fn<Promise<TaskDetailData>, [string]>()
-    .mockResolvedValueOnce(firstTaskDetail)
-    .mockResolvedValueOnce(secondTaskDetail);
+  await user.click(within(workspaceTabs).getByRole("button", { name: "关闭 sample.pdf" }));
 
-  const { rerender, listTasks, submitReview } = renderTaskDetail(firstTaskDetail, {
-    loadTaskDetail: injectedLoadTaskDetail,
-    listTasks: async () => [firstTaskDetail.summary, secondTaskDetail.summary]
-  });
-
-  await user.click(await screen.findByRole("button", { name: "关闭任务栏" }));
-  await user.click(screen.getByRole("link", { name: "任务一证据" }));
-  expect(screen.getByRole("tab", { name: "任务一证据" })).toBeInTheDocument();
-
-  rerender(
-    <TaskDetail
-      taskId="task-002"
-      initialSummary={secondTaskDetail.summary}
-      loadTaskDetail={injectedLoadTaskDetail}
-      listTasks={listTasks}
-      submitReview={submitReview}
-    />
-  );
-
-  expect(await screen.findByRole("link", { name: "任务二证据" })).toHaveAttribute(
-    "href",
-    "evidence://task-002/p001_b010"
-  );
-  expect(screen.queryByRole("tab", { name: "任务一证据" })).not.toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "打开 evidence Review" }));
-  expect(screen.getByText("选择一个字段或 evidence 链接查看详情")).toBeInTheDocument();
-});
-
-it("打开左栏会自动关闭字段 Progress，但不会关闭最右侧 evidence Review", async () => {
-  const user = userEvent.setup();
-  const evidenceDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...baseReplay,
-      actions: [
-        {
-          tool_name: "read",
-          reason: "查看 [文明寝室证据](evidence://task-001/p001_b001)",
-          args: { path: "/001-sample/001-Notice.md" },
-          result: { ok: true, path: "/001-sample/001-Notice.md", kind: "paragraph", text: "1-101" }
-        }
-      ]
-    }
-  };
-  renderTaskDetail(evidenceDetail);
-
-  expect(await screen.findByLabelText("任务工作台左侧任务栏")).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "关闭任务栏" }));
-  await user.click(screen.getByRole("link", { name: "文明寝室证据" }));
-  expect(screen.queryByLabelText("任务工作台左侧任务栏")).not.toBeInTheDocument();
+  expect(within(workspaceTabs).queryByRole("tab", { name: "sample.pdf" })).not.toBeInTheDocument();
+  expect(within(workspaceTabs).getByRole("tab", { name: "Review" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByLabelText("Agent 中间工作区")).toBeInTheDocument();
   expect(screen.getByLabelText("字段进度面板")).toBeInTheDocument();
-  expect(screen.getByLabelText("Review 面板")).toBeInTheDocument();
-
-  await user.click(screen.getByRole("button", { name: "打开任务栏" }));
-
-  expect(screen.getByLabelText("任务工作台左侧任务栏")).toBeInTheDocument();
-  expect(screen.queryByLabelText("字段进度面板")).not.toBeInTheDocument();
-  expect(screen.getByLabelText("Review 面板")).toBeInTheDocument();
-
-  await user.click(screen.getByRole("button", { name: "关闭 Review" }));
-
-  expect(screen.getByLabelText("任务工作台左侧任务栏")).toBeInTheDocument();
-  expect(screen.queryByLabelText("字段进度面板")).not.toBeInTheDocument();
-  expect(screen.queryByLabelText("Review 面板")).not.toBeInTheDocument();
 });
 
-it("waiting_review 字段复核提交 revise_and_approve 并刷新最近任务", async () => {
+it("不同文件的 evidence 才会打开不同原文文件 tab", async () => {
   const user = userEvent.setup();
-  window.localStorage.setItem(
-    "agent-gate.recent-tasks",
-    JSON.stringify([
-      {
-        task_id: "task-001",
-        status: "waiting_review",
-        stage: "review",
-        created_at: "2026-04-29T08:00:00Z"
-      }
-    ])
-  );
-  const refreshedSummary: TaskSummary = {
-    ...waitingReviewSummary,
-    status: "completed",
-    stage: "done",
-    needs_review: false
-  };
-  const completedDetail: TaskDetailData = {
+  const multiDocumentDetail: TaskDetailData = {
     ...detailData,
-    summary: refreshedSummary,
-    result: {
-      ...reviewResult,
-      status: "completed",
-      fields: reviewResult.fields.map((field) => ({
-        ...field,
-        final_value: "1-101,1-102,1-103",
-        source: "human",
-        committed: true
-      }))
-    },
-    review: null
-  };
-  const injectedLoadTaskDetail = jest
-    .fn<Promise<TaskDetailData>, [string]>()
-    .mockResolvedValueOnce(detailData)
-    .mockResolvedValueOnce(completedDetail);
-  const submitReview = jest.fn(async () => refreshedSummary);
-
-  renderTaskDetail(detailData, {
-    loadTaskDetail: injectedLoadTaskDetail,
-    submitReview
-  });
-
-  await user.click(await screen.findByRole("button", { name: "关闭任务栏" }));
-  await user.click(screen.getByRole("button", { name: /文明寝室房间号/ }));
-  expect(await screen.findByText("写入字段：文明寝室房间号")).toBeInTheDocument();
-  await user.clear(screen.getByLabelText("文明寝室房间号 复核值"));
-  await user.type(screen.getByLabelText("文明寝室房间号 复核值"), "1-101,1-102,1-103");
-  await user.type(screen.getByLabelText("复核备注"), "人工补充遗漏房间");
-  await user.click(screen.getByRole("button", { name: "提交修正并通过" }));
-
-  await waitFor(() => expect(submitReview).toHaveBeenCalledTimes(1));
-  expect(submitReview).toHaveBeenCalledWith("task-001", {
-    decision: "revise_and_approve",
-    fields: [
-      {
-        field_name: "room_numbers",
-        review_value: "1-101,1-102,1-103"
-      }
-    ],
-    comment: "人工补充遗漏房间",
-    reviewer: "frontend"
-  });
-  await waitFor(() => expect(injectedLoadTaskDetail).toHaveBeenCalledTimes(2));
-  const recentTasks = JSON.parse(window.localStorage.getItem("agent-gate.recent-tasks") ?? "[]");
-  expect(recentTasks[0]).toMatchObject({
-    task_id: "task-001",
-    status: "completed",
-    stage: "done"
-  });
-  expect(recentTasks[0].created_at).toBe("2026-04-29T08:00:00Z");
-});
-
-it("enum 字段复核提交 tagged payload 而不是字符串", async () => {
-  const user = userEvent.setup();
-  const enumVariants = [
-    { name: "Entailment", type: "null", description: "合同文本支持该判断" },
-    { name: "Contradiction", type: "null", description: "合同文本否定该判断" },
-    { name: "NotMentioned", type: "null", description: "合同文本没有提到该判断" }
-  ];
-  const enumValue = { variant: "Entailment", value: null };
-  const enumDetail: TaskDetailData = {
-    ...detailData,
-    result: {
-      ...reviewResult,
-      fields: [
-        {
-          ...reviewResult.fields[0],
-          field_name: "nda_disclosure",
-          display_name: "保密义务判断",
-          agent_value: enumValue,
-          field_type: "enum",
-          variants: enumVariants
-        }
-      ]
-    },
     replay: {
       ...baseReplay,
-      result: { nda_disclosure: enumValue },
+      documents: [
+        { document_id: "doc-1", filename: "sample-a.pdf" },
+        { document_id: "doc-2", filename: "sample-b.pdf" }
+      ],
       actions: [
         {
-          tool_name: "write_field",
-          reason: "合同文本支持保密义务判断",
-          args: {
-            field_id: "nda_disclosure",
-            value: enumValue,
-            final_evidence: []
-          },
-          result: {
-            ok: true,
-            field: {
-              field_id: "nda_disclosure",
-              status: "resolved",
-              value: enumValue,
-              evidence: [],
-              reason: "合同文本支持保密义务判断"
-            }
-          }
-        }
-      ]
-    },
-    review: {
-      ...detailData.review!,
-      fields: [
-        {
-          ...reviewFields[0],
-          field_name: "nda_disclosure",
-          display_name: "保密义务判断",
-          agent_value: enumValue,
-          field_type: "enum",
-          variants: enumVariants
+          tool_name: "read",
+          reason: "查看 [第一份](evidence://001/p001_b001) 和 [第二份](evidence://002/p001_b002)",
+          args: { path: "/001-sample/001-Notice.md" },
+          result: { ok: true, path: "/001-sample/001-Notice.md", kind: "paragraph", text: "1-101、1-102 被列为文明寝室" }
         }
       ]
     }
   };
-  const submitReview = jest.fn(async (): Promise<TaskSummary> => ({
-    ...waitingReviewSummary,
-    status: "completed",
-    stage: "done",
-    needs_review: false
-  }));
-
-  renderTaskDetail(enumDetail, { submitReview });
+  renderTaskDetail(multiDocumentDetail);
 
   await user.click(await screen.findByRole("button", { name: "关闭任务栏" }));
-  await user.click(screen.getByRole("button", { name: /保密义务判断/ }));
-  expect(await screen.findByText("写入字段：保密义务判断")).toBeInTheDocument();
-  expect(screen.getByLabelText("保密义务判断 枚举选项")).toHaveValue("Entailment");
-  await user.selectOptions(screen.getByLabelText("保密义务判断 枚举选项"), "Contradiction");
-  await user.click(screen.getByRole("button", { name: "提交修正并通过" }));
+  await user.click(screen.getByRole("link", { name: "第一份" }));
+  await user.click(screen.getByRole("link", { name: "第二份" }));
 
-  await waitFor(() => expect(submitReview).toHaveBeenCalledTimes(1));
-  expect(submitReview).toHaveBeenCalledWith("task-001", {
-    decision: "revise_and_approve",
-    fields: [
-      {
-        field_name: "nda_disclosure",
-        review_value: { variant: "Contradiction", value: null }
-      }
-    ],
-    comment: "",
-    reviewer: "frontend"
-  });
+  const workspaceTabs = within(screen.getByLabelText("右侧 Review 工作栏")).getByRole("tablist", { name: "右侧工作栏选项卡" });
+  expect(within(workspaceTabs).getByRole("tab", { name: "sample-a.pdf" })).toBeInTheDocument();
+  expect(within(workspaceTabs).getByRole("tab", { name: "sample-b.pdf" })).toHaveAttribute("aria-selected", "true");
+  expect(within(workspaceTabs).getAllByRole("tab")).toHaveLength(3);
 });
 
-it("reject 字段只显示拒绝路由，不提供人工修改入口", async () => {
-  const rejectedDetail: TaskDetailData = {
-    ...detailData,
-    summary: {
-      ...waitingReviewSummary,
-      status: "rejected",
-      route: "reject",
-      needs_review: false
-    },
-    result: {
-      ...reviewResult,
-      fields: [
-        {
-          ...reviewResult.fields[0],
-          route: "reject",
-          route_reason: "证据不足，拒绝写入"
-        }
-      ]
-    },
-    replay: {
-      ...baseReplay,
-      actions: [
-        {
-          tool_name: "write_field",
-          reason: "证据不足",
-          args: {
-            field_id: "room_numbers",
-            value: "1-101"
-          },
-          result: {
-            ok: true,
-            field: {
-              field_id: "room_numbers",
-              status: "rejected",
-              value: "1-101",
-              evidence: [],
-              reason: "证据不足"
-            }
-          }
-        }
-      ]
-    },
-    review: null
-  };
-
-  renderTaskDetail(rejectedDetail);
+it("右侧原文栏可以拉伸到更宽，便于查看完整文件", async () => {
+  renderTaskDetail();
 
   await userEvent.click(await screen.findByRole("button", { name: "关闭任务栏" }));
-  await userEvent.click(screen.getByRole("button", { name: /文明寝室房间号/ }));
-  expect(await screen.findByText("写入字段：文明寝室房间号")).toBeInTheDocument();
-  expect(screen.getAllByText("reject").length).toBeGreaterThan(0);
-  expect(screen.queryByLabelText("文明寝室房间号 复核值")).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "提交修正并通过" })).not.toBeInTheDocument();
+
+  const rightResizeHandle = screen.getByRole("separator", { name: "调整右侧栏宽度" });
+  expect(rightResizeHandle).toHaveAttribute("aria-valuemax", "920");
+});
+
+it("点击 read 和 add_candidate_evidence 工具行会打开对应顶层原文 tab", async () => {
+  const user = userEvent.setup();
+  const toolJumpDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      actions: [
+        {
+          tool_name: "read",
+          reason: "读取房间号所在段落",
+          args: { path_id: "evidence://task-001/p001_b001" },
+          result: {
+            ok: true,
+            locator: "evidence://task-001/p001_b001",
+            path_id: "p001_b001",
+            kind: "paragraph",
+            text: "1-101、1-102 被列为文明寝室"
+          }
+        },
+        {
+          tool_name: "add_candidate_evidence",
+          reason: "保存房间号候选证据",
+          args: { field_id: "room_numbers", path_id: "evidence://task-001/p001_b001" },
+          result: {
+            ok: true,
+            field_id: "room_numbers",
+            candidate_evidence: ["evidence://task-001/p001_b001"]
+          }
+        }
+      ]
+    }
+  };
+  renderTaskDetail(toolJumpDetail);
+
+  expect(await screen.findByLabelText("任务工作台左侧任务栏")).toBeInTheDocument();
+  const readToolLink = screen.getByRole("link", { name: "tool read" });
+  expect(readToolLink).toHaveAttribute("href", "evidence://task-001/p001_b001");
+  await user.click(readToolLink);
+
+  const rightPanel = screen.getByLabelText("右侧 Review 工作栏");
+  expect(within(rightPanel).getByRole("tab", { name: "sample.pdf" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByLabelText("Agent 中间工作区")).toBeInTheDocument();
+  const sourceViewer = within(rightPanel).getByLabelText("原文查看器");
+  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "p001_b001");
+  let sourceFrameHtml = getSourceFrameHtml(sourceViewer);
+  expect(sourceFrameHtml).toContain("文明寝室名单");
+  expect(sourceFrameHtml).toContain("一号楼包含文明寝室");
+  expect(sourceFrameHtml).toContain('id="p001_b001" class="is-current-evidence" data-current-evidence="true"');
+
+  await user.click(within(rightPanel).getByRole("tab", { name: "Review" }));
+  const addCandidateEvidenceToolLink = screen.getByRole("link", { name: "tool add_candidate_evidence" });
+  expect(addCandidateEvidenceToolLink).toHaveAttribute("href", "evidence://task-001/p001_b001");
+  await user.click(addCandidateEvidenceToolLink);
+
+  expect(within(screen.getByLabelText("右侧 Review 工作栏")).getByRole("tab", { name: "sample.pdf" })).toHaveAttribute("aria-selected", "true");
+  expect(within(screen.getByLabelText("右侧 Review 工作栏")).getByLabelText("原文查看器")).toHaveAttribute("data-highlight-selector", "p001_b001");
+  sourceFrameHtml = getSourceFrameHtml(within(screen.getByLabelText("右侧 Review 工作栏")).getByLabelText("原文查看器"));
+  expect(sourceFrameHtml).toContain('id="p001_b001" class="is-current-evidence" data-current-evidence="true"');
 });
 
 it("failed 任务会展示 backend 返回的失败原因", async () => {
@@ -990,11 +925,8 @@ it("failed 任务会展示 backend 返回的失败原因", async () => {
     task_id: "task-001",
     status: "failed",
     stage: "extraction",
-    route: null,
-    route_reason: null,
     has_result: false,
     has_trace: false,
-    needs_review: false,
     error_message: "OCR worker crashed"
   };
   renderTaskDetail({
@@ -1002,7 +934,6 @@ it("failed 任务会展示 backend 返回的失败原因", async () => {
     result: null,
     trace: null,
     replay: null,
-    review: null,
     audit: null
   });
 
@@ -1015,18 +946,17 @@ it("failed 但已有 replay 的任务仍展示 Agent 工作区", async () => {
   const failedWithReplay: TaskDetailData = {
     ...detailData,
     summary: {
-      ...waitingReviewSummary,
+      ...completedSummary,
       status: "failed",
-      stage: "route_policy",
-      error_message: "字段提交失败"
-    },
-    review: null
+      stage: "extraction",
+      error_message: "字段抽取失败"
+    }
   };
 
   renderTaskDetail(failedWithReplay);
 
   expect(await screen.findByText("任务失败")).toBeInTheDocument();
-  expect(screen.getByText("字段提交失败")).toBeInTheDocument();
+  expect(screen.getByText("字段抽取失败")).toBeInTheDocument();
   expect(screen.getByLabelText("Agent 中间工作区")).toBeInTheDocument();
   expect(screen.getByLabelText("Agent 文字流")).toBeInTheDocument();
 });

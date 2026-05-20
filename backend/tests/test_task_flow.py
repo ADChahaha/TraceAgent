@@ -9,7 +9,6 @@ from fastapi.testclient import TestClient
 from backend.core.config import BackendSettings
 from backend.main import create_app
 from backend.services.agent_process import build_field_agent_process
-from backend.services.route_policy import build_route_policy_request
 
 
 TASK_SPEC = {
@@ -27,11 +26,9 @@ TASK_SPEC = {
 
 
 class FakeAgentClient:
-    def __init__(self, route: str = "accept"):
-        self.route = route
+    def __init__(self):
         self.document_calls: list[dict[str, Any]] = []
         self.extraction_calls: list[dict[str, Any]] = []
-        self.route_policy_calls: list[dict[str, Any]] = []
 
     def process_document(
         self,
@@ -192,39 +189,6 @@ class FakeAgentClient:
             },
         }
 
-    def evaluate_route_policy(
-        self,
-        *,
-        task_spec: dict[str, Any],
-        field_outputs: list[dict[str, Any]],
-        refs_with_text: list[dict[str, Any]],
-        field_processes: list[dict[str, Any]],
-        metadata: dict[str, Any],
-    ) -> dict[str, Any]:
-        self.route_policy_calls.append(
-            {
-                "task_spec": task_spec,
-                "field_outputs": field_outputs,
-                "refs_with_text": refs_with_text,
-                "field_processes": field_processes,
-                "metadata": metadata,
-            }
-        )
-        return {
-            "status": "completed",
-            "failure_reason": None,
-            "field_routes": [
-                {
-                    "field_name": "room_numbers",
-                    "route": self.route,
-                    "route_reason": "测试 route policy 输出",
-                    "needs_review": self.route != "accept",
-                }
-            ],
-        "warnings": [],
-        "metadata": {"source": "fake-agent"},
-    }
-
 
 class FakeFailedExtractionAgentClient(FakeAgentClient):
     def extract_fields(
@@ -284,7 +248,7 @@ class FakeFailedExtractionAgentClient(FakeAgentClient):
         }
 
 
-class FakeMissingRequiredFieldRouteClient(FakeAgentClient):
+class FakeMissingRequiredFieldClient(FakeAgentClient):
     def extract_fields(
         self,
         *,
@@ -310,42 +274,9 @@ class FakeMissingRequiredFieldRouteClient(FakeAgentClient):
             },
         }
 
-    def evaluate_route_policy(
-        self,
-        *,
-        task_spec: dict[str, Any],
-        field_outputs: list[dict[str, Any]],
-        refs_with_text: list[dict[str, Any]],
-        field_processes: list[dict[str, Any]],
-        metadata: dict[str, Any],
-    ) -> dict[str, Any]:
-        self.route_policy_calls.append(
-            {
-                "task_spec": task_spec,
-                "field_outputs": field_outputs,
-                "refs_with_text": refs_with_text,
-                "field_processes": field_processes,
-                "metadata": metadata,
-            }
-        )
-        return {
-            "status": "completed",
-            "failure_reason": None,
-            "field_routes": [
-                {
-                    "field_name": "room_numbers",
-                    "route": "review",
-                    "route_reason": "字段 room_numbers 是 required 字段，但 file_extraction_agent 没有返回该字段，需要人工复核或补录。",
-                    "needs_review": True,
-                }
-            ],
-            "warnings": [],
-            "metadata": {"source": "fake-agent"},
-        }
 
-
-def build_app(tmp_path: Path, route: str = "accept"):
-    fake_agent = FakeAgentClient(route=route)
+def build_app(tmp_path: Path):
+    fake_agent = FakeAgentClient()
     app = create_app(
         settings=BackendSettings(database_path=tmp_path / "backend.sqlite3"),
         agent_client=fake_agent,
@@ -384,392 +315,8 @@ def test_failed_task_summary_returns_error_message(tmp_path: Path):
         assert summary["error_message"] == "resolution 执行失败: lookup_blocks action exceeded limit"
 
 
-def test_route_policy_request_counts_broad_copy_candidates_in_broad_stage():
-    trace = {
-        "field_name": "room_numbers",
-        "evidence_json": json.dumps({"refs": [], "texts": []}, ensure_ascii=False),
-        "actions_json": json.dumps(
-            [
-                {
-                    "action_type": "add_broad_candidate",
-                    "metadata": {"stage": "broad"},
-                },
-                {
-                    "action_type": "copy_field_candidates",
-                    "metadata": {
-                        "stage": "broad",
-                        "source_field_name": "room_rows",
-                        "copied_candidate_count": 2,
-                    },
-                },
-                {
-                    "action_type": "add_resolution_candidate",
-                    "metadata": {"stage": "resolution"},
-                },
-                {
-                    "action_type": "count_field_candidates",
-                    "metadata": {
-                        "stage": "resolution",
-                        "counted_field_name": "room_rows",
-                        "count": 2,
-                    },
-                },
-                {
-                    "action_type": "final_decision",
-                    "metadata": {"stage": "resolution"},
-                },
-            ],
-            ensure_ascii=False,
-        ),
-        "reason": "候选证据支持字段值",
-        "failure_reason": None,
-    }
-
-    request = build_route_policy_request(
-        task_spec=TASK_SPEC,
-        extracted_fields=[
-            {
-                "field_name": "room_numbers",
-                "agent_status": "resolved",
-                "agent_value_json": json.dumps("1-101,1-102", ensure_ascii=False),
-                "reason": "候选证据支持字段值",
-                "failure_reason": None,
-            }
-        ],
-        field_traces=[trace],
-        metadata={},
-    )
-
-    field_process = request["field_processes"][0]
-    assert field_process["broad_extraction"]["candidate_action_count"] == 2
-    assert field_process["field_resolution"]["candidate_action_count"] == 1
-    assert field_process["field_resolution"]["counted_fields"] == [
-        {"field_name": "room_rows", "count": 2}
-    ]
-
-
-def test_route_policy_request_summarizes_tool_name_actions():
-    trace = {
-        "field_name": "academic_paper_titles",
-        "evidence_json": json.dumps({"refs": [], "texts": []}, ensure_ascii=False),
-        "actions_json": json.dumps(
-            [
-                {
-                    "tool_name": "table_extraction",
-                    "args": {
-                        "table_id": "p002_b001",
-                        "sql": "SELECT \"论文题目\" FROM data WHERE \"作品类型\" = '学术论文'",
-                        "reason": "筛选作品类型为学术论文的行",
-                    },
-                },
-                {
-                    "tool_name": "set_field",
-                    "args": {
-                        "name": "academic_paper_titles",
-                        "status": "resolved",
-                        "reason": "写入学术论文题目",
-                    },
-                },
-            ],
-            ensure_ascii=False,
-        ),
-        "reason": "写入学术论文题目",
-        "failure_reason": None,
-    }
-
-    request = build_route_policy_request(
-        task_spec={
-            "task_name": "extract_academic_paper_titles",
-            "fields": [
-                {
-                    "field_name": "academic_paper_titles",
-                    "display_name": "学术论文题目",
-                    "type": "list[string]",
-                    "required": True,
-                }
-            ],
-        },
-        extracted_fields=[
-            {
-                "field_name": "academic_paper_titles",
-                "agent_status": "resolved",
-                "agent_value_json": json.dumps(["论文 A"], ensure_ascii=False),
-                "reason": "写入学术论文题目",
-                "failure_reason": None,
-            }
-        ],
-        field_traces=[trace],
-        metadata={},
-    )
-
-    field_process = request["field_processes"][0]
-    assert field_process["broad_extraction"]["search_queries"] == [
-        "SELECT \"论文题目\" FROM data WHERE \"作品类型\" = '学术论文'"
-    ]
-    assert field_process["broad_extraction"]["candidate_action_count"] == 1
-    assert field_process["field_resolution"]["final_decision_used"] is True
-    assert field_process["field_resolution"]["reason"] == "写入学术论文题目"
-
-
-def test_route_policy_request_preserves_table_and_query_audit_summaries():
-    trace = {
-        "field_name": "academic_paper_titles",
-        "evidence_json": json.dumps({"refs": [], "texts": []}, ensure_ascii=False),
-        "actions_json": json.dumps(
-            [
-                {
-                    "tool_name": "table_extraction",
-                    "args": {
-                        "table_id": "p002_b001",
-                        "sql": "SELECT \"论文题目\" FROM data WHERE \"作品类型\" = '学术论文'",
-                        "reason": "筛选作品类型为学术论文的行",
-                    },
-                    "result": {
-                        "table_id": "p002_b001",
-                        "columns": ["论文题目"],
-                        "row_count": 14,
-                        "rows": [
-                            {
-                                "row_id": "p002_b001_tr_001",
-                                "values": {"论文题目": "论文 A"},
-                                "evidence_ids": ["p002_b001", "p002_b001_tr_001"],
-                            }
-                        ],
-                        "table_audit": {
-                            "row_count": 14,
-                            "column_count": 3,
-                            "blank_cells": {
-                                "total_blank_cell_count": 1,
-                                "by_column": [
-                                    {
-                                        "column": "作品类型",
-                                        "blank_count": 1,
-                                        "blank_row_ids_sample": ["p002_b001_tr_007"],
-                                    }
-                                ],
-                                "cell_texts": ["不应该进入 route policy"],
-                            },
-                            "structure_signals": [],
-                        },
-                        "query_audit": {
-                            "summary": "返回 14 行；筛选列“作品类型”空白 1 行；非空分布：学术论文 14；输出列“论文题目”无空值。",
-                            "predicate_columns": [
-                                {
-                                    "column": "作品类型",
-                                    "literal": "学术论文",
-                                    "blank_count": 1,
-                                    "blank_row_ids_sample": ["p002_b001_tr_007"],
-                                    "row_values": {"作品类型": "", "论文题目": "不应该进入 route policy"},
-                                }
-                            ],
-                        },
-                    },
-                },
-                {
-                    "tool_name": "set_field",
-                    "args": {
-                        "name": "academic_paper_titles",
-                        "status": "resolved",
-                        "reason": "写入学术论文题目",
-                    },
-                },
-            ],
-            ensure_ascii=False,
-        ),
-        "reason": "写入学术论文题目",
-        "failure_reason": None,
-    }
-
-    request = build_route_policy_request(
-        task_spec={
-            "task_name": "extract_academic_paper_titles",
-            "fields": [
-                {
-                    "field_name": "academic_paper_titles",
-                    "display_name": "学术论文题目",
-                    "type": "list[string]",
-                    "required": True,
-                }
-            ],
-        },
-        extracted_fields=[
-            {
-                "field_name": "academic_paper_titles",
-                "agent_status": "resolved",
-                "agent_value_json": json.dumps(["论文 A"], ensure_ascii=False),
-                "reason": "写入学术论文题目",
-                "failure_reason": None,
-            }
-        ],
-        field_traces=[trace],
-        metadata={},
-    )
-
-    diagnostics = request["field_processes"][0]["broad_extraction"]["diagnostics"]
-    assert diagnostics == [
-        {
-            "source": "table_extraction",
-            "table_id": "p002_b001",
-            "query": "SELECT \"论文题目\" FROM data WHERE \"作品类型\" = '学术论文'",
-            "quality_type": "table_audit",
-            "issues": [],
-            "summary": "表格 14 行；3 列；空白单元格：作品类型 空白 1 行。",
-        },
-        {
-            "source": "table_extraction",
-            "table_id": "p002_b001",
-            "query": "SELECT \"论文题目\" FROM data WHERE \"作品类型\" = '学术论文'",
-            "quality_type": "query_audit",
-            "issues": [],
-            "summary": "返回 14 行；筛选列“作品类型”空白 1 行；非空分布：学术论文 14；输出列“论文题目”无空值。",
-        },
-    ]
-    assert "status" not in diagnostics[0]
-    assert "status" not in diagnostics[1]
-    assert "row_values" not in json.dumps(diagnostics, ensure_ascii=False)
-    assert "不应该进入 route policy" not in json.dumps(diagnostics, ensure_ascii=False)
-
-
-def test_route_policy_request_preserves_query_audit_summary_without_raw_samples():
-    trace = {
-        "field_name": "civilized_dormitory_names",
-        "evidence_json": json.dumps({"refs": [], "texts": []}, ensure_ascii=False),
-        "actions_json": json.dumps(
-            [
-                {
-                    "tool_name": "table_extraction",
-                    "args": {
-                        "table_id": "p001_b000",
-                        "sql": "SELECT \"房间\" FROM data WHERE \"模范/文明\" = '文明寝室'",
-                        "reason": "筛选类别为文明寝室的行",
-                    },
-                    "result": {
-                        "table_id": "p001_b000",
-                        "columns": ["房间"],
-                        "row_count": 12,
-                        "query_audit": {
-                            "summary": "返回 12 行；筛选列“模范/文明”空白 149 行；非空分布：文明寝室 12，模范寝室 5；输出列“房间”无空值。",
-                            "predicate_columns": [
-                                {
-                                    "column": "模范/文明",
-                                    "literal": "文明寝室",
-                                    "blank_count": 149,
-                                    "blank_row_ids_sample": ["p001_b000_tr_001"],
-                                    "non_empty_distribution": [
-                                        {"value": "文明寝室", "count": 12},
-                                        {"value": "模范寝室", "count": 5},
-                                    ],
-                                }
-                            ],
-                        },
-                    },
-                },
-                {
-                    "tool_name": "set_field",
-                    "args": {
-                        "name": "civilized_dormitory_names",
-                        "status": "resolved",
-                        "reason": "使用“模范/文明 = 文明寝室”筛出 12 行；空白行表示未获评普通寝室。",
-                    },
-                },
-            ],
-            ensure_ascii=False,
-        ),
-        "reason": "使用“模范/文明 = 文明寝室”筛出 12 行；空白行表示未获评普通寝室。",
-        "failure_reason": None,
-    }
-
-    request = build_route_policy_request(
-        task_spec={
-            "task_name": "civilized_model_dormitory_names",
-            "fields": [
-                {
-                    "field_name": "civilized_dormitory_names",
-                    "display_name": "文明寝室名称",
-                    "type": "list[string]",
-                    "required": True,
-                }
-            ],
-        },
-        extracted_fields=[
-            {
-                "field_name": "civilized_dormitory_names",
-                "agent_status": "resolved",
-                "agent_value_json": json.dumps(["212", "214"], ensure_ascii=False),
-                "reason": "使用“模范/文明 = 文明寝室”筛出 12 行；空白行表示未获评普通寝室。",
-                "failure_reason": None,
-            }
-        ],
-        field_traces=[trace],
-        metadata={},
-    )
-
-    diagnostics = request["field_processes"][0]["broad_extraction"]["diagnostics"]
-    assert diagnostics == [
-        {
-            "source": "table_extraction",
-            "table_id": "p001_b000",
-            "query": "SELECT \"房间\" FROM data WHERE \"模范/文明\" = '文明寝室'",
-            "quality_type": "query_audit",
-            "issues": [],
-            "summary": "返回 12 行；筛选列“模范/文明”空白 149 行；非空分布：文明寝室 12，模范寝室 5；输出列“房间”无空值。",
-        }
-    ]
-    assert "status" not in diagnostics[0]
-    assert "blank_row_ids_sample" not in json.dumps(diagnostics, ensure_ascii=False)
-    assert request["field_processes"][0]["field_resolution"]["reason"] == (
-        "使用“模范/文明 = 文明寝室”筛出 12 行；空白行表示未获评普通寝室。"
-    )
-
-
-def test_route_policy_request_backfills_ref_text_from_document_blocks():
-    trace = {
-        "field_name": "room_numbers",
-        "evidence_json": json.dumps(
-            {
-                "refs": [{"block_id": "dp-p-1"}],
-                "texts": [],
-                "status": "resolved",
-            },
-            ensure_ascii=False,
-        ),
-        "actions_json": json.dumps([], ensure_ascii=False),
-        "reason": "候选证据支持字段值",
-        "failure_reason": None,
-    }
-
-    request = build_route_policy_request(
-        task_spec=TASK_SPEC,
-        extracted_fields=[
-            {
-                "field_name": "room_numbers",
-                "agent_status": "resolved",
-                "agent_value_json": json.dumps("1-101,1-102", ensure_ascii=False),
-                "reason": "候选证据支持字段值",
-                "failure_reason": None,
-            }
-        ],
-        field_traces=[trace],
-        metadata={},
-        block_lookup={
-            "dp-p-1": {
-                "document_id": "doc_1",
-                "block_id": "dp-p-1",
-                "text": "1-101、1-102 被列为文明寝室",
-                "page_no": 2,
-                "kind": "text",
-            }
-        },
-    )
-
-    ref = request["refs_with_text"][0]["refs"][0]
-    assert ref["text"] == "1-101、1-102 被列为文明寝室"
-    assert ref["document_id"] == "doc_1"
-    assert ref["page"] == 2
-
-
 def test_create_task_returns_pending_before_background_pipeline_finishes(tmp_path: Path):
-    app, fake_agent = build_app(tmp_path, route="accept")
+    app, fake_agent = build_app(tmp_path)
 
     with TestClient(app) as client:
         response = client.post(
@@ -794,7 +341,7 @@ def test_create_task_returns_pending_before_background_pipeline_finishes(tmp_pat
 
 
 def test_list_tasks_returns_latest_db_tasks_for_workspace(tmp_path: Path):
-    app, _fake_agent = build_app(tmp_path, route="review")
+    app, _fake_agent = build_app(tmp_path)
 
     with TestClient(app) as client:
         first_response = client.post(
@@ -828,15 +375,16 @@ def test_list_tasks_returns_latest_db_tasks_for_workspace(tmp_path: Path):
             second_response.json()["task_id"],
             first_response.json()["task_id"],
         ]
-        assert payload["tasks"][0]["status"] == "waiting_review"
-        assert payload["tasks"][0]["route"] == "review"
+        assert payload["tasks"][0]["status"] == "completed"
+        assert "route" not in payload["tasks"][0]
+        assert "route_reason" not in payload["tasks"][0]
         assert payload["tasks"][0]["has_result"] is True
         assert payload["tasks"][0]["has_trace"] is True
-        assert payload["tasks"][0]["needs_review"] is True
+        assert "needs_review" not in payload["tasks"][0]
 
 
-def test_create_task_accept_route_commits_agent_fields(tmp_path: Path):
-    app, fake_agent = build_app(tmp_path, route="accept")
+def test_create_task_commits_resolved_agent_fields_without_routing(tmp_path: Path):
+    app, fake_agent = build_app(tmp_path)
 
     with TestClient(app) as client:
         response = client.post(
@@ -859,24 +407,30 @@ def test_create_task_accept_route_commits_agent_fields(tmp_path: Path):
         task_summary = task_response.json()
         assert task_summary["status"] == "completed"
         assert task_summary["stage"] == "done"
-        assert task_summary["needs_review"] is False
-        assert task_summary["route"] == "accept"
+        assert "needs_review" not in task_summary
+        assert "route" not in task_summary
+        assert "route_reason" not in task_summary
 
         result_response = client.get(f"/tasks/{task_id}/result")
         assert result_response.status_code == 200
-        result_field = result_response.json()["fields"][0]
+        result_payload = result_response.json()
+        assert "route" not in result_payload
+        result_field = result_payload["fields"][0]
         assert result_field["field_name"] == "room_numbers"
         assert result_field["agent_value"] == "1-101,1-102"
         assert result_field["final_value"] == "1-101,1-102"
         assert result_field["source"] == "agent"
         assert result_field["committed"] is True
+        assert "route" not in result_field
 
         audit_response = client.get(f"/tasks/{task_id}/audit")
         assert audit_response.status_code == 200
         commit = audit_response.json()["field_commits"][0]
         assert commit["field_name"] == "room_numbers"
-        assert commit["route"] == "accept"
-        assert commit["reviewed"] is False
+        assert "route" not in commit
+        assert "reviewed" not in commit
+        assert "review_decision" not in commit
+        assert "review_value" not in commit
         assert commit["used_global_lookup"] is False
         assert commit["used_validation_rule"] is False
         assert commit["action_types"] == [
@@ -909,36 +463,10 @@ def test_create_task_accept_route_commits_agent_fields(tmp_path: Path):
         extract_call = fake_agent.extraction_calls[0]
         assert extract_call["task_spec"] == TASK_SPEC
         assert "dp-p-1" in extract_call["html"]
-        route_call = fake_agent.route_policy_calls[0]
-        assert route_call["field_outputs"] == [
-            {"field_name": "room_numbers", "status": "resolved", "value": "1-101,1-102"}
-        ]
-        assert route_call["refs_with_text"][0]["refs"][0]["text"] == "1-101、1-102 被列为文明寝室"
-        assert route_call["field_processes"] == [
-            {
-                "field_name": "room_numbers",
-                "broad_extraction": {
-                    "status": "enough_evidence",
-                    "search_queries": ["文明寝室 OR 房间号"],
-                    "candidate_action_count": 1,
-                    "counted_fields": [],
-                    "finish_reason": "候选足够，结束 broad",
-                },
-                "field_resolution": {
-                    "status": "resolved",
-                    "search_queries": [],
-                    "candidate_action_count": 0,
-                    "counted_fields": [],
-                    "final_decision_used": True,
-                    "reason": "候选证据支持字段值",
-                    "failure_reason": None,
-                },
-            }
-        ]
 
 
 def test_create_task_accepts_multiple_files_and_merges_document_blocks(tmp_path: Path):
-    app, fake_agent = build_app(tmp_path, route="accept")
+    app, fake_agent = build_app(tmp_path)
 
     with TestClient(app) as client:
         response = client.post(
@@ -978,7 +506,6 @@ def test_create_task_accepts_multiple_files_and_merges_document_blocks(tmp_path:
         assert [step["agent"] for step in steps] == [
             "document_processor",
             "file_extraction_agent",
-            "route_policy_agent",
         ]
         assert steps[0]["stage"] == "document_processing"
         assert steps[0]["status"] == "completed"
@@ -999,7 +526,6 @@ def test_create_task_accepts_multiple_files_and_merges_document_blocks(tmp_path:
             "broad_extraction",
             "field_resolution",
             "final_result",
-            "route_validation",
         ]
         assert process_steps[0]["title"] == "第一步 broad extraction"
         assert process_steps[0]["evidence"]["status"] == "candidate_resolved"
@@ -1028,45 +554,24 @@ def test_create_task_accepts_multiple_files_and_merges_document_blocks(tmp_path:
         ]
         assert "执行 final_decision：候选证据支持字段值，参与最终定案。" in process_steps[1]["notes"]
         assert process_steps[1]["actions"][0]["action_type"] == "final_decision"
-        assert process_steps[2]["title"] == "第三步 agent result（route 前）"
+        assert process_steps[2]["title"] == "第三步 agent result"
         assert process_steps[2]["value"] == "1-101,1-102"
         assert process_steps[2]["reason"] == "候选证据支持字段值"
-        assert process_steps[3]["title"] == "第四步 route validation"
-        assert process_steps[3]["status"] == "accept"
-        assert process_steps[3]["route"] == "accept"
-        assert process_steps[3]["needs_review"] is False
-        assert process_steps[3]["reason"] == "测试 route policy 输出"
         assert steps[1]["field_decisions"][0]["actions"][1]["action_type"] == "add_broad_candidate"
         assert steps[1]["field_decisions"][0]["actions"][1]["message"] == "召回文明寝室房间号候选"
-        assert steps[2]["stage"] == "route_policy"
-        assert steps[2]["status"] == "completed"
-        assert steps[2]["summary"]["routes"] == {
-            "accept": 1,
-            "review": 0,
-            "reject": 0,
-        }
-        assert steps[2]["routes"] == [
-            {
-                "field_name": "room_numbers",
-                "route": "accept",
-                "needs_review": False,
-                "route_reason": "测试 route policy 输出",
-            }
-        ]
         trace_field = trace_response.json()["fields"][0]
         assert trace_field["process_steps"][0]["stage"] == "broad_extraction"
         assert trace_field["process_steps"][1]["stage"] == "field_resolution"
         assert trace_field["process_steps"][2]["stage"] == "final_result"
-        assert trace_field["process_steps"][3]["stage"] == "route_validation"
+        assert len(trace_field["process_steps"]) == 3
 
         agent_trace = trace_response.json()["agent_trace"]
         assert [event["agent"] for event in agent_trace] == [
             "document_processor",
             "document_processor",
             "file_extraction_agent",
-            "route_policy_agent",
         ]
-        assert [event["sequence"] for event in agent_trace] == [1, 2, 3, 4]
+        assert [event["sequence"] for event in agent_trace] == [1, 2, 3]
         assert agent_trace[0]["request"]["filename"] == "sample.pdf"
         assert agent_trace[0]["request"]["file_type"] == "pdf"
         assert agent_trace[0]["request"]["upload_size_bytes"] == len(b"%PDF-1.4 fake")
@@ -1082,120 +587,10 @@ def test_create_task_accepts_multiple_files_and_merges_document_blocks(tmp_path:
         assert "evidence" not in agent_trace[2]["response"]["result"]["fields"][0]
         assert agent_trace[2]["response"]["trace"]["fields"][0]["actions"][1]["action_type"] == "add_broad_candidate"
         assert agent_trace[2]["trace"]["fields"][0]["field_name"] == "room_numbers"
-        assert agent_trace[3]["request"]["field_outputs"] == [
-            {"field_name": "room_numbers", "status": "resolved", "value": "1-101,1-102"}
-        ]
-        assert agent_trace[3]["request"]["field_processes"][0]["broad_extraction"]["search_queries"] == [
-            "文明寝室 OR 房间号"
-        ]
-        assert "refs" not in agent_trace[3]["request"]["field_processes"][0]["broad_extraction"]
-        assert agent_trace[3]["response"]["field_routes"][0]["route"] == "accept"
 
 
-def test_review_route_returns_handoff_and_accepts_revised_value(tmp_path: Path):
-    app, fake_agent = build_app(tmp_path, route="review")
-
-    with TestClient(app) as client:
-        response = client.post(
-            "/tasks",
-            data={
-                "task_type": "civilized_dormitory",
-                "task_spec": json.dumps(TASK_SPEC, ensure_ascii=False),
-            },
-            files={
-                "file": (
-                    "sample.pdf",
-                    b"%PDF-1.4 fake",
-                    "application/pdf",
-                )
-            },
-        )
-
-        assert response.status_code == 200
-        created = response.json()
-        assert created["status"] == "pending"
-        assert created["stage"] == "uploaded"
-        task_id = created["task_id"]
-
-        task_response = client.get(f"/tasks/{task_id}")
-        assert task_response.status_code == 200
-        task_summary = task_response.json()
-        assert task_summary["status"] == "waiting_review"
-        assert task_summary["stage"] == "review"
-
-        review_response = client.get(f"/tasks/{task_id}/review")
-        assert review_response.status_code == 200
-        handoff = review_response.json()
-        assert handoff["route"] == "review"
-        assert handoff["fields"][0]["needs_review"] is True
-        assert handoff["fields"][0]["evidence_texts"] == ["1-101、1-102 被列为文明寝室"]
-        assert handoff["fields"][0]["actions"] == [
-            "search_grep",
-            "add_broad_candidate",
-            "finish_broad",
-            "final_decision",
-        ]
-        assert handoff["fields"][0]["agent_process"]["actions"][0]["message"] == "文明寝室 OR 房间号"
-        assert handoff["fields"][0]["agent_process"]["process_steps"][0]["stage"] == "broad_extraction"
-        assert handoff["fields"][0]["agent_process"]["process_steps"][1]["actions"][0]["action_type"] == "final_decision"
-        assert handoff["fields"][0]["agent_process"]["process_steps"][2]["value"] == "1-101,1-102"
-        assert handoff["fields"][0]["agent_process"]["process_steps"][3]["status"] == "review"
-        assert handoff["fields"][0]["agent_process"]["process_steps"][3]["reason"] == "测试 route policy 输出"
-
-        submit_response = client.post(
-            f"/tasks/{task_id}/review",
-            json={
-                "decision": "revise_and_approve",
-                "fields": [
-                    {
-                        "field_name": "room_numbers",
-                        "review_value": "1-101,1-102,1-103",
-                    }
-                ],
-                "comment": "人工补充遗漏房间",
-                "reviewer": "teacher",
-            },
-        )
-        assert submit_response.status_code == 200
-        assert submit_response.json()["status"] == "completed"
-
-        summary_response = client.get(f"/tasks/{task_id}")
-        assert summary_response.status_code == 200
-        summary = summary_response.json()
-        assert summary["status"] == "completed"
-        assert summary["stage"] == "done"
-        assert summary["needs_review"] is False
-
-        result_response = client.get(f"/tasks/{task_id}/result")
-        result_field = result_response.json()["fields"][0]
-        assert result_field["review_value"] == "1-101,1-102,1-103"
-        assert result_field["final_value"] == "1-101,1-102,1-103"
-        assert result_field["source"] == "human"
-        assert result_field["committed"] is True
-
-        audit_response = client.get(f"/tasks/{task_id}/audit")
-        commit = audit_response.json()["field_commits"][0]
-        assert commit["reviewed"] is True
-        assert commit["review_decision"] == "revise_and_approve"
-        assert commit["review_value"] == "1-101,1-102,1-103"
-        assert commit["committed_by"] == "human"
-        assert commit["agent_process"]["reason"] == "候选证据支持字段值"
-        assert commit["action_types"] == [
-            "search_grep",
-            "add_broad_candidate",
-            "finish_broad",
-            "final_decision",
-        ]
-        assert commit["agent_process"]["actions"][1]["metadata"]["candidate_ids"] == ["c1"]
-        assert commit["agent_process"]["process_steps"][0]["title"] == "第一步 broad extraction"
-        assert commit["agent_process"]["process_steps"][1]["title"] == "第二步 resolution / tool"
-        assert commit["agent_process"]["process_steps"][2]["title"] == "第三步 agent result（route 前）"
-        assert commit["agent_process"]["process_steps"][3]["title"] == "第四步 route validation"
-        assert fake_agent.document_calls[0]["file_type"] == "pdf"
-
-
-def test_review_handoff_includes_missing_required_field_placeholder(tmp_path: Path):
-    fake_agent = FakeMissingRequiredFieldRouteClient()
+def test_missing_required_field_placeholder_stays_uncommitted_without_routing(tmp_path: Path):
+    fake_agent = FakeMissingRequiredFieldClient()
     app = create_app(
         settings=BackendSettings(database_path=tmp_path / "backend.sqlite3"),
         agent_client=fake_agent,
@@ -1215,46 +610,35 @@ def test_review_handoff_includes_missing_required_field_placeholder(tmp_path: Pa
         task_id = response.json()["task_id"]
 
         task_summary = client.get(f"/tasks/{task_id}").json()
-        assert task_summary["status"] == "waiting_review"
+        assert task_summary["status"] == "completed"
+        assert task_summary["stage"] == "done"
+        assert "route" not in task_summary
+        assert "needs_review" not in task_summary
 
-        review_response = client.get(f"/tasks/{task_id}/review")
-        assert review_response.status_code == 200
-        handoff = review_response.json()
-        assert len(handoff["fields"]) == 1
-        field = handoff["fields"][0]
-        assert field["field_name"] == "room_numbers"
-        assert field["display_name"] == "文明寝室房间号"
-        assert field["agent_value"] is None
-        assert field["field_status"] == "failed"
-        assert field["needs_review"] is True
-        assert field["review_reason"] == "字段 room_numbers 是 required 字段，但 file_extraction_agent 没有返回该字段，需要人工复核或补录。"
-        assert field["evidence_texts"] == []
-        assert field["evidence_refs"] == []
-        assert field["actions"] == []
-        assert field["agent_process"]["status"] == "failed"
+        unavailable_response = client.get(f"/tasks/{task_id}/manual-check")
+        assert unavailable_response.status_code == 404
 
         submit_response = client.post(
-            f"/tasks/{task_id}/review",
+            f"/tasks/{task_id}/manual-check",
             json={
                 "decision": "revise_and_approve",
                 "fields": [
                     {
                         "field_name": "room_numbers",
-                        "review_value": "1-101",
+                        "manual_value": "1-101",
                     }
                 ],
                 "comment": "人工补录 required 字段",
-                "reviewer": "teacher",
+                "operator": "teacher",
             },
         )
-        assert submit_response.status_code == 200
-        assert submit_response.json()["status"] == "completed"
+        assert submit_response.status_code == 404
 
         result_field = client.get(f"/tasks/{task_id}/result").json()["fields"][0]
         assert result_field["agent_value"] is None
-        assert result_field["review_value"] == "1-101"
-        assert result_field["final_value"] == "1-101"
-        assert result_field["source"] == "human"
+        assert result_field["final_value"] is None
+        assert result_field["source"] == "none"
+        assert result_field["committed"] is False
 
 
 def test_agent_process_without_tool_actions_keeps_resolution_step_completed():
@@ -1310,7 +694,7 @@ def test_create_task_rejects_unsupported_file_type(tmp_path: Path):
         assert "unsupported file type" in response.json()["detail"]
 
 
-def test_capabilities_returns_supported_task_and_routes(tmp_path: Path):
+def test_capabilities_returns_supported_task_features_without_routing(tmp_path: Path):
     app, _fake_agent = build_app(tmp_path)
 
     with TestClient(app) as client:
@@ -1320,11 +704,10 @@ def test_capabilities_returns_supported_task_and_routes(tmp_path: Path):
         payload = response.json()
         assert payload["supported_file_types"] == ["pdf"]
         assert payload["task_types"] == []
-        assert payload["routes"] == ["accept", "review", "reject"]
-        assert payload["review_decisions"] == ["approve", "revise_and_approve", "reject"]
+        assert "routes" not in payload
+        assert "review_decisions" not in payload
         assert payload["features"] == {
             "trace": True,
-            "review": True,
             "audit": True,
             "external_task_spec": True,
             "multiple_files": True,

@@ -8,8 +8,6 @@ SCHEMA_SQL = [
         task_type TEXT NOT NULL,
         status TEXT NOT NULL,
         stage TEXT NOT NULL,
-        route TEXT,
-        route_reason TEXT,
         metadata_json TEXT NOT NULL,
         error_message TEXT,
         created_at TEXT NOT NULL,
@@ -114,54 +112,12 @@ SCHEMA_SQL = [
     )
     """,
     """
-    CREATE TABLE IF NOT EXISTS field_routes (
-        id TEXT PRIMARY KEY,
-        task_id TEXT NOT NULL,
-        field_name TEXT NOT NULL,
-        route TEXT NOT NULL,
-        route_reason TEXT NOT NULL,
-        needs_review INTEGER NOT NULL,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY(task_id) REFERENCES tasks(id)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS reviews (
-        id TEXT PRIMARY KEY,
-        task_id TEXT NOT NULL,
-        decision TEXT NOT NULL,
-        comment TEXT,
-        reviewer TEXT,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY(task_id) REFERENCES tasks(id)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS review_fields (
-        id TEXT PRIMARY KEY,
-        review_id TEXT NOT NULL,
-        task_id TEXT NOT NULL,
-        field_name TEXT NOT NULL,
-        agent_value_json TEXT,
-        review_value_json TEXT,
-        final_value_json TEXT,
-        decision TEXT NOT NULL,
-        comment TEXT,
-        FOREIGN KEY(review_id) REFERENCES reviews(id),
-        FOREIGN KEY(task_id) REFERENCES tasks(id)
-    )
-    """,
-    """
     CREATE TABLE IF NOT EXISTS field_commits (
         id TEXT PRIMARY KEY,
         task_id TEXT NOT NULL,
         field_name TEXT NOT NULL,
         final_value_json TEXT,
-        route TEXT NOT NULL,
-        reviewed INTEGER NOT NULL,
-        review_decision TEXT,
         agent_value_json TEXT,
-        review_value_json TEXT,
         evidence_refs_json TEXT NOT NULL,
         used_global_lookup INTEGER NOT NULL,
         used_validation_rule INTEGER NOT NULL,
@@ -177,8 +133,5 @@ SCHEMA_SQL = [
     "CREATE INDEX IF NOT EXISTS idx_task_events_task_sequence ON task_events(task_id, sequence)",
     "CREATE INDEX IF NOT EXISTS idx_extracted_fields_task_id ON extracted_fields(task_id)",
     "CREATE INDEX IF NOT EXISTS idx_field_traces_task_id ON field_traces(task_id)",
-    "CREATE INDEX IF NOT EXISTS idx_field_routes_task_id ON field_routes(task_id)",
-    "CREATE INDEX IF NOT EXISTS idx_reviews_task_id ON reviews(task_id)",
-    "CREATE INDEX IF NOT EXISTS idx_review_fields_task_id ON review_fields(task_id)",
     "CREATE INDEX IF NOT EXISTS idx_field_commits_task_id ON field_commits(task_id)",
 ]

@@ -10,6 +10,6 @@
 边界：
 
 - 不直接作为调用方入口。
-- 不访问数据库、backend storage、人工审核或 route policy。
+- 不访问数据库、backend storage 或人工审核。
 - 不重新承担 input_adapter.py 已经完成的入口契约校验。
 """

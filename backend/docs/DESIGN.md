@@ -1,22 +1,20 @@
 # Backend Design
 
-这份文档是 `backend` 服务的设计入口，面向毕业设计原型阶段。接口细节见 [API.md](API.md)。
+这份文档是 `backend` 的设计入口，面向当前仅保留文档处理、字段抽取、结果提交和审计的实现。接口细节见 [API.md](API.md)。
 
 ## 1. 目标与边界
 
-`backend` 负责把 `agent service` 产出的抽取结果变成可治理、可审核、可追责的业务任务。它不重新实现 OCR 或字段抽取，而是围绕上传文件、任务状态、route policy、人工审核、最终结果和审计记录组织流程。
+`backend` 负责把 `agent service` 产出的抽取结果变成可治理、可追责的业务任务。它不重新实现 OCR 或字段抽取，而是围绕上传文件、任务状态、最终结果和审计记录组织流程。
 
-流式改造后的 API 设计把任务读取拆成三层：`GET /tasks/{task_id}` 返回当前快照，`GET /tasks/{task_id}/events?after_seq=n` 返回可回放、可续传的任务事件流，`result/trace/replay/review/audit` 继续作为页面读模型。`events` 只描述过程，`result` 和 `audit` 仍由后端从数据库中的字段、route、review 和提交记录组装。
-
-目标流式链路是：
+任务的真实链路是：
 
 ```text
 POST /tasks 创建任务
   -> 写入 task.created 事件并返回 task_id / stream.last_event_seq
   -> 前端打开 GET /tasks/{task_id}/events?after_seq=n
-  -> backend 后台处理文档、消费 file_extraction_agent NDJSON stream、执行 route_policy
+  -> backend 后台处理文档、消费 file_extraction_agent NDJSON stream
   -> 每个阶段写入 task_events，前端按 seq 实时渲染或断线补拉
-  -> 终态后 result / replay / review / audit 作为整理后的读模型继续可直接读取
+  -> 终态后 result / replay / audit 作为整理后的读模型继续可直接读取
 ```
 
 核心链路是：
@@ -25,24 +23,21 @@ POST /tasks 创建任务
 前端或脚本上传一个或多个 PDF + task_type + task_spec
   -> backend 创建任务记录
   -> POST /tasks 立即返回 task_id 和 pending/uploaded
-  -> backend 后台继续执行文档处理、字段抽取和 route policy
+  -> backend 后台继续执行文档处理和字段抽取
   -> backend 通过 HTTP 逐个调用 document_processor，把上传文件转成 markdown + blocks
-  -> backend 为每个文件保存标准化文本结果，不保存原始文件
+  -> backend 保存标准化文本结果，不保存原始文件
   -> backend 合并多个文件的 html 作为字段抽取输入，markdown、md_list 和 blocks 留作展示和证据回填
   -> backend 通过 HTTP 调用 file_extraction_agent
   -> agent service 返回 ExtractionResult(result + trace)
   -> task_service 对照 task_spec.fields 补齐 agent 没返回的预期字段，写成 failed/None 占位
-  -> backend 组装 field_outputs + refs_with_text + field_processes 并调用 route_policy_agent
-  -> agent service 返回 accept / review / reject 字段路由
-  -> accept 自动生成字段提交记录
-  -> review 等待人工审核
-  -> review 提交后更新最终结果和 audit
+  -> backend 直接提交 resolved 字段，failed/None 字段保持未提交
+  -> backend 保存抽取结果、trace 和 audit
 ```
 
 职责边界：
 
-- `backend` 管理任务、文档标准化结果、数据库记录、route 输出、人工审核和 audit。
-- `agent service` 负责 `document_processor`、`file_extraction_agent` 和 `route_policy_agent`，返回标准化结果、字段结果、trace 和字段路由。
+- `backend` 管理任务、文档标准化结果、数据库记录、最终结果和 audit。
+- `agent service` 负责 `document_processor` 和 `file_extraction_agent`，返回标准化结果、字段结果和 trace。
 - `backend` 通过 HTTP 调用 `agent service`，不直接 import `agent/` 内部包。
 - `backend` 不持久化用户上传的原始文件；上传文件只在请求处理过程中用于调用 `document_processor`。
 - `agent service` 不直接访问 `backend` 的 SQLite 数据库。
@@ -63,7 +58,6 @@ backend/
     storage.py
   routes/
     tasks.py
-    reviews.py
     capabilities.py
     errors.py
   crud/
@@ -71,14 +65,11 @@ backend/
     task_events.py
     tasks.py
     extraction.py
-    reviews.py
     audit.py
     json_utils.py
   services/
     task_service.py
     agent_client.py
-    route_policy.py
-    review_service.py
     audit_service.py
     errors.py
     time_utils.py
@@ -86,8 +77,9 @@ backend/
     schema.py
   tests/
     test_task_flow.py
+    test_task_events.py
+    test_config.py
     docs/
-      test_task_flow.md
   docs/
     API.md
     DESIGN.md
@@ -101,10 +93,10 @@ backend/
 - `core/db.py` 初始化 SQLite 连接，不直接写业务查询。
 - `core/storage.py` 只保留上传文件元信息所需的哈希工具，不落盘保存原始文件。
 - `routes/` 只做 HTTP 入参出参适配，把请求转交给 `services/`。
-- `routes/reviews.py` 定义 review 提交请求模型；其他响应暂按服务层字典返回。
 - `models/schema.py` 定义 SQLite DDL。第一版没有引入 ORM，CRUD 直接使用 `sqlite3.Row` 和参数化 SQL。
 - `crud/` 封装基础数据库读写，不写业务编排。
-- `services/` 负责任务创建、agent 调用、状态流转、route policy、review 和 audit。
+- `services/` 负责任务创建、agent 调用、状态流转和 audit。
+
 ## 3. 主处理链路
 
 任务创建后的处理流程如下：
@@ -119,7 +111,7 @@ POST /tasks 上传一个或多个文件
   -> FastAPI BackgroundTasks 调用 task_service.run_created_task(...)
   -> task_service 将任务置为 processing / document_processing
   -> agent_client 逐个用上传文件 bytes 通过 HTTP 调用 agent service 的文档处理接口
-  -> document_processor 输出语义 HTML 时只需保留 heading 层级和 block 阅读顺序，不需要包裹 section
+  -> document_processor 输出语义 HTML 时只需保留 heading 层级和 block 阅读顺序
   -> SQLite 为每次 document_processor 调用写入 agent_stage_runs，不保存原始文件 bytes
   -> task_service 为每个文件生成 document_id，并为 blocks 补 document_id / block_id
   -> SQLite 为每个文件写入 documents(markdown / md_list_json / blocks_json / meta_info_json / warnings_json)
@@ -128,18 +120,10 @@ POST /tasks 上传一个或多个文件
   -> file_extraction_agent 按 heading stack 重建虚拟 section 树
   -> SQLite 为 file_extraction_agent 调用写入 agent_stage_runs
   -> SQLite 写入 agent_runs / extracted_fields / field_traces；task_spec 中存在但 agent 未返回的字段会补 failed/None 占位
-  -> route_policy 从字段结果、trace refs 和 trace actions 组装 field_outputs + refs_with_text + field_processes
-  -> agent_client 通过 HTTP 调用 agent service 的 route policy 接口
-  -> SQLite 为 route_policy_agent 调用写入 agent_stage_runs
-  -> SQLite 写入 field_routes
-  -> GET /trace 从 documents、agent_runs、agent_stage_runs、field_traces、field_routes 组装字段证据、三段摘要步骤和原始 agent 调用记录
-  -> 字段级 agent_process/process_steps 从 field_traces 和 field_routes 派生，不新增表结构
-  -> 如果全部字段可 accept，写入 field_commits 并将任务置为 completed / done
-  -> 如果存在 review 字段，将任务置为 waiting_review / review
-  -> GET /tasks/{task_id} 的 needs_review 只以当前任务 status 是否为 waiting_review 为准
-  -> 如果 route=reject，将任务置为 rejected / done
+  -> backend 直接提交 resolved 字段
+  -> backend 保存抽取结果、trace 和 audit
   -> 如果 agent 或流程失败，将任务置为 failed / done 并保存 error_message
-  -> GET /tasks/{task_id} 返回当前 status/stage/route/error_message，供前端轮询
+  -> GET /tasks/{task_id} 返回当前 status/stage/error_message，供前端轮询
 ```
 
 工作台任务列表流程如下：
@@ -150,47 +134,12 @@ GET /tasks?limit=20
   -> task_service 把 limit 限制在 1..100
   -> crud.tasks 按 updated_at DESC、created_at DESC、id DESC 读取最近任务
   -> task_service 对每条任务复用单任务 summary 序列化
-  -> 查询 extracted_fields、field_traces、field_routes
-  -> 补齐 has_result、has_trace、needs_review、route 和错误信息
+  -> 查询 extracted_fields、field_traces
+  -> 补齐 has_result、has_trace 和错误信息
   -> 返回 { "tasks": TaskSummary[] }
 ```
 
-第一版任务执行模型是“请求内创建、后台处理”：`POST /tasks` 只保证任务已经入库并返回 `pending/uploaded`，耗时的 document processing、extraction 和 route policy 在响应发出后继续执行。调用方需要轮询 `GET /tasks/{task_id}` 获取 `completed/done`、`waiting_review/review`、`rejected/done` 或 `failed/done`；失败原因统一从 summary 的 `error_message` 读取。
-
-语义 HTML 的 section 边界由 agent 侧负责重建，backend 不需要为了 agent 把 heading 后续内容重新包进 `<section>`。后端只要求 document_processor 尽量保留 `h1/h2/h3...` 和 `p/list/table` 的阅读顺序：
-
-```text
-document_processor 产出语义 HTML
-  -> backend 原样保存 html / markdown / blocks
-  -> backend 调用 file_extraction_agent
-  -> file_extraction_agent 线性扫描 heading 与 block
-  -> h1/title 进入文档目录名
-  -> h2-h6 创建虚拟 section 目录
-  -> 后续 paragraph/list/table 归到当前 section
-  -> 遇到同级或更高级 heading 时切换 section
-```
-
-这样即使 OCR/PDF 转出的真实 `<section>` 被分页打断，或者 HTML 里只有独立的 `<h2>` header，backend 也不需要补 DOM 包裹。agent 会以“当前 heading 到下一个同级或更高级 heading 之前”为语义范围生成虚拟文件树。
-
-人工审核流程如下：
-
-```text
-GET /tasks/{task_id}/review
-  -> review_service 读取 extracted_fields、field_traces、field_routes
-  -> 如果字段是 task_service 为缺失必填项补出的 failed/None 占位，也会进入 handoff
-  -> 组装 handoff 包，返回字段值、证据、定位、route 原因、actions 和 agent_process
-  -> agent_process.process_steps 按 broad_extraction、field_resolution、final_result、route_validation 回放 route 前抽取过程和 route policy 验证结果
-
-POST /tasks/{task_id}/review
-  -> review_service 校验任务状态必须是 waiting_review
-  -> 写入 reviews / review_fields
-  -> approve 沿用 agent_value 作为 final_value
-  -> revise_and_approve 使用 review_value 作为 final_value
-  -> reject 将任务置为 rejected，不生成对应字段提交
-  -> audit_service 写入 field_commits
-  -> 更新 tasks.status / stage / completed_at
-  -> 后续 summary 返回 completed / done / needs_review=false
-```
+第一版任务执行模型是“请求内创建、后台处理”：`POST /tasks` 只保证任务已经入库并返回 `pending/uploaded`，耗时的 document processing 和 extraction 在响应发出后继续执行。调用方需要轮询 `GET /tasks/{task_id}` 获取 `completed/done` 或 `failed/done`；失败原因统一从 summary 的 `error_message` 读取。
 
 ## 4. 模块职责
 
@@ -215,22 +164,13 @@ HTTP 请求
   -> 返回服务层已组装的 API 响应
 ```
 
-### `routes.reviews`
-
-暴露人工审核 API：
-
-- `GET /tasks/{task_id}/review`
-- `POST /tasks/{task_id}/review`
-
-它只负责协议适配，不直接判断字段是否可通过。
-
 ### `routes.capabilities`
 
-暴露 `GET /capabilities`，返回支持文件类型、route 类型、review 决策类型和 feature flags。因为 backend 不内置业务 schema，`task_types` 固定为空，调用方根据 `features.external_task_spec=true` 自行传入 `task_spec`。
+暴露 `GET /capabilities`，返回支持文件类型、空任务类型列表和 feature flags。因为 backend 不内置业务 schema，`task_types` 固定为空，调用方根据 `features.external_task_spec=true` 自行传入 `task_spec`。
 
 ### `crud`
 
-`crud/` 只负责最基础的数据库读写，也就是创建、查询、更新和删除记录。它不决定业务流程，不调用 agent service，也不执行 route policy。
+`crud/` 只负责最基础的数据库读写，也就是创建、查询、更新和删除记录。它不决定业务流程，不调用 agent service，也不执行任何人工复核流程。
 
 数据库访问链路应当保持为：
 
@@ -241,7 +181,7 @@ routes
   -> models / SQLite
 ```
 
-不要让 `routes/` 直接操作 `models/`，也不要把复杂业务流程塞进 `crud/`。例如“什么时候调用 agent、什么时候进入人工审核、什么时候生成 audit”属于 `services/`；“把 task 状态更新成 waiting_review”或“按 task_id 查询 field_routes”才属于 `crud/`。
+不要让 `routes/` 直接操作 `models/`，也不要把复杂业务流程塞进 `crud/`。例如“什么时候调用 agent、什么时候提交字段、什么时候生成 audit”属于 `services/`。
 
 第一版不按每张表机械拆文件，而是按业务聚合拆：
 
@@ -260,610 +200,122 @@ crud/extraction.py
   -> agent_runs
   -> extracted_fields
   -> field_traces
-  -> field_routes
-
-crud/reviews.py
-  -> reviews
-  -> review_fields
 
 crud/audit.py
   -> field_commits
 ```
 
-这样拆分的原因是这些表通常按同一个业务动作一起读写：
+## 5. 后端序列化
 
-```text
-创建任务
-  -> 先写 tasks
-  -> 同时写 task_events(task.created)
-  -> 后台处理文件时再写 documents
-  -> 每次 agent HTTP 调用写 agent_stage_runs
-  -> 每个可见阶段或终态写 task_events
+### `GET /tasks/{task_id}`
 
-保存 agent 输出
-  -> 同时写 agent_runs、extracted_fields、field_traces
+返回任务当前快照：
 
-执行 route policy
-  -> 读取 extracted_fields / field_traces
-  -> 写 field_routes
-
-提交人工审核
-  -> 写 reviews / review_fields
-  -> 更新 extracted_fields.final_value_json
-  -> 写 task_events(task.completed 或 task.rejected)
-
-生成审计记录
-  -> 写 field_commits
+```json
+{
+  "task_id": "task_xxx",
+  "status": "completed",
+  "stage": "done",
+  "error_message": null,
+  "has_result": true,
+  "has_trace": true,
+  "stream": {
+    "state": "ended",
+    "last_event_seq": 8
+  }
+}
 ```
 
-也就是说，CRUD 的拆分标准不是“每个 table 一个文件”，而是“哪些表经常在同一个业务动作里一起使用”。
+`has_result` 和 `has_trace` 都只根据数据库里是否有对应记录判断；这里不再返回额外的审核标记。
 
-### `services.task_service`
+### `GET /tasks/{task_id}/result`
 
-负责任务创建和状态流转：
+返回字段结果和是否已提交的标记：
 
-```text
-files/file + task_type + task_spec + metadata
-  -> 至少收集一个上传文件，否则抛出 ValidationError
-  -> 逐个从 filename 推断 pdf，否则抛出 ValidationError
-  -> 如果未传 task_spec，抛出 ValidationError
-  -> 创建 task_... 记录为 pending/uploaded
-  -> 写入 task_events(task.created)，返回 stream.last_event_seq
-  -> 如果调用方要求立即返回，create_task(run_pipeline=False) 直接序列化 task_id/status/stage/error_message
-  -> routes.tasks 把上传文件 bytes 和 task_spec 交给 BackgroundTasks，后台调用 run_created_task(...)
-  -> 逐个调用 agent_client.process_document(file_bytes, filename, file_type)
-  -> 每个阶段通过 task_events 写入 task.stage_changed / document.processed / agent.event / field.written / route_policy.completed
-  -> 每次 document_processor 调用保存 agent_stage_runs(request 摘要、完整 response、trace)
-  -> 每个文件生成独立 document_id，并为返回 blocks 补 document_id 和 block_id
-  -> 逐个写入 documents，只保存标准化文本结果和上传元信息
-  -> 合并全部 blocks、markdown 和 md_list
-  -> 调用 agent_client.extract_fields(html, task_spec, run_options=None)，metadata 只保存在 backend 的请求摘要中
-  -> 保存 file_extraction_agent 的 agent_stage_runs
-  -> 写入 agent_runs、extracted_fields、field_traces
-  -> route_policy.build_route_policy_request(...) 组装 field_outputs + refs_with_text + field_processes
-  -> 调用 agent_client.evaluate_route_policy(...)
-  -> 保存 route_policy_agent 的 agent_stage_runs
-  -> 写入 field_routes
-  -> get_trace(task_id) 读取 documents、agent_runs、agent_stage_runs、field_traces、field_routes，并序列化 trace.steps 与 agent_trace
-  -> field_decisions、review handoff 和 audit 中的 agent_process 都复用同一套 process_steps 派生逻辑，并把 route_validation 与 agent 抽取结果分开展示
-  -> accept 写 final_value/source 和 field_commits
-  -> review 只自动提交 accept 字段，其余等待 review_service
-  -> reject/failed 写任务终态；后台异常会被捕获并写入 failed/done/error_message
-  -> get_task_summary(task_id) 返回 stream.state 和 stream.last_event_seq
-  -> list_task_events(task_id, after_sequence) 返回 seq 大于游标的已持久化事件
+```json
+{
+  "task_id": "task_xxx",
+  "status": "completed",
+  "fields": [
+    {
+      "field_name": "room_numbers",
+      "display_name": "文明寝室房间号",
+      "agent_value": "1-101,1-102",
+      "final_value": "1-101,1-102",
+      "field_status": "resolved",
+      "source": "agent",
+      "committed": true
+    }
+  ]
+}
 ```
 
-### `services.agent_client`
+只有 `agent_status == "resolved"` 的字段才会写入 `final_value` 和 audit。`failed` 或缺失字段保留为 `final_value=null`、`source="none"`、`committed=false`。
 
-只通过 HTTP 调用 `agent service`：
+### `GET /tasks/{task_id}/trace`
 
-```text
-upload file bytes + filename + file_type
-  -> POST /v1/document-processor/process
-  -> ProcessResult
-  -> backend 为每个文件的 blocks 补 document_id / block_id
-  -> POST /v1/file-extraction-agent/extract
-  -> ExtractionResult(result + trace)
-  -> POST /v1/route-policy-agent/evaluate
-  -> RoutePolicyResult(field_routes)
-```
-
-约束：
-
-- 不直接 import `document_processor` 或 `file_extraction_agent`。
-- 不直接写数据库。
-- 只返回调用结果或抛出可被 `task_service` 捕获的异常。
-
-### `services.route_policy`
-
-负责把 backend 已保存的字段结果和 trace refs 转成 agent route policy 需要的请求。它不在 backend 内执行 LLM route 判断，也不重新抽取字段值。
+返回文档处理和字段抽取的 trace 视图：
 
 ```text
-extracted_fields + field_traces + task_spec
-  -> 从 trace refs 和证据文本组装 refs_with_text，并从 trace actions 组装 field_processes
-  -> 从 extracted_fields 组装 field_outputs
-  -> 调用 agent /v1/route-policy-agent/evaluate
-  -> 保存 RoutePolicyResult.field_routes
+documents
+  -> agent_runs
+  -> agent_stage_runs
+  -> field_traces
+  -> trace.steps / trace.fields / metadata
 ```
 
-### `services.review_service`
+trace 只展示 document_processing 和 extraction 两段。
 
-负责人工审核包和审核提交：
+### `GET /tasks/{task_id}/audit`
 
-- `GET review`：把 agent 字段结果、trace 和 route 原因合并成 handoff 包。
-- `POST review`：保存人工决策，并把 `review_value` 合并到最终字段结果。
-- review 提交进入 `completed` 或 `rejected` 终态时，会继续写 `task_events` 终态事件，确保前端能从复核前的 `last_event_seq` 续传到最终状态。
+返回字段提交记录。每条 commit 只记录抽取结果和提交元数据。
 
-### `services.audit_service`
+## 6. 状态模型
 
-负责字段级提交记录：
-
-```text
-final field value + route + review decision + trace refs
-  -> 提取 evidence_refs、related_fields、action_types 和旧版兼容标记
-  -> 写入 field_commits
-```
-
-## 5. 数据库表设计
-
-第一版使用 SQLite 本地数据库。字段类型在设计上采用逻辑类型；JSON 内容以 SQLite `TEXT` 保存，序列化为 JSON 字符串。
-
-### `documents`
-
-保存上传文件的元信息和 `document_processor` 的标准化结果。毕业设计原型阶段不保存用户上传的原始文件内容；数据库只保存用于抽取、展示和 trace 的 markdown、blocks 和处理元信息。
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `id` | `TEXT PRIMARY KEY` | 文档 ID |
-| `task_id` | `TEXT INDEX` | 所属任务 ID |
-| `filename` | `TEXT` | 原始文件名 |
-| `file_type` | `TEXT` | `pdf` |
-| `content_type` | `TEXT` | 上传时的 MIME 类型 |
-| `upload_size_bytes` | `INTEGER` | 上传文件大小，仅作元信息 |
-| `upload_sha256` | `TEXT` | 上传文件内容哈希，仅作去重或排查元信息 |
-| `markdown` | `TEXT` | `document_processor` 输出的整篇 Markdown |
-| `md_list_json` | `TEXT` | `document_processor` 输出的 `md_list` |
-| `blocks_json` | `TEXT` | 标准化 blocks，后续抽取和证据定位使用 |
-| `processor_meta_json` | `TEXT` | 文档处理阶段的 `meta_info` |
-| `warnings_json` | `TEXT` | 文档处理阶段的 warnings |
-| `processed_at` | `DATETIME NULL` | 文档标准化完成时间 |
-| `created_at` | `DATETIME` | 创建时间 |
-
-### `tasks`
-
-保存任务级状态、阶段和 route 摘要。
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `id` | `TEXT PRIMARY KEY` | 任务 ID |
-| `task_type` | `TEXT` | 任务类型，例如 `civilized_dormitory` |
-| `status` | `TEXT` | `pending / processing / waiting_review / completed / rejected / failed` |
-| `stage` | `TEXT` | `uploaded / document_processing / extraction / route_policy / review / field_commit / done` |
-| `route` | `TEXT NULL` | 顶层 route 摘要 |
-| `route_reason` | `TEXT NULL` | 顶层 route 原因 |
-| `metadata_json` | `TEXT` | 调用方传入的元信息 |
-| `error_message` | `TEXT NULL` | 失败原因 |
-| `created_at` | `DATETIME` | 创建时间 |
-| `updated_at` | `DATETIME` | 更新时间 |
-| `completed_at` | `DATETIME NULL` | 完成时间 |
-
-### `agent_runs`
-
-保存 `file_extraction_agent` 的字段抽取输入、字段结果和字段 trace。它是字段结果落库的来源，保留这个表是为了兼容现有 result / field trace 组装逻辑。
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `id` | `TEXT PRIMARY KEY` | agent run ID |
-| `task_id` | `TEXT INDEX` | 所属任务 ID |
-| `agent_status` | `TEXT` | agent 返回的 `completed / failed` |
-| `failure_reason` | `TEXT NULL` | agent 失败原因 |
-| `request_json` | `TEXT` | 传给 agent 的主要请求摘要 |
-| `result_json` | `TEXT` | `ExtractionResult.result` |
-| `trace_json` | `TEXT` | `ExtractionResult.trace` |
-| `started_at` | `DATETIME` | agent 调用开始时间 |
-| `finished_at` | `DATETIME NULL` | agent 调用结束时间 |
-
-### `agent_stage_runs`
-
-按真实 HTTP 调用顺序保存 `agent/` 服务每个阶段返回给 backend 的过程数据。它用于 `GET /trace.agent_trace`，比 `trace.steps` 更接近原始调用记录；为了不保存用户上传原始文件，`document_processor` 的 `request_json` 只保存文件名、类型、大小、sha256 和 backend 生成的 `document_id`，不保存 `file_bytes`。
-
-处理链路是：
-
-```text
-task_service 准备某次 agent HTTP 调用
-  -> 生成 sequence、stage、agent_name、started_at
-  -> request_json 保存 backend 实际发出的结构化请求或安全摘要
-  -> response_json 保存 agent service 返回的完整 JSON payload
-  -> trace_json 保存 response.trace；如果该 agent 没有 trace 字段，就保存 meta_info/warnings 或 field_routes 摘要
-  -> GET /tasks/{task_id}/trace 按 sequence 返回 agent_trace
-```
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `id` | `TEXT PRIMARY KEY` | 阶段调用 ID |
-| `task_id` | `TEXT INDEX` | 所属任务 ID |
-| `sequence` | `INTEGER` | 当前任务内的 agent 调用顺序 |
-| `stage` | `TEXT` | `document_processing / extraction / route_policy` |
-| `agent_name` | `TEXT` | `document_processor / file_extraction_agent / route_policy_agent` |
-| `status` | `TEXT` | agent 返回状态；未显式返回时用 `completed` |
-| `failure_reason` | `TEXT NULL` | agent 返回的失败原因 |
-| `request_json` | `TEXT` | 请求摘要或结构化请求 |
-| `response_json` | `TEXT` | agent service 返回的完整 JSON payload |
-| `trace_json` | `TEXT` | agent trace 或可解释摘要 |
-| `started_at` | `DATETIME` | agent 调用开始时间 |
-| `finished_at` | `DATETIME NULL` | agent 调用结束时间 |
-
-### `task_events`
-
-保存任务级可回放事件，用于 `GET /tasks/{task_id}/events?after_seq=n`。事件不是业务结果本体，而是任务处理过程的增量日志；`result`、`trace`、`review` 和 `audit` 仍从各自的数据表组装。
-
-处理链路是：
-
-```text
-任务创建、阶段切换、文档处理、字段写入、route policy、人工复核或失败
-  -> service 层拿到更新后的 task 状态
-  -> task_events 按 task_id 查询当前最大 sequence
-  -> 新事件 sequence = max(sequence) + 1
-  -> 写入 event_type/status/stage/payload_json/created_at
-  -> GET /tasks/{task_id}/events?after_seq=n 按 sequence 升序输出 SSE
-```
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `id` | `TEXT PRIMARY KEY` | 事件 ID |
-| `task_id` | `TEXT INDEX` | 所属任务 ID |
-| `sequence` | `INTEGER` | 当前任务内递增事件序号 |
-| `event_type` | `TEXT` | 事件类型，例如 `task.created / field.written / task.completed` |
-| `status` | `TEXT` | 写入事件时的任务业务状态 |
-| `stage` | `TEXT` | 写入事件时的任务阶段 |
-| `payload_json` | `TEXT` | 事件载荷 |
-| `created_at` | `DATETIME` | 写入时间 |
-
-### `extracted_fields`
-
-保存字段级 agent 原始结果和后端最终值。
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `id` | `TEXT PRIMARY KEY` | 记录 ID |
-| `task_id` | `TEXT INDEX` | 所属任务 ID |
-| `field_name` | `TEXT` | 字段名 |
-| `display_name` | `TEXT` | 展示名 |
-| `field_type` | `TEXT` | 字段类型 |
-| `agent_status` | `TEXT` | agent 字段状态 |
-| `agent_value_json` | `TEXT NULL` | agent 原始值 |
-| `final_value_json` | `TEXT NULL` | 后端治理后的最终值 |
-| `source` | `TEXT` | `agent / human / none` |
-| `reason` | `TEXT NULL` | 定案原因 |
-| `failure_reason` | `TEXT NULL` | 字段失败原因 |
-| `created_at` | `DATETIME` | 创建时间 |
-| `updated_at` | `DATETIME` | 更新时间 |
-
-### `field_traces`
-
-保存字段级证据、动作和解释信息。`field_traces` 不直接保存展示用的 `process_steps`；backend 在序列化 `trace.fields[]`、`trace.steps[].field_decisions[]`、`review.fields[].agent_process` 和 `audit.field_commits[].agent_process` 时，从该表中的 evidence、actions、reason、字段值和 `field_routes` 派生字段过程。
-
-派生过程如下：
-
-```text
-field_traces.evidence_json + documents.blocks_json + extracted_fields.agent_value_json
-  -> 用 evidence.block_ids / refs[].block_id 回查 documents.blocks_json，补出候选 blocks 的正文、页码和 kind
-  -> broad_extraction：展示 broad 阶段预选出的候选 block 正文、证据文本、refs 和 notes
-  -> field_resolution：展示 resolution 阶段产出的 route 前 output_fields(field_name/status/value/reason)，并说明实际执行了哪些 update_plan / read_element / read_section / table_extraction / paragraph_extraction / set_field / finish 等 actions；如果没有额外 action，只标记 completed 并说明 resolution 直接把已观察证据写成字段输出
-  -> final_result：展示 route policy 之前的 agent 抽取 status、agent value、reason 或 failure_reason
-  -> route_validation：展示 route_policy_agent 的 route、needs_review 和 route_reason，让验证结论与 agent final result 分离
-  -> agent_process.process_steps
-```
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `id` | `TEXT PRIMARY KEY` | 记录 ID |
-| `task_id` | `TEXT INDEX` | 所属任务 ID |
-| `field_name` | `TEXT` | 字段名 |
-| `evidence_json` | `TEXT` | 证据文本和 refs |
-| `related_fields_json` | `TEXT` | 相关字段列表 |
-| `actions_json` | `TEXT` | `update_plan / read_element / read_section / table_extraction / paragraph_extraction / set_field / finish / model_call_error` 等动作 |
-| `trace_status` | `TEXT` | trace 字段状态 |
-| `reason` | `TEXT NULL` | 成功定案原因 |
-| `failure_reason` | `TEXT NULL` | 失败原因 |
-
-### `field_routes`
-
-保存 route policy 对每个字段的判断。
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `id` | `TEXT PRIMARY KEY` | 记录 ID |
-| `task_id` | `TEXT INDEX` | 所属任务 ID |
-| `field_name` | `TEXT` | 字段名 |
-| `route` | `TEXT` | `accept / review / reject` |
-| `route_reason` | `TEXT` | route 原因 |
-| `needs_review` | `BOOLEAN` | 是否需要人工审核 |
-| `created_at` | `DATETIME` | 创建时间 |
-
-### `reviews`
-
-保存一次人工审核提交。
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `id` | `TEXT PRIMARY KEY` | review ID |
-| `task_id` | `TEXT INDEX` | 所属任务 ID |
-| `decision` | `TEXT` | `approve / revise_and_approve / reject` |
-| `comment` | `TEXT NULL` | 人工备注 |
-| `reviewer` | `TEXT NULL` | 审核者；原型阶段可为空或固定为 `human` |
-| `created_at` | `DATETIME` | 创建时间 |
-
-### `review_fields`
-
-保存人工审核对字段的处理结果。
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `id` | `TEXT PRIMARY KEY` | 记录 ID |
-| `review_id` | `TEXT INDEX` | 所属 review ID |
-| `task_id` | `TEXT INDEX` | 所属任务 ID |
-| `field_name` | `TEXT` | 字段名 |
-| `agent_value_json` | `TEXT NULL` | agent 原始值 |
-| `review_value_json` | `TEXT NULL` | 人工修正值 |
-| `final_value_json` | `TEXT NULL` | 人工审核后的最终值 |
-| `decision` | `TEXT` | 字段级审核结论 |
-| `comment` | `TEXT NULL` | 字段级备注 |
-
-### `field_commits`
-
-保存字段级提交与责任链路，用于 `GET /tasks/{task_id}/audit`。
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `id` | `TEXT PRIMARY KEY` | 提交记录 ID |
-| `task_id` | `TEXT INDEX` | 所属任务 ID |
-| `field_name` | `TEXT` | 字段名 |
-| `final_value_json` | `TEXT NULL` | 最终提交值 |
-| `route` | `TEXT` | 字段 route |
-| `reviewed` | `BOOLEAN` | 是否经过人工审核 |
-| `review_decision` | `TEXT NULL` | 人工审核结论 |
-| `agent_value_json` | `TEXT NULL` | agent 原始值 |
-| `review_value_json` | `TEXT NULL` | 人工修正值 |
-| `evidence_refs_json` | `TEXT` | 最终字段证据定位 |
-| `used_global_lookup` | `BOOLEAN` | 旧版兼容字段；新 file_extraction_agent 不再产生 global_lookup |
-| `used_validation_rule` | `BOOLEAN` | 旧版兼容字段；新 file_extraction_agent 不再产生 validation_rule |
-| `related_fields_json` | `TEXT` | 定案参考字段 |
-| `committed_by` | `TEXT` | `agent / human` |
-| `committed_at` | `DATETIME` | 提交时间 |
-
-## 6. 状态流转
-
-任务状态流转如下：
+任务业务状态 `status`：
 
 ```text
 pending
-  -> processing
-  -> completed
+processing
+completed
+failed
 ```
 
-人工审核分支：
-
-```text
-pending
-  -> processing
-  -> waiting_review
-  -> completed
-```
-
-拒绝分支：
-
-```text
-pending
-  -> processing
-  -> waiting_review
-  -> rejected
-```
-
-失败分支：
-
-```text
-pending
-  -> processing
-  -> failed
-```
-
-阶段 `stage` 比 `status` 更细，用于前端展示当前进度：
+任务处理阶段 `stage`：
 
 ```text
 uploaded
-  -> document_processing
-  -> extraction
-  -> route_policy
-  -> review
-  -> field_commit
-  -> done
+document_processing
+extraction
+done
 ```
 
-## 7. Route Policy 规则
+没有额外的审核阶段。
 
-第一版 route policy 由 agent service 的 `route_policy_agent` 执行。backend 不直接判断字段是否 `accept / review / reject`，只负责准备输入、保存输出和驱动后续状态。
+## 7. 事件模型
 
-route policy 的输出只有三类：
+任务事件必须持久化，不能只放在内存里。每个事件使用任务内递增的 `seq` 作为续传游标。
+
+推荐事件类型：
 
 ```text
-accept
-  -> 结果可信，可以自动进入字段提交记录
-
-review
-  -> 结果可能可用，但需要人工检查或修改后再通过
-
-reject
-  -> 关键字段不可用，或 refs 文本不足以支持字段值，不允许进入最终提交
+task.created
+task.stage_changed
+document.processed
+agent.event
+field.written
+task.completed
+task.failed
 ```
 
-与毕业设计文本中的治理术语对应关系是：
+`agent.event` 用于承载 agent service 的原始或归一化 stream 事件，例如 `tool_started`、`tool_completed`、`tool_failed`、`candidate_evidence_added`、`field_written` 和 `result_completed`。
 
-```text
-accept -> pass
-review -> human_review
-reject -> reject
-```
+## 8. 数据表
 
-第一版 MVP 暂不单独实现 `fallback` route；需要人工补录、人工修正或后续重跑的情况先并入 `review`，由 review handoff 和人工提交结果承接。
+任务表只保留 `pending / processing / completed / failed` 状态和 `uploaded / document_processing / extraction / done` 阶段。抽取结果表保留 `agent_value`、`final_value`、`source` 和 `committed`，不再有审核字段。
 
-执行流程：
+字段过程和审计记录都从 `field_traces`、`extracted_fields` 和 `field_commits` 派生，不再依赖额外的审核表。
 
-```text
-task_spec + extracted_fields + field_traces
-  -> backend 组装 field_outputs
-  -> backend 从 refs 和证据文本组装 refs_with_text
-  -> backend 从 actions_json 归一化 field_processes：
-       broad_extraction.search_queries 保留 broad 阶段可识别的查询或查表语句，当前规划型 broad 通常为空
-       broad_extraction.candidate_action_count 统计 broad 阶段候选/查表类动作，当前规划型 broad 通常为 0
-       broad_extraction.counted_fields 通常为空，保留兼容字段
-       broad_extraction.finish_reason 来自 broad 结束或 trace 摘要，当前规划型 broad 通常为空
-       field_resolution.search_queries 保留 resolution 阶段 table_extraction SQL 或其他可识别查询
-       field_resolution.candidate_action_count 统计 resolution 阶段候选类动作，当前 set_field 工具链路通常为 0
-       field_resolution.counted_fields 保留兼容字段
-       field_resolution.final_decision_used 来自 set_field 或旧 final_decision 是否执行
-       field_resolution.reason / failure_reason 来自字段 trace
-       diagnostics 来自 table_extraction 等工具的观察摘要，只保留 quality_type/summary/table_id/query
-  -> agent route_policy_agent 校验输入完整性
-  -> agent route_policy_agent 根据字段输出、refs 文本和两阶段过程摘要判断 route
-  -> backend 写入 field_routes(route, route_reason, needs_review)
-```
+## 9. 已删除的部分
 
-`field_processes` 不能包含工具返回的正文、表格行、cell、block_id 列表或 action refs。route policy 如果需要判断字段值是否被原文支持，只能读取 `refs_with_text.text`；`field_processes` 只用于判断 agent 是否实际读取证据、是否查过相关表格、是否写入字段、是否完成定案，以及当前工具是否报告质量风险。
-
-表格工具观察的传递规则：
-
-```text
-field_traces.actions_json[].result.table_audit / query_audit
-  -> route_policy._diagnostics(...) 提取轻量观察摘要
-  -> broad_extraction.diagnostics 或 field_resolution.diagnostics
-  -> route_policy_agent prompt 同时看到查表摘要和 field_resolution.reason
-  -> 小 LLM 结合字段值、refs 文本、工具观察和模型解释判断 route
-```
-
-这条链路只传“事实观察摘要”，不传整表内容，也不传 `status` 这种提前下结论的风险字段。这样 backend 不重新解释 OCR，也不让 route policy 重新查大表；表格工具发现的空 cell、非空分布、输出列空值或结构信号会被保留下来，由抽取模型 reason 和 route policy 共同判断是否需要人工 review。
-
-`route_policy.py` 的输出必须落库到 `field_routes`，不能只保存在内存里。这样 `GET /tasks/{task_id}/review` 和 `GET /tasks/{task_id}/audit` 都能解释字段为什么进入某条路径。
-
-## 8. Human Review 流程
-
-人工审核输入不是一组孤立字段，而是 handoff 包：
-
-```text
-extracted_fields
-  -> field_traces
-  -> field_routes
-  -> review_service 组装
-  -> 字段值 + 证据文本 + 证据位置 + route 原因 + actions
-```
-
-人工审核支持三类结论：
-
-- `approve`：接受 agent 结果，`final_value_json = agent_value_json`。
-- `revise_and_approve`：接受人工修正，`final_value_json = review_value_json`。
-- `reject`：拒绝该任务或字段，不生成对应字段提交。
-
-人工审核提交后：
-
-```text
-review payload
-  -> 写入 reviews / review_fields
-  -> 更新 extracted_fields.final_value_json 和 source
-  -> audit_service 生成 field_commits
-  -> 更新 tasks.status / stage / completed_at
-```
-
-## 9. Result / Trace / Audit 边界
-
-三类数据必须分开保存和返回：
-
-- `result`：面向业务展示和写库，保存最终字段结果。
-- `trace`：面向解释和调试，保存 agent 的证据、定位、actions 和失败原因。
-- `trace.steps`：面向过程回放，从已落库的文档、抽取 run 和 route 记录派生；其中 file_extraction_agent 步骤会带 `field_decisions`，每个字段决策再通过 `process_steps` 展示 `broad_extraction -> field_resolution -> final_result -> route_validation`。
-- `trace.agent_trace`：面向调试和论文展示，从 `agent_stage_runs` 返回每次 agent HTTP 调用的顺序、请求摘要、完整响应和 trace payload。它保存 agent service 返回的全部 JSON，但不会保存上传原始 bytes，也不会伪造 agent 未返回的 raw prompt 或 raw model response。
-- `review.fields[].agent_process`：面向人工复核，复用字段 trace 组装当前字段的 agent 决策过程，让审核人不只看到最终证据文本，还能按三段过程看到 broad 预选了哪些 block 正文、resolution 用了哪些 tool/action，以及最终输出是什么；没有额外 tool/action 时不把 resolution 标成 skipped。
-- `audit.field_commits[].agent_process`：面向责任链路，字段提交记录继续附带对应 agent 决策过程和 `process_steps`，方便审计最终值来自 agent 还是人工时回看原始定案依据。
-- `audit`：面向责任链路，保存最终字段值由谁确认、何时确认、是否人工修改、对应证据来源和 agent 决策过程。
-
-对应关系：
-
-```text
-agent ExtractionResult.result
-  -> extracted_fields.agent_value_json
-  -> route / review 后生成 extracted_fields.final_value_json
-
-agent ExtractionResult.trace
-  -> field_traces
-  -> review handoff 使用证据、actions 和 agent_process
-
-documents + agent_runs + field_routes
-  -> GET /tasks/{task_id}/trace.steps
-  -> 前端展示 document_processor、file_extraction_agent、route_policy_agent 的执行过程
-  -> file_extraction_agent step 从 trace_json/result_json 派生 field_decisions
-  -> field_decisions[].process_steps 回放 broad 候选 block 正文、resolution actions、route 前 agent result 和 route validation
-
-agent_stage_runs
-  -> GET /tasks/{task_id}/trace.agent_trace
-  -> 前端展示每次 agent 调用的 request / response / trace 摘要和可展开 JSON
-
-agent_stage_runs(document_processor).response.display_html/html
-  -> GET /tasks/{task_id}/replay.display_html
-  -> 只在 replay 出口清理 page_number/page_header/page_footer、`.page-number`、`.block-page_footer` 和 `.block-page_header` 这类旧任务文档 chrome
-  -> 保留 agent_stage_runs 原始 response，避免调试记录被改写
-
-field final value + route + review + trace refs
-  -> field_commits
-  -> audit API 返回，并按 field_name 补回 agent_process
-```
-
-设计约束：
-
-- review 结果不覆盖 agent 原始结果，只写入 `review_fields` 和 `final_value_json`。
-- audit 不重新计算字段值，只记录最终提交时的责任链路。
-- trace 不保存人工审核结论；人工审核结论保存在 `reviews` 和 `review_fields`。
-
-## 10. Agent Service HTTP 调用方式
-
-后端通过 HTTP 调用 agent service。第一版可以串行调用三个接口：
-
-```text
-上传请求中的原始文件 bytes
-  -> POST agent /v1/document-processor/process
-  -> ProcessResult(html + display_html + blocks + markdown + md_list)
-  -> backend 写 agent_stage_runs(document_processor)，request 只含文件摘要
-  -> backend 保存 markdown / md_list / blocks
-  -> backend 为 blocks 补 document_id / block_id
-  -> POST agent /v1/file-extraction-agent/extract(html + task_spec)
-  -> ExtractionResult(result + trace)
-  -> backend 写 agent_stage_runs(file_extraction_agent)
-  -> backend 组装 field_outputs + refs_with_text + field_processes
-  -> POST agent /v1/route-policy-agent/evaluate
-  -> RoutePolicyResult(field_routes)
-  -> backend 写 agent_stage_runs(route_policy_agent)
-```
-
-`agent_client.py` 负责：
-
-- 从 `UploadFile` 读取到的 bytes 构造 multipart 文件，提交给 `document_processor`。
-- 将多个 `ProcessResult.html` 拼接成 `file_extraction_agent` 需要的聚合 HTML。
-- 为每个 block 生成稳定 `block_id`，例如 `"{document_id}:p{page_no}:b{index}"`。
-- 传入后端选择的 `task_spec` 和 `run_options`；`metadata` 只保存在 backend 请求摘要和 route policy metadata 中。
-- 将字段输出和 refs 证据文本提交给 `route_policy_agent`。
-- 返回完整 `ExtractionResult` 和 `RoutePolicyResult` 给 `task_service`。
-
-异常处理：
-
-```text
-agent HTTP 调用失败
-  -> task_service 捕获异常
-  -> 写入 tasks.error_message
-  -> 任务进入 failed
-
-agent 返回 ExtractionResult.status=failed
-  -> 保存 agent_runs / field_traces
-  -> route_policy_agent 判断 review / reject / failed
-```
-
-## 11. 本科毕业设计原型范围
-
-第一版需要实现完整闭环，但不追求生产级复杂度。
-
-需要覆盖：
-
-- 单任务多文件 PDF 上传。
-- 单任务创建、状态查询、result、trace、review、audit。
-- SQLite 本地数据库。
-- SQLite 保存 markdown、blocks、trace 和审核结果，不保存用户上传的原始文件。
-- HTTP 调用 agent service 的 document_processor、file_extraction_agent 和 route_policy_agent。
-- 人工审核 `approve / revise_and_approve / reject`。
-- 字段级 audit 展示。
-
-暂不覆盖：
-
-- 登录、权限、多用户。
-- 批量任务。
-- 取消任务。
-- 重试任务。
-- 分布式任务队列。
-- 复杂数据库迁移。
-- 多轮人工补料或重新抽取。
+当前实现没有单独的人工审核接口、审核状态或审核表。

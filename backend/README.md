@@ -1,6 +1,6 @@
 # Backend
 
-`backend` 是 TraceAgent 的任务治理服务。它接收前端或脚本上传的一个或多个 PDF、`task_type` 和外部传入的 `task_spec`，调用 `agent service` 完成文档标准化、字段抽取和字段级 route policy，然后把任务状态、最终结果、人工复核和审计记录保存在本地 SQLite。
+`backend` 是 TraceAgent 的任务治理服务。它接收前端或脚本上传的一个或多个 PDF、`task_type` 和外部传入的 `task_spec`，调用 `agent service` 完成文档标准化和字段抽取，然后把任务状态、最终结果、审计记录保存在本地 SQLite。
 
 ## 实现链路
 
@@ -13,15 +13,12 @@
   -> 合并多个文件的 html 作为字段抽取输入，markdown、md_list 和 blocks 留作展示、证据回填和 trace
   -> HTTP 调用 file_extraction_agent
   -> 保存 agent_runs、extracted_fields 和 field_traces
-  -> 组装 field_outputs + refs_with_text
-  -> HTTP 调用 route_policy_agent
-  -> 保存 field_routes
-  -> accept 自动写 field_commits 并完成任务
-  -> review 返回 handoff，等待 `POST /tasks/{task_id}/review`
-  -> reject 或失败写入终态和错误信息
+  -> 对照 task_spec.fields 补齐 agent 没返回的字段占位，缺失字段写成 failed/None
+  -> 直接提交 resolved 字段，failed/None 字段保持未提交
+  -> 写入最终结果和 audit
 ```
 
-第一版采用请求内创建、后台处理模型：`POST /tasks` 先返回 `pending/uploaded`，随后由后台任务继续跑 document processing、extraction 和 route policy。调用方通过 `GET /tasks/{task_id}` 轮询 `completed/done`、`waiting_review/review`、`rejected/done` 或 `failed/done`。
+第一版采用请求内创建、后台处理模型：`POST /tasks` 先返回 `pending/uploaded`，随后由后台任务继续跑 document processing 和 extraction。调用方通过 `GET /tasks/{task_id}` 轮询 `completed/done` 或 `failed/done`。
 
 ## 主要 API
 
@@ -31,10 +28,9 @@ GET  /tasks/{task_id}
 GET  /tasks/{task_id}/result
 GET  /tasks/{task_id}/trace
 GET  /tasks/{task_id}/replay
-GET  /tasks/{task_id}/review
-POST /tasks/{task_id}/review
 GET  /tasks/{task_id}/audit
 GET  /capabilities
+GET  /healthz
 ```
 
 详细请求和响应见 [`docs/API.md`](docs/API.md)，设计边界见 [`docs/DESIGN.md`](docs/DESIGN.md)。
@@ -75,7 +71,7 @@ AGENT_SERVICE_BASE_URL=http://127.0.0.1:8001 uvicorn backend.main:app --reload -
 
 ## 测试
 
-后端测试使用 fake agent client，不依赖真实 OCR、LLM 或 agent service：
+后端测试使用 fake agent client，不依赖真实 OCR、LLM 或人工审核流程：
 
 ```bash
 PYTHONPATH=. pytest backend/tests -q

@@ -48,7 +48,11 @@ def build_tools(state: Any) -> list[Any]:
         reviewing, adding candidates, or writing according to the evidence you need.
         No assistant content is needed for mechanical adjacent reads. Use optional
         assistant content only when this read completes a semantic chunk or changes what
-        you will do next. If optional assistant content mentions source text, make that
+        you will do next. Use a short reading note when this turn reports a read result:
+        Read: name the block or clause just read.
+        Finding: summarize only what that block supports.
+        Next: say the next read, candidate save, review, or write action.
+        If assistant content mentions source text, make that
         quote, summary, or source-text claim a Markdown evidence link. Use a block link
         when inline selectors are not available yet.
         """
@@ -70,9 +74,12 @@ def build_tools(state: Any) -> list[Any]:
         final_evidence is selected later after review, and it may be a smaller or different
         inline subset of the candidate blocks.
         Assistant content is not optional when you call add_candidate_evidence.
-        Before calling add_candidate_evidence, write a short user-visible note explaining
-        why this block is worth saving for this field. This candidate is not the final field decision;
-        it is a reading note for later review. When source text is available, include a Markdown evidence link to the same block path_id you are saving, for example
+        Use a short candidate note for this turn:
+        Saving candidate: name the field and block being saved.
+        Why relevant: explain why this already-known block may support, contradict, or qualify the field.
+        Next: say whether you will keep reading, review this field, or save another candidate.
+        This candidate is not the final field decision; it is a note for later review.
+        When source text is available, include a Markdown evidence link to the same block path_id you are saving, for example
         ["quoted words"](evidence://0000.0001.0014). Do not leave source words as plain quoted text.
         Explain why the linked text may support, contradict, or qualify the field.
         If inline selectors are not available yet, block-level evidence links such as
@@ -97,6 +104,10 @@ def build_tools(state: Any) -> list[Any]:
         these returned inline evidence links as the only source for
         write_field(final_evidence=...).
         Use review_evidences like checking your notes before deciding whether to write or keep reading.
+        Use a short review note when this turn reports review status:
+        Review: name the field and candidate set being checked.
+        Sufficiency: say whether the reviewed evidence is enough for a field decision.
+        Next: say whether you will write, keep reading, or add another candidate.
         Only write after review makes the evidence sufficient for the field decision.
         Assistant content is optional for routine review checks.
         Use content when review changes your plan, shows what is missing, or prepares a field write.
@@ -124,6 +135,10 @@ def build_tools(state: Any) -> list[Any]:
         Use status="resolved" for extracted values and status="missing" when the document
         does not support the field. Array fields must be written as a complete array; do
         not append items incrementally. Rewriting the same field replaces the prior value.
+        Use a short write note for this turn:
+        Write: name the field and value/status being written.
+        Why supported: cite reviewed evidence or explain the reviewed absence basis.
+        Next: say the next field, review, or submit action.
 
         Assistant content citations should use Markdown links like ["short source quote"](evidence://0000.0001/S002).
         For non-empty final_evidence, assistant content must include a short quote from reviewed evidence_texts
