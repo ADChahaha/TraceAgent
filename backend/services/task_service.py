@@ -212,15 +212,22 @@ class TaskService:
     def __init__(
         self,
         *,
-        connection: sqlite3.Connection,
+        connection: Any,
         settings: BackendSettings,
         agent_client,
         audit_service: AuditService,
     ):
-        self.connection = connection
+        self._connection = connection
         self.settings = settings
         self.agent_client = agent_client
         self.audit_service = audit_service
+
+    @property
+    def connection(self) -> sqlite3.Connection:
+        connect = getattr(self._connection, "connect", None)
+        if callable(connect):
+            return connect()
+        return self._connection
 
     def upload_file_payload(
         self,

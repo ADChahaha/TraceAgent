@@ -221,6 +221,27 @@ def test_task_events_endpoint_replays_persisted_events_and_respects_after_seq(tm
     assert resume_events[0]["seq"] == second_seq + 1
 
 
+def test_backend_uses_thread_local_sqlite_connections_for_concurrent_polling(tmp_path: Path):
+    app = build_app(tmp_path)
+
+    with TestClient(app) as client:
+        main_thread_connection = client.app.state.task_service.connection
+        worker_connections = []
+
+        def read_connection_in_worker_thread():
+            worker_connection = client.app.state.task_service.connection
+            worker_connections.append(worker_connection)
+            row = worker_connection.execute("SELECT 1 AS value").fetchone()
+            assert row["value"] == 1
+
+        thread = threading.Thread(target=read_connection_in_worker_thread)
+        thread.start()
+        thread.join(timeout=2)
+
+    assert len(worker_connections) == 1
+    assert worker_connections[0] is not main_thread_connection
+
+
 def test_task_events_endpoint_waits_for_new_events_until_task_ends(tmp_path: Path):
     app = build_app(tmp_path)
 

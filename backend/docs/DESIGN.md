@@ -89,10 +89,10 @@ backend/
 
 模块边界：
 
-- `main.py` 创建 FastAPI app，通过 lifespan 初始化 SQLite 连接、agent client 和服务对象，挂载 `routes/`，不写业务流程。
+- `main.py` 创建 FastAPI app，通过 lifespan 初始化 SQLite 数据库、agent client 和服务对象，挂载 `routes/`，不写业务流程。
 - `pyproject.toml` 定义 backend 独立 Python 包、运行依赖和测试依赖；从零启动时应先执行 `pip install -e ".[dev]"`。
 - `core/config.py` 管理数据库路径、agent service 地址等配置，不管理业务 task spec。
-- `core/db.py` 初始化 SQLite 连接，不直接写业务查询；初始化时会清理旧 route/review schema 残留，避免本地旧库继续保留 `tasks.route`、`field_routes` 或人工复核旧表。
+- `core/db.py` 初始化 SQLite 数据库，不直接写业务查询；初始化时会清理旧 route/review schema 残留，避免本地旧库继续保留 `tasks.route`、`field_routes` 或人工复核旧表。运行时通过 `ThreadLocalDatabase` 为 FastAPI worker thread 和后台任务 thread 分配各自的 SQLite connection，避免前端轮询 `GET /tasks`、`GET /tasks/{task_id}/events` 时和后台抽取写入共享同一个 connection 导致游标状态互相踩踏。
 - `core/storage.py` 只保留上传文件元信息所需的哈希工具，不落盘保存原始文件。
 - `routes/` 只做 HTTP 入参出参适配，把请求转交给 `services/`。
 - `models/schema.py` 定义 SQLite DDL。第一版没有引入 ORM，CRUD 直接使用 `sqlite3.Row` 和参数化 SQL。

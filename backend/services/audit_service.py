@@ -15,8 +15,15 @@ from backend.services.agent_process import (
 
 
 class AuditService:
-    def __init__(self, connection: sqlite3.Connection):
-        self.connection = connection
+    def __init__(self, connection: Any):
+        self._connection = connection
+
+    @property
+    def connection(self) -> sqlite3.Connection:
+        connect = getattr(self._connection, "connect", None)
+        if callable(connect):
+            return connect()
+        return self._connection
 
     def commit_field(
         self,
