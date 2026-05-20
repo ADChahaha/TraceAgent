@@ -161,6 +161,14 @@ class HtmlDocument:
             return {"path_id": node.path_id, "rows": [row["row_id"] for row in table["rows"]]}
         raise ValueError(f"path is not readable: {path}")
 
+    def source_selectors(self) -> dict[str, str]:
+        selectors: dict[str, str] = {}
+        for path_id, node in self.nodes_by_path_id.items():
+            source_id = source_dom_id(node.source)
+            if source_id:
+                selectors[path_id] = source_id
+        return selectors
+
     def query_table(
         self,
         path: str,
@@ -509,6 +517,16 @@ def add_virtual_child(
     nodes_by_path[path] = child
     nodes_by_path_id[child.path_id] = child
     return child
+
+
+def source_dom_id(node: HtmlNode | None) -> str:
+    if node is None:
+        return ""
+    for attr_name in ("id", "data-element-id"):
+        value = node.attrs.get(attr_name)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def block_nodes(root: HtmlNode) -> list[HtmlNode]:

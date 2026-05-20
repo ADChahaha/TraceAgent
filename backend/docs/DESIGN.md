@@ -28,10 +28,10 @@ POST /tasks 创建任务
   -> backend 保存标准化文本结果，不保存原始文件
   -> backend 合并多个文件的 html 作为字段抽取输入，markdown、md_list 和 blocks 留作展示和证据回填
   -> backend 通过 HTTP 调用 file_extraction_agent
-  -> agent service 返回 ExtractionResult(result + trace)
+  -> agent service 返回 ExtractionResult(result + trace)，其中 trace.source_selectors 保存虚拟 path_id 到原文 DOM id 的映射
   -> task_service 对照 task_spec.fields 补齐 agent 没返回的预期字段，写成 failed/None 占位
   -> backend 直接提交 resolved 字段，failed/None 字段保持未提交
-  -> backend 保存抽取结果、trace 和 audit
+  -> backend 保存抽取结果、trace 和 audit；GET /tasks/{task_id}/replay 会把 trace.source_selectors 原样透传给前端用于 evidence 跳转
 ```
 
 职责边界：
@@ -265,6 +265,21 @@ documents
 ```
 
 trace 只展示 document_processing 和 extraction 两段。
+
+### `GET /tasks/{task_id}/replay`
+
+返回前端回放工作台需要的整理视图：
+
+```text
+agent_run.trace_json
+  -> outline_tree / actions / field_states
+  -> source_selectors(path_id -> 原文 DOM id)
+agent_stage_runs(document_processor)
+  -> display_html
+  -> 过滤页码、页眉、页脚版本号等旧任务文档 chrome
+```
+
+`source_selectors` 不参与字段判定，只用于前端把 `evidence://0000.0001...` 这类虚拟 locator 定位到 `display_html` 里的真实 DOM 节点。backend 不重新生成这张表，只透传 file_extraction_agent trace 中的映射。
 
 ### `GET /tasks/{task_id}/audit`
 

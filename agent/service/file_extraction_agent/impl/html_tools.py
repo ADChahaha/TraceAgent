@@ -765,7 +765,12 @@ def validate_and_build_result(state: Any) -> dict[str, Any]:
         return {"ok": False, "errors": errors}
     fields = [_field_with_evidence_texts(state, state.field_states[field.name]) for field in state.task_spec.fields if field.name in state.field_states]
     result = {"fields": fields}
-    trace = {"events": list(state.events), "actions": list(state.actions), "document_tree": state.document.tree_text("/", depth=3)}
+    trace = {
+        "events": list(state.events),
+        "actions": list(state.actions),
+        "document_tree": state.document.tree_text("/", depth=3),
+        "source_selectors": state.document.source_selectors(),
+    }
     return {"ok": True, "result": result, "trace": trace}
 
 

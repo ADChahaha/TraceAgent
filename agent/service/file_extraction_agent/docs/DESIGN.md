@@ -77,7 +77,9 @@ evidence://0000 /
 
 raw virtual path 是内部索引，不再作为模型可见 locator。`HtmlDocument` 会同时维护 `nodes_by_path` 和 `nodes_by_path_id`：raw path 用于内部调试和兼容底层查询，`path_id` 是内部稳定编号。模型看到和传入工具的 locator 是 `evidence://<path_id>`，例如根为 `evidence://0000`，第一个文档为 `evidence://0000.0001`，文档下第一个 section 为 `evidence://0000.0001.0001`。旧的方括号格式 `[0000.0001]` 不是别名，工具参数会直接拒绝。
 
-模型只能复制 tree 输出里的 `evidence://` locator。工具返回给模型的候选 evidence、`review_evidences.evidence` 和 `write_field(final_evidence=...)` 都使用 evidence links；工具内部会把这些 link 转成 canonical `path_id` selector，最终结果和 scorer 仍使用 `path_id + Sxxx/Ixxx/Rxxx` 反查原文。
+`HtmlDocument.source_selectors()` 会从虚拟节点对应的原始 HTML 节点上读取 `id`，如果没有 `id` 再看 `data-element-id`，生成 `path_id -> DOM id` 映射。这个映射只服务 replay 和前端定位，不改变 `tree/read/add_candidate_evidence/review_evidences/write_field` 的证据语义。
+
+模型只能复制 tree 输出里的 `evidence://` locator。工具返回给模型的候选 evidence、`review_evidences.evidence` 和 `write_field(final_evidence=...)` 都使用 evidence links；工具内部会把这些 link 转成 canonical `path_id` selector，最终结果和 scorer 仍使用 `path_id + Sxxx/Ixxx/Rxxx` 反查原文。`validate_and_build_result` 还会在 trace 里附带 `source_selectors`，把虚拟 `path_id` 映射到原文 DOM id，供 backend replay 和 frontend evidence 跳转使用。
 
 ## 工具边界
 

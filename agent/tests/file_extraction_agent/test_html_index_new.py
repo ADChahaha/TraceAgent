@@ -95,6 +95,18 @@ def test_path_ids_are_stable_model_visible_locators_for_raw_paths():
     assert "path" not in document.read_markdown(path_id)
 
 
+def test_source_selectors_map_path_ids_to_original_dom_ids():
+    document = build_html_document(_documents())
+
+    source_selectors = document.source_selectors()
+
+    assert source_selectors["0000.0001.0001"] == "h1"
+    assert source_selectors["0000.0001.0001.0001"] == "p1"
+    assert source_selectors["0000.0001.0001.0002"] == "p2"
+    assert source_selectors["0000.0001.0002.0001"] == "l1"
+    assert source_selectors["0000.0001.0002.0002"] == "tbl1"
+
+
 def test_bracketed_path_ids_are_rejected_instead_of_canonicalized():
     document = build_html_document(_documents())
     legacy_path_id = "[0000.0001.0001.0001]"

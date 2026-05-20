@@ -14,7 +14,7 @@
   -> 左侧任务栏打开时自动隐藏右侧 Review 工作栏；左侧任务栏关闭且停留在右侧 `Review` tab 时自动显示字段 Progress
   -> 字段 Progress 是靠中间的右侧竖栏，按字段名排序展示紧凑字段列表，不再分 Review / Reject / Accept 组
   -> 字段 Progress 不承载字段展开区；点击字段行只更新选中态，字段 summary 保留在 Progress 行里
-  -> 右侧 Review 工作栏内默认有 `Review` tab；evidence:// 链接、read、add_candidate_evidence 会按文件打开或切换完整原文 tab
+  -> 右侧 Review 工作栏内默认有 `Review` tab；evidence:// 链接、read、add_candidate_evidence 会按文件打开或切换完整原文 tab，优先使用 replay.source_selectors 把 path_id 映射到真实 DOM id
   -> 原文 tab 按 task_id 和文件隔离，tab 标题只显示解码后的 basename 文件名，不显示目录、URL 编码或 `%20`；同一文件内不同证据复用同一个文件 tab 并更新定位高亮；多文件才打开多个文件 tab；关闭原文 tab 后回到右侧 `Review`
   -> 原文查看器只显示完整原文渲染，不在 iframe 上方重复显示文件标题，并把原文内容铺满右侧框体，长表格、图片和长词按框宽收缩或换行，不出现左右滑动的纸张感
   -> Agent 流一次性渲染完整 reason 文本和工具摘要，不再提供自动播放、下一步、速度条或单步播放
@@ -46,7 +46,9 @@
 - `字段 Progress 显示字段摘要，点击字段不会占用 Review 工作区`：验证字段 summary 留在 Progress 行里，点击字段只改变选中态，不打开 Inspector 或固定子 tab。
 - `点击 evidence 链接会打开顶层原文 tab，并定位高亮对应位置`：验证 evidence:// 链接会在右侧 Review 工作栏打开对应文件的完整原文 tab，渲染 replay.display_html 的全文，跳到对应原文节点并高亮，同时不展示字段值、证据文本、原文位置或内部 evidence URI 等实现字段，并保留中央 Agent 工作区。
 - `原文文件 tab 只显示解码后的文件名，原文内容上方不再重复文件标题`：验证带目录的文件名只在右侧 tab 显示解码后的 basename，`%20` 会显示成空格，并且原文 iframe 上方不再额外渲染重复标题栏。
-- `点号 evidence URI 会打开原文文件 tab 并映射到真实 DOM 位置`：验证真实任务里的 `evidence://0000.0001.0009` 这类 locator 会归一化到 `p001_b009`，打开同一份原文文件 tab 并高亮对应 DOM 节点。
+- `点号 evidence URI 会打开原文文件 tab 并映射到真实 DOM 位置`：验证真实任务里的 `evidence://0000.0001.0009` 这类 locator 会先查 replay 里的 `source_selectors` 再高亮对应 DOM 节点，打开同一份原文文件 tab。
+- `0000.0001.0019 这类 base locator 会按实际段落定位，不会错配成 p001_b019`：验证当工具文本不能直接匹配时，前端会依赖 replay.source_selectors 把虚拟 path_id 定位到真实 DOM id，而不是沿用旧的点号编号猜测。
+- `旧 replay 没有 source_selectors 时，短 quote 链接会在最小原文块内高亮 quote 本身`：验证没有映射表的旧 replay 会用文本兜底定位到最小完整原文块，并在用户点击 Markdown 短 quote 时只用 `<mark>` 高亮 quote 文本，不把整个段落涂成当前证据。
 - `同一文件内不同 evidence 复用同一个原文文件 tab，只更新定位高亮`：验证同一文件内多个 evidence 链接只保留一个文件 tab，第二次点击只切换该 tab 的高亮节点，关闭后回到 `Review` 并显示字段 Progress。
 - `不同文件的 evidence 才会打开不同原文文件 tab`：验证不同文件定位会打开不同文件 tab，并把最后点击的文件 tab 设为当前 tab。
 - `右侧原文栏可以拉伸到更宽，便于查看完整文件`：验证右侧 Review/原文栏的 resize 上限足够大，便于查看完整文件。

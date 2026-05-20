@@ -356,6 +356,7 @@ class TaskService:
             ],
             "display_html": self._build_replay_display_html(agent_stage_runs),
             "outline_tree": trace_payload.get("document_tree") or [],
+            "source_selectors": trace_payload.get("source_selectors") or {},
             "broad_plan": trace_payload.get("broad_plan"),
             "actions": trace_payload.get("actions") or [],
             "result": result_payload,

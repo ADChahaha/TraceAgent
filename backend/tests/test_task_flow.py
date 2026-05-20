@@ -122,6 +122,7 @@ class FakeAgentClient:
                         "children": [],
                     }
                 ],
+                "source_selectors": {"0000.0001.0001": "dp-p-1"},
                 "fields": [
                     {
                         "field_name": "room_numbers",
@@ -459,6 +460,7 @@ def test_create_task_commits_resolved_agent_fields_without_routing(tmp_path: Pat
         assert "428249v2" not in replay["display_html"]
         assert "page-number" not in replay["display_html"]
         assert "page_footer" not in replay["display_html"]
+        assert replay["source_selectors"] == {"0000.0001.0001": "dp-p-1"}
 
         extract_call = fake_agent.extraction_calls[0]
         assert extract_call["task_spec"] == TASK_SPEC

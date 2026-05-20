@@ -24,7 +24,7 @@
   -> TaskDetail 读取 summary/result/replay
   -> ReplayReview 展示原顶部工具栏、左侧任务栏、中间 Agent 流和右侧 Review 工作栏
   -> 字段 Progress 只按字段名排序展示紧凑字段列表，只负责导航和状态，不再展示 route 结论或人工编辑入口
-  -> 用户点击字段 Progress 里的字段行时只在 Progress 内选中并查看字段摘要；用户点击 evidence://、read 或 add_candidate_evidence 时，在右侧 Review 工作栏按文件打开完整原文 tab，跳到对应原文节点并高亮
+  -> 用户点击字段 Progress 里的字段行时只在 Progress 内选中并查看字段摘要；用户点击 evidence://、read 或 add_candidate_evidence 时，在右侧 Review 工作栏按文件打开完整原文 tab，通过 replay.source_selectors 的 path_id -> DOM id 映射跳到对应原文节点并高亮
   -> 刷新任务详情，并用最新 summary 回写最近任务列表
 ```
 
@@ -132,7 +132,7 @@ frontend/
   -> read 和 add_candidate_evidence 工具行如果能解析到证据定位，会以 evidence href 的链接式工具行呈现，点击时复用同一套右侧原文 tab 打开逻辑
   -> 原文 tab 按 task_id 和文件隔离保存，tab 标题只显示解码后的 basename 文件名，不显示目录、URL 编码或 `%20`；同一文件只存在一个 tab，点击同一文件里的不同证据只更新该文件 tab 的 evidence selector 并重新定位高亮，多文件才打开多个文件 tab
   -> 原文查看器主体只显示完整原文渲染，不在 iframe 上方重复显示文件标题；原文内容按右侧框体 100% 宽度铺满重排，去掉纸张式灰底、外层留白、圆角和阴影，长表格、媒体、长词和预格式文本都收进框内，不保留固定纸面宽度或横向滚动条
-  -> 原文 tab 用 iframe 隔离渲染 replay.display_html 的完整文档，用 evidence selector/id 找到对应 DOM 节点，滚动到该节点并高亮；`evidence://0000.0001.0009` 这类点号 locator 会归一化到 `p001_b009` 这种原文 DOM id；界面不展示内部 evidence URI、selector、字段映射或实现细节
+  -> 原文 tab 用 iframe 隔离渲染 replay.display_html 的完整文档，先用 replay.source_selectors 把 `evidence://0000.0001.0009` 这类虚拟 path_id 映射成原文 DOM id，再滚动到该节点并高亮；旧 replay 没有映射时只用工具返回文本做兜底匹配，不把点号 locator 硬算成 `p001_b009` 这类 DOM id；用户点击 Markdown 短 quote 链接时在定位到的原文块内部只高亮 quote 文本本身，工具行等 block 级点击才高亮整块；界面不展示内部 evidence URI、selector、字段映射或实现细节
   -> 中央 Agent 区底部固定对话输入框，左下角是加文件按钮，右下角是发送按钮；当前阶段只提供 UI 骨架，不直接创建新任务或追加消息
   -> 中央 Agent 文字流使用中间 Agent 工作区自己的动态三列布局：左侧弹性留白 / 阅读列 / 右侧弹性留白，阅读列在 Agent 自己的内容框内居中
   -> 当整页只有一个侧栏可见时，Agent 中间文字框和输入框使用 `弹性留白 / 阅读列 / 弹性留白`；中间区变窄时先连续压缩两侧留白，留白归零后才压缩阅读列本身

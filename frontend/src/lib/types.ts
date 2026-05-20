@@ -245,6 +245,7 @@ export interface TaskReplay {
   }>;
   display_html: string;
   outline_tree?: ReplayOutlineNode[];
+  source_selectors?: Record<string, string>;
   broad_plan?: ReplayBroadPlan | null;
   actions: ReplayAction[];
   result?: {

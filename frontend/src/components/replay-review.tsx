@@ -41,6 +41,7 @@ type WorkspaceSourceTab = {
   uri: string;
   label: string;
   evidenceId: string;
+  quote: string;
   documentIndex: number;
 };
 
@@ -173,11 +174,13 @@ export function ReplayReview({
     const documentIndex = getEvidenceDocumentIndex(replay, evidenceId);
     const documentTitle = getEvidenceDocumentTitle(replay, evidenceId);
     const tabId = getSourceDocumentTabId(documentIndex);
+    const quote = isShortEvidenceQuote(label) ? label : "";
     const nextTab: WorkspaceSourceTab = {
       id: tabId,
       uri,
       label: documentTitle || label || evidenceId || "Source",
       evidenceId,
+      quote,
       documentIndex,
     };
     setSourceTabsByTask((current) => {
@@ -186,7 +189,7 @@ export function ReplayReview({
       return {
         ...current,
         [currentTaskId]: exists
-          ? currentTabs.map((tab) => (tab.id === tabId ? { ...tab, uri, evidenceId, label: tab.label || nextTab.label, documentIndex } : tab))
+          ? currentTabs.map((tab) => (tab.id === tabId ? { ...tab, uri, evidenceId, quote, label: tab.label || nextTab.label, documentIndex } : tab))
           : [...currentTabs, nextTab],
       };
     });
@@ -413,7 +416,7 @@ export function ReplayReview({
                   />
                 ) : (
                   <SourceTabPanel
-                    tab={activeSourceTab ?? sourceTabs[0] ?? { id: REVIEW_TAB_ID, uri: "", label: "Review", evidenceId: "", documentIndex: 0 }}
+                    tab={activeSourceTab ?? sourceTabs[0] ?? { id: REVIEW_TAB_ID, uri: "", label: "Review", evidenceId: "", quote: "", documentIndex: 0 }}
                     replay={replay}
                     evidenceDetailsById={evidenceDetailsById}
                   />
@@ -783,8 +786,8 @@ function SourceTabPanel({
   const highlightSelector = activeEvidenceDetail?.selector || getEvidenceSelector(tab.evidenceId);
   const sourceFrameRef = React.useRef<HTMLIFrameElement | null>(null);
   const renderedDocumentHtml = React.useMemo(
-    () => renderSourceDocumentHtml(replay.display_html, highlightSelector),
-    [highlightSelector, replay.display_html],
+    () => renderSourceDocumentHtml(replay.display_html, highlightSelector, tab.quote),
+    [highlightSelector, replay.display_html, tab.quote],
   );
   const scrollToCurrentEvidence = React.useCallback(() => {
     const target = sourceFrameRef.current?.contentDocument?.querySelector<HTMLElement>("[data-current-evidence='true']");
@@ -1249,20 +1252,23 @@ function getAgentToolIcon(toolName: string): { icon: React.ComponentType<{ class
 function buildEvidenceDetailsById(replay: TaskReplay, fields: ReplayField[]): Map<string, EvidenceDetail> {
   const details = new Map<string, EvidenceDetail>();
   const sourceBlocks = extractDisplayHtmlBlocks(replay.display_html);
+  const sourceSelectorByEvidenceId = buildSourceSelectorByEvidenceId(replay, sourceBlocks);
   const fieldsByEvidenceId = new Map<string, ReplayField>();
 
   for (const field of fields) {
     for (const evidenceId of field.evidenceIds) {
+      const sourceSelector = getMappedSourceSelector(sourceSelectorByEvidenceId, evidenceId);
       fieldsByEvidenceId.set(evidenceId, field);
-      fieldsByEvidenceId.set(getEvidenceSelector(evidenceId), field);
+      fieldsByEvidenceId.set(sourceSelector || getEvidenceSelector(evidenceId), field);
     }
   }
 
   for (const action of replay.actions) {
     const result = readObject(action.result);
     const resultField = readObject(result?.field);
+    collectReadResultEvidenceDetail(result, replay, sourceBlocks, sourceSelectorByEvidenceId, fieldsByEvidenceId, details);
     for (const value of [result?.evidence_texts, resultField?.evidence_texts]) {
-      collectEvidenceDetails(value, replay, sourceBlocks, fieldsByEvidenceId, details);
+      collectEvidenceDetails(value, replay, sourceBlocks, sourceSelectorByEvidenceId, fieldsByEvidenceId, details);
     }
   }
 
@@ -1285,7 +1291,7 @@ function buildEvidenceDetailsById(replay: TaskReplay, fields: ReplayField[]): Ma
       if (getEvidenceDetailById(details, evidenceId)) {
         continue;
       }
-      const selector = getEvidenceSelector(evidenceId);
+      const selector = getMappedSourceSelector(sourceSelectorByEvidenceId, evidenceId) ?? getEvidenceSelector(evidenceId);
       const sourceText = sourceBlocks.get(selector) ?? "";
       details.set(evidenceId, {
         id: evidenceId,
@@ -1301,10 +1307,126 @@ function buildEvidenceDetailsById(replay: TaskReplay, fields: ReplayField[]): Ma
   return details;
 }
 
+function buildSourceSelectorByEvidenceId(replay: TaskReplay, sourceBlocks: Map<string, string>): Map<string, string> {
+  const selectors = new Map<string, string>();
+  const remember = (evidenceId: string, sourceSelector: string) => {
+    const normalizedSelector = normalizeSourceSelector(sourceSelector);
+    if (!evidenceId || !normalizedSelector) {
+      return;
+    }
+    for (const key of getEvidenceLookupKeys(evidenceId)) {
+      if (!selectors.has(key)) {
+        selectors.set(key, normalizedSelector);
+      }
+    }
+  };
+
+  if (replay.source_selectors && typeof replay.source_selectors === "object") {
+    for (const [pathId, sourceSelector] of Object.entries(replay.source_selectors)) {
+      if (typeof sourceSelector === "string") {
+        remember(pathId, sourceSelector);
+      }
+    }
+  }
+
+  for (const action of replay.actions) {
+    const result = readObject(action.result);
+    if (!result) {
+      continue;
+    }
+    const resultLocator = readString(result.locator) || readString(result.path_id) || readString(result.path);
+    const resultText = readString(result.text);
+    const resultSelector = findSourceSelectorForEvidence(sourceBlocks, "", resultText);
+    if (resultLocator && resultSelector) {
+      remember(resultLocator, resultSelector);
+    }
+    const resultField = readObject(result.field);
+    for (const value of [result.evidence_texts, resultField?.evidence_texts]) {
+      collectSourceSelectorsFromEvidenceTexts(value, sourceBlocks, remember);
+    }
+  }
+
+  return selectors;
+}
+
+function getMappedSourceSelector(sourceSelectorByEvidenceId: Map<string, string>, evidenceId: string): string | undefined {
+  for (const key of getEvidenceLookupKeys(evidenceId)) {
+    const selector = sourceSelectorByEvidenceId.get(key);
+    if (selector) {
+      return selector;
+    }
+  }
+  return undefined;
+}
+
+function normalizeSourceSelector(sourceSelector: string): string {
+  return sourceSelector.trim().replace(/^#/, "");
+}
+
+function collectSourceSelectorsFromEvidenceTexts(
+  value: unknown,
+  sourceBlocks: Map<string, string>,
+  remember: (evidenceId: string, sourceSelector: string) => void,
+) {
+  if (!Array.isArray(value)) {
+    return;
+  }
+  for (const item of value) {
+    const objectItem = readObject(item);
+    if (!objectItem) {
+      continue;
+    }
+    const locator = readString(objectItem.locator);
+    const selector = readString(objectItem.selector);
+    const path = readString(objectItem.path);
+    const text = readString(objectItem.text);
+    const sourceSelector = findSourceSelectorForEvidence(sourceBlocks, selector, text);
+    if (!sourceSelector) {
+      continue;
+    }
+    for (const evidenceId of [locator, path, path && selector ? `${path}#${selector}` : ""]) {
+      remember(evidenceId, sourceSelector);
+    }
+  }
+}
+
+function collectReadResultEvidenceDetail(
+  result: Record<string, unknown> | null,
+  replay: TaskReplay,
+  sourceBlocks: Map<string, string>,
+  sourceSelectorByEvidenceId: Map<string, string>,
+  fieldsByEvidenceId: Map<string, ReplayField>,
+  details: Map<string, EvidenceDetail>,
+) {
+  if (!result) {
+    return;
+  }
+  const locator = readString(result.locator) || readString(result.path_id) || readString(result.path);
+  const text = readString(result.text);
+  if (!locator || !text) {
+    return;
+  }
+  const selector = getMappedSourceSelector(sourceSelectorByEvidenceId, locator) ?? findSourceSelectorForEvidence(sourceBlocks, "", text);
+  if (!selector) {
+    return;
+  }
+  const sourceText = sourceBlocks.get(selector) || text;
+  const detail: EvidenceDetail = {
+    id: locator,
+    text,
+    sourceText,
+    selector,
+    documentTitle: getEvidenceDocumentTitle(replay, locator),
+    field: fieldsByEvidenceId.get(locator) ?? fieldsByEvidenceId.get(stripEvidenceScheme(locator)) ?? fieldsByEvidenceId.get(selector) ?? null,
+  };
+  setEvidenceDetailAliases(details, locator, detail);
+}
+
 function collectEvidenceDetails(
   value: unknown,
   replay: TaskReplay,
   sourceBlocks: Map<string, string>,
+  sourceSelectorByEvidenceId: Map<string, string>,
   fieldsByEvidenceId: Map<string, ReplayField>,
   details: Map<string, EvidenceDetail>,
 ) {
@@ -1318,34 +1440,44 @@ function collectEvidenceDetails(
     }
     const selector = readString(objectItem.selector);
     const path = readString(objectItem.path);
+    const locator = readString(objectItem.locator);
     const text = readString(objectItem.text);
-    const id = path && selector ? `${path}#${selector}` : selector || path;
+    const id = locator || (path && selector ? `${path}#${selector}` : selector || path);
     if (!id) {
       continue;
     }
-    const sourceText = sourceBlocks.get(selector) || text;
+    const sourceSelector =
+      getMappedSourceSelector(sourceSelectorByEvidenceId, id) ??
+      (findSourceSelectorForEvidence(sourceBlocks, selector, text) || selector);
+    const sourceText = sourceBlocks.get(sourceSelector) || text;
     const detail: EvidenceDetail = {
       id,
       text: text || sourceText || id,
       sourceText,
-      selector,
+      selector: sourceSelector,
       documentTitle: getEvidenceDocumentTitle(replay, id),
-      field: fieldsByEvidenceId.get(id) ?? fieldsByEvidenceId.get(selector) ?? null,
+      field: fieldsByEvidenceId.get(id) ?? fieldsByEvidenceId.get(stripEvidenceScheme(id)) ?? fieldsByEvidenceId.get(sourceSelector) ?? fieldsByEvidenceId.get(selector) ?? null,
     };
-    details.set(id, detail);
+    setEvidenceDetailAliases(details, id, detail);
     if (selector) {
       details.set(selector, detail);
     }
     for (const [fieldEvidenceId, field] of fieldsByEvidenceId) {
-      if (fieldEvidenceId.endsWith(selector) || fieldEvidenceId.endsWith(`#${selector}`)) {
+      if (selector && (fieldEvidenceId.endsWith(selector) || fieldEvidenceId.endsWith(`#${selector}`))) {
         details.set(fieldEvidenceId, { ...detail, id: fieldEvidenceId, field });
       }
     }
   }
 }
 
+function setEvidenceDetailAliases(details: Map<string, EvidenceDetail>, evidenceId: string, detail: EvidenceDetail) {
+  for (const key of getEvidenceLookupKeys(evidenceId)) {
+    details.set(key, { ...detail, id: key });
+  }
+}
+
 function getEvidenceDetailById(details: Map<string, EvidenceDetail>, evidenceId: string): EvidenceDetail | null {
-  const exact = details.get(evidenceId) ?? details.get(getEvidenceSelector(evidenceId));
+  const exact = getEvidenceLookupKeys(evidenceId).map((key) => details.get(key)).find(Boolean) ?? details.get(getEvidenceSelector(evidenceId));
   if (exact) {
     return exact;
   }
@@ -1356,6 +1488,53 @@ function getEvidenceDetailById(details: Map<string, EvidenceDetail>, evidenceId:
     }
   }
   return null;
+}
+
+function getEvidenceLookupKeys(evidenceId: string): string[] {
+  const keys = new Set<string>();
+  const withoutScheme = stripEvidenceScheme(evidenceId);
+  const withoutInlineSelector = withoutScheme.split("/")[0] ?? withoutScheme;
+  const withoutHashSelector = withoutScheme.split("#")[0] ?? withoutScheme;
+  for (const key of [evidenceId, withoutScheme, withoutInlineSelector, `evidence://${withoutScheme}`, `evidence://${withoutInlineSelector}`]) {
+    if (key) {
+      keys.add(key);
+    }
+  }
+  if (withoutHashSelector) {
+    keys.add(withoutHashSelector);
+    keys.add(`evidence://${withoutHashSelector}`);
+  }
+  return [...keys];
+}
+
+function stripEvidenceScheme(evidenceId: string): string {
+  return evidenceId.replace(/^evidence:\/\//, "");
+}
+
+function findSourceSelectorForEvidence(sourceBlocks: Map<string, string>, selector: string, text: string): string {
+  if (selector && sourceBlocks.has(selector)) {
+    return selector;
+  }
+  return findSourceSelectorByText(sourceBlocks, text);
+}
+
+function findSourceSelectorByText(sourceBlocks: Map<string, string>, text: string): string {
+  const normalizedText = normalizeComparableText(text);
+  if (normalizedText.length < 12) {
+    return "";
+  }
+  for (const [selector, sourceText] of sourceBlocks) {
+    if (normalizeComparableText(sourceText) === normalizedText) {
+      return selector;
+    }
+  }
+  for (const [selector, sourceText] of sourceBlocks) {
+    const normalizedSourceText = normalizeComparableText(sourceText);
+    if (normalizedSourceText.includes(normalizedText) || normalizedText.includes(normalizedSourceText)) {
+      return selector;
+    }
+  }
+  return "";
 }
 
 function extractDisplayHtmlBlocks(displayHtml: string): Map<string, string> {
@@ -1447,28 +1626,62 @@ code {
 }
 </style>`;
 
-function renderSourceDocumentHtml(displayHtml: string, highlightSelector: string): string {
+function renderSourceDocumentHtml(displayHtml: string, highlightSelector: string, quote: string = ""): string {
   if (!displayHtml) {
     return wrapSourceDocumentHtml("<p>No source document is available.</p>");
   }
   let renderedHtml = displayHtml;
   const escapedSelector = escapeRegExp(highlightSelector);
-  const openingTagPattern = new RegExp(`(<[^>]*\\bid=(["'])${escapedSelector}\\2[^>]*)(>)`, "i");
   if (highlightSelector) {
-    renderedHtml = displayHtml.replace(openingTagPattern, (match, openingTag: string, _quote: string, close: string) => {
-      if (/\bdata-current-evidence=/.test(openingTag)) {
-        return match;
-      }
-      const classMatch = /\bclass=(["'])([^"']*)\1/i.exec(openingTag);
-      if (classMatch) {
-        const nextClass = `${classMatch[2]} is-current-evidence`.trim();
-        const withClass = openingTag.replace(classMatch[0], `class=${classMatch[1]}${nextClass}${classMatch[1]}`);
-        return `${withClass} data-current-evidence="true"${close}`;
-      }
-      return `${openingTag} class="is-current-evidence" data-current-evidence="true"${close}`;
-    });
+    renderedHtml = markSourceDocumentEvidence(displayHtml, highlightSelector, quote);
   }
   return wrapSourceDocumentHtml(renderedHtml);
+}
+
+function markSourceDocumentEvidence(displayHtml: string, highlightSelector: string, quote: string): string {
+  const escapedSelector = escapeRegExp(highlightSelector);
+  const elementPattern = new RegExp(`(<(?<tag>[a-z][\\w:-]*)\\b(?<attrs>[^>]*(?:\\bid|\\bdata-element-id)=(["'])${escapedSelector}\\4[^>]*)>)(?<content>[\\s\\S]*?)(</\\k<tag>>)`, "i");
+  if (quote && normalizeComparableText(quote).length >= 12) {
+    const withInlineQuote = displayHtml.replace(
+      elementPattern,
+      (match, openingTag: string, _tag: string, _attrs: string, _quoteChar: string, content: string, closingTag: string) => {
+        const markedContent = markFirstTextOccurrence(content, quote);
+        if (markedContent === content) {
+          return match;
+        }
+        return `${openingTag}${markedContent}${closingTag}`;
+      },
+    );
+    if (withInlineQuote !== displayHtml) {
+      return withInlineQuote;
+    }
+  }
+  const openingTagPattern = new RegExp(`(<[^>]*(?:\\bid|\\bdata-element-id)=(["'])${escapedSelector}\\2[^>]*)(>)`, "i");
+  return displayHtml.replace(openingTagPattern, (match, openingTag: string, _quote: string, close: string) => {
+    if (/\bdata-current-evidence=/.test(openingTag)) {
+      return match;
+    }
+    const classMatch = /\bclass=(["'])([^"']*)\1/i.exec(openingTag);
+    if (classMatch) {
+      const nextClass = `${classMatch[2]} is-current-evidence`.trim();
+      const withClass = openingTag.replace(classMatch[0], `class=${classMatch[1]}${nextClass}${classMatch[1]}`);
+      return `${withClass} data-current-evidence="true"${close}`;
+    }
+    return `${openingTag} class="is-current-evidence" data-current-evidence="true"${close}`;
+  });
+}
+
+function markFirstTextOccurrence(htmlContent: string, quote: string): string {
+  const quoteIndex = htmlContent.indexOf(quote);
+  if (quoteIndex < 0) {
+    return htmlContent;
+  }
+  return `${htmlContent.slice(0, quoteIndex)}<mark class="is-current-evidence" data-current-evidence="true">${htmlContent.slice(quoteIndex, quoteIndex + quote.length)}</mark>${htmlContent.slice(quoteIndex + quote.length)}`;
+}
+
+function isShortEvidenceQuote(label: string): boolean {
+  const normalizedLabel = label.replace(/\s+/g, " ").trim();
+  return normalizedLabel.length >= 12 && normalizedLabel.length <= 240;
 }
 
 function wrapSourceDocumentHtml(displayHtml: string): string {
@@ -1546,8 +1759,15 @@ function getSourceDocumentTabId(documentIndex: number): string {
 }
 
 function getEvidenceDocumentIndex(replay: TaskReplay, evidenceId: string): number {
-  const pathPrefix = evidenceId.split("#")[0] ?? "";
-  const firstPathPart = pathPrefix.split("/").filter(Boolean)[0] ?? "";
+  const evidencePath = stripEvidenceScheme(evidenceId).split("#")[0] ?? "";
+  const firstPathPart = evidencePath.split("/").filter(Boolean)[0] ?? "";
+  const virtualPathMatch = firstPathPart.match(/^0000\.(\d{4})(?:\.|$)/);
+  if (virtualPathMatch) {
+    const virtualDocumentIndex = Number(virtualPathMatch[1]) - 1;
+    if (Number.isFinite(virtualDocumentIndex) && virtualDocumentIndex >= 0) {
+      return Math.min(virtualDocumentIndex, Math.max(replay.documents.length - 1, 0));
+    }
+  }
   const documentIndexMatch = firstPathPart.match(/^(\d+)/);
   const parsedDocumentIndex = documentIndexMatch ? Number(documentIndexMatch[1]) - 1 : 0;
   if (!Number.isFinite(parsedDocumentIndex) || parsedDocumentIndex < 0) {
@@ -1557,20 +1777,7 @@ function getEvidenceDocumentIndex(replay: TaskReplay, evidenceId: string): numbe
 }
 
 function normalizeEvidenceSelector(locator: string): string {
-  const dottedMatch = locator.match(/^(?:\d+\.)+\d+$/);
-  if (!dottedMatch) {
-    return locator;
-  }
-  const parts = locator.split(".");
-  if (parts.length < 3) {
-    return locator;
-  }
-  const pageNumber = Number(parts[1]);
-  const blockNumber = Number(parts[2]);
-  if (!Number.isFinite(pageNumber) || !Number.isFinite(blockNumber)) {
-    return locator;
-  }
-  return `p${String(pageNumber).padStart(3, "0")}_b${String(blockNumber).padStart(3, "0")}`;
+  return locator.replace(/^#/, "");
 }
 
 function findFieldByEvidenceText(fields: ReplayField[], evidenceText: string): ReplayField | null {

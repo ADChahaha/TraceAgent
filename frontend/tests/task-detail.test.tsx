@@ -693,6 +693,7 @@ it("点号 evidence URI 会打开原文文件 tab 并映射到真实 DOM 位置"
       ...encodedFilenameReplay,
       display_html:
         '<main><section class="page"><p id="p001_b008">前一段</p><p id="p001_b009" data-element-id="p001_b009">ii) proprietary, non-public or confidential information</p></section></main>',
+      source_selectors: { "0000.0001.0009": "p001_b009" },
       actions: [
         {
           tool_name: "read",
@@ -718,6 +719,84 @@ it("点号 evidence URI 会打开原文文件 tab 并映射到真实 DOM 位置"
   const sourceViewer = within(rightPanel).getByLabelText("原文查看器");
   expect(sourceViewer).toHaveAttribute("data-highlight-selector", "p001_b009");
   expect(getSourceFrameHtml(sourceViewer)).toContain('id="p001_b009" data-element-id="p001_b009" class="is-current-evidence" data-current-evidence="true"');
+});
+
+it("0000.0001.0019 这类 base locator 会按实际段落定位，不会错配成 p001_b019", async () => {
+  const user = userEvent.setup();
+  const evidenceDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      display_html:
+        '<main><section class="page"><h1 id="p001_b000">标题</h1><p id="p002_b004">or (c) has been independently acquired or developed by the undersigned or any of its Representatives without violation of any obligation under this NDA;</p></section></main>',
+      source_selectors: { "0000.0001.0019": "p002_b004" },
+      actions: [
+        {
+          tool_name: "read",
+          reason: "查看独立开发例外",
+          args: { path_id: "evidence://0000.0001.0019" },
+          result: {
+            ok: true,
+            locator: "evidence://0000.0001.0019",
+            kind: "paragraph",
+            text: "normalized virtual tree text that cannot be matched against the display HTML"
+          }
+        },
+        {
+          tool_name: "add_candidate_evidence",
+          reason: "保存 [独立开发例外](evidence://0000.0001.0019)",
+          args: { field_id: "nda_12_decision", path_id: "evidence://0000.0001.0019" },
+          result: { ok: true, field_id: "nda_12_decision", candidate_evidence: ["evidence://0000.0001.0019"] }
+        }
+      ]
+    }
+  };
+  renderTaskDetail(evidenceDetail);
+
+  await user.click(await screen.findByRole("button", { name: "关闭任务栏" }));
+  await user.click(screen.getByRole("link", { name: "独立开发例外" }));
+
+  const rightPanel = screen.getByLabelText("右侧 Review 工作栏");
+  const sourceViewer = within(rightPanel).getByLabelText("原文查看器");
+  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "p002_b004");
+  expect(getSourceFrameHtml(sourceViewer)).toContain('id="p002_b004" class="is-current-evidence" data-current-evidence="true"');
+});
+
+it("旧 replay 没有 source_selectors 时，短 quote 链接会在最小原文块内高亮 quote 本身", async () => {
+  const user = userEvent.setup();
+  const quoteText = "including any documents or copies (paper, electronic or otherwise) thereof";
+  const longClause =
+    "1. To maintain the Information in the strictest of confidence and to control the dissemination of the Information, including any documents or copies (paper, electronic or otherwise) thereof contained in the Information in accordance with the terms and conditions of this Confidentiality and Non-Disclosure Agreement (“NDA”);";
+  const evidenceDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      display_html: `<main><section id="page_001"><h1>CONFIDENTIALITY AND NON-DISCLOSURE AGREEMENT</h1><p id="p001_b012">${longClause}</p><p id="p004_b004">OR</p></section></main>`,
+      source_selectors: undefined,
+      actions: [
+        {
+          tool_name: "read",
+          reason: `查看 [${quoteText}](evidence://0000.0001.0012)`,
+          args: { path_id: "evidence://0000.0001.0012" },
+          result: {
+            ok: true,
+            locator: "evidence://0000.0001.0012",
+            kind: "paragraph",
+            text: longClause
+          }
+        }
+      ]
+    }
+  };
+  renderTaskDetail(evidenceDetail);
+
+  await user.click(await screen.findByRole("button", { name: "关闭任务栏" }));
+  await user.click(screen.getByRole("link", { name: quoteText }));
+
+  const sourceViewer = within(screen.getByLabelText("右侧 Review 工作栏")).getByLabelText("原文查看器");
+  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "p001_b012");
+  expect(getSourceFrameHtml(sourceViewer)).not.toContain('id="p001_b012" class="is-current-evidence" data-current-evidence="true"');
+  expect(getSourceFrameHtml(sourceViewer)).toContain(`<mark class="is-current-evidence" data-current-evidence="true">${quoteText}</mark>`);
 });
 
 it("完整原文 tab 填满右侧框体，不再强制固定纸面宽度或横向滚动", async () => {
