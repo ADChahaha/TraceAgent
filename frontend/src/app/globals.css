@@ -910,6 +910,8 @@ html[data-theme="dark"] .home-task-composer {
   font-size: 13px;
   font-weight: 400;
   line-height: 1.58;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .replay-agent-stream {
@@ -1008,7 +1010,7 @@ html[data-theme="dark"] .home-task-composer {
   width: 100%;
   min-width: 0;
   max-width: 100%;
-  align-items: center;
+  align-items: start;
   gap: 8px;
   border: 0;
   border-radius: 0;
@@ -1048,9 +1050,9 @@ html[data-theme="dark"] .home-task-composer {
 
 .replay-agent-tool-summary {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   color: currentColor;
   font-size: 12px;
   font-weight: 400;
@@ -1071,10 +1073,10 @@ html[data-theme="dark"] .home-task-composer {
 
 .replay-agent-tool-group-toggle {
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
   width: 100%;
   min-width: 0;
-  align-items: center;
+  align-items: start;
   gap: 8px;
   border: 0;
   border-radius: 6px;
@@ -1109,9 +1111,9 @@ html[data-theme="dark"] .home-task-composer {
 
 .replay-agent-tool-group-summary {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   color: currentColor;
   font-size: 12px;
   font-weight: 400;
@@ -1201,12 +1203,14 @@ html[data-theme="dark"] .home-task-composer {
 }
 
 .replay-evidence-link {
-  display: inline-block;
+  display: inline;
   border-radius: 4px;
   color: var(--replay-foreground);
   padding: 0 1px;
   text-decoration: underline;
   text-underline-offset: 3px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .replay-field-progress-panel-slot,

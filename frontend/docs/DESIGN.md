@@ -145,6 +145,7 @@ frontend/
   -> 中央 Agent 区底部固定对话输入框，左下角是加文件按钮，右下角是发送按钮；当前阶段只提供 UI 骨架，不直接创建新任务或追加消息
   -> 中央 Agent 文字流使用中间 Agent 工作区自己的动态三列布局：左侧弹性留白 / 阅读列 / 右侧弹性留白，阅读列在 Agent 自己的内容框内居中
   -> 当整页没有侧栏或只有一个侧栏可见时，Agent 中间文字框和输入框使用 `弹性留白 / 阅读列 / 弹性留白`；中间区变窄时先连续压缩两侧留白，留白归零后才压缩阅读列本身
+  -> 阅读列被压窄时，Agent 正文、Markdown evidence 链接、单行 tool 摘要和折叠 tool group 摘要都在列内换行，不使用 `nowrap`、`overflow:hidden` 或 ellipsis 裁掉内容
   -> Replay stage 在窄视口也保持左栏 / Agent / 右侧 Review 的列布局，不把右侧 Review 原文栏堆到 Agent 下方
   -> 顶部工具栏左侧展示任务栏 toggle 和任务标题，右侧展示任务 status badge 和 Review 图标按钮，当前文件名只出现在右侧 Review 工作栏的文件 tab
   -> Agent 工具调用先按 action 顺序过滤掉 anchors/submit_result；空的 model_message 不进入文字流，非空 model_message 只作为文字段展示，不作为 tool 行；真实 tool 不包含也不消费 reason，连续 tool 直接按 run 折叠

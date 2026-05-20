@@ -3,6 +3,11 @@ import { resolve } from "node:path";
 
 const globalsCss = readFileSync(resolve(__dirname, "../src/app/globals.css"), "utf8");
 
+function cssRule(selector: string) {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return globalsCss.match(new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+}
+
 it("Codex 主题使用统一的 light/dark token", () => {
   expect(globalsCss).toContain("--foreground: #1a1c1f;");
   expect(globalsCss).toContain("--secondary: #f4f4f5;");
@@ -27,14 +32,30 @@ it("Agent turn 使用更开的上下间距，工具行内部保持紧凑", () =>
   expect(globalsCss).toMatch(/\.replay-agent-turn\s*\{[^}]*gap:\s*14px;/);
   expect(globalsCss).toMatch(/\.replay-agent-tool-line\s*\{[^}]*gap:\s*8px;/);
   expect(globalsCss).toMatch(/\.replay-agent-tool-group\s*\{[^}]*gap:\s*8px;/);
-  expect(globalsCss).toMatch(/\.replay-agent-tool-group-toggle\s*\{[^}]*grid-template-columns:\s*auto auto minmax\(0,\s*1fr\);[^}]*gap:\s*8px;/);
+  expect(globalsCss).toMatch(/\.replay-agent-tool-group-toggle\s*\{[^}]*grid-template-columns:\s*auto minmax\(0,\s*1fr\);[^}]*gap:\s*8px;/);
   expect(globalsCss).toMatch(/\.replay-agent-tool-icon\s*\{[^}]*height:\s*14px;[^}]*width:\s*14px;/);
   expect(globalsCss).toMatch(/\.home-task-file-remove\s*\{[^}]*width:\s*18px;[^}]*height:\s*18px;/);
 });
 
-it("evidence 文本链接扩大命中区域，跨行时仍能点击到链接本身", () => {
-  expect(globalsCss).toMatch(/\.replay-evidence-link\s*\{[^}]*display:\s*inline-block;/);
-  expect(globalsCss).toMatch(/\.replay-evidence-link\s*\{[^}]*padding:\s*0 1px;/);
+it("Agent 文本和工具摘要在窄宽度下换行，不用隐藏省略裁剪", () => {
+  const reasonTextRule = cssRule(".replay-agent-reason-text");
+  expect(reasonTextRule).toContain("overflow-wrap: anywhere;");
+  expect(reasonTextRule).toContain("word-break: break-word;");
+
+  const evidenceLinkRule = cssRule(".replay-evidence-link");
+  expect(evidenceLinkRule).toContain("display: inline;");
+  expect(evidenceLinkRule).toContain("padding: 0 1px;");
+  expect(evidenceLinkRule).toContain("overflow-wrap: anywhere;");
+  expect(evidenceLinkRule).toContain("word-break: break-word;");
+
+  for (const selector of [".replay-agent-tool-summary", ".replay-agent-tool-group-summary"]) {
+    const rule = cssRule(selector);
+    expect(rule).toContain("white-space: normal;");
+    expect(rule).toContain("overflow-wrap: anywhere;");
+    expect(rule).toContain("word-break: break-word;");
+    expect(rule).not.toContain("overflow: hidden;");
+    expect(rule).not.toContain("text-overflow: ellipsis;");
+  }
 });
 
 it("Replay stage 在窄视口也使用左右栏列布局，不把 Review 原文栏堆到下方", () => {
