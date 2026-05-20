@@ -48,7 +48,7 @@ def test_build_html_document_builds_virtual_tree_for_multiple_documents():
         "001-contract-项目设计说明",
         "002-contract-项目设计说明",
     ]
-    assert [child.path_id for child in root.children] == ["0000.0001", "0000.0002"]
+    assert [child.path_id for child in root.children] == ["0001", "0002"]
     assert "/001-contract-项目设计说明/001-背景" in document.nodes_by_path
     assert "/001-contract-项目设计说明/002-背景" in document.nodes_by_path
     assert (
@@ -67,13 +67,14 @@ def test_tree_view_respects_depth_and_file_kinds():
     document = build_html_document(_documents())
 
     depth_one = document.tree_text("/", depth=1)
-    assert "0000 /" in depth_one
-    assert "0000.0001 contract-项目设计说明/" in depth_one
+    assert depth_one.splitlines()[0] == "/"
+    assert "0001 contract-项目设计说明/" in depth_one
+    assert "0000 /" not in depth_one
     assert "001-contract-项目设计说明/" not in depth_one
     assert "背景/" not in depth_one
 
     depth_three = document.tree_text("/001-contract-项目设计说明", depth=3)
-    assert "0000.0001" in depth_three
+    assert "0001" in depth_three
     assert "/001-contract-项目设计说明/001-背景" not in depth_three
     assert "背景/" in depth_three
     assert "这个项目最初是为了抽取字段.md" in depth_three
@@ -88,28 +89,54 @@ def test_path_ids_are_stable_model_visible_locators_for_raw_paths():
 
     path_id = document.path_id(path)
 
-    assert path_id == "0000.0001.0001.0001"
+    assert path_id == "0001.0001.0001"
     assert document.resolve_path_id(path_id) == path
     assert document.resolve_path(path_id) == path
     assert document.read_markdown(path_id)["path_id"] == path_id
     assert "path" not in document.read_markdown(path_id)
 
 
-def test_source_selectors_map_path_ids_to_original_dom_ids():
+def test_source_selectors_map_readable_path_ids_to_original_dom_ids():
     document = build_html_document(_documents())
 
     source_selectors = document.source_selectors()
 
-    assert source_selectors["0000.0001.0001"] == "h1"
-    assert source_selectors["0000.0001.0001.0001"] == "p1"
-    assert source_selectors["0000.0001.0001.0002"] == "p2"
-    assert source_selectors["0000.0001.0002.0001"] == "l1"
-    assert source_selectors["0000.0001.0002.0002"] == "tbl1"
+    assert "0001" not in source_selectors
+    assert "0001.0001" not in source_selectors
+    assert "0001.0002" not in source_selectors
+    assert source_selectors["0001.0001.0001"] == "p1"
+    assert source_selectors["0001.0001.0002"] == "p2"
+    assert source_selectors["0001.0002.0001"] == "l1"
+    assert source_selectors["0001.0002.0002"] == "tbl1"
+
+
+def test_document_direct_blocks_use_document_root_namespace():
+    document = build_html_document(
+        [
+            {
+                "filename": "cover.html",
+                "html": """
+                <h1 id="title">封面</h1>
+                <p id="cover-p1">封面第一行。</p>
+                <p id="cover-p2">封面第二行。</p>
+                <h2 id="section">第一章</h2>
+                <p id="section-p1">章节正文。</p>
+                """,
+            }
+        ]
+    )
+
+    assert document.path_id("/001-cover-封面/001-封面第一行.md") == "0001.0000.0001"
+    assert document.path_id("/001-cover-封面/002-封面第二行.md") == "0001.0000.0002"
+    assert document.path_id("/001-cover-封面/003-第一章") == "0001.0001"
+    assert document.path_id("/001-cover-封面/003-第一章/001-章节正文.md") == "0001.0001.0001"
+    assert document.source_selectors()["0001.0000.0001"] == "cover-p1"
+    assert "0001.0000" not in document.nodes_by_path_id
 
 
 def test_bracketed_path_ids_are_rejected_instead_of_canonicalized():
     document = build_html_document(_documents())
-    legacy_path_id = "[0000.0001.0001.0001]"
+    legacy_path_id = "[0001.0001.0001]"
 
     with pytest.raises(ValueError):
         document.resolve_path_id(legacy_path_id)
@@ -133,7 +160,7 @@ def test_tree_display_names_decode_percent_encoded_filenames_without_changing_ra
 
     tree = document.tree_text("/", depth=1)
 
-    assert "0000.0001 Confidentiality Agreement-NDA/" in tree
+    assert "0001 Confidentiality Agreement-NDA/" in tree
     assert "Confidentiality%20Agreement" not in tree
     assert "/001-Confidentiality%20Agreement-NDA" in document.nodes_by_path
 

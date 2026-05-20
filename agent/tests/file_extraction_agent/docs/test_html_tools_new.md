@@ -7,7 +7,7 @@
 ```text
 documents + task_spec
   -> build_graph_input / build_graph_state
-  -> tree/read 使用 evidence:// locator 浏览材料
+  -> tree(path_id="") 打开根目录，tree/read 使用 tree 输出里的 evidence:// locator 浏览材料
   -> 内部工具 helper 与模型工具 schema 都不接收 reason 参数
   -> read(evidence://...) 先校验 locator 指向可读 block，再只返回这个 block 的阅读视图
   -> read 成功后可以继续 tree/read/review，工具层不拦截下一步
@@ -24,7 +24,7 @@ documents + task_spec
 - `test_module_exports_current_review_helper`：确认模块星号导出同步到当前 `_review_evidences` helper，不再暴露旧 `_anchors`、`_query_table`、`_review_field` 名称。
 - `test_internal_tool_helpers_do_not_accept_reason_parameter`：确认内部工具 helper 也不再接收 `reason` 参数。
 - `test_read_allows_free_navigation_after_successful_read`：确认 `read` 成功后可以继续 `tree/read`，不会再返回 `READ_JUDGEMENT_REQUIRED`。
-- `test_tool_path_arguments_use_evidence_links_and_write_final_evidence_copies_review_links`：确认模型工具参数使用 `evidence://` block/inline links；`add_candidate_evidence` 对模型返回候选 link，内部 state 仍保存 canonical `path_id` selector。
+- `test_tool_path_arguments_use_evidence_links_and_write_final_evidence_copies_review_links`：确认模型工具参数使用 `evidence://` block/inline links；根目录通过空 path_id 打开，文档目录显示为 `evidence://0001`；`add_candidate_evidence` 对模型返回候选 link，内部 state 仍保存 canonical `path_id` selector。
 - `test_bare_path_ids_are_rejected_for_model_facing_path_arguments`：确认模型面向的 `read/add_candidate_evidence` 参数拒绝裸 `path_id`，必须传 `evidence://` link。
 - `test_read_reads_one_block_and_exposes_only_path_id_argument`：确认模型可见 `read` schema 只暴露 `path_id` 参数，内部读取也只返回指定的单个 paragraph/list/table block。
 - `test_add_candidate_evidence_accepts_one_explicit_path_id_and_review_expands_inline`：确认 `add_candidate_evidence` 必须拿到显式 `evidence://` block link，且一次只记录一个字段和一个 paragraph/list/table block；`review_evidences` 会把 paragraph block 展开成 Sxxx inline link 和反查文本。

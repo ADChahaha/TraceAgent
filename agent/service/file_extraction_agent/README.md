@@ -23,7 +23,7 @@ documents + task_spec + run_options
   -> graph 按顺序输出 NDJSON 工具事件，最后输出 result_completed
 ```
 
-虚拟树不会落盘。raw virtual path 只作为内部索引和调试信息使用；模型看到和提交的 locator 是 `evidence://0000.0001` 这种 evidence link。旧方括号格式不是别名，工具参数会直接拒绝。内部仍通过 `HtmlDocument.nodes_by_path` / `nodes_by_path_id` 找回 paragraph 文本、list item 和 table row。
+虚拟树不会落盘。raw virtual path 只作为内部索引和调试信息使用；模型看到和提交的 locator 是 `evidence://0001.0000.0001` 这种 evidence link。根目录只在 `tree(path_id="", depth=...)` 里用空 path_id 表示，不再暴露成 `evidence://0000`。旧方括号格式不是别名，工具参数会直接拒绝。内部仍通过 `HtmlDocument.nodes_by_path` / `nodes_by_path_id` 找回 paragraph 文本、list item 和 table row。
 
 ## 虚拟文件树
 
@@ -50,7 +50,7 @@ paragraph 文件名只是预览，不代表截断正文。完整正文由 `read(
 | `write_field(field_id, value, final_evidence, status)` | 基于同字段当前 `review_evidences` snapshot，写入或覆盖一个 schema 字段的最终值和最终证据。 |
 | `submit_result()` | 校验当前字段缓冲区，成功返回最终 `fields[]`，失败返回结构化错误。 |
 
-工具参数不再包含 `reason`。assistant content 是可选的用户可见阶段性说明，并兼容填入工具 action/event 的 `reason` 字段；没有 content 时 `reason` 为空字符串。system prompt 只保留全局约束，具体本轮说明模板写在 tool docstring 中：`read` 用 `Read / Finding / Next`，`add_candidate_evidence` 用 `Saving candidate / Why relevant / Next`，`review_evidences` 用 `Review / Sufficiency / Next`，`write_field` 用 `Write / Why supported / Next`。这样只有候选保存的轮次只说明“保存哪个候选、为什么相关”，不会写成“刚读到了什么”。如果 content 使用了文档原文或原文语义，就必须写成 Markdown evidence link，并解释为什么这段文字支持当前动作。可以引用 inline selector，例如 `["only in connection"](evidence://0000.0001.0014/S002)`；必要时也可以引用整个 paragraph/list/table block，例如 `["strictest of confidence"](evidence://0000.0001.0012)`。`write_field` 的可见引用也可以链到 inline selector 或它所在的 paragraph/list/table block；工具参数和 `final_evidence` 都使用 `evidence://` 链接。
+工具参数不再包含 `reason`。assistant content 是可选的用户可见阶段性说明，并兼容填入工具 action/event 的 `reason` 字段；没有 content 时 `reason` 为空字符串。system prompt 只保留全局约束，具体本轮说明模板写在 tool docstring 中：`read` 用 `Read / Finding / Next`，`add_candidate_evidence` 用 `Saving candidate / Why relevant / Next`，`review_evidences` 用 `Review / Sufficiency / Next`，`write_field` 用 `Write / Why supported / Next`。这样只有候选保存的轮次只说明“保存哪个候选、为什么相关”，不会写成“刚读到了什么”。如果 content 使用了文档原文或原文语义，就必须写成 Markdown evidence link，并解释为什么这段文字支持当前动作。可以引用 inline selector，例如 `["only in connection"](evidence://0001.0001.0004/S002)`；必要时也可以引用整个 paragraph/list/table block，例如 `["strictest of confidence"](evidence://0001.0000.0012)`。`write_field` 的可见引用也可以链到 inline selector 或它所在的 paragraph/list/table block；工具参数和 `final_evidence` 都使用 `evidence://` 链接。
 
 resolution 关闭并发工具调用：prompt 要求每轮只调用一个工具，`bind_tools` 会请求 provider 侧 `parallel_tool_calls=False`，运行时如果仍收到多个 tool call，只保留并执行第一个。这样模型必须等待每次 `read/review/write` 的结果再继续下一步，避免批量读取或批量写入破坏证据反馈链。
 
@@ -61,38 +61,38 @@ resolution 关闭并发工具调用：prompt 要求每轮只调用一个工具�
 paragraph：
 
 ```text
-tree("evidence://0000", depth=2)
-  -> 显示 evidence://0000.0001.0001.0001 公司成立于2020年.md
-read("evidence://0000.0001.0001.0001")
+tree(path_id="", depth=2)
+  -> 显示 evidence://0001.0001.0001 公司成立于2020年.md
+read("evidence://0001.0001.0001")
   -> 返回完整 paragraph 正文，不带句子号
-add_candidate_evidence(field_id="founded_year", path_id="evidence://0000.0001.0001.0001")
-  -> 保存候选 block evidence: {"path_id": "0000.0001.0001.0001"}
+add_candidate_evidence(field_id="founded_year", path_id="evidence://0001.0001.0001")
+  -> 保存候选 block evidence: {"path_id": "0001.0001.0001"}
 review_evidences(field_id="founded_year")
-  -> 展开 inline evidence: {"path_id": "0000.0001.0001.0001", "sentences": ["S001", ...]}
+  -> 展开 inline evidence: {"path_id": "0001.0001.0001", "sentences": ["S001", ...]}
 ```
 
 list：
 
 ```text
-read("evidence://0000.0001.0002.0001")
+read("evidence://0001.0002.0001")
   -> frontmatter metadata + Markdown list
   -> - [I001] ...
-add_candidate_evidence(field_id="service_items", path_id="evidence://0000.0001.0002.0001")
-  -> 保存候选 block evidence: {"path_id": "0000.0001.0002.0001"}
+add_candidate_evidence(field_id="service_items", path_id="evidence://0001.0002.0001")
+  -> 保存候选 block evidence: {"path_id": "0001.0002.0001"}
 review_evidences(field_id="service_items")
-  -> 展开 inline evidence: {"path_id": "0000.0001.0002.0001", "items": ["I001", ...]}
+  -> 展开 inline evidence: {"path_id": "0001.0002.0001", "items": ["I001", ...]}
 ```
 
 table：
 
 ```text
-read("evidence://0000.0001.0003.0001")
+read("evidence://0001.0003.0001")
   -> frontmatter metadata + Markdown table
   -> | R001 | ... |
-add_candidate_evidence(field_id="fees", path_id="evidence://0000.0001.0003.0001")
-  -> 保存候选 block evidence: {"path_id": "0000.0001.0003.0001"}
+add_candidate_evidence(field_id="fees", path_id="evidence://0001.0003.0001")
+  -> 保存候选 block evidence: {"path_id": "0001.0003.0001"}
 review_evidences(field_id="fees")
-  -> 展开 inline evidence: {"path_id": "0000.0001.0003.0001", "rows": ["R001", ...]}
+  -> 展开 inline evidence: {"path_id": "0001.0003.0001", "rows": ["R001", ...]}
 ```
 
 `write_field(final_evidence=...)` 必须复制同字段当前 `review_evidences.evidence` 里的 inline selector；模型应在 review 后判断证据足够支撑字段决定，或者足够判断 missing/null，才写字段。如果 review 后又给该字段 `add_candidate_evidence` 新候选，当前 review snapshot 会失效，需要重新 review 再写。prompt 会建议模型 review 后尽快 write，不要隔很远才使用旧 review。这个规则也适用于 `status="missing"` 和 null enum variant，不过它们可以在有同字段 review snapshot 后使用空 `final_evidence`。最终证据不能使用只有 `path_id` 的 block selector，也不能手写 raw virtual path。`submit_result` 会校验 selector 类型和编号是否存在：`.md` 只能用 `sentences`，`.list` 只能用 `items`，`.table` 只能用 `rows`。

@@ -13,19 +13,21 @@
   -> 构建只读 semantic HTML virtual tree
   -> resolution 初始上下文只写入 task fields 和“先用 tree 导航”的指令，不内联任何 tree 正文
   -> 模型先调用 tree 展开目录，再用 read 浏览文件、章节和段落；模型可见 locator 统一显示为 `evidence://...`
-  -> 模型像人类读文档一样推进；assistant content 是用户可见动作说明，不是工具调用日志
+  -> 模型像人类读文档一样推进；assistant content 是按信息增量触发的用户可见进度更新，不是工具调用日志
   -> read 一次只打开一个 paragraph/list/table；需要继续看相邻内容时，模型必须再次调用 read
-  -> read 的可见说明使用 Read / Finding / Next，只概括当前已读 block 支持什么
+  -> read 调用前通常不说话；read 返回后如果内容有意义，下一轮用 task_spec 主语言自然概括看了什么、是否有价值
   -> 如果某个已知 block 可能支持、反驳、限定或帮助排除字段，模型用 add_candidate_evidence 保存候选 block evidence
-  -> add_candidate_evidence 的可见说明使用 Saving candidate / Why relevant / Next，说明保存候选，不写成新阅读结论
+  -> add_candidate_evidence 是内部候选笔记，常规保存可以静默；只有证据图景变化、候选组完成或相关性不明显时才输出进度更新
   -> 模型用 review_evidences 像看笔记一样复看某字段的候选 block evidence，并由工具展开成 `evidence://.../Sxxx`、`evidence://.../Ixxx`、`evidence://.../Rxxx` inline link
-  -> review_evidences 的可见说明使用 Review / Sufficiency / Next，说明证据是否足够定案
+  -> review_evidences 只有在证据足够、不足、缺口明确或准备写字段时输出进度更新
   -> 模型在 review 后判断证据足够支撑字段决定，才复制当前 review snapshot 里的 inline evidence link 写入同一字段；为了像人类阅读，prompt 建议 review 后尽快 write
-  -> write_field 的可见说明使用 Write / Why supported / Next，说明字段值或缺失状态为什么由 review 支持
+  -> write_field 是字段定案点，通常用自然短句说明字段值或缺失状态为什么由 review 支持
   -> submit_result 内部按 schema 校验并返回最终结果或错误
 ```
 
 `schema` 是用户给定的抽取契约，直接放在模型上下文里，不作为虚拟文件树的一部分，也不提供写 schema 工具。虚拟文件树只表达待抽取材料；字段结果通过专门的结果写入工具提交。
+
+对外返回给 backend 的终态结果也属于契约的一部分：`result.fields[]` 和 `trace.fields[]` 都必须显式使用 `field_name`，不能把内部写入态里的 `field_id` 直接透出。
 
 如果字段类型是 `enum`，resolution prompt 会把 variants 展开成 `VariantName(payload_type)`，并提示模型用 tagged enum object 写入：
 
@@ -98,56 +100,35 @@ write_field(field_id, value, final_evidence, status?)  # final_evidence 必须�
 submit_result()
 ```
 
-系统 prompt 只保留全局约束：agent 身份和最终 `submit_result` 目标、assistant content 必须短且绑定当前动作、单轮单工具调用节奏、以及 `evidence://` locator 和 source citation 边界。`read`、`add_candidate_evidence`、`review_evidences`、`write_field`、`submit_result` 的具体参数、证据规则和本轮说明模板写在各 tool description 中，并通过 LangGraph `bind_tools` 暴露给模型。这样模型在选择某个工具时能直接看到该工具的局部规则，例如 `read` 只能读取 tree 输出中 `.md/.list/.table` 文件对应的 evidence link，目录 evidence link 必须先用 `tree` 展开。
+系统 prompt 只保留全局约束：agent 身份和最终 `submit_result` 目标、第一轮工具调用前先用 `task_spec` 主语言写一句简短开场、assistant content 是给 reviewer 的进度更新而不是工具调用日志、单轮单工具调用节奏、`task_spec` 主语言输出，以及 `evidence://` locator 和 source citation 边界。`read`、`add_candidate_evidence`、`review_evidences`、`write_field`、`submit_result` 的具体参数、证据规则和何时值得输出进度更新写在各 tool description 中，并通过 LangGraph `bind_tools` 暴露给模型。这样模型在选择某个工具时能直接看到该工具的局部规则，例如 `read` 只能读取 tree 输出中 `.md/.list/.table` 文件对应的 evidence link，目录 evidence link 必须先用 `tree` 展开。
 
-工具参数不再包含 `reason`。assistant content 是用户可见的阅读笔记和动作说明，不是每轮工具调用都必须输出的理由，也不是工具调用日志。它由当前工具的 docstring 决定形态：
+工具参数不再包含 `reason`。assistant content 不是每轮工具调用都必须输出的理由，也不是工具调用日志。除第一轮工具调用前固定先说一句开场外，后续按“最新观察是否改变 reviewer 的理解”动态决定：
 
 ```text
-read
-  -> Read: 当前读到的 block 或条款
-  -> Finding: 只总结该 block 支持的内容
-  -> Next: 下一步继续 read、保存候选、review 或 write
+tree 导航、read 调用前、常规候选保存、相邻重复读取、纯 bookkeeping
+  -> assistant content 可以为空
 
-add_candidate_evidence
-  -> Saving candidate: 要保存到哪个字段、哪个 block
-  -> Why relevant: 这个已知 block 为什么可能支持、反驳或限定字段
-  -> Next: 继续读、review 该字段或保存其他候选
+read 返回后读到有价值内容、几个 read 形成完整语义块、预期区域被排除
+  -> 下一轮用自然短句概括看了什么、是否支持字段或为什么继续找
+  -> 如果这个概括依赖同一 section 里的连续 block，可以在 assistant content 里用一个 `evidence://range/<start>/<end>` 覆盖整段连续 block，而不是只链第一个 block
 
-review_evidences
-  -> Review: 正在复看哪个字段的候选集合
-  -> Sufficiency: reviewed evidence 是否足够定案
-  -> Next: write、继续读或补候选
+review_evidences 发现证据足够、不足或缺口明确
+  -> 用自然短句说明当前证据状态和字段是否可以定案
 
-write_field
-  -> Write: 写入哪个字段和值或状态
-  -> Why supported: 引用 reviewed evidence，或说明 reviewed absence basis
-  -> Next: 下一个字段、review 或 submit
+write_field 写入、修正或标记 missing
+  -> 用自然短句说明字段结论，并链接 reviewed evidence 或说明 reviewed absence basis
+
+submit_result 成功或返回校验错误
+  -> 用自然短句说明提交结果或需要修正的点
 ```
 
-这个分层避免只有 `add_candidate_evidence` 的轮次写成“我刚读到了什么”。候选保存轮只说明“保存哪个候选、为什么相关”，读后概括只属于 `read` 轮。
+可见进度更新默认使用 `task_spec` 的主语言；如果 `task_spec` 混合多种语言，优先跟随字段描述和 instructions 的主要语言。证据 quote 保留原文语言，避免为了匹配 `task_spec` 而翻译原文。模型不使用固定小标题，也不直接叙述工具名。
 
-只要 assistant content 使用了文档原文或原文语义来解释阅读、候选记录、复核或写入动作，就必须写成 Markdown evidence link，并尽可能引用原文说明模型正在做什么，不能只把原文放在裸引号里。还没有 Sxxx/Ixxx/Rxxx selector 时，用 paragraph/list/table block 链接，例如 `["strictest of confidence"](evidence://0001.0012.0001)`；已经有 inline selector 时优先用 inline 链接，例如 `["only in connection"](evidence://0001.0014.0001/S002)`。调用 `add_candidate_evidence` 前，如果引用正在保存的 block 内容，content 必须包含指向同一个 block path_id 的 Markdown evidence link。`write_field` 是字段定案动作；非空 `final_evidence` 的 write content 应包含简短原文 quote，并链接到对应 inline selector 或它所在的 paragraph/list/table block。可信证据仍只来自虚拟路径和文件内编号，assistant content 不是模型隐藏推理链。
+只要 assistant content 使用了文档原文或原文语义来解释阅读、候选记录、复核或写入动作，就必须写成 Markdown evidence link，并尽可能引用原文说明模型正在做什么，不能只把原文放在裸引号里。还没有 Sxxx/Ixxx/Rxxx selector 时，用 paragraph/list/table block 链接，例如 `["strictest of confidence"](evidence://0001.0012.0001)`；如果说明依赖同一 section 的连续 block，也可以用一个 `evidence://range/<start>/<end>` 覆盖整段连续 block；需要句、项、行级引用时，paragraph 用 `evidence://<block>/Sxxx`，list 用 `evidence://<block>/Ixxx`，table 用 `evidence://<block>/Rxxx`；已经有 inline selector 时优先用 inline 链接，例如 `["only in connection"](evidence://0001.0014.0001/S002)`。调用 `add_candidate_evidence` 前，如果引用正在保存的 block 内容，content 必须包含指向同一个 block path_id 的 Markdown evidence link。`write_field` 是字段定案动作；非空 `final_evidence` 的 write content 应包含简短原文 quote，并链接到对应 inline selector 或它所在的 paragraph/list/table block。可信证据仍只来自虚拟路径和文件内编号，assistant content 不是模型隐藏推理链。
 
 resolution system prompt 要求每轮只调用一个工具，避免模型批量扫、批量 review、批量写，保持接近人类阅读节奏。运行时也会在 `bind_tools` 时请求关闭 provider 侧 parallel tool calls；如果模型仍然同轮返回多个 tool call，运行时只保留并执行第一个，再把截断后的单个 tool call 写入 `model_message` trace。依赖前一个工具输出的动作必须等结果回来后再做，例如 `write_field` 不能和它所依赖的 `review_evidences` 放在同一轮。模型应把 `review_evidences` 当成复看候选证据的判断点：只有 review 后觉得证据足够支撑字段决定，或者足够判断 missing/null，才写字段；不够就继续读或继续添加候选证据。
 
-assistant content 的推荐形态是：
-
-```text
-tree
-  -> 可短说明准备展开哪个目录；机械导航可以留空
-read
-  -> 用 Read / Finding / Next 报告当前 read 结果
-add_candidate_evidence
-  -> 用 Saving candidate / Why relevant / Next 说明候选保存
-review_evidences
-  -> 用 Review / Sufficiency / Next 说明复核状态
-write_field
-  -> 用 Write / Why supported / Next 说明写入依据
-submit_result
-  -> 可短说明准备提交或修正校验失败
-```
-
-这不是长推理，也不要求每轮工具调用都说话。普通机械导航可以留空，但一旦模型要解释源文语义，就必须用当前工具的模板把“读到什么、保存什么、复核什么、写入什么”区分清楚。`write_field` 作为字段定案阶段，assistant content 通常应写清楚字段结论、选择该值的理由和引用标记。
+assistant content 的推荐形态是短进度更新，而不是固定模板。普通机械导航、准备调用 `read`、常规候选保存和重复读取可以留空；`read` 返回后如果读到实质内容，下一轮再概括刚看的内容；`review_evidences` 和 `write_field` 是判断点，通常更值得输出。`write_field` 作为字段定案阶段，assistant content 通常应写清楚字段结论、选择该值的理由和引用标记。
 
 ### Trace 事件
 
@@ -169,7 +150,7 @@ model.stream(messages)
 
 `model_message` 用来调试模型是否在同一轮既输出普通文本又发起 tool call。模型工厂构造一个按顺序尝试的 fallback chain：`responses_stream -> chat_completions_stream -> responses_invoke -> chat_completions_invoke`。resolution graph 优先使用 stream 语义；如果当前 stream attempt 抛错或没有返回任何 chunk，才尝试下一种 transport。运行时把 stream chunk 合并成一个普通 `AIMessage` 后再交给 trace 和 ToolNode，因此 trace 能保存用户可见 assistant content，工具执行仍使用完整 tool call 参数。普通 chat-completions tool-call stream 不是主路径，因为该路径在部分 provider 上只返回 function-call delta，不返回 assistant text；它只作为 Responses stream 失败后的备用。`model_message` 只保存模型返回的普通 `content` 和工具调用摘要，不保存 DeepSeek `reasoning_content` 这类隐藏思考内容。工具 action/event 不再保存 `reason` 字段；用户可见文字只来自 `model_message.content`，工具记录只表达工具名、参数和结果。
 
-候选证据记录是 provisional collection，不是最终字段分类或定案。`add_candidate_evidence` 使用显式 `evidence://` block link 保存 block 级候选 evidence，不依赖上一轮是不是 `read`，也不接受 Sxxx/Ixxx/Rxxx inline selector。一次 `add_candidate_evidence` 只保存一个字段和一个 paragraph/list/table block；如果同一个对象可能支持多个字段，或者同一字段需要继续补充更多对象，模型需要分多次调用。模型看到某个 paragraph/list/table 可能支持、反驳或限定某个字段时，可以直接把该 block link 记入候选集合；不确定但可能相关的对象也应该先保存为候选笔记。每次调用前，assistant content 使用 `Saving candidate / Why relevant / Next` 说明保存哪个候选和为什么相关；如果引用原文，必须用 Markdown evidence link 指向正在保存的同一个 block path_id，不能只写裸引号，也不能把本轮写成刚刚完成的新阅读。候选 evidence 可以比最终 evidence 更宽、更粗，也可能包含后续会被筛掉的对象；`final_evidence` 必须等 `review_evidences` 展开 inline selector 后再选择，通常是候选 block 里的更小或不同的 inline 子集。`task_spec` 只描述字段语义和输出类型，不负责说明工具调用顺序。
+候选证据记录是 provisional collection，不是最终字段分类或定案。`add_candidate_evidence` 使用显式 `evidence://` block link 保存 block 级候选 evidence，不依赖上一轮是不是 `read`，也不接受 Sxxx/Ixxx/Rxxx inline selector。一次 `add_candidate_evidence` 只保存一个字段和一个 paragraph/list/table block；如果同一个对象可能支持多个字段，或者同一字段需要继续补充更多对象，模型需要分多次调用。模型看到某个 paragraph/list/table 可能支持、反驳或限定某个字段时，可以直接把该 block link 记入候选集合；不确定但可能相关的对象也应该先保存为候选笔记。常规候选保存可以静默；只有候选改变证据图景、完成一组关键候选，或者相关性不明显时，assistant content 才需要用自然短句说明。如果引用原文，必须用 Markdown evidence link 指向正在保存的同一个 block path_id，不能只写裸引号，也不能把本轮写成刚刚完成的新阅读。候选 evidence 可以比最终 evidence 更宽、更粗，也可能包含后续会被筛掉的对象；`final_evidence` 必须等 `review_evidences` 展开 inline selector 后再选择，通常是候选 block 里的更小或不同的 inline 子集。`task_spec` 只描述字段语义和输出类型，不负责说明工具调用顺序。
 
 ### `tree`
 

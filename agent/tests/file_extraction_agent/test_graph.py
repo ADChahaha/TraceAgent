@@ -19,7 +19,7 @@ class FakeStreamingModel:
                 "tool_name": "read",
                 "content": "读取成立年份段落。",
                 "arguments": {
-                    "path_id": "evidence://0000.0001.0001.0001",
+                    "path_id": "evidence://0001.0001.0001",
                 },
             },
             {
@@ -27,7 +27,7 @@ class FakeStreamingModel:
                 "content": "当前段落写明公司成立年份，先保存为候选证据。",
                 "arguments": {
                     "field_id": "founded_year",
-                    "path_id": "evidence://0000.0001.0001.0001",
+                    "path_id": "evidence://0001.0001.0001",
                 },
             },
             {
@@ -44,7 +44,7 @@ class FakeStreamingModel:
                     "field_id": "founded_year",
                     "value": 2020,
                     "final_evidence": [
-                        "evidence://0000.0001.0001.0001/S001"
+                        "evidence://0001.0001.0001/S001"
                     ],
                 },
             },
@@ -85,23 +85,26 @@ def test_run_extraction_graph_stream_yields_ndjson_events_and_final_result():
 
     assert all(line.endswith("\n") for line in events)
     payloads = [json.loads(line) for line in events]
-    assert payloads[0]["type"] == "tool_started"
-    assert payloads[0]["tool"] == "tree"
+    assert payloads[0]["type"] == "source_indexed"
+    assert payloads[0]["tool"] == "source_index"
+    assert payloads[0]["result"]["source_selectors"] == {"0001.0001.0001": "p1"}
+    assert payloads[1]["type"] == "tool_started"
+    assert payloads[1]["tool"] == "tree"
     assert payloads[-1]["type"] == "result_completed"
     assert payloads[-1]["result"]["fields"] == [
         {
-            "field_id": "founded_year",
+            "field_name": "founded_year",
             "status": "resolved",
             "value": 2020,
             "evidence": [
                 {
-                    "path_id": "0000.0001.0001.0001",
+                    "path_id": "0001.0001.0001",
                     "sentences": ["S001"],
                 }
             ],
             "evidence_texts": [
                 {
-                    "path_id": "0000.0001.0001.0001",
+                    "path_id": "0001.0001.0001",
                     "selector": "S001",
                     "text": "公司成立于2020年。",
                 }
@@ -117,9 +120,11 @@ def test_run_extraction_graph_stream_flushes_events_after_each_tool_call():
     stream = iter(run_extraction_graph_stream(_input(), model))
 
     first_event = json.loads(next(stream))
+    second_event = json.loads(next(stream))
 
-    assert first_event["type"] == "tool_started"
-    assert first_event["tool"] == "tree"
+    assert first_event["type"] == "source_indexed"
+    assert second_event["type"] == "tool_started"
+    assert second_event["tool"] == "tree"
     assert len(model.calls) == 5
 
 
@@ -131,7 +136,7 @@ def test_map_state_to_result_returns_new_field_result_shape():
         "value": 2020,
         "evidence": [
             {
-                "path_id": "0000.0001.0001.0001",
+                "path_id": "0001.0001.0001",
                 "sentences": ["S001"],
             }
         ],
@@ -144,18 +149,18 @@ def test_map_state_to_result_returns_new_field_result_shape():
     assert result.result == {
         "fields": [
             {
-                "field_id": "founded_year",
+                "field_name": "founded_year",
                 "status": "resolved",
                 "value": 2020,
                 "evidence": [
                     {
-                        "path_id": "0000.0001.0001.0001",
+                        "path_id": "0001.0001.0001",
                         "sentences": ["S001"],
                     }
                 ],
                 "evidence_texts": [
                     {
-                        "path_id": "0000.0001.0001.0001",
+                        "path_id": "0001.0001.0001",
                         "selector": "S001",
                         "text": "公司成立于2020年。",
                     }

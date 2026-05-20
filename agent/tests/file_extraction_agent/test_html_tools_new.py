@@ -201,7 +201,7 @@ def test_read_allows_free_navigation_after_successful_read():
     locators = _locators(state, paths)
 
     read_result = _read(state, locators["paragraph"])
-    next_tree = _tree(state, "evidence://0000", depth=1)
+    next_tree = _tree(state, "", depth=1)
     next_read = _read(state, locators["list"])
 
     assert read_result["ok"] is True
@@ -215,7 +215,7 @@ def test_tool_path_arguments_use_evidence_links_and_write_final_evidence_copies_
     path_ids = _path_ids(state, paths)
     locators = _locators(state, paths)
 
-    tree = _tree(state, "evidence://0000", depth=2)
+    tree = _tree(state, "", depth=2)
     read = _read(state, locators["paragraph"])
     bound = _add_candidate_evidence(state, "founded_year", path_id=locators["paragraph"])
     review = _review_evidences(state, "founded_year")
@@ -228,7 +228,7 @@ def test_tool_path_arguments_use_evidence_links_and_write_final_evidence_copies_
     )
 
     assert tree["ok"] is True
-    assert "evidence://0000.0001" in tree["text"]
+    assert "evidence://0001" in tree["text"]
     assert read["ok"] is True
     assert read["locator"] == locators["paragraph"]
     assert bound["ok"] is True
@@ -308,7 +308,7 @@ def test_add_candidate_evidence_can_add_after_other_tools_with_explicit_path_id(
     locators = _locators(state, paths)
 
     _read(state, locators["paragraph"])
-    _tree(state, "evidence://0000", depth=1)
+    _tree(state, "", depth=1)
     bound = _add_candidate_evidence(state, "deposit", path_id=locators["paragraph"])
 
     assert bound["ok"] is True

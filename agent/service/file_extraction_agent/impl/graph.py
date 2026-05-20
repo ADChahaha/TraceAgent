@@ -105,10 +105,15 @@ def _append_source_index_event(state: GraphState) -> None:
 
 
 def _field_with_evidence_texts(state: GraphState, field_state: dict[str, Any]) -> dict[str, Any]:
-    if "evidence_texts" in field_state:
-        return field_state
-    return {
+    normalized = {
         **field_state,
+        "field_name": field_state.get("field_id"),
+    }
+    normalized.pop("field_id", None)
+    if "evidence_texts" in normalized:
+        return normalized
+    return {
+        **normalized,
         "evidence_texts": state.document.evidence_texts(field_state.get("evidence") or []),
     }
 

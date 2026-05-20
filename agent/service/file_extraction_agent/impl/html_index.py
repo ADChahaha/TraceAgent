@@ -76,7 +76,7 @@ class HtmlDocument:
     def tree_text(self, path: str = "/", depth: int = 3) -> str:
         node = self._node(path)
         max_depth = max(0, int(depth))
-        lines = [f"{node.path_id} /" if node.path == "/" else f"{node.path_id} {display_name(node)}/"]
+        lines = ["/" if node.path == "/" else f"{node.path_id} {display_name(node)}/"]
         if max_depth > 0:
             self._append_tree_lines(node, lines, prefix="", depth=max_depth)
         return "\n".join(lines)
@@ -164,6 +164,8 @@ class HtmlDocument:
     def source_selectors(self) -> dict[str, str]:
         selectors: dict[str, str] = {}
         for path_id, node in self.nodes_by_path_id.items():
+            if node.kind not in READABLE_KINDS:
+                continue
             source_id = source_dom_id(node.source)
             if source_id:
                 selectors[path_id] = source_id
@@ -405,7 +407,7 @@ def build_html_document(documents: Any) -> HtmlDocument:
         doc_node = VirtualNode(
             name=doc_name,
             path=doc_path,
-            path_id=child_path_id(root.path_id, len(root.children) + 1),
+            path_id=f"{len(root.children) + 1:04d}",
             display_name=decode_display_name(f"{basename}" + (f"-{title_slug}" if title_slug else "")),
             kind="document",
             source=parsed_root,
@@ -505,7 +507,7 @@ def add_virtual_child(
     child = VirtualNode(
         name=name,
         path=path,
-        path_id=child_path_id(parent.path_id, len(parent.children) + 1),
+        path_id=next_child_path_id(parent, kind),
         display_name=visible_name,
         kind=kind,
         source=source,
@@ -764,6 +766,16 @@ def decode_display_name(name: str) -> str:
 def normalize_path(path: str) -> str:
     normalized = "/" + str(path or "/").strip("/")
     return "/" if normalized == "/" else normalized
+
+
+def next_child_path_id(parent: VirtualNode, kind: str) -> str:
+    if parent.kind == "document" and kind in READABLE_KINDS:
+        index = sum(1 for child in parent.children if child.kind in READABLE_KINDS) + 1
+        return f"{parent.path_id}.0000.{index:04d}"
+    if parent.kind == "document" and kind == "section":
+        index = sum(1 for child in parent.children if child.kind == "section") + 1
+        return f"{parent.path_id}.{index:04d}"
+    return child_path_id(parent.path_id, len(parent.children) + 1)
 
 
 def child_path_id(parent_path_id: str, index: int) -> str:
