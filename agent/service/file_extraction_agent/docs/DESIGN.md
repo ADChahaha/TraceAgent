@@ -112,8 +112,9 @@ tree 导航、read 调用前、常规候选保存、相邻重复读取、纯 boo
 
 read 返回后读到有价值内容、几个 read 形成完整语义块、预期区域被排除
   -> 下一轮用自然短句概括看了什么、是否支持字段或为什么继续找
+  -> 这句话要接上当前字段或语义目标，说明证据图景发生了什么变化，以及为什么下一步动作顺理成章
   -> 如果这些事实很快会被写入字段，只做短定位，不提前完整写最终字段结论
-  -> 如果这个概括依赖同一 section 里的连续 block，可以在 assistant content 里用一个 `evidence://range/<start>/<end>` 覆盖整段连续 block，而不是只链第一个 block
+  -> 如果这个概括依赖同一 section 里至少两个连续兄弟 block，可以在 assistant content 里用一个 `evidence://range/<start>/<end>` 覆盖整段连续 block，而不是只链第一个 block
 
 review_evidences 发现证据不足、缺口明确或改变下一步动作
   -> 用自然短句说明当前证据状态和字段是否可以定案
@@ -129,11 +130,11 @@ submit_result 成功或返回校验错误
 
 可见进度更新必须使用 `task_spec` 语言；如果 `task_spec` 混合多种语言，优先跟随字段描述和 instructions 的主要语言，不能因为原文是日文、英文或其他语言就切换输出语言。证据链接的 label 也应翻译或改写成 `task_spec` 语言；只有专有名词、正式名称、抽取值或不可翻译术语在翻译后会改变字段值时，才保留原文。模型不使用固定小标题，也不直接叙述工具名。
 
-只要 assistant content 的某句话陈述了文档事实、证据充分/缺失状态、候选相关性或字段定案，就必须包含 Markdown evidence link，不能输出没有链接的文档事实。还没有 Sxxx/Ixxx/Rxxx selector 时，用 paragraph/list/table block 链接，例如 `[保密义务条款](evidence://0001.0012.0001)`；如果 read 概括依赖同一 section 的连续 block，优先用一个 `evidence://range/<start>/<end>` 覆盖整段连续 block，而不是只链开头 block；需要句、项、行级引用时，paragraph 用 `evidence://<block>/Sxxx`，list 用 `evidence://<block>/Ixxx`，table 用 `evidence://<block>/Rxxx`；已经有 inline selector 时优先用 inline 链接，例如 `[仅限本协议相关用途](evidence://0001.0014.0001/S002)`。调用 `add_candidate_evidence` 前，如果引用正在保存的 block 内容，content 必须包含指向同一个 block path_id 的 Markdown evidence link。`write_field` 是字段定案动作；非空 `final_evidence` 的 write content 应包含 `task_spec` 语言的简短释义或必要抽取值，并链接到对应 inline selector 或它所在的 paragraph/list/table block。可信证据仍只来自虚拟路径和文件内编号，assistant content 不是模型隐藏推理链。
+只要 assistant content 的某句话陈述了文档事实、证据充分/缺失状态、候选相关性或字段定案，就必须包含 Markdown evidence link，不能输出没有链接的文档事实。还没有 Sxxx/Ixxx/Rxxx selector 时，用 paragraph/list/table block 链接，例如 `[保密义务条款](evidence://0001.0012.0001)`；如果 read 概括依赖同一 section 的连续 block，优先用一个 `evidence://range/<start>/<end>` 覆盖整段连续 block，而不是只链开头 block。range 只能用于至少两个不同的、同一 section 下直接相邻的 readable block；`start` 和 `end` 写裸 path_id，例如 `evidence://range/0001.0028.0002/0001.0028.0005`，不能写成 `evidence://range/evidence://...`，也不能用于同一个 block、跨 section、非相邻块或两个不同 section 中重复出现的条款。range 的链接 label 只能概括整段共同主题或动作，不能把只由单个 block 支持的日期、费用、字段结论挂到整段 range 上；不确定是否连续时，用多个单独 Markdown 链接。需要句、项、行级引用时，paragraph 用 `evidence://<block>/Sxxx`，list 用 `evidence://<block>/Ixxx`，table 用 `evidence://<block>/Rxxx`；已经有 inline selector 时优先用 inline 链接，例如 `[仅限本协议相关用途](evidence://0001.0014.0001/S002)`。调用 `add_candidate_evidence` 前，如果引用正在保存的 block 内容，content 必须包含指向同一个 block path_id 的 Markdown evidence link。`write_field` 是字段定案动作；非空 `final_evidence` 的 write content 应包含 `task_spec` 语言的简短释义或必要抽取值，并链接到对应 inline selector 或它所在的 paragraph/list/table block。可信证据仍只来自虚拟路径和文件内编号，assistant content 不是模型隐藏推理链。
 
 resolution system prompt 要求每轮只调用一个工具，避免模型批量扫、批量 review、批量写，保持接近人类阅读节奏。运行时也会在 `bind_tools` 时请求关闭 provider 侧 parallel tool calls；如果模型仍然同轮返回多个 tool call，运行时只保留并执行第一个，再把截断后的单个 tool call 写入 `model_message` trace。依赖前一个工具输出的动作必须等结果回来后再做，例如 `write_field` 不能和它所依赖的 `review_evidences` 放在同一轮。模型应把 `review_evidences` 当成复看候选证据的判断点：只有 review 后觉得证据足够支撑字段决定，或者足够判断 missing/null，才写字段；不够就继续读或继续添加候选证据。为了避免用户在长 trace 里看到同一内容两次，prompt 要求模型按紧凑字段决策簇推进：如果刚刚读到的一组 block 已经足够支持某字段，就优先完成该字段的候选保存、review 和 write，再切到无关字段；review 足够后下一轮通常写同字段，除非明确说明具体证据缺口。
 
-assistant content 的推荐形态是短进度更新，而不是固定模板。普通机械导航、准备调用 `read`、常规候选保存和重复读取可以留空；`read` 返回后如果读到实质内容，下一轮再概括刚看的内容，但这个概括用于定位发现，不提前完整写最终字段结论；`review_evidences` 如果下一步显然是 `write_field` 且 facts 已经在 read 后说明过，可以静默；`write_field` 作为字段定案阶段，assistant content 通常应写清楚字段结论、选择该值的理由和引用标记，但不完整重复前面 read 已经说过的同一组事实。
+assistant content 的推荐形态是短进度更新，而不是固定模板。普通机械导航、准备调用 `read`、常规候选保存和重复读取可以留空；`read` 返回后如果读到实质内容，下一轮再概括刚看的内容，但这个概括用于定位发现，不提前完整写最终字段结论；每条可见更新都应接上当前字段或语义目标，交代“刚刚的新证据改变了什么、所以下一步为什么这样做”，避免孤立事实散落在 trace 里；`review_evidences` 如果下一步显然是 `write_field` 且 facts 已经在 read 后说明过，可以静默；`write_field` 作为字段定案阶段，assistant content 通常应写清楚字段结论、选择该值的理由和引用标记，但不完整重复前面 read 已经说过的同一组事实。
 
 ### Trace 事件
 

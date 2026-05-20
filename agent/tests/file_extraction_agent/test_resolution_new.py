@@ -101,6 +101,32 @@ def test_resolution_prompt_requires_task_spec_language_and_linked_evidence_conte
     assert "Quote the source words as the link label when possible" not in tools["write_field"].description
 
 
+def test_resolution_prompt_restricts_range_links_and_threads_progress_updates():
+    messages = build_resolution_messages(_state())
+    system_content = messages[0].content
+    tools = {getattr(tool, "name", getattr(tool, "__name__", "")): tool for tool in build_tools(_state())}
+
+    assert "Use range links only for two or more distinct readable blocks that are direct siblings in the same section" in system_content
+    assert "Never use a range when start and end are the same block" in system_content
+    assert "Write range URLs with path_ids only, for example evidence://range/0001.0028.0002/0001.0028.0005" in system_content
+    assert "Never write evidence://range/evidence://" in system_content
+    assert "Do not use ranges to compare non-adjacent blocks or repeated clauses from different sections" in system_content
+    assert "If unsure that a span is continuous, use separate Markdown evidence links" in system_content
+    assert "A range link label must describe only the shared topic or operation of the entire span" in system_content
+    assert "Do not attach dates, fees, decisions, or conclusions to a range unless every block in the range supports that statement" in system_content
+    assert "Each visible update should connect to the active field or semantic goal" in system_content
+    assert "briefly say what changed, and why the next action follows" in system_content
+    assert "Do not output isolated observations" in system_content
+
+    assert "Only use a range after reading at least two distinct consecutive sibling blocks" in tools["read"].description
+    assert "Never use range for one block" in tools["read"].description
+    assert "range URLs use path_ids without nested evidence:// prefixes" in tools["read"].description
+    assert "Do not write evidence://range/evidence://" in tools["read"].description
+    assert "If blocks are not direct siblings, use separate links" in tools["read"].description
+    assert "Do not use range links to merge non-adjacent reviewed candidates" in tools["review_evidences"].description
+    assert "Use separate links for repeated clauses from different sections" in tools["write_field"].description
+
+
 def test_resolution_messages_do_not_inline_initial_tree():
     messages = build_resolution_messages(_state())
     content = "\n\n".join(message.content for message in messages)

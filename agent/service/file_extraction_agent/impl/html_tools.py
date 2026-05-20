@@ -59,6 +59,12 @@ def build_tools(state: Any) -> list[Any]:
         If that summary depends on consecutive blocks in the same section, use one evidence://range/<start>/<end> link
         in assistant content instead of citing only the first block. Prefer evidence://range/<start>/<end> when consecutive blocks support the summary.
         start and end must be readable block path_ids from the same section.
+        Only use a range after reading at least two distinct consecutive sibling blocks.
+        Never use range for one block; use that block's evidence link instead.
+        range URLs use path_ids without nested evidence:// prefixes, for example evidence://range/0001.0028.0002/0001.0028.0005.
+        Do not write evidence://range/evidence://. If blocks are not direct siblings, use separate links.
+        The range link label must describe only the shared topic or operation of that whole span, not a date,
+        fee, decision, or conclusion supported by only one block.
         If assistant content mentions source text or source meaning, make that
         quote, summary, or source-text claim a Markdown evidence link. Use a block link
         when inline selectors are not available yet.
@@ -121,6 +127,7 @@ def build_tools(state: Any) -> list[Any]:
         or a field decision, include Markdown evidence links and explain whether the evidence is
         sufficient or what is missing. assistant content must stay in task_spec language, and
         link labels should be task_spec-language paraphrases unless an extracted value must stay unchanged.
+        Do not use range links to merge non-adjacent reviewed candidates; use separate links instead.
         """
 
         return _review_evidences(state, field_id)
@@ -157,6 +164,7 @@ def build_tools(state: Any) -> list[Any]:
         Block-level evidence links are acceptable in assistant content when they are clearer,
         for example [task_spec-language evidence label](evidence://0001.0014.0001), but final_evidence
         must still use inline selectors from review_evidences.
+        Use separate links for repeated clauses from different sections; do not replace them with a range.
         For multiple selectors, repeat separate
         links. Tool arguments and final_evidence must use evidence:// links.
         """
