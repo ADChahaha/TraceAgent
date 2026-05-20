@@ -13,7 +13,7 @@ it("会把 multipart 表单转发到 backend 目标路径", async () => {
   formData.set("task_spec", JSON.stringify({ task_name: "civilized_dormitory" }));
   formData.set("file", new File(["%PDF-1.4 fake"], "sample.pdf", { type: "application/pdf" }));
 
-  const fetcher: FetcherMock = jest.fn(async (_input, _init) =>
+  const fetcher: FetcherMock = jest.fn(async () =>
     Response.json({ task_id: "task-001", status: "completed", stage: "done" })
   );
   const request = new Request("http://frontend.test/api/backend/tasks", {
@@ -41,7 +41,7 @@ it("会把 multipart 表单转发到 backend 目标路径", async () => {
 });
 
 it("会保留 backend 错误状态和 detail 响应", async () => {
-  const fetcher: FetcherMock = jest.fn(async (_input, _init) =>
+  const fetcher: FetcherMock = jest.fn(async () =>
     Response.json({ detail: "task_spec is required" }, { status: 422 })
   );
   const request = new Request("http://frontend.test/api/backend/tasks", {
@@ -60,7 +60,7 @@ it("会保留 backend 错误状态和 detail 响应", async () => {
 });
 
 it("backend 不可达时会返回明确的 502 detail", async () => {
-  const fetcher: FetcherMock = jest.fn(async (_input, _init) => {
+  const fetcher: FetcherMock = jest.fn(async () => {
     throw new TypeError("fetch failed");
   });
   const request = new Request("http://frontend.test/api/backend/capabilities");
@@ -74,4 +74,28 @@ it("backend 不可达时会返回明确的 502 detail", async () => {
   await expect(response.json()).resolves.toEqual({
     detail: "backend unavailable"
   });
+});
+
+it("会把 text/event-stream 响应作为流转发，不先读成完整文本", async () => {
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('data: {"seq":1}\\n\\n'));
+    }
+  });
+  const fetcher: FetcherMock = jest.fn(async () =>
+    new Response(stream, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" }
+    })
+  );
+  const request = new Request("http://frontend.test/api/backend/tasks/task-001/events?after_seq=0");
+
+  const response = await forwardBackendRequest(request, ["tasks", "task-001", "events"], {
+    backendBaseUrl: "http://backend.test",
+    fetcher
+  });
+
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toBe("text/event-stream");
+  expect(response.body).toBe(stream);
 });

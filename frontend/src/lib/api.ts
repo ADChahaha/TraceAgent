@@ -4,6 +4,7 @@ import type {
   TaskReplay,
   TaskCreated,
   TaskDetailData,
+  TaskEvent,
   TaskList,
   TaskResult,
   TaskSummary,
@@ -57,14 +58,37 @@ export async function getTaskAudit(taskId: string): Promise<AuditResult> {
   return requestJson<AuditResult>(`/api/backend/tasks/${encodeURIComponent(taskId)}/audit`);
 }
 
+export function getTaskEventsUrl(taskId: string, afterSeq = 0): string {
+  const params = new URLSearchParams({ after_seq: String(Math.max(0, afterSeq)) });
+  return `/api/backend/tasks/${encodeURIComponent(taskId)}/events?${params.toString()}`;
+}
+
+export function createTaskEventSource(taskId: string, afterSeq = 0): EventSource {
+  if (typeof EventSource === "undefined") {
+    return createNoopEventSource();
+  }
+  return new EventSource(getTaskEventsUrl(taskId, afterSeq));
+}
+
+export function parseTaskEventMessage(event: MessageEvent<string>): TaskEvent | null {
+  try {
+    return JSON.parse(event.data) as TaskEvent;
+  } catch {
+    return null;
+  }
+}
+
 export async function loadTaskDetail(taskId: string): Promise<TaskDetailData> {
   const summary = await getTaskSummary(taskId);
+  const shouldFetchReplay =
+    summary.has_trace !== false ||
+    summary.has_result !== false ||
+    summary.stream?.state === "running" ||
+    summary.status === "processing" ||
+    summary.status === "pending";
   const [result, replay] = await Promise.all([
     optionalFetch(() => getTaskResult(taskId), summary.has_result !== false),
-    optionalFetch(
-      () => getTaskReplay(taskId),
-      summary.has_trace !== false || summary.has_result !== false,
-    )
+    optionalFetch(() => getTaskReplay(taskId), shouldFetchReplay)
   ]);
 
   return {
@@ -127,4 +151,24 @@ function getErrorMessage(payload: unknown, fallback: string): string {
     return payload.detail;
   }
   return fallback || "请求失败";
+}
+
+function createNoopEventSource(): EventSource {
+  return {
+    close() {},
+    addEventListener() {},
+    removeEventListener() {},
+    dispatchEvent() {
+      return false;
+    },
+    onerror: null,
+    onmessage: null,
+    onopen: null,
+    readyState: 2,
+    url: "",
+    withCredentials: false,
+    CONNECTING: 0,
+    OPEN: 1,
+    CLOSED: 2,
+  } as EventSource;
 }

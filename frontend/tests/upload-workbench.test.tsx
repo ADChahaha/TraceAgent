@@ -288,6 +288,8 @@ it("创建任务后左侧任务栏先显示处理中，轮询完成后显示处�
 
   expect(await screen.findByText("处理结果")).toBeInTheDocument();
   expect(screen.getByText("completed")).toBeInTheDocument();
+  expect(document.querySelector(".replay-task-route")).not.toBeInTheDocument();
+  expect(document.querySelector(".replay-task-status-detail")).toBeInTheDocument();
 });
 
 it("主题切换仍在任务工作台顶部生效", async () => {

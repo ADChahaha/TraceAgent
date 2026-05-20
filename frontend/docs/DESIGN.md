@@ -141,15 +141,15 @@ frontend/
   -> read 和 add_candidate_evidence 工具行如果能解析到证据定位，会以 evidence href 的链接式工具行呈现，点击时复用同一套右侧原文 tab 打开逻辑；工具参数里的裸虚拟 path_id，例如 `0001.0000.0001`，会先规范成 `evidence://0001.0000.0001`
   -> 原文 tab 按 task_id 和文件隔离保存，tab 标题只显示解码后的 basename 文件名，不显示目录、URL 编码或 `%20`；同一文件只存在一个 tab，点击同一文件里的不同证据只更新该文件 tab 的 evidence selector 并重新定位高亮，多文件才打开多个文件 tab
   -> 原文查看器主体只显示完整原文渲染，不在 iframe 上方重复显示文件标题；原文内容按右侧框体 100% 宽度铺满重排，去掉纸张式灰底、外层留白、圆角和阴影，长表格、媒体、长词和预格式文本都收进框内，不保留固定纸面宽度或横向滚动条
-  -> 原文 tab 用 iframe 隔离渲染 replay.display_html 的完整文档；backend 已把可读 block 的 DOM id 改写成虚拟 path_id，前端只在 replay.source_selectors 明确包含该 path_id 时滚动并高亮，例如 `evidence://0001.0000.0009` 只定位到 `id="0001.0000.0009"`；旧 replay 没有 source_selectors 时只打开原文文件 tab，不做 DOM id 或文本匹配兜底；用户点击 Markdown 短 quote 链接时也必须先有 source_selectors 定位到 block，才会在该 block 内部高亮 quote 文本本身；界面不展示内部 evidence URI、selector、字段映射或实现细节
+  -> 原文 tab 用 iframe 隔离渲染 replay.display_html 的完整文档；backend 已把可读 block 的 DOM id 改写成虚拟 path_id，前端只在 replay.source_selectors 明确包含该 path_id 时滚动并高亮，例如 `evidence://0001.0000.0009` 只定位到 `id="0001.0000.0009"`；如果 evidence 使用 `evidence://range/<start>/<end>`，则前端按 `start` 所属文件打开原文 tab，并把这段连续 block 一起高亮；旧 replay 没有 source_selectors 时只打开原文文件 tab，不做 DOM id 或文本匹配兜底；用户点击 Markdown 短 quote 链接时也必须先有 source_selectors 定位到 block，才会在该 block 内部高亮 quote 文本本身；界面不展示内部 evidence URI、selector、字段映射或实现细节
   -> 中央 Agent 区底部固定对话输入框，左下角是加文件按钮，右下角是发送按钮；当前阶段只提供 UI 骨架，不直接创建新任务或追加消息
   -> 中央 Agent 文字流使用中间 Agent 工作区自己的动态三列布局：左侧弹性留白 / 阅读列 / 右侧弹性留白，阅读列在 Agent 自己的内容框内居中
   -> 当整页没有侧栏或只有一个侧栏可见时，Agent 中间文字框和输入框使用 `弹性留白 / 阅读列 / 弹性留白`；中间区变窄时先连续压缩两侧留白，留白归零后才压缩阅读列本身
   -> Replay stage 在窄视口也保持左栏 / Agent / 右侧 Review 的列布局，不把右侧 Review 原文栏堆到 Agent 下方
   -> 顶部工具栏左侧展示任务栏 toggle 和任务标题，右侧展示任务 status badge 和 Review 图标按钮，当前文件名只出现在右侧 Review 工作栏的文件 tab
   -> Agent 工具调用先按 action 顺序过滤掉 anchors/submit_result；空的 model_message 不进入文字流，非空 model_message 只作为文字段展示，不作为 tool 行；真实 tool 不包含也不消费 reason，连续 tool 直接按 run 折叠
-  -> Agent 文字流不会因为 liveActions 增加或 detail refresh 自动滚动到底部；默认保持用户当前阅读位置，只有用户点击 evidence/read/add_candidate_evidence 打开原文时，右侧 iframe 才滚到对应原文节点
-  -> 每个 tool run 如果只有 1 个 tool 就保持直出；如果连续包含多个 tool，就整组默认折叠成 tool group，不会先直出第一条 tool
+  -> Agent 文字流根据用户当前位置决定是否跟随 liveActions：用户已经在底部时追加输出会继续滚到最新底部，用户离开底部阅读旧内容时保持当前 scrollTop；只有用户点击 evidence/read/add_candidate_evidence 打开原文时，右侧 iframe 才滚到对应原文节点
+  -> 每个 tool run 如果只有 1 个 tool 就保持直出；如果连续包含多个 tool，就整组默认折叠成 tool group，不会先直出第一条 tool；用户手动展开后，同一组里后续 live tool 继续追加时保持展开，不会因为组内数量变化重新折叠
   -> tool group 折叠态显示一条类似 Codex 的自然语言摘要，概括这一段做了什么、涉及多少个文件/证据/字段；展开后恢复每个 tool 的单行明细
   -> tool 明细采用 Codex 风格的淡化运行文字行：tree/read/add_candidate_evidence/review_evidences/write_field 用语义图标，图标后是一句短英文摘要；tree 只显示 `Viewed outline`，read 只显示 `Read passage`，submit_result 不进入文字流
   -> write_field action 不在中间 Agent 流里展开字段大卡；字段状态、短值和字段 summary 进入字段 Progress 紧凑列表

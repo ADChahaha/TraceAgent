@@ -681,6 +681,55 @@ it("Agent 文字后的连续多个 tool 整组折叠，不先直出第一条 too
   expect(within(agentArea).getByLabelText("tool review_evidences")).toBeInTheDocument();
 });
 
+it("终态 replay 保留文字和 tool group 的原始时间线位置", async () => {
+  const timelineDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      actions: [
+        modelMessage("先说明接下来读取原文"),
+        {
+          tool_name: "read",
+          args: { path_id: "evidence://0001.0000.0001" },
+          result: { ok: true, locator: "evidence://0001.0000.0001", kind: "paragraph" },
+          metadata: { seq: 2 }
+        },
+        {
+          tool_name: "add_candidate_evidence",
+          args: { field_id: "room_numbers", path_id: "evidence://0001.0000.0001" },
+          result: { ok: true, field_id: "room_numbers", candidate_evidence: ["evidence://0001.0000.0001"] },
+          metadata: { seq: 3 }
+        },
+        modelMessage("读完后说明将写入字段"),
+        {
+          tool_name: "write_field",
+          args: { field_id: "room_numbers", value: "1-101,1-102", final_evidence: [] },
+          result: {
+            ok: true,
+            field: {
+              field_id: "room_numbers",
+              status: "resolved",
+              value: "1-101,1-102",
+              evidence: []
+            }
+          },
+          metadata: { seq: 5 }
+        }
+      ]
+    }
+  };
+  renderTaskDetail(timelineDetail);
+
+  const agentArea = await screen.findByLabelText("Agent 中间工作区");
+  const firstMessage = within(agentArea).getByText("先说明接下来读取原文");
+  const toolGroup = within(agentArea).getByRole("group", { name: "2 collapsed tools" });
+  const secondMessage = within(agentArea).getByText("读完后说明将写入字段");
+  const writeField = within(agentArea).getByText("Filled room_numbers");
+  expect(firstMessage.compareDocumentPosition(toolGroup) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(toolGroup.compareDocumentPosition(secondMessage) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(secondMessage.compareDocumentPosition(writeField) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
 it("顶部最右侧 Review 按钮打开右侧字段 Progress，字段列表只按字段排序", async () => {
   const user = userEvent.setup();
   renderTaskDetail(createMultiFieldDetail());
@@ -773,6 +822,78 @@ it("点击 evidence 链接会打开顶层原文 tab，并定位高亮对应位�
   expect(sourceViewer).toHaveAttribute("data-highlight-selector", "0001.0000.0001");
   expect(screen.queryByText("evidence://0001.0000.0001")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("Inspector 面板")).not.toBeInTheDocument();
+});
+
+it("点击连续 block range evidence 链接会打开原文并高亮整段连续 block", async () => {
+  const user = userEvent.setup();
+  const evidenceDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      display_html:
+        '<main><section class="page"><p id="0001.0028.0002">先注册 Web 出願系统。</p><p id="0001.0028.0003">再输入志愿信息。</p><p id="0001.0028.0004">然后缴纳选考料并生成マイページ。</p><p id="0001.0028.0005">最后上传 PDF 出願书类。</p></section></main>',
+      source_selectors: {
+        "0001.0028.0002": "0001.0028.0002",
+        "0001.0028.0003": "0001.0028.0003",
+        "0001.0028.0004": "0001.0028.0004",
+        "0001.0028.0005": "0001.0028.0005"
+      },
+      actions: [
+        modelMessage("出愿流程见 [出願手順一式](evidence://range/0001.0028.0002/0001.0028.0005)"),
+        {
+          tool_name: "read",
+          args: { path_id: "evidence://0001.0028.0002" },
+          result: { ok: true, locator: "evidence://0001.0028.0002", kind: "paragraph", text: "先注册 Web 出願系统。" }
+        }
+      ]
+    }
+  };
+  renderTaskDetail(evidenceDetail);
+
+  expect(await screen.findByLabelText("任务工作台左侧任务栏")).toBeInTheDocument();
+  await user.click(screen.getByRole("link", { name: "出願手順一式" }));
+
+  const rightPanel = screen.getByLabelText("右侧 Review 工作栏");
+  expect(within(rightPanel).getByRole("tab", { name: "sample.pdf" })).toHaveAttribute("aria-selected", "true");
+  const sourceViewer = within(rightPanel).getByLabelText("原文查看器");
+  const sourceFrameHtml = getSourceFrameHtml(sourceViewer);
+  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "0001.0028.0002");
+  expect(sourceFrameHtml).toContain('id="0001.0028.0002" class="is-current-evidence" data-current-evidence="true"');
+  expect(sourceFrameHtml).toContain('id="0001.0028.0003" class="is-current-evidence" data-current-evidence="true"');
+  expect(sourceFrameHtml).toContain('id="0001.0028.0004" class="is-current-evidence" data-current-evidence="true"');
+  expect(sourceFrameHtml).toContain('id="0001.0028.0005" class="is-current-evidence" data-current-evidence="true"');
+});
+
+it("连续 block range evidence 会按起始 block 所属文件打开正确原文 tab", async () => {
+  const user = userEvent.setup();
+  const evidenceDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      documents: [
+        { document_id: "doc-1", filename: "sample-a.pdf" },
+        { document_id: "doc-2", filename: "sample-b.pdf" }
+      ],
+      display_html:
+        '<main><section class="page"><p id="0002.0001.0001">先在第二份文件中确认报名资格。</p><p id="0002.0001.0002">再准备并上传修士申请书类。</p></section></main>',
+      source_selectors: {
+        "0002.0001.0001": "0002.0001.0001",
+        "0002.0001.0002": "0002.0001.0002"
+      },
+      actions: [
+        modelMessage("第二份材料见 [修士申请流程](evidence://range/0002.0001.0001/0002.0001.0002)")
+      ]
+    }
+  };
+  renderTaskDetail(evidenceDetail);
+
+  expect(await screen.findByLabelText("任务工作台左侧任务栏")).toBeInTheDocument();
+  await user.click(screen.getByRole("link", { name: "修士申请流程" }));
+
+  const rightPanel = screen.getByLabelText("右侧 Review 工作栏");
+  expect(within(rightPanel).getByRole("tab", { name: "sample-b.pdf" })).toHaveAttribute("aria-selected", "true");
+  const sourceViewer = within(rightPanel).getByLabelText("原文查看器");
+  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "0002.0001.0001");
 });
 
 it("原文文件 tab 只显示解码后的文件名，原文内容上方不再重复文件标题", async () => {
@@ -1533,7 +1654,7 @@ it("处理中 source_indexed 事件会刷新出原文 replay", async () => {
   expect(await screen.findByLabelText("Agent 中间工作区")).toBeInTheDocument();
 });
 
-it("实时追加工具输出时不强制滚动 Agent 文字流到底部", async () => {
+it("实时追加工具输出时，用户不在底部就保持当前阅读位置", async () => {
   const processingDetail: TaskDetailData = {
     summary: {
       task_id: "task-no-autoscroll",
@@ -1567,7 +1688,11 @@ it("实时追加工具输出时不强制滚动 Agent 文字流到底部", async 
 
   const agentStream = await screen.findByLabelText("Agent 文字流");
   Object.defineProperty(agentStream, "scrollHeight", { configurable: true, value: 999 });
+  Object.defineProperty(agentStream, "clientHeight", { configurable: true, value: 120 });
   agentStream.scrollTop = 17;
+  await act(async () => {
+    agentStream.dispatchEvent(new Event("scroll"));
+  });
 
   await act(async () => {
     eventSources[0].emitEvent("agent.event", {
@@ -1587,6 +1712,71 @@ it("实时追加工具输出时不强制滚动 Agent 文字流到底部", async 
 
   expect(await screen.findByText("Read passage")).toBeInTheDocument();
   expect(agentStream.scrollTop).toBe(17);
+});
+
+it("实时追加工具输出时，用户在底部就继续跟随到底部", async () => {
+  const processingDetail: TaskDetailData = {
+    summary: {
+      task_id: "task-autoscroll-bottom",
+      status: "processing",
+      stage: "extraction",
+      has_result: false,
+      has_trace: false,
+      error_message: null,
+      stream: {
+        state: "running",
+        last_event_seq: 1
+      }
+    },
+    result: null,
+    trace: null,
+    replay: null,
+    audit: null
+  };
+  const eventSources: FakeEventSource[] = [];
+  const createTaskEventSource = jest.fn((_taskId: string, afterSeq = 0) => {
+    const eventSource = new FakeEventSource(String(afterSeq));
+    eventSources.push(eventSource);
+    return eventSource as unknown as EventSource;
+  });
+
+  renderTaskDetail(processingDetail, {
+    taskId: "task-autoscroll-bottom",
+    createTaskEventSource,
+    loadTaskDetail: async () => processingDetail
+  });
+
+  const agentStream = await screen.findByLabelText("Agent 文字流");
+  let streamScrollHeight = 500;
+  Object.defineProperty(agentStream, "scrollHeight", {
+    configurable: true,
+    get: () => streamScrollHeight
+  });
+  Object.defineProperty(agentStream, "clientHeight", { configurable: true, value: 100 });
+  agentStream.scrollTop = 400;
+  await act(async () => {
+    agentStream.dispatchEvent(new Event("scroll"));
+  });
+
+  streamScrollHeight = 999;
+  await act(async () => {
+    eventSources[0].emitEvent("agent.event", {
+      seq: 2,
+      task_id: "task-autoscroll-bottom",
+      type: "agent.event",
+      status: "processing",
+      stage: "extraction",
+      payload: {
+        type: "tool_completed",
+        tool: "read",
+        args: { path_id: "evidence://0001.0000.0001" },
+        result: { ok: true, locator: "evidence://0001.0000.0001", kind: "paragraph", text: "1-101 被列为文明寝室" }
+      }
+    });
+  });
+
+  expect(await screen.findByText("Read passage")).toBeInTheDocument();
+  expect(agentStream.scrollTop).toBe(999);
 });
 
 it("处理中已有 replay 时，live read 工具行能打开原文并高亮", async () => {
@@ -1768,4 +1958,86 @@ it("处理中已有 replay actions 时，live 裸 path_id 可跳原文且字段 
   const progress = screen.getByLabelText("字段进度面板");
   expect(within(progress).getByRole("button", { name: /room_numbers/ })).toBeInTheDocument();
   expect(within(progress).getByText("实时写入字段")).toBeInTheDocument();
+});
+
+it("已展开的 live tool group 追加新工具后保持展开", async () => {
+  const user = userEvent.setup();
+  const processingDetail: TaskDetailData = {
+    summary: {
+      task_id: "task-live-expanded-group",
+      status: "processing",
+      stage: "extraction",
+      has_result: false,
+      has_trace: false,
+      error_message: null,
+      stream: {
+        state: "running",
+        last_event_seq: 1
+      }
+    },
+    result: null,
+    trace: null,
+    replay: {
+      ...baseReplay,
+      task_id: "task-live-expanded-group",
+      status: "processing",
+      stage: "extraction",
+      actions: [
+        {
+          tool_name: "tree",
+          args: { path_id: "0001.0000.0000" },
+          result: { ok: true, locator: "0001.0000.0000" }
+        },
+        {
+          tool_name: "read",
+          args: { path_id: "0001.0000.0001" },
+          result: { ok: true, locator: "0001.0000.0001", kind: "paragraph", text: "1-101、1-102 被列为文明寝室" }
+        }
+      ]
+    },
+    audit: null
+  };
+  const eventSources: FakeEventSource[] = [];
+  const createTaskEventSource = jest.fn((_taskId: string, afterSeq = 0) => {
+    const eventSource = new FakeEventSource(String(afterSeq));
+    eventSources.push(eventSource);
+    return eventSource as unknown as EventSource;
+  });
+
+  renderTaskDetail(processingDetail, {
+    taskId: "task-live-expanded-group",
+    createTaskEventSource,
+    loadTaskDetail: async () => processingDetail
+  });
+
+  const agentArea = await screen.findByLabelText("Agent 中间工作区");
+  const initialToolGroup = await within(agentArea).findByRole("group", { name: "2 collapsed tools" });
+  await user.click(within(initialToolGroup).getByRole("button", { name: "展开 2 个工具调用" }));
+  expect(within(initialToolGroup).getByRole("button", { name: "收起 2 个工具调用" })).toHaveAttribute("aria-expanded", "true");
+  expect(within(agentArea).getByText("Viewed outline")).toBeInTheDocument();
+  expect(within(agentArea).getByText("Read passage")).toBeInTheDocument();
+
+  await act(async () => {
+    eventSources[0].emitEvent("agent.event", {
+      seq: 2,
+      task_id: "task-live-expanded-group",
+      type: "agent.event",
+      status: "processing",
+      stage: "extraction",
+      payload: {
+        type: "tool_completed",
+        tool: "add_candidate_evidence",
+        args: { field_id: "room_numbers", path_id: "0001.0000.0001" },
+        result: {
+          ok: true,
+          field_id: "room_numbers",
+          candidate_evidence: ["0001.0000.0001"]
+        }
+      }
+    });
+  });
+
+  const updatedToolGroup = await within(agentArea).findByRole("group", { name: "3 collapsed tools" });
+  expect(within(updatedToolGroup).getByRole("button", { name: "收起 3 个工具调用" })).toHaveAttribute("aria-expanded", "true");
+  expect(within(agentArea).getByText("Saved evidence for room_numbers")).toBeInTheDocument();
 });

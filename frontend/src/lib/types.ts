@@ -55,6 +55,16 @@ export interface TaskStreamState {
   last_event_seq: number;
 }
 
+export interface TaskEvent {
+  seq: number;
+  task_id: string;
+  type: string;
+  status: TaskStatus | string;
+  stage: TaskStage | string;
+  payload: Record<string, unknown>;
+  created_at?: string;
+}
+
 export interface TaskList {
   tasks: TaskSummary[];
 }

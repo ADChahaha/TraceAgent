@@ -20,7 +20,7 @@
   -> 用重复 files 字段和 task_spec 组装 FormData
   -> POST /tasks 创建任务
   -> 左侧任务栏立即显示处理中
-  -> 轮询 GET /tasks/{task_id} 后更新为处理结果
+  -> 轮询 GET /tasks/{task_id} 后更新为处理结果，任务状态明细使用 status/stage 命名，不再保留旧 route 命名
 ```
 
 ## 测试函数
@@ -32,5 +32,5 @@
 - `task_spec composer 会用 task_name 作为 task_type 并提交 PDF files`：验证 composer 提交时从 `task_spec.task_name` 推导 `task_type`，并用重复 `files` 字段发送多个 PDF。
 - `没有 PDF 或缺少 task_name 时不会创建任务`：验证创建任务前会拦截缺少 PDF 和缺少 `task_spec.task_name` 的输入。
 - `已选择的 PDF 可以逐个移除`：验证用户误选多个 PDF 后，每个文件 chip 都有可访问的移除按钮，点击后只删除对应文件。
-- `创建任务后左侧任务栏先显示处理中，轮询完成后显示处理结果`：验证新任务先进入左侧任务栏，轮询拿到终态后更新终态标签。
+- `创建任务后左侧任务栏先显示处理中，轮询完成后显示处理结果`：验证新任务先进入左侧任务栏，轮询拿到终态后更新终态标签，并确认任务列表不再保留旧 `replay-task-route` DOM 命名。
 - `主题切换仍在任务工作台顶部生效`：验证顶部单个主题按钮仍写入 `html[data-theme]` 和 localStorage。

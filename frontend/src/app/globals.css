@@ -518,7 +518,8 @@ html[data-theme="dark"] .home-task-composer {
   gap: 12px;
 }
 
-.replay-topbar-back {
+.replay-topbar-back,
+.replay-topbar-review-toggle {
   display: inline-flex;
   height: 2rem;
   width: 2rem;
@@ -529,11 +530,25 @@ html[data-theme="dark"] .home-task-composer {
   color: var(--replay-muted);
 }
 
+.replay-topbar-review-toggle {
+  border: 1px solid var(--replay-border-soft);
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+
 .replay-topbar-back:hover,
-.replay-topbar-back:focus-visible {
+.replay-topbar-back:focus-visible,
+.replay-topbar-review-toggle:hover,
+.replay-topbar-review-toggle:focus-visible,
+.replay-topbar-review-toggle[data-active="true"] {
   background: var(--replay-tool-row);
   color: var(--replay-foreground);
   outline: none;
+}
+
+.replay-topbar-review-toggle[data-active="true"] {
+  border-color: color-mix(in oklch, var(--replay-foreground) 24%, var(--replay-border-soft));
 }
 
 .replay-topbar-title {
@@ -786,7 +801,7 @@ html[data-theme="dark"] .home-task-composer {
 }
 
 .replay-task-meta,
-.replay-task-route,
+.replay-task-status-detail,
 .replay-task-error,
 .replay-task-empty {
   color: var(--replay-muted);

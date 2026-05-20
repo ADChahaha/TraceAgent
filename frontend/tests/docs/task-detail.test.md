@@ -17,13 +17,13 @@
   -> 右侧 Review 工作栏由顶部最右侧图标按钮显式开关；关闭左侧任务栏不会自动显示右侧栏，证据链接和可定位工具行会自动打开右侧原文 tab
   -> 字段 Progress 是靠中间的右侧竖栏，按字段名排序展示紧凑字段列表，不再分 Review / Reject / Accept 组
   -> 字段 Progress 不承载字段展开区；点击字段行只更新选中态，字段 summary 保留在 Progress 行里
-  -> 右侧 Review 工作栏内默认有 `Review` tab；evidence:// 链接、read、add_candidate_evidence 会按文件打开或切换完整原文 tab，只在 replay.source_selectors 明确包含 path_id 时，用 replay.display_html 里的同名虚拟 path_id DOM id 定位高亮
+  -> 右侧 Review 工作栏内默认有 `Review` tab；evidence:// 链接、read、add_candidate_evidence 会按文件打开或切换完整原文 tab，只在 replay.source_selectors 明确包含 path_id 时，用 replay.display_html 里的同名虚拟 path_id DOM id 定位高亮；如果 evidence 使用 `evidence://range/<start>/<end>`，则按 `start` 所属文件打开 tab，并把这段连续 block 一起高亮
   -> 原文 tab 按 task_id 和文件隔离，tab 标题只显示解码后的 basename 文件名，不显示目录、URL 编码或 `%20`；同一文件内不同证据复用同一个文件 tab 并更新定位高亮；多文件才打开多个文件 tab；关闭原文 tab 后回到右侧 `Review`
   -> 原文查看器只显示完整原文渲染，不在 iframe 上方重复显示文件标题，并把原文内容铺满右侧框体，长表格、图片和长词按框宽收缩或换行，不出现左右滑动的纸张感
   -> Agent 流一次性渲染完整 model_message 文本和工具摘要，不再提供自动播放、下一步、速度条或单步播放
-  -> live tool/message 追加时不强制滚动 Agent 文字流，保持用户当前阅读位置；空 `model_message` 不显示为 `Thinking` 或工具行
+  -> live tool/message 追加时按用户当前位置决定是否滚动：用户在底部就继续跟随到底部，用户离开底部阅读旧内容就保持当前位置；空 `model_message` 不显示为 `Thinking` 或工具行
   -> Agent 工具行只展示真实可见工具：tree/read/add_candidate_evidence/review_evidences/write_field，submit_result 作为收尾动作不进入文字流
-  -> 非空 model_message 文字段作为 tool run 边界；文字后连续出现多个 tool 时，整组默认折叠成一个 tool group，用户展开后才显示每个工具明细；只有单个 tool 时才直出，旧 tool.reason 不进入文字流
+  -> 非空 model_message 文字段作为 tool run 边界；文字后连续出现多个 tool 时，整组默认折叠成一个 tool group 并保留在原始时间线位置，用户展开后才显示每个工具明细；只有单个 tool 时才直出，旧 tool.reason 不进入文字流
   -> tool group 折叠态显示一条类似 Codex 的自然语言摘要，概括这一段做了什么、涉及多少个文件/证据/字段，不再拼接工具动作摘要
   -> 工具行使用短英文动作摘要和轻量语义图标：ListTree、BookUser、BookmarkPlus、FileCheck、PenLine；tree 只显示 Viewed outline，read 只显示 Read passage，submit_result 不进入文字流
   -> Agent model_message 中的 `[文本](evidence://...)` 被点击时打开右侧对应文件的完整原文 tab，路径式 selector 和点号 locator 都会跳到对应原文节点并高亮，不替换中央 Agent 工作区
@@ -48,9 +48,11 @@
 - `单个 tool 保持直出，不会折叠成 group`：验证只有一条 tool 时不会被包进折叠容器，仍然以普通 tool 行直接显示。
 - `tool action 的旧 reason 字段不进入 Agent 文字流`：验证旧 replay 里残留的 tool.reason 不会渲染成可见文字，工具行仍按 args/result 展示。
 - `Agent 文字后的连续多个 tool 整组折叠，不先直出第一条 tool`：验证文字段后的 tool run 如果包含多条 tool，第一条 tool 不会先直出，而是和后续 tool 一起进入折叠组；下一段文字会重新开始新的 tool run，单个 tool 仍保持直出。
+- `终态 replay 保留文字和 tool group 的原始时间线位置`：验证终态 replay 已经带有 model_message/tool 交错时间线时，前端仍把连续工具折叠在两段文字之间，不把工具组集中挪到文字上方。
 - `顶部最右侧 Review 按钮打开右侧字段 Progress，字段列表只按字段排序`：验证右上角 Review 图标按钮在不改变左栏状态的情况下显式打开右侧 Review 工作栏，展示字段 Progress，并可再次点击关闭。
 - `字段 Progress 显示字段摘要，点击字段不会占用 Review 工作区`：验证字段 summary 留在 Progress 行里，点击字段只改变选中态，不打开 Inspector 或固定子 tab。
 - `点击 evidence 链接会打开顶层原文 tab，并定位高亮对应位置`：验证 evidence:// 链接会在右侧 Review 工作栏打开对应文件的完整原文 tab，渲染 replay.display_html 的全文，跳到对应原文节点并高亮，同时不展示字段值、证据文本、原文位置或内部 evidence URI 等实现字段，并保留中央 Agent 工作区。
+- `点击连续 block range evidence 链接会打开原文并高亮整段连续 block`：验证 `evidence://range/<start>/<end>` 会按 `start` 所属文件打开原文 tab，把 `start` 作为滚动定位点，并同时高亮这段连续 block。
 - `原文文件 tab 只显示解码后的文件名，原文内容上方不再重复文件标题`：验证带目录的文件名只在右侧 tab 显示解码后的 basename，`%20` 会显示成空格，并且原文 iframe 上方不再额外渲染重复标题栏。
 - `点号 evidence URI 会打开原文文件 tab 并映射到真实 DOM 位置`：验证真实任务里的 `evidence://0001.0000.0009` 这类 locator 会先查 replay 里的 `source_selectors`，再高亮 replay HTML 里同名虚拟 path_id DOM 节点，打开同一份原文文件 tab。
 - `0001.0019.0001 这类 base locator 会按实际段落定位，不会错配成旧 DOM id`：验证当工具文本不能直接匹配时，前端只依赖 replay.source_selectors 和同名虚拟 path_id DOM id，不沿用旧的点号编号或 `p001_b019` 猜测。
@@ -67,5 +69,7 @@
 - `刷新从头回放时不把同一工具的 start、completed 和 replay action 重复显示`：验证刷新后 SSE 从 0 重放时，前端不会把同一工具在 partial replay、tool_started 和 tool_completed 中显示成多条，只保留一条可见工具记录。
 - `空 model_message 不渲染成 Thinking 工具行，前后工具继续按组折叠`：验证 backend SSE 里的空内容 model_message 会被丢弃，不占用文字段，也不会作为 `model_message` 工具混入 tool group；后续连续工具仍按真实工具数量折叠。
 - `处理中 source_indexed 事件会刷新出原文 replay`：验证 live source index 到达后，TaskDetail 会刷新 partial replay，使运行中的任务也能拿到原文 HTML 和 selector 映射。
-- `实时追加工具输出时不强制滚动 Agent 文字流到底部`：验证 live tool 增加只追加文本，不改写用户当前 `scrollTop`。
+- `实时追加工具输出时，用户不在底部就保持当前阅读位置`：验证 live tool 增加时，如果用户已经离开底部阅读旧内容，Agent 文字流不会改写当前 `scrollTop`。
+- `实时追加工具输出时，用户在底部就继续跟随到底部`：验证 live tool 增加时，如果用户追加前已经在底部，Agent 文字流会滚到新的底部。
 - `处理中已有 replay 时，live read 工具行能打开原文并高亮`：验证 running 任务只要已有 partial replay 和 source_selectors，live read 工具行就能打开右侧原文 tab 并定位到同名虚拟 path_id DOM id。
+- `已展开的 live tool group 追加新工具后保持展开`：验证用户手动展开的连续 tool group 在同一组里继续收到新的 live tool 时，不会因为组内工具数量变化而重新折叠。

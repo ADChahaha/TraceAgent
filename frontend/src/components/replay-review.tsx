@@ -64,7 +64,7 @@ type VisibleAgentAction = {
 type AgentStreamItem =
   | { kind: "message"; item: VisibleAgentAction; reason: string }
   | { kind: "tool"; item: VisibleAgentAction }
-  | { kind: "tool-group"; items: VisibleAgentAction[] };
+  | { kind: "tool-group"; groupId: string; items: VisibleAgentAction[] };
 
 const DEFAULT_LEFT_PANEL_WIDTH = 224;
 const DEFAULT_FIELD_PROGRESS_PANEL_WIDTH = 320;
@@ -74,6 +74,7 @@ const RIGHT_PANEL_MIN_WIDTH = 300;
 const RIGHT_PANEL_MAX_WIDTH = 920;
 const PANEL_RESIZE_KEY_STEP = 16;
 const REVIEW_TAB_ID = "review";
+const AGENT_STREAM_BOTTOM_THRESHOLD = 8;
 const LIVE_REPLAY_TOOL_EVENT_TYPES = new Set(["tool_completed", "tool_failed"]);
 
 export function ReplayReview({
@@ -109,7 +110,10 @@ export function ReplayReview({
   const [composerValue, setComposerValue] = React.useState("");
   const [leftPanelWidth, setLeftPanelWidth] = React.useState(DEFAULT_LEFT_PANEL_WIDTH);
   const [fieldProgressPanelWidth, setFieldProgressPanelWidth] = React.useState(DEFAULT_FIELD_PROGRESS_PANEL_WIDTH);
+  const [expandedToolGroups, setExpandedToolGroups] = React.useState<Record<string, boolean>>({});
   const agentStreamRef = React.useRef<HTMLDivElement | null>(null);
+  const shouldFollowAgentStreamRef = React.useRef(true);
+  const previousVisibleActionCountRef = React.useRef(0);
 
   const currentTaskId = taskId ?? replay?.task_id ?? "";
 
@@ -166,6 +170,33 @@ export function ReplayReview({
     }) as React.CSSProperties,
     [fieldProgressPanelWidth, leftPanelWidth, stageColumns],
   );
+
+  React.useEffect(() => {
+    const agentStream = agentStreamRef.current;
+    if (!agentStream) {
+      return;
+    }
+    const updateFollowState = () => {
+      shouldFollowAgentStreamRef.current = isAgentStreamScrolledToBottom(agentStream);
+    };
+    updateFollowState();
+    agentStream.addEventListener("scroll", updateFollowState, { passive: true });
+    return () => agentStream.removeEventListener("scroll", updateFollowState);
+  }, [currentTaskId]);
+
+  React.useLayoutEffect(() => {
+    const agentStream = agentStreamRef.current;
+    if (!agentStream) {
+      previousVisibleActionCountRef.current = visibleActions.length;
+      return;
+    }
+    const didAppendVisibleAction = visibleActions.length > previousVisibleActionCountRef.current;
+    if (didAppendVisibleAction && shouldFollowAgentStreamRef.current) {
+      agentStream.scrollTop = agentStream.scrollHeight;
+    }
+    previousVisibleActionCountRef.current = visibleActions.length;
+    shouldFollowAgentStreamRef.current = isAgentStreamScrolledToBottom(agentStream);
+  }, [visibleActions.length]);
 
   function openEvidenceReview(uri: string, label: string) {
     openSourceTab(uri, label);
@@ -249,6 +280,13 @@ export function ReplayReview({
     if (uri) {
       openSourceTab(uri, label);
     }
+  }
+
+  function toggleToolGroup(groupId: string) {
+    setExpandedToolGroups((current) => ({
+      ...current,
+      [getScopedToolGroupId(currentTaskId, groupId)]: !current[getScopedToolGroupId(currentTaskId, groupId)],
+    }));
   }
 
   function startPanelResize(side: SidebarResizeSide, event: React.PointerEvent<HTMLButtonElement>) {
@@ -399,17 +437,20 @@ export function ReplayReview({
               />
             ) : null}
             <ReviewWorkspacePanel
+              currentTaskId={currentTaskId}
               agentStreamRef={agentStreamRef}
               agentStreamItems={agentStreamItems}
               visibleActionCount={visibleActionCount}
               composerValue={composerValue}
               agentBalanceSide={agentBalanceSide}
               agentContentMode={agentContentMode}
+              expandedToolGroups={expandedToolGroups}
               pendingLabel="Thinking"
               onComposerChange={setComposerValue}
               onComposerSubmit={() => setComposerValue("")}
               onOpenEvidence={openEvidenceReview}
               onOpenActionSource={openActionSource}
+              onToggleToolGroup={toggleToolGroup}
             />
             {isRightReviewPanelOpen ? (
               <>
@@ -501,16 +542,19 @@ export function ReplayReview({
         ) : null}
 
         <ReviewWorkspacePanel
+          currentTaskId={currentTaskId}
           agentStreamRef={agentStreamRef}
           agentStreamItems={agentStreamItems}
           visibleActionCount={visibleActionCount}
           composerValue={composerValue}
           agentBalanceSide={agentBalanceSide}
           agentContentMode={agentContentMode}
+          expandedToolGroups={expandedToolGroups}
           onComposerChange={setComposerValue}
           onComposerSubmit={() => setComposerValue("")}
           onOpenEvidence={openEvidenceReview}
           onOpenActionSource={openActionSource}
+          onToggleToolGroup={toggleToolGroup}
           pendingLabel={summary && !isTaskTerminal(summary) ? "Thinking" : undefined}
         />
 
@@ -694,6 +738,10 @@ function FieldProgressPanel({
 
 function orderReplayFieldsForProgress(fields: ReplayField[]): ReplayField[] {
   return [...fields].sort((left, right) => left.fieldName.localeCompare(right.fieldName));
+}
+
+function isAgentStreamScrolledToBottom(element: HTMLElement): boolean {
+  return element.scrollHeight - element.scrollTop - element.clientHeight <= AGENT_STREAM_BOTTOM_THRESHOLD;
 }
 
 function isTaskTerminal(summary: TaskSummary): boolean {
@@ -899,28 +947,34 @@ function WorkspaceTabStrip({
 }
 
 function ReviewWorkspacePanel({
+  currentTaskId,
   agentStreamRef,
   agentStreamItems,
   visibleActionCount,
   composerValue,
   agentBalanceSide,
   agentContentMode,
+  expandedToolGroups,
   onComposerChange,
   onComposerSubmit,
   onOpenEvidence,
   onOpenActionSource,
+  onToggleToolGroup,
   pendingLabel,
 }: {
+  currentTaskId: string;
   agentStreamRef: React.RefObject<HTMLDivElement | null>;
   agentStreamItems: AgentStreamItem[];
   visibleActionCount: number;
   composerValue: string;
   agentBalanceSide: AgentBalanceSide;
   agentContentMode: "centered" | "full";
+  expandedToolGroups: Record<string, boolean>;
   onComposerChange: (value: string) => void;
   onComposerSubmit: () => void;
   onOpenEvidence: (uri: string, label: string) => void;
   onOpenActionSource: (action: ReplayAction, label: string) => void;
+  onToggleToolGroup: (groupId: string) => void;
   pendingLabel?: string;
 }) {
   return (
@@ -964,11 +1018,13 @@ function ReviewWorkspacePanel({
                       );
                     }
                     if (streamItem.kind === "tool-group") {
-                      const firstItem = streamItem.items[0];
                       return (
                         <AgentToolGroup
-                          key={`tool-group-${firstItem.actionIndex}-${streamItem.items.length}`}
+                          key={streamItem.groupId}
+                          groupId={streamItem.groupId}
                           items={streamItem.items}
+                          isExpanded={Boolean(expandedToolGroups[getScopedToolGroupId(currentTaskId, streamItem.groupId)])}
+                          onToggleExpanded={onToggleToolGroup}
                           onOpenActionSource={onOpenActionSource}
                         />
                       );
@@ -1044,11 +1100,15 @@ function SourceTabPanel({
   evidenceDetailsById: Map<string, EvidenceDetail>;
 }) {
   const activeEvidenceDetail = getEvidenceDetailById(evidenceDetailsById, tab.evidenceId);
-  const highlightSelector = activeEvidenceDetail?.selector || "";
+  const highlightSelectors = React.useMemo(
+    () => getEvidenceHighlightSelectors(replay, tab.evidenceId, activeEvidenceDetail),
+    [activeEvidenceDetail, replay, tab.evidenceId],
+  );
+  const highlightSelector = highlightSelectors[0] || activeEvidenceDetail?.selector || "";
   const sourceFrameRef = React.useRef<HTMLIFrameElement | null>(null);
   const renderedDocumentHtml = React.useMemo(
-    () => renderSourceDocumentHtml(replay.display_html, highlightSelector, tab.quote),
-    [highlightSelector, replay.display_html, tab.quote],
+    () => renderSourceDocumentHtml(replay.display_html, highlightSelectors, highlightSelectors.length > 1 ? "" : tab.quote),
+    [highlightSelectors, replay.display_html, tab.quote],
   );
   const scrollToCurrentEvidence = React.useCallback(() => {
     const target = sourceFrameRef.current?.contentDocument?.querySelector<HTMLElement>("[data-current-evidence='true']");
@@ -1182,13 +1242,18 @@ function AgentToolLine({
 }
 
 function AgentToolGroup({
+  groupId,
   items,
+  isExpanded,
+  onToggleExpanded,
   onOpenActionSource,
 }: {
+  groupId: string;
   items: VisibleAgentAction[];
+  isExpanded: boolean;
+  onToggleExpanded: (groupId: string) => void;
   onOpenActionSource?: (action: ReplayAction, label: string) => void;
 }) {
-  const [isExpanded, setIsExpanded] = React.useState(false);
   const summaryText = summarizeAgentToolGroup(items);
   return (
     <div className="replay-agent-tool-group" role="group" aria-label={`${items.length} collapsed tools`}>
@@ -1197,7 +1262,7 @@ function AgentToolGroup({
         className="replay-agent-tool-group-toggle"
         aria-expanded={isExpanded}
         aria-label={`${isExpanded ? "收起" : "展开"} ${items.length} 个工具调用`}
-        onClick={() => setIsExpanded((current) => !current)}
+        onClick={() => onToggleExpanded(groupId)}
       >
         {isExpanded ? (
           <ChevronDown className="replay-agent-tool-group-icon" aria-hidden="true" />
@@ -1358,7 +1423,11 @@ function groupAgentStreamItems(actions: VisibleAgentAction[]): AgentStreamItem[]
     if (pendingTools.length === 1) {
       items.push({ kind: "tool", item: pendingTools[0] });
     } else {
-      items.push({ kind: "tool-group", items: pendingTools });
+      items.push({
+        kind: "tool-group",
+        groupId: getAgentToolGroupId(pendingTools),
+        items: pendingTools,
+      });
     }
     pendingTools = [];
   };
@@ -1376,6 +1445,18 @@ function groupAgentStreamItems(actions: VisibleAgentAction[]): AgentStreamItem[]
   }
   flushPendingTools();
   return items;
+}
+
+function getAgentToolGroupId(items: VisibleAgentAction[]): string {
+  const first = items[0];
+  if (!first) {
+    return "tool-group-empty";
+  }
+  return `tool-group-${first.actionIndex}-${getActionType(first.action)}-${getActionTarget(first.action)}`;
+}
+
+function getScopedToolGroupId(taskId: string, groupId: string): string {
+  return `${taskId || "task"}::${groupId}`;
 }
 
 function isAgentActionOk(action: ReplayAction): boolean {
@@ -1721,23 +1802,129 @@ function getEvidenceDetailById(details: Map<string, EvidenceDetail>, evidenceId:
 
 function getEvidenceLookupKeys(evidenceId: string): string[] {
   const keys = new Set<string>();
-  const withoutScheme = stripEvidenceScheme(evidenceId);
-  const withoutInlineSelector = withoutScheme.split("/")[0] ?? withoutScheme;
-  const withoutHashSelector = withoutScheme.split("#")[0] ?? withoutScheme;
-  for (const key of [evidenceId, withoutScheme, withoutInlineSelector, `evidence://${withoutScheme}`, `evidence://${withoutInlineSelector}`]) {
-    if (key) {
-      keys.add(key);
+  const rememberVariants = (value: string) => {
+    const withoutScheme = stripEvidenceScheme(value);
+    const withoutInlineSelector = withoutScheme.split("/")[0] ?? withoutScheme;
+    const withoutHashSelector = withoutScheme.split("#")[0] ?? withoutScheme;
+    for (const key of [value, withoutScheme, withoutInlineSelector, `evidence://${withoutScheme}`, `evidence://${withoutInlineSelector}`]) {
+      if (key) {
+        keys.add(key);
+      }
     }
-  }
-  if (withoutHashSelector) {
-    keys.add(withoutHashSelector);
-    keys.add(`evidence://${withoutHashSelector}`);
+    if (withoutHashSelector) {
+      keys.add(withoutHashSelector);
+      keys.add(`evidence://${withoutHashSelector}`);
+    }
+  };
+
+  rememberVariants(evidenceId);
+  const range = parseEvidenceRangeId(evidenceId);
+  if (range) {
+    rememberVariants(range.start);
+    rememberVariants(range.end);
   }
   return [...keys];
 }
 
 function stripEvidenceScheme(evidenceId: string): string {
   return evidenceId.replace(/^evidence:\/\//, "");
+}
+
+function parseEvidenceRangeId(evidenceId: string): { start: string; end: string } | null {
+  const withoutScheme = stripEvidenceScheme(evidenceId).split("#")[0] ?? "";
+  const parts = withoutScheme.split("/").filter(Boolean);
+  if (parts.length !== 3 || parts[0] !== "range") {
+    return null;
+  }
+  const [, start, end] = parts;
+  if (!isVirtualPathId(start) || !isVirtualPathId(end)) {
+    return null;
+  }
+  return { start, end };
+}
+
+function getEvidenceHighlightSelectors(
+  replay: TaskReplay,
+  evidenceId: string,
+  detail: EvidenceDetail | null,
+): string[] {
+  const rangeSelectors = getEvidenceRangeSelectors(replay, evidenceId);
+  if (rangeSelectors.length > 0) {
+    return rangeSelectors;
+  }
+  return detail?.selector ? [detail.selector] : [];
+}
+
+function getEvidenceRangeSelectors(replay: TaskReplay, evidenceId: string): string[] {
+  const selectorsByPathId = replay.source_selectors;
+  if (!selectorsByPathId || typeof selectorsByPathId !== "object") {
+    return [];
+  }
+  const pathIds = getEvidenceRangePathIds(replay, evidenceId);
+  const selectors: string[] = [];
+  for (const pathId of pathIds) {
+    const sourceSelector = selectorsByPathId[pathId];
+    if (typeof sourceSelector !== "string") {
+      continue;
+    }
+    const normalizedSelector = normalizeSourceSelector(sourceSelector);
+    if (normalizedSelector && !selectors.includes(normalizedSelector)) {
+      selectors.push(normalizedSelector);
+    }
+  }
+  return selectors;
+}
+
+function getEvidenceRangePathIds(replay: TaskReplay, evidenceId: string): string[] {
+  const range = parseEvidenceRangeId(evidenceId);
+  if (!range) {
+    return [];
+  }
+  const startSegments = range.start.split(".");
+  const endSegments = range.end.split(".");
+  if (startSegments.length !== endSegments.length) {
+    return [range.start];
+  }
+  const startParentPath = startSegments.slice(0, -1).join(".");
+  const endParentPath = endSegments.slice(0, -1).join(".");
+  if (startParentPath !== endParentPath) {
+    return [range.start];
+  }
+  const [rangeStart, rangeEnd] = compareEvidencePathIds(range.start, range.end) <= 0 ? [range.start, range.end] : [range.end, range.start];
+  const sourceSelectors = replay.source_selectors;
+  if (!sourceSelectors || typeof sourceSelectors !== "object") {
+    return [rangeStart];
+  }
+  const rangePathIds = Object.keys(sourceSelectors)
+    .filter((pathId) => {
+      if (!isVirtualPathId(pathId)) {
+        return false;
+      }
+      const pathSegments = pathId.split(".");
+      if (pathSegments.length !== startSegments.length) {
+        return false;
+      }
+      if (pathSegments.slice(0, -1).join(".") !== startParentPath) {
+        return false;
+      }
+      return compareEvidencePathIds(pathId, rangeStart) >= 0 && compareEvidencePathIds(pathId, rangeEnd) <= 0;
+    })
+    .sort(compareEvidencePathIds);
+  return rangePathIds.length > 0 ? rangePathIds : [rangeStart];
+}
+
+function compareEvidencePathIds(left: string, right: string): number {
+  const leftParts = stripEvidenceScheme(left).split(".").map((part) => Number.parseInt(part, 10));
+  const rightParts = stripEvidenceScheme(right).split(".").map((part) => Number.parseInt(part, 10));
+  const maxLength = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < maxLength; index += 1) {
+    const leftPart = leftParts[index] ?? 0;
+    const rightPart = rightParts[index] ?? 0;
+    if (leftPart !== rightPart) {
+      return leftPart - rightPart;
+    }
+  }
+  return 0;
 }
 
 function extractDisplayHtmlBlocks(displayHtml: string): Map<string, string> {
@@ -1829,21 +2016,26 @@ code {
 }
 </style>`;
 
-function renderSourceDocumentHtml(displayHtml: string, highlightSelector: string, quote: string = ""): string {
+function renderSourceDocumentHtml(displayHtml: string, highlightSelectors: string[], quote: string = ""): string {
   if (!displayHtml) {
     return wrapSourceDocumentHtml("<p>No source document is available.</p>");
   }
   let renderedHtml = displayHtml;
-  if (highlightSelector) {
-    renderedHtml = markSourceDocumentEvidence(displayHtml, highlightSelector, quote);
+  if (highlightSelectors.length > 0) {
+    renderedHtml = markSourceDocumentEvidence(displayHtml, highlightSelectors, quote);
   }
   return wrapSourceDocumentHtml(renderedHtml);
 }
 
-function markSourceDocumentEvidence(displayHtml: string, highlightSelector: string, quote: string): string {
-  const escapedSelector = escapeRegExp(highlightSelector);
-  const elementPattern = new RegExp(`(<(?<tag>[a-z][\\w:-]*)\\b(?<attrs>[^>]*(?:\\bid|\\bdata-element-id)=(["'])${escapedSelector}\\4[^>]*)>)(?<content>[\\s\\S]*?)(</\\k<tag>>)`, "i");
-  if (quote && normalizeComparableText(quote).length >= 12) {
+function markSourceDocumentEvidence(displayHtml: string, highlightSelectors: string[], quote: string): string {
+  const normalizedSelectors = [...new Set(highlightSelectors.filter(Boolean))];
+  if (normalizedSelectors.length === 0) {
+    return displayHtml;
+  }
+  if (quote && normalizedSelectors.length === 1 && normalizeComparableText(quote).length >= 12) {
+    const highlightSelector = normalizedSelectors[0];
+    const escapedSelector = escapeRegExp(highlightSelector);
+    const elementPattern = new RegExp(`(<(?<tag>[a-z][\\w:-]*)\\b(?<attrs>[^>]*(?:\\bid|\\bdata-element-id)=(["'])${escapedSelector}\\4[^>]*)>)(?<content>[\\s\\S]*?)(</\\k<tag>>)`, "i");
     const withInlineQuote = displayHtml.replace(
       elementPattern,
       (match, openingTag: string, _tag: string, _attrs: string, _quoteChar: string, content: string, closingTag: string) => {
@@ -1858,6 +2050,11 @@ function markSourceDocumentEvidence(displayHtml: string, highlightSelector: stri
       return withInlineQuote;
     }
   }
+  return normalizedSelectors.reduce((html, selector) => addSourceDocumentEvidenceMarker(html, selector), displayHtml);
+}
+
+function addSourceDocumentEvidenceMarker(displayHtml: string, highlightSelector: string): string {
+  const escapedSelector = escapeRegExp(highlightSelector);
   const openingTagPattern = new RegExp(`(<[^>]*(?:\\bid|\\bdata-element-id)=(["'])${escapedSelector}\\2[^>]*)(>)`, "i");
   return displayHtml.replace(openingTagPattern, (match, openingTag: string, _quote: string, close: string) => {
     if (/\bdata-current-evidence=/.test(openingTag)) {
@@ -1955,7 +2152,8 @@ function getSourceDocumentTabId(documentIndex: number): string {
 }
 
 function getEvidenceDocumentIndex(replay: TaskReplay, evidenceId: string): number {
-  const evidencePath = stripEvidenceScheme(evidenceId).split("#")[0] ?? "";
+  const range = parseEvidenceRangeId(evidenceId);
+  const evidencePath = stripEvidenceScheme(range?.start ?? evidenceId).split("#")[0] ?? "";
   const firstPathPart = evidencePath.split("/").filter(Boolean)[0] ?? "";
   const virtualPathMatch = firstPathPart.match(/^0000\.(\d{4})(?:\.|$)/);
   if (virtualPathMatch) {

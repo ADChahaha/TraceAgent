@@ -338,7 +338,7 @@ function TaskSidebar({ tasks }: { tasks: RecentTask[] }) {
                 )}
                 {isTaskTerminal(task) ? "处理结果" : "处理中"}
               </span>
-              <span className="replay-task-route">
+              <span className="replay-task-status-detail">
                 {isTaskTerminal(task) ? getTaskResultLabel(task) : task.stage}
               </span>
               {task.error_message ? (

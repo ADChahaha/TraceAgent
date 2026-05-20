@@ -44,6 +44,14 @@ export async function forwardBackendRequest(
     return Response.json({ detail: "backend unavailable" }, { status: 502 });
   }
 
+  if ((backendResponse.headers.get("content-type") ?? "").includes("text/event-stream")) {
+    return new Response(backendResponse.body, {
+      status: backendResponse.status,
+      statusText: backendResponse.statusText,
+      headers: buildResponseHeaders(backendResponse.headers)
+    });
+  }
+
   return new Response(await backendResponse.text(), {
     status: backendResponse.status,
     statusText: backendResponse.statusText,
