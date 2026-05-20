@@ -39,9 +39,20 @@ def test_resolution_messages_describe_candidate_policy_without_tool_manual():
 
     assert "semantic HTML virtual file tree" in system_content
     assert "Your goal is to extract fields according to task_spec and finally call submit_result" in system_content
-    assert "Assistant content is visible to a human reviewer" in system_content
-    assert "Keep it short, human-readable, and tied to the current action" in system_content
-    assert "Use the current tool's docstring as the note template for that turn" in system_content
+    assert "Assistant content is a progress update for a human reviewer, not a tool-call log" in system_content
+    assert "Write assistant content only when the latest observation changes what the reviewer understands" in system_content
+    assert "Leave assistant content empty for mechanical tree navigation" in system_content
+    assert "calling read before seeing the content" in system_content
+    assert "routine candidate saves" in system_content
+    assert "Summarize useful read results in one natural sentence" in system_content
+    assert "Do not use fixed headings such as Read/Finding/Next" in system_content
+    assert "Do not narrate tool names" in system_content
+    assert "Vary wording and avoid repeating the same sentence shape" in system_content
+    assert "Write assistant content in the same language as task_spec" in system_content
+    assert "keep quoted source text in the original source language" in system_content
+    assert "When a summary depends on consecutive blocks in the same section" in system_content
+    assert "cite the whole continuous span instead of only the first block" in system_content
+    assert "evidence://range/<start>/<end>" in system_content
     assert "Call exactly one tool in each assistant turn" in system_content
     assert "Never emit multiple or parallel tool calls in one turn" in system_content
     assert "Tool-specific argument rules are provided in the tool descriptions" in system_content
@@ -55,6 +66,7 @@ def test_resolution_messages_describe_candidate_policy_without_tool_manual():
     assert "Saving candidate:" not in system_content
     assert "Review:" not in system_content
     assert "Write:" not in system_content
+    assert "Use the current tool's docstring as the note template" not in system_content
     assert "Task fields:" in content
 
 
@@ -79,10 +91,6 @@ def test_tool_descriptions_carry_candidate_and_review_contracts():
     assert "evidence://0001 copied" in tools["tree"].description
     assert "Only read file evidence links ending in .md, .list, or .table" in tools["read"].description
     assert "Use evidence links such as evidence://0001.0001.0002" in tools["read"].description
-    assert "Use a short reading note when this turn reports a read result" in tools["read"].description
-    assert "Read:" in tools["read"].description
-    assert "Finding:" in tools["read"].description
-    assert "Next:" in tools["read"].description
     assert set(tools["read"].args) == {"path_id"}
     assert "count reads consecutive readable blocks" not in tools["read"].description
     assert "count is capped" not in tools["read"].description
@@ -93,15 +101,20 @@ def test_tool_descriptions_carry_candidate_and_review_contracts():
     assert "limit" not in tools["read"].description
     assert "pagination" not in tools["read"].description
     assert "read does not require an immediate add_candidate_evidence" in tools["read"].description
-    assert "No assistant content is needed for mechanical adjacent reads" in tools["read"].description
+    assert "Do not narrate the read call before seeing its result" in tools["read"].description
+    assert "After a read result is available" in tools["read"].description
+    assert "summarize useful source content in the next assistant turn" in tools["read"].description
+    assert "Leave routine adjacent reads silent until they form a meaningful chunk" in tools["read"].description
+    assert "If that summary depends on consecutive blocks in the same section" in tools["read"].description
+    assert "use one evidence://range/<start>/<end> link" in tools["read"].description
     assert "If assistant content mentions source text" in tools["read"].description
+    assert "Do not use fixed headings" in tools["read"].description
     assert "Add one readable paragraph/list/table evidence link as block candidate evidence" in tools["add_candidate_evidence"].description
     assert "Use exactly one field_id and one path_id" in tools["add_candidate_evidence"].description
     assert "one paragraph, list, or table block" in tools["add_candidate_evidence"].description
-    assert "Use a short candidate note for this turn" in tools["add_candidate_evidence"].description
-    assert "Saving candidate:" in tools["add_candidate_evidence"].description
-    assert "Why relevant:" in tools["add_candidate_evidence"].description
-    assert "Next:" in tools["add_candidate_evidence"].description
+    assert "Routine candidate saves can stay silent" in tools["add_candidate_evidence"].description
+    assert "Assistant content is not required for every candidate save" in tools["add_candidate_evidence"].description
+    assert "Use content only when the candidate changes the evidence picture" in tools["add_candidate_evidence"].description
     assert "path_ids" not in tools["add_candidate_evidence"].args
     assert "bindings" not in tools["add_candidate_evidence"].args
     assert "bindings=[{field_id, path_ids}, ...]" not in tools["add_candidate_evidence"].description
@@ -109,31 +122,24 @@ def test_tool_descriptions_carry_candidate_and_review_contracts():
     assert "possible or uncertain relevance is enough to add as candidate" in tools["add_candidate_evidence"].description
     assert "Candidate evidence can be broader than final_evidence" in tools["add_candidate_evidence"].description
     assert "final_evidence is selected later after review" in tools["add_candidate_evidence"].description
-    assert "Assistant content is not optional when you call add_candidate_evidence" in tools["add_candidate_evidence"].description
     assert "include a Markdown evidence link to the same block path_id you are saving" in tools["add_candidate_evidence"].description
     assert "[\"quoted words\"](evidence://0001.0014.0001)" in tools["add_candidate_evidence"].description
     assert "Do not leave source words as plain quoted text" in tools["add_candidate_evidence"].description
     assert "This candidate is not the final field decision" in tools["add_candidate_evidence"].description
     assert "Assistant content is optional for routine candidate additions" not in tools["add_candidate_evidence"].description
     assert "Use content when this candidate addition completes a meaningful candidate-evidence group" not in tools["add_candidate_evidence"].description
+    assert "Assistant content is not optional when you call add_candidate_evidence" not in tools["add_candidate_evidence"].description
     assert "Do not pass sentence/item/row inline links" in tools["add_candidate_evidence"].description
     assert "bind_evidence" not in tools["add_candidate_evidence"].description
     assert "review_evidences expands block candidate evidence into inline evidence links" in tools["review_evidences"].description
     assert "Use review_evidences like checking your notes before deciding whether to write or keep reading" in tools["review_evidences"].description
-    assert "Use a short review note when this turn reports review status" in tools["review_evidences"].description
-    assert "Review:" in tools["review_evidences"].description
-    assert "Sufficiency:" in tools["review_evidences"].description
-    assert "Next:" in tools["review_evidences"].description
+    assert "Use content when review changes evidence sufficiency" in tools["review_evidences"].description
+    assert "Routine review checks can stay silent" in tools["review_evidences"].description
     assert "Only write after review makes the evidence sufficient for the field decision" in tools["review_evidences"].description
-    assert "Assistant content is optional for routine review checks" in tools["review_evidences"].description
-    assert "Use content when review changes your plan" in tools["review_evidences"].description
     assert "write_field does not have to immediately follow review_evidences" in tools["write_field"].description
     assert "Use a recent review snapshot" in tools["write_field"].description
-    assert "Use a short write note for this turn" in tools["write_field"].description
-    assert "Write:" in tools["write_field"].description
-    assert "Why supported:" in tools["write_field"].description
-    assert "Next:" in tools["write_field"].description
-    assert "If" in tools["write_field"].description
+    assert "Field writes are decision checkpoints" in tools["write_field"].description
+    assert "Use one natural sentence when a field is written" in tools["write_field"].description
     assert "add_candidate_evidence adds more candidates for this field after review" in tools["write_field"].description
     assert "review again before" in tools["write_field"].description
     assert "final_evidence must copy inline" in tools["write_field"].description
@@ -156,10 +162,23 @@ def test_tool_descriptions_carry_candidate_and_review_contracts():
     assert "classification standard" not in tools["write_field"].description
     assert "semantic or legal equivalents" not in tools["write_field"].description
     assert "Only null-typed fields or null enum variants may use final_evidence=[]" in tools["submit_result"].description
+    fixed_headings = [
+        "Read:",
+        "Finding:",
+        "Saving candidate:",
+        "Why relevant:",
+        "Review:",
+        "Sufficiency:",
+        "Write:",
+        "Why supported:",
+        "Next:",
+    ]
     for tool in tools.values():
         assert "reason" not in tool.args
         assert "[0000" not in tool.description
         assert "bare path_id" not in tool.description
+        for fixed_heading in fixed_headings:
+            assert fixed_heading not in tool.description
 
 
 def test_resolution_messages_expand_enum_variants():
