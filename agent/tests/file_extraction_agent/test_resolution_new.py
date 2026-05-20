@@ -88,6 +88,27 @@ def test_resolution_messages_do_not_inline_initial_tree():
     assert "Use tree first to inspect the virtual file tree" in content
 
 
+def test_resolution_prompt_keeps_read_review_write_as_compact_decision_cluster():
+    messages = build_resolution_messages(_state())
+    system_content = messages[0].content
+    tools = {getattr(tool, "name", getattr(tool, "__name__", "")): tool for tool in build_tools(_state())}
+
+    assert "Work in compact field decision clusters whenever evidence allows" in system_content
+    assert "finish the current field or semantic chunk with add_candidate_evidence, review_evidences, and write_field before switching to unrelated reading" in system_content
+    assert "If a read summary already states the source facts, keep the later write_field content incremental" in system_content
+    assert "do not restate the same source facts in full twice" in system_content
+    assert "When review_evidences shows enough evidence, the next assistant turn should normally call write_field for that same field" in system_content
+    assert "Leave review content empty when the next action is an obvious write_field" in system_content
+    assert "Use read summaries to orient the reviewer, not to pre-write the final field conclusion" in tools["read"].description
+    assert "If the read result is likely to be written soon, keep the summary short and defer the full decision sentence to write_field" in tools["read"].description
+    assert "When review shows enough evidence, normally call write_field for the same field in the next assistant turn" in tools["review_evidences"].description
+    assert "Do not insert unrelated reading between a sufficient review and the write unless you name a concrete evidence gap" in tools["review_evidences"].description
+    assert "Leave assistant content empty when the next step is an obvious write_field and the reviewed facts were already summarized after read" in tools["review_evidences"].description
+    assert "If the same source facts were already summarized after read, write_field content should be incremental" in tools["write_field"].description
+    assert "do not repeat the full earlier read summary" in tools["write_field"].description
+    assert "write_field should normally be the next tool after a sufficient review_evidences for the same field" in tools["write_field"].description
+
+
 def test_tool_descriptions_carry_candidate_and_review_contracts():
     tools = {getattr(tool, "name", getattr(tool, "__name__", "")): tool for tool in build_tools(_state())}
 
@@ -141,7 +162,7 @@ def test_tool_descriptions_carry_candidate_and_review_contracts():
     assert "Use content when review changes evidence sufficiency" in tools["review_evidences"].description
     assert "Routine review checks can stay silent" in tools["review_evidences"].description
     assert "Only write after review makes the evidence sufficient for the field decision" in tools["review_evidences"].description
-    assert "write_field does not have to immediately follow review_evidences" in tools["write_field"].description
+    assert "write_field should normally be the next tool after a sufficient review_evidences for the same field" in tools["write_field"].description
     assert "Use a recent review snapshot" in tools["write_field"].description
     assert "Field writes are decision checkpoints" in tools["write_field"].description
     assert "Use one natural sentence when a field is written" in tools["write_field"].description

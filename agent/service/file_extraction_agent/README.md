@@ -95,7 +95,7 @@ review_evidences(field_id="fees")
   -> 展开 inline evidence: {"path_id": "0001.0003.0001", "rows": ["R001", ...]}
 ```
 
-`write_field(final_evidence=...)` 必须复制同字段当前 `review_evidences.evidence` 里的 inline selector；模型应在 review 后判断证据足够支撑字段决定，或者足够判断 missing/null，才写字段。如果 review 后又给该字段 `add_candidate_evidence` 新候选，当前 review snapshot 会失效，需要重新 review 再写。prompt 会建议模型 review 后尽快 write，不要隔很远才使用旧 review。这个规则也适用于 `status="missing"` 和 null enum variant，不过它们可以在有同字段 review snapshot 后使用空 `final_evidence`。最终证据不能使用只有 `path_id` 的 block selector，也不能手写 raw virtual path。`submit_result` 会校验 selector 类型和编号是否存在：`.md` 只能用 `sentences`，`.list` 只能用 `items`，`.table` 只能用 `rows`。
+`write_field(final_evidence=...)` 必须复制同字段当前 `review_evidences.evidence` 里的 inline selector；模型应在 review 后判断证据足够支撑字段决定，或者足够判断 missing/null，才写字段。如果 review 后又给该字段 `add_candidate_evidence` 新候选，当前 review snapshot 会失效，需要重新 review 再写。prompt 要求模型按紧凑字段决策簇推进：读到足够支持某字段的一组 block 后，优先完成候选保存、review 和 write，再切到无关阅读；review 足够后下一轮通常写同字段，除非明确说明具体证据缺口。这个规则也适用于 `status="missing"` 和 null enum variant，不过它们可以在有同字段 review snapshot 后使用空 `final_evidence`。最终证据不能使用只有 `path_id` 的 block selector，也不能手写 raw virtual path。`submit_result` 会校验 selector 类型和编号是否存在：`.md` 只能用 `sentences`，`.list` 只能用 `items`，`.table` 只能用 `rows`。
 
 ## 公共入口
 

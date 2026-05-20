@@ -51,7 +51,8 @@ def build_tools(state: Any) -> list[Any]:
         summarize useful source content in the next assistant turn when it changes what the
         reviewer understands. Leave routine adjacent reads silent until they form a meaningful chunk.
         Use natural wording to say what was inspected and whether it helps, rules out an
-        expected area, or suggests continuing elsewhere. Do not use fixed headings.
+        expected area, or suggests continuing elsewhere. Use read summaries to orient the reviewer, not to pre-write the final field conclusion.
+        If the read result is likely to be written soon, keep the summary short and defer the full decision sentence to write_field. Do not use fixed headings.
         If that summary depends on consecutive blocks in the same section, use one evidence://range/<start>/<end> link
         in assistant content instead of citing only the
         first block. start and end must be readable block path_ids from the same section.
@@ -108,6 +109,9 @@ def build_tools(state: Any) -> list[Any]:
         Use content when review changes evidence sufficiency, shows what is missing, or prepares a
         field decision. Routine review checks can stay silent.
         Only write after review makes the evidence sufficient for the field decision.
+        When review shows enough evidence, normally call write_field for the same field in the next assistant turn.
+        Do not insert unrelated reading between a sufficient review and the write unless you name a concrete evidence gap.
+        Leave assistant content empty when the next step is an obvious write_field and the reviewed facts were already summarized after read.
         If assistant content uses reviewed text, quote it as an evidence link and explain whether it is
         sufficient or what is missing.
         """
@@ -123,9 +127,11 @@ def build_tools(state: Any) -> list[Any]:
     ) -> dict[str, Any]:
         """Write or overwrite one schema field value with selected final evidence.
 
-        write_field does not have to immediately follow review_evidences. Use a recent review snapshot
-        for the same field, and prefer writing soon after review because
-        old reviews are hard for humans to follow. final_evidence must copy inline
+        write_field should normally be the next tool after a sufficient review_evidences for the same field.
+        Use a recent review snapshot for the same field, and prefer writing soon after review because
+        old reviews are hard for humans to follow.
+        If the same source facts were already summarized after read, write_field content should be incremental; do not repeat the full earlier read summary.
+        final_evidence must copy inline
         evidence:// links from review_evidences.evidence for the same field. If
         add_candidate_evidence adds more candidates for this field after review, review again before
         writing. Do not use block-level evidence links as final_evidence.
