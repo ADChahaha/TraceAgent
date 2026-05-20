@@ -75,3 +75,22 @@ it("Agent 阅读列先压缩弹性留白，再压缩正文宽度", () => {
   expect(globalsCss).not.toContain("--replay-agent-compact-gutter-width");
   expect(globalsCss).not.toContain("@container (max-width: 820px)");
 });
+
+it("Contents 面板保留可读宽度、纵向滚动和多行文本", () => {
+  const outlineListRule = cssRule(".replay-outline-panel-list");
+  expect(outlineListRule).toContain("min-height: 0;");
+  expect(outlineListRule).toContain("overflow-y: auto;");
+  expect(outlineListRule).toContain("overflow-x: hidden;");
+
+  const outlineLabelRule = cssRule(".replay-outline-item-label");
+  expect(outlineLabelRule).toContain("white-space: normal;");
+  expect(outlineLabelRule).toContain("overflow-wrap: anywhere;");
+  expect(outlineLabelRule).not.toContain("overflow: hidden;");
+  expect(outlineLabelRule).not.toContain("text-overflow: ellipsis;");
+
+  const outlineValueRule = cssRule(".replay-outline-item-value");
+  expect(outlineValueRule).toContain("max-width: 100%;");
+  expect(outlineValueRule).toContain("white-space: normal;");
+  expect(outlineValueRule).not.toContain("overflow: hidden;");
+  expect(outlineValueRule).not.toContain("text-overflow: ellipsis;");
+});

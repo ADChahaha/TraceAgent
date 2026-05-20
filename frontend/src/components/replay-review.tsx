@@ -24,10 +24,11 @@ import { stringifyValue } from "@/lib/json";
 import type { RecentTask } from "@/lib/task-store";
 import type { ReplayAction, TaskEvent, TaskReplay, TaskResultField, TaskSummary } from "@/lib/types";
 import { MarkdownEvidence } from "@/components/markdown-evidence";
+import { OutlinePanel } from "@/components/outline-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
-type SidebarResizeSide = "left" | "field-progress";
+type SidebarResizeSide = "left" | "outline" | "field-progress";
 
 type ReplayField = {
   sourceName: string;
@@ -45,6 +46,8 @@ type WorkspaceSourceTab = {
   evidenceId: string;
   quote: string;
   documentIndex: number;
+  navigationSelector?: string;
+  navigationKey: number;
 };
 
 type EvidenceDetail = {
@@ -69,8 +72,11 @@ type AgentStreamItem =
 
 const DEFAULT_LEFT_PANEL_WIDTH = 224;
 const DEFAULT_FIELD_PROGRESS_PANEL_WIDTH = 320;
+const DEFAULT_OUTLINE_PANEL_WIDTH = 280;
 const LEFT_PANEL_MIN_WIDTH = 176;
 const LEFT_PANEL_MAX_WIDTH = 360;
+const OUTLINE_PANEL_MIN_WIDTH = 240;
+const OUTLINE_PANEL_MAX_WIDTH = 520;
 const RIGHT_PANEL_MIN_WIDTH = 300;
 const RIGHT_PANEL_MAX_WIDTH = 920;
 const PANEL_RESIZE_KEY_STEP = 16;
@@ -105,6 +111,9 @@ export function ReplayReview({
   );
   const [isLeftPanelOpen, setIsLeftPanelOpen] = React.useState(true);
   const [isRightReviewPanelOpen, setIsRightReviewPanelOpen] = React.useState(false);
+  const [isOutlinePanelOpen] = React.useState(true);
+  const [outlinePanelWidth, setOutlinePanelWidth] = React.useState(DEFAULT_OUTLINE_PANEL_WIDTH);
+  const [activeOutlineNodeId, setActiveOutlineNodeId] = React.useState<string | null>(null);
   const [sourceTabsByTask, setSourceTabsByTask] = React.useState<Record<string, WorkspaceSourceTab[]>>({});
   const [activeWorkspaceTabByTask, setActiveWorkspaceTabByTask] = React.useState<Record<string, string>>({});
   const [selectedFieldName, setSelectedFieldName] = React.useState("");
@@ -115,6 +124,8 @@ export function ReplayReview({
   const agentStreamRef = React.useRef<HTMLDivElement | null>(null);
   const shouldFollowAgentStreamRef = React.useRef(true);
   const previousVisibleActionCountRef = React.useRef(0);
+  const sourceNavigationSequenceRef = React.useRef(0);
+  const outlineDrivenNavigationKeyRef = React.useRef(0);
 
   const currentTaskId = taskId ?? replay?.task_id ?? "";
 
@@ -148,28 +159,31 @@ export function ReplayReview({
     () => sourceTabs.find((tab) => tab.id === activeWorkspaceTabId) ?? null,
     [activeWorkspaceTabId, sourceTabs],
   );
+  const shouldShowOutlinePanel = isOutlinePanelOpen && Array.isArray(replay?.outline_tree) && replay.outline_tree.length > 0;
   const shouldShowRightReviewPanel = isRightReviewPanelOpen;
-  const visibleSidePanelCount = (isLeftPanelOpen ? 1 : 0) + (shouldShowRightReviewPanel ? 1 : 0);
+  const visibleAgentSidePanelCount = (isLeftPanelOpen ? 1 : 0) + (shouldShowRightReviewPanel ? 1 : 0);
   const agentBalanceSide: AgentBalanceSide =
-    visibleSidePanelCount === 1 ? (isLeftPanelOpen ? "right" : "left") : "none";
-  const agentContentMode = visibleSidePanelCount <= 1 ? "centered" : "full";
+    visibleAgentSidePanelCount === 1 ? (isLeftPanelOpen ? "right" : "left") : "none";
+  const agentContentMode = visibleAgentSidePanelCount <= 1 ? "centered" : "full";
   const replayTitle = taskId ?? replay?.task_id ?? "";
   const stageColumns = React.useMemo(
     () =>
       [
         ...(isLeftPanelOpen ? ["var(--replay-left-panel-width)", "10px"] : []),
         "minmax(0, 1fr)",
+        ...(shouldShowOutlinePanel ? ["10px", "var(--replay-outline-panel-width)"] : []),
         ...(shouldShowRightReviewPanel ? ["10px", "var(--replay-field-progress-panel-width)"] : []),
       ].join(" "),
-    [isLeftPanelOpen, shouldShowRightReviewPanel],
+    [isLeftPanelOpen, shouldShowOutlinePanel, shouldShowRightReviewPanel],
   );
   const stageStyle = React.useMemo(
     () => ({
       "--replay-left-panel-width": `${leftPanelWidth}px`,
+      "--replay-outline-panel-width": `${outlinePanelWidth}px`,
       "--replay-field-progress-panel-width": `${fieldProgressPanelWidth}px`,
       "--replay-stage-columns": stageColumns,
     }) as React.CSSProperties,
-    [fieldProgressPanelWidth, leftPanelWidth, stageColumns],
+    [fieldProgressPanelWidth, leftPanelWidth, outlinePanelWidth, stageColumns],
   );
 
   React.useEffect(() => {
@@ -203,16 +217,20 @@ export function ReplayReview({
     openSourceTab(uri, label);
   }
 
-  function openSourceTab(uri: string, label: string) {
+  function openSourceTab(uri: string, label: string, options: { navigationSelector?: string } = {}) {
     if (!replay) {
       return;
     }
     setIsRightReviewPanelOpen(true);
     const evidenceId = getEvidenceIdFromUri(uri);
+    setActiveOutlineNodeId(findOutlineNodeIdForEvidence(replay.outline_tree ?? [], evidenceId));
     const documentIndex = getEvidenceDocumentIndex(replay, evidenceId);
     const documentTitle = getEvidenceDocumentTitle(replay, evidenceId);
     const tabId = getSourceDocumentTabId(documentIndex);
     const quote = isShortEvidenceQuote(label) ? label : "";
+    const navigationKey = sourceNavigationSequenceRef.current + 1;
+    sourceNavigationSequenceRef.current = navigationKey;
+    suppressSourceToOutlineSyncForNavigation(navigationKey);
     const nextTab: WorkspaceSourceTab = {
       id: tabId,
       uri,
@@ -220,6 +238,8 @@ export function ReplayReview({
       evidenceId,
       quote,
       documentIndex,
+      navigationSelector: options.navigationSelector,
+      navigationKey,
     };
     setSourceTabsByTask((current) => {
       const currentTabs = current[currentTaskId] ?? [];
@@ -227,7 +247,7 @@ export function ReplayReview({
       return {
         ...current,
         [currentTaskId]: exists
-          ? currentTabs.map((tab) => (tab.id === tabId ? { ...tab, uri, evidenceId, quote, label: tab.label || nextTab.label, documentIndex } : tab))
+          ? currentTabs.map((tab) => (tab.id === tabId ? { ...tab, uri, evidenceId, quote, label: tab.label || nextTab.label, documentIndex, navigationSelector: options.navigationSelector, navigationKey } : tab))
           : [...currentTabs, nextTab],
       };
     });
@@ -235,6 +255,16 @@ export function ReplayReview({
       ...current,
       [currentTaskId]: tabId,
     }));
+  }
+
+  function suppressSourceToOutlineSyncForNavigation(navigationKey: number) {
+    outlineDrivenNavigationKeyRef.current = navigationKey;
+  }
+
+  function resumeSourceToOutlineSync(navigationKey: number) {
+    if (outlineDrivenNavigationKeyRef.current === navigationKey) {
+      outlineDrivenNavigationKeyRef.current = 0;
+    }
   }
 
   function openFieldReview(fieldName: string) {
@@ -294,13 +324,17 @@ export function ReplayReview({
     event.preventDefault();
     const handle = event.currentTarget;
     const startX = event.clientX;
-    const startWidth = side === "left" ? leftPanelWidth : fieldProgressPanelWidth;
+    const startWidth = side === "left" ? leftPanelWidth : side === "outline" ? outlinePanelWidth : fieldProgressPanelWidth;
     const pointerId = event.pointerId;
 
     const updateWidth = (clientX: number) => {
       const deltaX = clientX - startX;
       if (side === "left") {
         setLeftPanelWidth(clampPanelWidth(startWidth + deltaX, LEFT_PANEL_MIN_WIDTH, LEFT_PANEL_MAX_WIDTH));
+        return;
+      }
+      if (side === "outline") {
+        setOutlinePanelWidth(clampPanelWidth(startWidth - deltaX, OUTLINE_PANEL_MIN_WIDTH, OUTLINE_PANEL_MAX_WIDTH));
         return;
       }
       const nextWidth = clampPanelWidth(startWidth - deltaX, RIGHT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH);
@@ -345,12 +379,16 @@ export function ReplayReview({
     };
     if (event.key === "Home") {
       event.preventDefault();
-      setPanelWidthToBoundary(side, side === "left" ? LEFT_PANEL_MIN_WIDTH : RIGHT_PANEL_MAX_WIDTH);
+      if (side === "left") setPanelWidthToBoundary(side, LEFT_PANEL_MIN_WIDTH);
+      else if (side === "outline") setPanelWidthToBoundary(side, OUTLINE_PANEL_MAX_WIDTH);
+      else setPanelWidthToBoundary(side, RIGHT_PANEL_MAX_WIDTH);
       return;
     }
     if (event.key === "End") {
       event.preventDefault();
-      setPanelWidthToBoundary(side, side === "left" ? LEFT_PANEL_MAX_WIDTH : RIGHT_PANEL_MIN_WIDTH);
+      if (side === "left") setPanelWidthToBoundary(side, LEFT_PANEL_MAX_WIDTH);
+      else if (side === "outline") setPanelWidthToBoundary(side, OUTLINE_PANEL_MIN_WIDTH);
+      else setPanelWidthToBoundary(side, RIGHT_PANEL_MIN_WIDTH);
       return;
     }
     const delta = keyToDelta[event.key];
@@ -362,6 +400,10 @@ export function ReplayReview({
       setLeftPanelWidth((current) => clampPanelWidth(current + delta, LEFT_PANEL_MIN_WIDTH, LEFT_PANEL_MAX_WIDTH));
       return;
     }
+    if (side === "outline") {
+      setOutlinePanelWidth((current) => clampPanelWidth(current - delta, OUTLINE_PANEL_MIN_WIDTH, OUTLINE_PANEL_MAX_WIDTH));
+      return;
+    }
     if (side === "field-progress") {
       setFieldProgressPanelWidth((current) => clampPanelWidth(current - delta, RIGHT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH));
       return;
@@ -371,6 +413,10 @@ export function ReplayReview({
   function setPanelWidthToBoundary(side: SidebarResizeSide, width: number) {
     if (side === "left") {
       setLeftPanelWidth(width);
+      return;
+    }
+    if (side === "outline") {
+      setOutlinePanelWidth(width);
       return;
     }
     if (side === "field-progress") {
@@ -559,6 +605,28 @@ export function ReplayReview({
           pendingLabel={summary && !isTaskTerminal(summary) ? "Thinking" : undefined}
         />
 
+        {shouldShowOutlinePanel ? (
+          <>
+            <PanelResizeHandle
+              side="outline"
+              width={outlinePanelWidth}
+              onPointerDown={(event) => startPanelResize("outline", event)}
+              onKeyDown={(event) => resizePanelByKeyboard("outline", event)}
+            />
+            <aside className="replay-outline-panel-slot" aria-label="Contents 面板">
+              <OutlinePanel
+                outlineTree={replay!.outline_tree!}
+                fieldStates={replay?.field_states}
+                activeNodeId={activeOutlineNodeId}
+                onNodeClick={(nodeId, label) => {
+                  openSourceTab(`evidence://${nodeId}`, label, { navigationSelector: nodeId });
+                  setActiveOutlineNodeId(nodeId);
+                }}
+              />
+            </aside>
+          </>
+        ) : null}
+
         {shouldShowRightReviewPanel ? (
           <>
             <PanelResizeHandle
@@ -583,9 +651,16 @@ export function ReplayReview({
                   />
                 ) : (
                   <SourceTabPanel
-                    tab={activeSourceTab ?? sourceTabs[0] ?? { id: REVIEW_TAB_ID, uri: "", label: "Review", evidenceId: "", quote: "", documentIndex: 0 }}
+                    tab={activeSourceTab ?? sourceTabs[0] ?? { id: REVIEW_TAB_ID, uri: "", label: "Review", evidenceId: "", quote: "", documentIndex: 0, navigationKey: 0 }}
                     replay={replay}
                     evidenceDetailsById={evidenceDetailsById}
+                    onSectionVisible={(evidenceId, sourceNavigationKey) => {
+                      if (sourceNavigationKey && sourceNavigationKey === outlineDrivenNavigationKeyRef.current) {
+                        return;
+                      }
+                      setActiveOutlineNodeId(evidenceId ? findOutlineNodeIdForEvidence(replay.outline_tree ?? [], evidenceId) : null);
+                    }}
+                    onSourceUserIntent={resumeSourceToOutlineSync}
                   />
                 )}
               </div>
@@ -642,18 +717,35 @@ function PanelResizeHandle({
   onPointerDown: (event: React.PointerEvent<HTMLButtonElement>) => void;
   onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>) => void;
 }) {
-  const isLeft = side === "left";
+  const resizeMetadata =
+    side === "left"
+      ? {
+          label: "调整左侧栏宽度",
+          min: LEFT_PANEL_MIN_WIDTH,
+          max: LEFT_PANEL_MAX_WIDTH,
+        }
+      : side === "outline"
+        ? {
+            label: "调整 Contents 宽度",
+            min: OUTLINE_PANEL_MIN_WIDTH,
+            max: OUTLINE_PANEL_MAX_WIDTH,
+          }
+        : {
+            label: "调整右侧栏宽度",
+            min: RIGHT_PANEL_MIN_WIDTH,
+            max: RIGHT_PANEL_MAX_WIDTH,
+          };
   return (
     <button
       type="button"
       role="separator"
-      aria-label={isLeft ? "调整左侧栏宽度" : "调整右侧栏宽度"}
+      aria-label={resizeMetadata.label}
       aria-orientation="vertical"
-      aria-valuemin={isLeft ? LEFT_PANEL_MIN_WIDTH : RIGHT_PANEL_MIN_WIDTH}
-      aria-valuemax={isLeft ? LEFT_PANEL_MAX_WIDTH : RIGHT_PANEL_MAX_WIDTH}
+      aria-valuemin={resizeMetadata.min}
+      aria-valuemax={resizeMetadata.max}
       aria-valuenow={width}
       className="replay-panel-resize-handle"
-      title={isLeft ? "调整左侧栏宽度" : "调整右侧栏宽度"}
+      title={resizeMetadata.label}
       onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}
     >
@@ -1097,49 +1189,245 @@ function SourceTabPanel({
   tab,
   replay,
   evidenceDetailsById,
+  onSectionVisible,
+  onSourceUserIntent,
 }: {
   tab: WorkspaceSourceTab;
   replay: TaskReplay;
   evidenceDetailsById: Map<string, EvidenceDetail>;
+  onSectionVisible?: (sectionId: string | null, sourceNavigationKey: number) => void;
+  onSourceUserIntent?: (sourceNavigationKey: number) => void;
 }) {
   const activeEvidenceDetail = getEvidenceDetailById(evidenceDetailsById, tab.evidenceId);
   const highlightSelectors = React.useMemo(
-    () => getEvidenceHighlightSelectors(replay, tab.evidenceId, activeEvidenceDetail),
-    [activeEvidenceDetail, replay, tab.evidenceId],
+    () => (tab.navigationSelector ? getNavigationHighlightSelectors(replay, tab.navigationSelector) : getEvidenceHighlightSelectors(replay, tab.evidenceId, activeEvidenceDetail)),
+    [activeEvidenceDetail, replay, tab.evidenceId, tab.navigationSelector],
   );
   const highlightSelector = highlightSelectors[0] || activeEvidenceDetail?.selector || "";
   const sourceFrameRef = React.useRef<HTMLIFrameElement | null>(null);
-  const renderedDocumentHtml = React.useMemo(
+  const currentHighlightedHtml = React.useMemo(
     () => renderSourceDocumentHtml(replay.display_html, highlightSelectors, highlightSelectors.length > 1 ? "" : tab.quote),
     [highlightSelectors, replay.display_html, tab.quote],
   );
-  const scrollToCurrentEvidence = React.useCallback(() => {
-    const target = sourceFrameRef.current?.contentDocument?.querySelector<HTMLElement>("[data-current-evidence='true']");
-    if (target && typeof target.scrollIntoView === "function") {
-      target.scrollIntoView({ block: "center", inline: "nearest" });
+  const [sourceFrameSrcDoc, setSourceFrameSrcDoc] = React.useState(currentHighlightedHtml);
+  const previousDisplayHtmlRef = React.useRef(replay.display_html);
+  React.useEffect(() => {
+    if (previousDisplayHtmlRef.current === replay.display_html) {
+      return;
     }
-  }, []);
+    previousDisplayHtmlRef.current = replay.display_html;
+    setSourceFrameSrcDoc(currentHighlightedHtml);
+  }, [currentHighlightedHtml, replay.display_html]);
+
+  const applyCurrentEvidenceAndScroll = React.useCallback(() => {
+    const frame = sourceFrameRef.current;
+    if (!frame) {
+      return;
+    }
+    frame.dataset.currentSourceHtml = currentHighlightedHtml;
+    const doc = frame.contentDocument;
+    if (!doc) {
+      return;
+    }
+    applySourceDocumentEvidenceMarkers(doc, highlightSelectors);
+    const target = doc.querySelector<HTMLElement>("[data-current-evidence='true']");
+    if (target && typeof target.scrollIntoView === "function") {
+      target.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+    }
+  }, [currentHighlightedHtml, highlightSelectors]);
 
   React.useEffect(() => {
-    scrollToCurrentEvidence();
-  }, [renderedDocumentHtml, scrollToCurrentEvidence]);
+    applyCurrentEvidenceAndScroll();
+  }, [applyCurrentEvidenceAndScroll, tab.navigationKey]);
+
+  React.useEffect(() => {
+    if (!onSectionVisible) {
+      return;
+    }
+    const iframe = sourceFrameRef.current;
+    if (!iframe) {
+      return;
+    }
+    let cleanupScrollListener: (() => void) | undefined;
+    const setupScrollSync = () => {
+      cleanupScrollListener?.();
+      const doc = iframe.contentDocument;
+      const frameWindow = iframe.contentWindow;
+      if (!doc || !frameWindow) {
+        return;
+      }
+      const emitVisibleEvidence = () => {
+        const visibleEvidenceId = getVisibleSourceElementId(doc, frameWindow);
+        if (visibleEvidenceId) {
+          onSectionVisible(visibleEvidenceId, tab.navigationKey);
+        }
+      };
+      const handleSourceUserIntent = () => {
+        onSourceUserIntent?.(tab.navigationKey);
+      };
+      let animationFrameId: number | null = null;
+      const requestFrame =
+        typeof frameWindow.requestAnimationFrame === "function"
+          ? frameWindow.requestAnimationFrame.bind(frameWindow)
+          : (callback: FrameRequestCallback) => window.setTimeout(() => callback(Date.now()), 16);
+      const cancelFrame =
+        typeof frameWindow.cancelAnimationFrame === "function"
+          ? frameWindow.cancelAnimationFrame.bind(frameWindow)
+          : window.clearTimeout.bind(window);
+      const scheduleEmitVisibleEvidence = () => {
+        if (animationFrameId !== null) {
+          return;
+        }
+        animationFrameId = requestFrame(() => {
+          animationFrameId = null;
+          emitVisibleEvidence();
+        });
+      };
+      frameWindow.addEventListener("wheel", handleSourceUserIntent, { passive: true });
+      frameWindow.addEventListener("pointerdown", handleSourceUserIntent, { passive: true });
+      frameWindow.addEventListener("touchstart", handleSourceUserIntent, { passive: true });
+      frameWindow.addEventListener("keydown", handleSourceUserIntent);
+      frameWindow.addEventListener("scroll", scheduleEmitVisibleEvidence, { passive: true });
+      frameWindow.addEventListener("resize", scheduleEmitVisibleEvidence);
+      emitVisibleEvidence();
+      cleanupScrollListener = () => {
+        if (animationFrameId !== null) {
+          cancelFrame(animationFrameId);
+          animationFrameId = null;
+        }
+        frameWindow.removeEventListener("wheel", handleSourceUserIntent);
+        frameWindow.removeEventListener("pointerdown", handleSourceUserIntent);
+        frameWindow.removeEventListener("touchstart", handleSourceUserIntent);
+        frameWindow.removeEventListener("keydown", handleSourceUserIntent);
+        frameWindow.removeEventListener("scroll", scheduleEmitVisibleEvidence);
+        frameWindow.removeEventListener("resize", scheduleEmitVisibleEvidence);
+      };
+    };
+    const setupTimer = window.setTimeout(setupScrollSync, 0);
+    iframe.addEventListener("load", setupScrollSync);
+    return () => {
+      window.clearTimeout(setupTimer);
+      iframe.removeEventListener("load", setupScrollSync);
+      cleanupScrollListener?.();
+    };
+  }, [sourceFrameSrcDoc, onSectionVisible, onSourceUserIntent, tab.navigationKey]);
 
   return (
     <div
       className="replay-source-panel-slot"
       aria-label="原文查看器"
       data-highlight-selector={highlightSelector}
+      data-navigation-key={tab.navigationKey}
     >
       <iframe
         ref={sourceFrameRef}
         title="原文文档"
         className="replay-source-document replay-source-frame"
-        srcDoc={renderedDocumentHtml}
+        srcDoc={sourceFrameSrcDoc}
         referrerPolicy="no-referrer"
-        onLoad={scrollToCurrentEvidence}
+        onLoad={applyCurrentEvidenceAndScroll}
       />
     </div>
   );
+}
+
+function getVisibleSourceElementId(doc: Document, frameWindow: Window): string | null {
+  const candidates = Array.from(doc.querySelectorAll<HTMLElement>("[id], [data-element-id]"))
+    .map((element) => ({ element, elementId: getSourceElementEvidenceId(element) }))
+    .filter((candidate): candidate is { element: HTMLElement; elementId: string } => Boolean(candidate.elementId));
+  if (candidates.length === 0) {
+    return null;
+  }
+  const targetY = Math.max(48, frameWindow.innerHeight * 0.24);
+  let bestCandidate: { elementId: string; score: number } | null = null;
+  for (const candidate of candidates) {
+    const rect = candidate.element.getBoundingClientRect();
+    const visiblePenalty = rect.bottom < 0 || rect.top > frameWindow.innerHeight ? frameWindow.innerHeight : 0;
+    const score = Math.abs(rect.top - targetY) + visiblePenalty;
+    if (!bestCandidate || score < bestCandidate.score) {
+      bestCandidate = { elementId: candidate.elementId, score };
+    }
+  }
+  return bestCandidate?.elementId ?? null;
+}
+
+function applySourceDocumentEvidenceMarkers(doc: Document, highlightSelectors: string[]) {
+  clearSourceDocumentEvidenceMarkers(doc);
+  for (const selector of [...new Set(highlightSelectors.filter(Boolean))]) {
+    const target = findSourceDocumentElement(doc, selector);
+    if (!target) {
+      continue;
+    }
+    target.classList.add("is-current-evidence");
+    target.setAttribute("data-current-evidence", "true");
+  }
+}
+
+function clearSourceDocumentEvidenceMarkers(doc: Document) {
+  for (const element of Array.from(doc.querySelectorAll<HTMLElement>("[data-current-evidence='true']"))) {
+    if (element.tagName.toLowerCase() === "mark" && element.classList.contains("is-current-evidence")) {
+      element.replaceWith(...Array.from(element.childNodes));
+      continue;
+    }
+    element.classList.remove("is-current-evidence");
+    if (!element.getAttribute("class")) {
+      element.removeAttribute("class");
+    }
+    element.removeAttribute("data-current-evidence");
+  }
+}
+
+function findSourceDocumentElement(doc: Document, selector: string): HTMLElement | null {
+  return doc.getElementById(selector) ?? doc.querySelector<HTMLElement>(`[data-element-id="${escapeAttributeSelectorValue(selector)}"]`);
+}
+
+function escapeAttributeSelectorValue(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
+}
+
+function getSourceElementEvidenceId(element: HTMLElement): string | null {
+  const dataElementId = element.getAttribute("data-element-id") ?? "";
+  if (isVirtualPathId(dataElementId)) {
+    return dataElementId;
+  }
+  const elementId = element.getAttribute("id") ?? "";
+  if (isVirtualPathId(elementId)) {
+    return elementId;
+  }
+  return null;
+}
+
+function findOutlineNodeIdForEvidence(outlineTree: NonNullable<TaskReplay["outline_tree"]>, evidenceId: string): string | null {
+  const targetPathId = getPrimaryEvidencePathId(evidenceId);
+  if (!targetPathId) {
+    return null;
+  }
+  let bestMatch: string | null = null;
+  const visit = (nodes: NonNullable<TaskReplay["outline_tree"]>) => {
+    for (const node of nodes) {
+      const nodeId = readString(node.id);
+      if (nodeId && isEvidencePathIdWithinOutlineNode(targetPathId, nodeId)) {
+        if (!bestMatch || nodeId.length > bestMatch.length) {
+          bestMatch = nodeId;
+        }
+      }
+      if (Array.isArray(node.children) && node.children.length > 0) {
+        visit(node.children);
+      }
+    }
+  };
+  visit(outlineTree);
+  return bestMatch;
+}
+
+function getPrimaryEvidencePathId(evidenceId: string): string {
+  const range = parseEvidenceRangeId(evidenceId);
+  const primaryEvidenceId = range?.start ?? evidenceId;
+  return stripEvidenceScheme(primaryEvidenceId).split("#")[0]?.split("/")[0] ?? "";
+}
+
+function isEvidencePathIdWithinOutlineNode(pathId: string, outlineNodeId: string): boolean {
+  return pathId === outlineNodeId || pathId.startsWith(`${outlineNodeId}.`);
 }
 
 function ReplayStatusBadge({ status }: { status: TaskSummary["status"] }) {
@@ -1825,6 +2113,29 @@ function getEvidenceHighlightSelectors(
   return detail?.selector ? [detail.selector] : [];
 }
 
+function getNavigationHighlightSelectors(replay: TaskReplay, navigationSelector: string): string[] {
+  const normalizedSelector = normalizeSourceSelector(stripEvidenceScheme(navigationSelector).split("#")[0] ?? "");
+  if (!normalizedSelector) {
+    return [];
+  }
+  const sourceSelectors = replay.source_selectors;
+  if (sourceSelectors && typeof sourceSelectors === "object") {
+    const directSelector = sourceSelectors[normalizedSelector];
+    if (typeof directSelector === "string") {
+      return [normalizeSourceSelector(directSelector)].filter(Boolean);
+    }
+    const descendantSelectors = Object.entries(sourceSelectors)
+      .filter(([pathId]) => isVirtualPathId(pathId) && isEvidencePathIdWithinOutlineNode(pathId, normalizedSelector))
+      .sort(([leftPathId], [rightPathId]) => compareEvidencePathIds(leftPathId, rightPathId))
+      .map(([, sourceSelector]) => (typeof sourceSelector === "string" ? normalizeSourceSelector(sourceSelector) : ""))
+      .filter(Boolean);
+    if (descendantSelectors.length > 0) {
+      return Array.from(new Set(descendantSelectors));
+    }
+  }
+  return [normalizedSelector];
+}
+
 function getEvidenceRangeSelectors(replay: TaskReplay, evidenceId: string): string[] {
   const selectorsByPathId = replay.source_selectors;
   if (!selectorsByPathId || typeof selectorsByPathId !== "object") {
@@ -1850,37 +2161,31 @@ function getEvidenceRangePathIds(replay: TaskReplay, evidenceId: string): string
   if (!range) {
     return [];
   }
-  const startSegments = range.start.split(".");
-  const endSegments = range.end.split(".");
-  if (startSegments.length !== endSegments.length) {
-    return [range.start];
-  }
-  const startParentPath = startSegments.slice(0, -1).join(".");
-  const endParentPath = endSegments.slice(0, -1).join(".");
-  if (startParentPath !== endParentPath) {
-    return [range.start];
-  }
   const [rangeStart, rangeEnd] = compareEvidencePathIds(range.start, range.end) <= 0 ? [range.start, range.end] : [range.end, range.start];
   const sourceSelectors = replay.source_selectors;
   if (!sourceSelectors || typeof sourceSelectors !== "object") {
     return [rangeStart];
   }
   const rangePathIds = Object.keys(sourceSelectors)
-    .filter((pathId) => {
-      if (!isVirtualPathId(pathId)) {
-        return false;
-      }
-      const pathSegments = pathId.split(".");
-      if (pathSegments.length !== startSegments.length) {
-        return false;
-      }
-      if (pathSegments.slice(0, -1).join(".") !== startParentPath) {
-        return false;
-      }
-      return compareEvidencePathIds(pathId, rangeStart) >= 0 && compareEvidencePathIds(pathId, rangeEnd) <= 0;
-    })
+    .filter((pathId) => isVirtualPathId(pathId) && isEvidencePathIdInsideRange(pathId, rangeStart, rangeEnd))
     .sort(compareEvidencePathIds);
   return rangePathIds.length > 0 ? rangePathIds : [rangeStart];
+}
+
+function isEvidencePathIdInsideRange(pathId: string, rangeStart: string, rangeEnd: string): boolean {
+  const startSegments = rangeStart.split(".");
+  const endSegments = rangeEnd.split(".");
+  const pathSegments = pathId.split(".");
+  if (startSegments.length !== endSegments.length || pathSegments.length < startSegments.length) {
+    return pathId === rangeStart;
+  }
+  const startParentPath = startSegments.slice(0, -1).join(".");
+  const endParentPath = endSegments.slice(0, -1).join(".");
+  const pathPrefix = pathSegments.slice(0, startSegments.length).join(".");
+  if (startParentPath !== endParentPath || pathSegments.slice(0, startSegments.length - 1).join(".") !== startParentPath) {
+    return false;
+  }
+  return compareEvidencePathIds(pathPrefix, rangeStart) >= 0 && compareEvidencePathIds(pathPrefix, rangeEnd) <= 0;
 }
 
 function compareEvidencePathIds(left: string, right: string): number {
@@ -1917,6 +2222,7 @@ body {
   max-width: 100% !important;
   overflow-x: hidden !important;
   overflow-y: auto !important;
+  scroll-behavior: smooth !important;
 }
 body {
   margin: 0 !important;

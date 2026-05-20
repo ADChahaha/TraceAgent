@@ -697,6 +697,8 @@ html[data-theme="dark"] .home-task-composer {
 .replay-source-frame {
   flex: 1 1 auto;
   width: 100%;
+  height: 100%;
+  display: block;
   min-height: 0;
   border: 0;
   background: var(--replay-surface);
@@ -2414,6 +2416,98 @@ html[data-theme="dark"] .home-task-composer {
   .replay-dialogue-main {
     grid-template-columns: 1fr;
   }
+}
+
+/* --- Outline Panel --- */
+
+.replay-outline-panel-slot {
+  height: calc(100svh - var(--replay-topbar-h));
+  min-height: 0;
+  border-left: 1px solid var(--replay-border);
+  background: var(--replay-panel);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.replay-outline-panel {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.replay-outline-panel-header {
+  display: flex;
+  min-height: 2.5rem;
+  align-items: center;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--replay-border-soft);
+}
+
+.replay-outline-panel-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
+}
+
+.replay-outline-panel-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 6px 0;
+}
+
+.replay-outline-item {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  padding: 5px 12px;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: var(--foreground);
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.replay-outline-item:hover {
+  background: var(--replay-hover);
+}
+
+.replay-outline-item-section {
+  font-weight: 500;
+}
+
+.replay-outline-item-leaf {
+  font-weight: 400;
+  color: var(--muted-foreground);
+}
+
+.replay-outline-item-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.replay-outline-item-value {
+  flex: 0 1 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  word-break: break-word;
+  font-size: 0.72rem;
+  color: var(--muted-foreground);
+  opacity: 0.8;
 }
 
 .outline-item-active {

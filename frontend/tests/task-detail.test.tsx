@@ -206,7 +206,7 @@ function renderTaskDetail(
 
 function getSourceFrameHtml(sourceViewer: HTMLElement): string {
   const frame = within(sourceViewer).getByTitle("原文文档") as HTMLIFrameElement;
-  return frame.getAttribute("srcdoc") ?? "";
+  return frame.dataset.currentSourceHtml || frame.getAttribute("srcdoc") || "";
 }
 
 function modelMessage(content: string): TaskReplay["actions"][number] {
@@ -819,6 +819,7 @@ it("点击 evidence 链接会打开顶层原文 tab，并定位高亮对应位�
   expect(sourceFrameHtml).toContain("一号楼包含文明寝室");
   expect(sourceFrameHtml).toContain('id="0001.0000.0001" class="is-current-evidence" data-current-evidence="true"');
   expect(sourceFrameHtml).toContain("data-agent-gate-source-frame");
+  expect(sourceFrameHtml).toContain("scroll-behavior: smooth !important");
   expect(sourceViewer).toHaveAttribute("data-highlight-selector", "0001.0000.0001");
   expect(screen.queryByText("evidence://0001.0000.0001")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("Inspector 面板")).not.toBeInTheDocument();
@@ -897,6 +898,272 @@ it("点击连续 block range evidence 链接会打开原文并高亮整段连续
   expect(sourceFrameHtml).toContain('id="0001.0028.0003" class="is-current-evidence" data-current-evidence="true"');
   expect(sourceFrameHtml).toContain('id="0001.0028.0004" class="is-current-evidence" data-current-evidence="true"');
   expect(sourceFrameHtml).toContain('id="0001.0028.0005" class="is-current-evidence" data-current-evidence="true"');
+});
+
+it("点击 section-level range evidence 链接会高亮该 section range 下的连续可读 block", async () => {
+  const user = userEvent.setup();
+  const evidenceDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      display_html:
+        '<main><section class="page"><p id="0001.0016.0001">募集人員は若干名。</p><p id="0001.0017.0001">出願期間は指定期間内。</p><p id="0001.0019.0002">試験日は別表の通り。</p><p id="0001.0020.0001">入学手続は合格後に行う。</p></section></main>',
+      source_selectors: {
+        "0001.0016.0001": "0001.0016.0001",
+        "0001.0017.0001": "0001.0017.0001",
+        "0001.0019.0002": "0001.0019.0002",
+        "0001.0020.0001": "0001.0020.0001"
+      },
+      outline_tree: [
+        {
+          id: "0001.0016",
+          text: "募集・日程",
+          children: [
+            { id: "0001.0017", text: "出願期間", children: [] },
+            { id: "0001.0019", text: "試験日", children: [] }
+          ]
+        }
+      ],
+      actions: [
+        modelMessage("募集と日程は [募集・日程の章](evidence://range/0001.0016/0001.0019) で確認します。")
+      ]
+    }
+  };
+  renderTaskDetail(evidenceDetail);
+
+  await user.click(await screen.findByRole("link", { name: "募集・日程の章" }));
+
+  const rightPanel = screen.getByLabelText("右侧 Review 工作栏");
+  const sourceViewer = within(rightPanel).getByLabelText("原文查看器");
+  const sourceFrameHtml = getSourceFrameHtml(sourceViewer);
+  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "0001.0016.0001");
+  expect(sourceFrameHtml).toContain('id="0001.0016.0001" class="is-current-evidence" data-current-evidence="true"');
+  expect(sourceFrameHtml).toContain('id="0001.0017.0001" class="is-current-evidence" data-current-evidence="true"');
+  expect(sourceFrameHtml).toContain('id="0001.0019.0002" class="is-current-evidence" data-current-evidence="true"');
+  expect(sourceFrameHtml).not.toContain('id="0001.0020.0001" class="is-current-evidence" data-current-evidence="true"');
+});
+
+it("点击 evidence 后 Contents 会选中对应 outline 节点并滚到固定锚点", async () => {
+  const user = userEvent.setup();
+  const originalScrollTo = HTMLElement.prototype.scrollTo;
+  const scrollTo = jest.fn();
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+    configurable: true,
+    value: scrollTo
+  });
+  const evidenceDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      display_html:
+        '<main><section class="page"><h2 id="0001.0028">出願流程</h2><p id="0001.0028.0002">先注册 Web 出願系统。</p><p id="0001.0028.0003">再上传 PDF 出願书类。</p></section></main>',
+      source_selectors: {
+        "0001.0028.0002": "0001.0028.0002",
+        "0001.0028.0003": "0001.0028.0003"
+      },
+      outline_tree: [
+        {
+          id: "0001.0028",
+          text: "出願流程",
+          children: []
+        }
+      ],
+      actions: [
+        modelMessage("出願流程见 [出願手順一式](evidence://range/0001.0028.0002/0001.0028.0003)")
+      ]
+    }
+  };
+  try {
+    renderTaskDetail(evidenceDetail);
+
+    const contentsList = await screen.findByRole("tree");
+    const outlineItem = screen.getByText("出願流程").closest('[role="treeitem"]');
+    expect(outlineItem).not.toBeNull();
+    Object.defineProperty(contentsList, "clientHeight", { configurable: true, value: 420 });
+    Object.defineProperty(outlineItem!, "clientHeight", { configurable: true, value: 28 });
+    Object.defineProperty(outlineItem!, "offsetTop", { configurable: true, value: 300 });
+
+    await user.click(await screen.findByRole("link", { name: "出願手順一式" }));
+
+    expect(screen.getByLabelText("Contents")).toBeInTheDocument();
+    expect(outlineItem).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => {
+      expect(scrollTo).toHaveBeenCalledWith({ top: 204, behavior: "auto" });
+    });
+  } finally {
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      value: originalScrollTo
+    });
+  }
+});
+
+it("点击 Contents 节点会打开右侧原文并定位到对应结构位置", async () => {
+  const user = userEvent.setup();
+  renderTaskDetail();
+
+  await user.click(await screen.findByRole("treeitem", { name: "文明寝室名单" }));
+
+  const rightPanel = screen.getByLabelText("右侧 Review 工作栏");
+  expect(within(rightPanel).getByRole("tab", { name: "sample.pdf" })).toHaveAttribute("aria-selected", "true");
+  const sourceViewer = within(rightPanel).getByLabelText("原文查看器");
+  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "p001_b000");
+  expect(getSourceFrameHtml(sourceViewer)).toContain('id="p001_b000" class="is-current-evidence" data-current-evidence="true"');
+});
+
+it("点击 Contents section 节点会定位到该 section 下第一个可读 block", async () => {
+  const user = userEvent.setup();
+  const evidenceDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      display_html:
+        '<main><section class="page"><p id="0001.0028.0002">先注册 Web 出願系统。</p><p id="0001.0028.0003">再上传 PDF 出願书类。</p></section></main>',
+      source_selectors: {
+        "0001.0028.0002": "0001.0028.0002",
+        "0001.0028.0003": "0001.0028.0003"
+      },
+      outline_tree: [
+        {
+          id: "0001.0028",
+          text: "出願流程",
+          children: []
+        }
+      ]
+    }
+  };
+  renderTaskDetail(evidenceDetail);
+
+  await user.click(await screen.findByRole("treeitem", { name: "出願流程" }));
+
+  const sourceViewer = within(screen.getByLabelText("右侧 Review 工作栏")).getByLabelText("原文查看器");
+  const sourceFrameHtml = getSourceFrameHtml(sourceViewer);
+  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "0001.0028.0002");
+  expect(sourceFrameHtml).toContain('id="0001.0028.0002" class="is-current-evidence" data-current-evidence="true"');
+  expect(sourceFrameHtml).toContain('id="0001.0028.0003" class="is-current-evidence" data-current-evidence="true"');
+});
+
+it("Contents 点击发起导航时不会被右侧滚动同步立刻覆盖", async () => {
+  const user = userEvent.setup();
+  const evidenceDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      display_html:
+        '<main><section class="page"><p id="0001.0001.0001">第一节内容。</p><p id="0001.0002.0001">第二节内容。</p></section></main>',
+      source_selectors: {
+        "0001.0001.0001": "0001.0001.0001",
+        "0001.0002.0001": "0001.0002.0001"
+      },
+      outline_tree: [
+        { id: "0001.0001", text: "第一节", children: [] },
+        { id: "0001.0002", text: "第二节", children: [] }
+      ]
+    }
+  };
+  renderTaskDetail(evidenceDetail);
+
+  const firstOutlineItem = await screen.findByRole("treeitem", { name: "第一节" });
+  const secondOutlineItem = await screen.findByRole("treeitem", { name: "第二节" });
+  await user.click(secondOutlineItem);
+  const sourceFrame = within(screen.getByLabelText("原文查看器")).getByTitle("原文文档") as HTMLIFrameElement;
+  await new Promise((resolve) => window.setTimeout(resolve, 0));
+  sourceFrame.contentDocument?.body.insertAdjacentHTML("beforeend", '<p id="0001.0001.0001">第一节内容。</p><p id="0001.0002.0001">第二节内容。</p>');
+  await new Promise((resolve) => window.setTimeout(resolve, 1300));
+  sourceFrame.contentWindow?.dispatchEvent(new sourceFrame.contentWindow.Event("scroll"));
+
+  await waitFor(() => {
+    expect(secondOutlineItem).toHaveAttribute("aria-selected", "true");
+    expect(firstOutlineItem).toHaveAttribute("aria-selected", "false");
+  });
+  expect(within(screen.getByLabelText("右侧 Review 工作栏")).getByLabelText("原文查看器")).toHaveAttribute("data-highlight-selector", "0001.0002.0001");
+});
+
+it("Agent evidence 链接发起导航时不会被右侧滚动同步立刻覆盖", async () => {
+  const user = userEvent.setup();
+  const evidenceDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      display_html:
+        '<main><section class="page"><p id="0001.0001.0001">第一节内容。</p><p id="0001.0002.0001">第二节内容。</p></section></main>',
+      source_selectors: {
+        "0001.0001.0001": "0001.0001.0001",
+        "0001.0002.0001": "0001.0002.0001"
+      },
+      outline_tree: [
+        { id: "0001.0001", text: "第一节", children: [] },
+        { id: "0001.0002", text: "第二节", children: [] }
+      ],
+      actions: [
+        modelMessage("看 [第二节证据](evidence://0001.0002.0001)")
+      ]
+    }
+  };
+  renderTaskDetail(evidenceDetail);
+
+  const firstOutlineItem = await screen.findByRole("treeitem", { name: "第一节" });
+  const secondOutlineItem = await screen.findByRole("treeitem", { name: "第二节" });
+  await user.click(await screen.findByRole("link", { name: "第二节证据" }));
+  const sourceFrame = within(screen.getByLabelText("原文查看器")).getByTitle("原文文档") as HTMLIFrameElement;
+  Object.defineProperty(sourceFrame.contentWindow!, "requestAnimationFrame", {
+    configurable: true,
+    value: (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    }
+  });
+  Object.defineProperty(sourceFrame.contentWindow!, "cancelAnimationFrame", {
+    configurable: true,
+    value: jest.fn()
+  });
+  sourceFrame.contentDocument?.body.insertAdjacentHTML("beforeend", '<p id="0001.0001.0001">第一节内容。</p><p id="0001.0002.0001">第二节内容。</p>');
+  await new Promise((resolve) => window.setTimeout(resolve, 0));
+  sourceFrame.contentWindow?.dispatchEvent(new sourceFrame.contentWindow.Event("scroll"));
+
+  await waitFor(() => {
+    expect(secondOutlineItem).toHaveAttribute("aria-selected", "true");
+    expect(firstOutlineItem).toHaveAttribute("aria-selected", "false");
+  });
+  expect(within(screen.getByLabelText("右侧 Review 工作栏")).getByLabelText("原文查看器")).toHaveAttribute("data-highlight-selector", "0001.0002.0001");
+});
+
+it("右侧手动滚动后会恢复 Contents 跟随原文", async () => {
+  const user = userEvent.setup();
+  const evidenceDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      display_html:
+        '<main><section class="page"><p id="0001.0001.0001">第一节内容。</p><p id="0001.0002.0001">第二节内容。</p></section></main>',
+      source_selectors: {
+        "0001.0001.0001": "0001.0001.0001",
+        "0001.0002.0001": "0001.0002.0001"
+      },
+      outline_tree: [
+        { id: "0001.0001", text: "第一节", children: [] },
+        { id: "0001.0002", text: "第二节", children: [] }
+      ],
+      actions: [
+        modelMessage("看 [第二节证据](evidence://0001.0002.0001)")
+      ]
+    }
+  };
+  renderTaskDetail(evidenceDetail);
+
+  const firstOutlineItem = await screen.findByRole("treeitem", { name: "第一节" });
+  const secondOutlineItem = await screen.findByRole("treeitem", { name: "第二节" });
+  await user.click(await screen.findByRole("link", { name: "第二节证据" }));
+  const sourceFrame = within(screen.getByLabelText("原文查看器")).getByTitle("原文文档") as HTMLIFrameElement;
+  await new Promise((resolve) => window.setTimeout(resolve, 0));
+  sourceFrame.contentDocument?.body.insertAdjacentHTML("beforeend", '<p id="0001.0001.0001">第一节内容。</p><p id="0001.0002.0001">第二节内容。</p>');
+  sourceFrame.contentWindow?.dispatchEvent(new sourceFrame.contentWindow.WheelEvent("wheel"));
+  sourceFrame.contentWindow?.dispatchEvent(new sourceFrame.contentWindow.Event("scroll"));
+
+  await waitFor(() => {
+    expect(firstOutlineItem).toHaveAttribute("aria-selected", "true");
+    expect(secondOutlineItem).toHaveAttribute("aria-selected", "false");
+  });
 });
 
 it("连续 block range evidence 会按起始 block 所属文件打开正确原文 tab", async () => {
@@ -1175,6 +1442,47 @@ it("同一文件内不同 evidence 复用同一个原文文件 tab，只更新�
   expect(screen.getByLabelText("字段进度面板")).toBeInTheDocument();
 });
 
+it("同一原文 tab 内连续点击不同 evidence 不重写 iframe srcDoc", async () => {
+  const user = userEvent.setup();
+  const evidenceDetail: TaskDetailData = {
+    ...detailData,
+    replay: {
+      ...baseReplay,
+      actions: [
+        modelMessage("查看 [第一条证据](evidence://0001.0000.0001) 和 [第二条证据](evidence://0001.0000.0002)")
+      ]
+    }
+  };
+  renderTaskDetail(evidenceDetail);
+
+  await user.click(await screen.findByRole("link", { name: "第一条证据" }));
+  const sourceViewer = within(screen.getByLabelText("右侧 Review 工作栏")).getByLabelText("原文查看器");
+  const sourceFrame = within(sourceViewer).getByTitle("原文文档") as HTMLIFrameElement;
+  const firstSrcDoc = sourceFrame.getAttribute("srcdoc");
+
+  await user.click(screen.getByRole("link", { name: "第二条证据" }));
+
+  expect(sourceFrame.getAttribute("srcdoc")).toBe(firstSrcDoc);
+  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "0001.0000.0002");
+  expect(getSourceFrameHtml(sourceViewer)).toContain('id="0001.0000.0002" class="is-current-evidence" data-current-evidence="true"');
+  expect(getSourceFrameHtml(sourceViewer)).not.toContain('id="0001.0000.0001" class="is-current-evidence" data-current-evidence="true"');
+});
+
+it("重复点击同一个 Contents 节点也会刷新右侧定位请求", async () => {
+  const user = userEvent.setup();
+  renderTaskDetail();
+
+  const contentsNode = await screen.findByRole("treeitem", { name: "文明寝室名单" });
+  await user.click(contentsNode);
+  const sourceViewer = within(screen.getByLabelText("右侧 Review 工作栏")).getByLabelText("原文查看器");
+  const firstNavigationKey = sourceViewer.getAttribute("data-navigation-key");
+
+  await user.click(contentsNode);
+
+  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "p001_b000");
+  expect(sourceViewer.getAttribute("data-navigation-key")).not.toBe(firstNavigationKey);
+});
+
 it("不同文件的 evidence 才会打开不同原文文件 tab", async () => {
   const user = userEvent.setup();
   const multiDocumentDetail: TaskDetailData = {
@@ -1212,6 +1520,7 @@ it("右侧原文栏可以拉伸到更宽，便于查看完整文件", async () =
 
   await userEvent.click(await screen.findByRole("button", { name: "打开右侧 Review" }));
 
+  expect(screen.getByRole("separator", { name: "调整 Contents 宽度" })).toHaveAttribute("aria-valuemax", "520");
   const rightResizeHandle = screen.getByRole("separator", { name: "调整右侧栏宽度" });
   expect(rightResizeHandle).toHaveAttribute("aria-valuemax", "920");
 });

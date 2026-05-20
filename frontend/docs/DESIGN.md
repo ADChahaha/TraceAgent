@@ -135,13 +135,16 @@ frontend/
   -> 右侧 Review 工作栏内部有文件式动态 tab，默认 tab 是 `Review`；证据链接和可定位工具行会在这里追加原文 tab
   -> 默认状态是左侧任务栏 + 中央 Agent 工作区；左侧任务栏只由用户点击顶部左侧 toggle 手动开关
   -> 右侧 Review 工作栏只由用户点击顶部最右侧图标按钮显式开关，或者由 evidence://、read、add_candidate_evidence 这类可定位入口自动打开；关闭左侧任务栏不会自动显示右侧 Review 工作栏
+  -> 如果 replay 带有 outline_tree，ReplayReview 会在 Agent 和右侧 Review 之间渲染独立 Contents 面板；这个面板只作为文档结构导航，不参与 Agent 阅读列的左右侧栏计数，因此默认左栏 + Contents 时 Agent 正文仍保持居中阅读列
+  -> Contents 面板默认给足可读宽度，列表自身纵向滚动，长标题和值直接多行换行，不用 ellipsis 裁剪；点击 outline 节点会复用 evidence 打开逻辑，在右侧原文 tab 中定位对应结构；如果 outline 节点是 section id 而不是可读 block id，前端会定位到该 section 下第一个可读 block，并把 section 下连续可读 block 一起高亮
   -> 字段 Progress 是靠中间的右侧竖栏，主体是按字段名排序的紧凑字段列表：每行展示字段名、field status、短值、字段 summary 和证据数量
   -> 字段 Progress 不承载展开区，也不打开独立 Inspector；点击字段行只更新 Progress 内的选中态
   -> Agent 输出中的 Markdown 证据链接 `[文本](evidence://...)` 会阻止默认跳转，在右侧 Review 工作栏打开或切换对应文件的完整原文 tab
   -> read 和 add_candidate_evidence 工具行如果能解析到证据定位，会以 evidence href 的链接式工具行呈现，点击时复用同一套右侧原文 tab 打开逻辑；工具参数里的裸虚拟 path_id，例如 `0001.0000.0001`，会先规范成 `evidence://0001.0000.0001`
   -> 原文 tab 按 task_id 和文件隔离保存，tab 标题只显示解码后的 basename 文件名，不显示目录、URL 编码或 `%20`；同一文件只存在一个 tab，点击同一文件里的不同证据只更新该文件 tab 的 evidence selector 并重新定位高亮，多文件才打开多个文件 tab
   -> 原文查看器主体只显示完整原文渲染，不在 iframe 上方重复显示文件标题；原文内容按右侧框体 100% 宽度铺满重排，去掉纸张式灰底、外层留白、圆角和阴影，长表格、媒体、长词和预格式文本都收进框内，不保留固定纸面宽度或横向滚动条
-  -> 原文 tab 用 iframe 隔离渲染 replay.display_html 的完整文档；backend 已把可读 block 的 DOM id 改写成虚拟 path_id，前端只在 replay.source_selectors 明确包含该 path_id 时滚动并高亮，例如 `evidence://0001.0000.0009` 只定位到 `id="0001.0000.0009"`；如果 evidence 使用 `evidence://range/<start>/<end>`，则前端按 `start` 所属文件打开原文 tab，并把这段连续 block 一起高亮；旧 replay 没有 source_selectors 时只打开原文文件 tab，不做 DOM id 或文本匹配兜底；用户点击 Markdown 短 quote 链接时也必须先有 source_selectors 定位到 block，才会在该 block 内部高亮 quote 文本本身；界面不展示内部 evidence URI、selector、字段映射或实现细节
+  -> 原文 tab 用 iframe 隔离渲染 replay.display_html 的完整文档；backend 已把可读 block 的 DOM id 改写成虚拟 path_id，前端只在 replay.source_selectors 明确包含该 path_id 时滚动并高亮，例如 `evidence://0001.0000.0009` 只定位到 `id="0001.0000.0009"`；如果 evidence 使用 `evidence://range/<start>/<end>`，则前端按 `start` 所属文件打开原文 tab，并把这段连续 block 一起高亮；range 两端也可以是同一文档内同层级的 section id，此时前端会从 source_selectors 中收集落在 section range 下的可读 block 一起高亮；旧 replay 没有 source_selectors 时只打开原文文件 tab，不做 DOM id 或文本匹配兜底；用户点击 Markdown 短 quote 链接时也必须先有 source_selectors 定位到 block，才会在该 block 内部高亮 quote 文本本身；界面不展示内部 evidence URI、selector、字段映射或实现细节；点击 evidence 或 Contents 后，同一原文 tab 不重新写入 iframe srcDoc，而是在当前 iframe DOM 内更新高亮并用 smooth scroll 从当前 scrollTop 滑到目标节点，不从文档顶部重放滚动
+  -> evidence 链接、range 链接或右侧原文滚动都会用 path_id 前缀匹配 replay.outline_tree 中最深的 outline 节点，并把 Contents 面板里的对应节点设为 active，让右侧原文位置和左侧 Contents 结构保持同步；active 节点变化时 Contents 列表会把对应条目滚到固定上方锚点，而不是只高亮或随意停在可见区域；如果导航是由左侧 Agent evidence 链接、tool 行或 Contents 点击发起的，右侧 smooth scroll 过程中的可见 block 回传会保持暂停，避免相邻 block 在滚动中反向覆盖左侧刚点击或刚链接到的 Contents 节点；直到用户在右侧原文中 wheel、pointer、touch 或键盘滚动，才恢复右侧驱动左侧同步
   -> 中央 Agent 区底部固定对话输入框，左下角是加文件按钮，右下角是发送按钮；当前阶段只提供 UI 骨架，不直接创建新任务或追加消息
   -> 中央 Agent 文字流使用中间 Agent 工作区自己的动态三列布局：左侧弹性留白 / 阅读列 / 右侧弹性留白，阅读列在 Agent 自己的内容框内居中
   -> 当整页没有侧栏或只有一个侧栏可见时，Agent 中间文字框和输入框使用 `弹性留白 / 阅读列 / 弹性留白`；中间区变窄时先连续压缩两侧留白，留白归零后才压缩阅读列本身

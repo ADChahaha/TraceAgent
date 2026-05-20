@@ -13,6 +13,7 @@
   -> 检查 Agent 正文、evidence 链接、tool 摘要和折叠 tool group 摘要在窄宽度下使用换行，而不是 nowrap + hidden 裁剪
   -> 检查 Replay stage 在窄视口也使用列布局，避免右侧 Review 原文栏掉到 Agent 下方
   -> 检查 Agent 阅读列是否使用 `1fr / max readable / 1fr`，保证宽度变窄时先压缩左右留白，再压缩正文宽度
+  -> 检查 Contents 面板列表是否自身纵向滚动、隐藏横向溢出，并让长标题和值多行换行，不用 ellipsis 裁剪
   -> 失败时提示哪些 token 或 surface 又回退成了硬编码颜色
 ```
 
@@ -24,3 +25,4 @@
 - `Agent 文本和工具摘要在窄宽度下换行，不用隐藏省略裁剪`：验证 Agent 正文、evidence 链接、tool 摘要和折叠 tool group 摘要都允许在窄列中换行，防止压缩侧栏或打开 Review 后文字被 ellipsis/overflow hidden 截断。
 - `Replay stage 在窄视口也使用左右栏列布局，不把 Review 原文栏堆到下方`：验证 `.replay-stage` 的基础样式就使用 `--replay-stage-columns`，保证 in-app browser 等窄视口下点击证据后右侧 Review 仍出现在右侧列。
 - `Agent 阅读列先压缩弹性留白，再压缩正文宽度`：验证 Agent 中间文字框和输入框使用左右 `1fr` 弹性留白与 720px 阅读列上限，防止回退成固定 gutter 或阈值式突然取消留白。
+- `Contents 面板保留可读宽度、纵向滚动和多行文本`：验证 Contents 列表有 `min-height: 0` 和纵向滚动，横向溢出被收住，outline 标题和值都允许多行换行而不是隐藏省略。
