@@ -51,8 +51,9 @@ def test_resolution_messages_describe_candidate_policy_without_tool_manual():
     assert "Do not use fixed headings such as Read/Finding/Next" in system_content
     assert "Do not narrate tool names" in system_content
     assert "Vary wording and avoid repeating the same sentence shape" in system_content
-    assert "Write assistant content in the same language as task_spec" in system_content
-    assert "keep quoted source text in the original source language" in system_content
+    assert "All assistant content must be written in the task_spec language" in system_content
+    assert "Do not switch languages to match the source document" in system_content
+    assert "keep quoted source text in the original source language" not in system_content
     assert "When a summary depends on consecutive blocks in the same section" in system_content
     assert "cite the whole continuous span instead of only the first block" in system_content
     assert "evidence://range/<start>/<end>" in system_content
@@ -60,7 +61,7 @@ def test_resolution_messages_describe_candidate_policy_without_tool_manual():
     assert "Never emit multiple or parallel tool calls in one turn" in system_content
     assert "Tool-specific argument rules are provided in the tool descriptions" in system_content
     assert "In assistant content, use evidence:// links for source or path references" in system_content
-    assert "When assistant content cites source text, use Markdown evidence links" in system_content
+    assert "Use Markdown evidence links for source facts, evidence status, candidate relevance, and field decisions" in system_content
     assert "sentence-level paragraph evidence, use evidence://<block>/Sxxx" in system_content
     assert "list items use evidence://<block>/Ixxx" in system_content
     assert "table rows use evidence://<block>/Rxxx" in system_content
@@ -73,6 +74,31 @@ def test_resolution_messages_describe_candidate_policy_without_tool_manual():
     assert "Write:" not in system_content
     assert "Use the current tool's docstring as the note template" not in system_content
     assert "Task fields:" in content
+
+
+def test_resolution_prompt_requires_task_spec_language_and_linked_evidence_content():
+    messages = build_resolution_messages(_state())
+    system_content = messages[0].content
+    tools = {getattr(tool, "name", getattr(tool, "__name__", "")): tool for tool in build_tools(_state())}
+
+    assert "All assistant content must be written in the task_spec language" in system_content
+    assert "Do not switch languages to match the source document" in system_content
+    assert "Translate or paraphrase evidence-link labels into the task_spec language" in system_content
+    assert "Every assistant sentence that states a document fact, evidence status, or field decision must include a Markdown evidence link" in system_content
+    assert "Do not output unlinked document facts" in system_content
+    assert "For read summaries over consecutive blocks, prefer evidence://range/<start>/<end>" in system_content
+    assert "If you need sentence-level paragraph evidence, use evidence://<block>/Sxxx" in system_content
+    assert "keep quoted source text in the original source language" not in system_content
+
+    assert "Every read summary that states a document fact must include a Markdown evidence link" in tools["read"].description
+    assert "Prefer evidence://range/<start>/<end> when consecutive blocks support the summary" in tools["read"].description
+    assert "Use task_spec-language link labels" in tools["read"].description
+    assert "Do not leave document facts outside links" in tools["read"].description
+    assert "assistant content must stay in task_spec language" in tools["review_evidences"].description
+    assert "link labels should be task_spec-language paraphrases" in tools["review_evidences"].description
+    assert "assistant content must stay in task_spec language" in tools["write_field"].description
+    assert "link labels should be task_spec-language paraphrases, not raw source quotes" in tools["write_field"].description
+    assert "Quote the source words as the link label when possible" not in tools["write_field"].description
 
 
 def test_resolution_messages_do_not_inline_initial_tree():
@@ -149,8 +175,9 @@ def test_tool_descriptions_carry_candidate_and_review_contracts():
     assert "Candidate evidence can be broader than final_evidence" in tools["add_candidate_evidence"].description
     assert "final_evidence is selected later after review" in tools["add_candidate_evidence"].description
     assert "include a Markdown evidence link to the same block path_id you are saving" in tools["add_candidate_evidence"].description
-    assert "[\"quoted words\"](evidence://0001.0014.0001)" in tools["add_candidate_evidence"].description
-    assert "Do not leave source words as plain quoted text" in tools["add_candidate_evidence"].description
+    assert "[\"task_spec-language summary\"](evidence://0001.0014.0001)" in tools["add_candidate_evidence"].description
+    assert "Use task_spec-language" in tools["add_candidate_evidence"].description
+    assert "Do not leave source" in tools["add_candidate_evidence"].description
     assert "This candidate is not the final field decision" in tools["add_candidate_evidence"].description
     assert "Assistant content is optional for routine candidate additions" not in tools["add_candidate_evidence"].description
     assert "Use content when this candidate addition completes a meaningful candidate-evidence group" not in tools["add_candidate_evidence"].description
@@ -171,12 +198,14 @@ def test_tool_descriptions_carry_candidate_and_review_contracts():
     assert "final_evidence must copy inline" in tools["write_field"].description
     assert "evidence:// links from review_evidences.evidence" in tools["write_field"].description
     assert "CRITICAL" not in tools["write_field"].description
-    assert "Assistant content citations should use Markdown links like [\"short source quote\"](evidence://0001.0014.0001/S002)" in tools["write_field"].description
-    assert "For non-empty final_evidence, assistant content must include a short quote from reviewed evidence_texts" in tools["write_field"].description
+    assert "Assistant content citations should use" in tools["write_field"].description
+    assert "[short task_spec-language evidence label](evidence://0001.0014.0001/S002)" in tools["write_field"].description
+    assert "For non-empty final_evidence, assistant content must include a task_spec-language paraphrase" in tools["write_field"].description
     assert "and a Markdown evidence link to either the inline selector or its paragraph/list/table block" in tools["write_field"].description
-    assert "explain why the linked text supports the field decision" in tools["write_field"].description
+    assert "Explain why the linked text supports the field decision" in tools["write_field"].description
     assert "Block-level evidence links are acceptable in assistant content when they are clearer" in tools["write_field"].description
-    assert "Quote the source words as the link label when possible" in tools["write_field"].description
+    assert "link labels should be task_spec-language paraphrases" in tools["write_field"].description
+    assert "Quote the source words as the link label when possible" not in tools["write_field"].description
     assert "Tool arguments and final_evidence must use evidence:// links" in tools["write_field"].description
     assert "BAD:" not in tools["write_field"].description
     assert "GOOD:" not in tools["write_field"].description

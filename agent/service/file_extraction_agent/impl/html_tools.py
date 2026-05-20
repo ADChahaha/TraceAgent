@@ -53,10 +53,13 @@ def build_tools(state: Any) -> list[Any]:
         Use natural wording to say what was inspected and whether it helps, rules out an
         expected area, or suggests continuing elsewhere. Use read summaries to orient the reviewer, not to pre-write the final field conclusion.
         If the read result is likely to be written soon, keep the summary short and defer the full decision sentence to write_field. Do not use fixed headings.
+        Every read summary that states a document fact must include a Markdown evidence link.
+        Do not leave document facts outside links. Use task_spec-language link labels, translating
+        or paraphrasing source text instead of switching to the source document language.
         If that summary depends on consecutive blocks in the same section, use one evidence://range/<start>/<end> link
-        in assistant content instead of citing only the
-        first block. start and end must be readable block path_ids from the same section.
-        If assistant content mentions source text, make that
+        in assistant content instead of citing only the first block. Prefer evidence://range/<start>/<end> when consecutive blocks support the summary.
+        start and end must be readable block path_ids from the same section.
+        If assistant content mentions source text or source meaning, make that
         quote, summary, or source-text claim a Markdown evidence link. Use a block link
         when inline selectors are not available yet.
         """
@@ -82,7 +85,9 @@ def build_tools(state: Any) -> list[Any]:
         evidence group, or explains a non-obvious relevance judgment.
         This candidate is not the final field decision; it is a note for later review.
         When source text is available, include a Markdown evidence link to the same block path_id you are saving, for example
-        ["quoted words"](evidence://0001.0014.0001). Do not leave source words as plain quoted text.
+        ["task_spec-language summary"](evidence://0001.0014.0001). Use task_spec-language
+        link labels that describe or paraphrase the source content. Do not leave source
+        words or document facts as plain quoted text.
         Explain why the linked text may support, contradict, or qualify the field.
         If inline selectors are not available yet, block-level evidence links such as
         evidence://0001.0014.0001 are acceptable.
@@ -112,8 +117,10 @@ def build_tools(state: Any) -> list[Any]:
         When review shows enough evidence, normally call write_field for the same field in the next assistant turn.
         Do not insert unrelated reading between a sufficient review and the write unless you name a concrete evidence gap.
         Leave assistant content empty when the next step is an obvious write_field and the reviewed facts were already summarized after read.
-        If assistant content uses reviewed text, quote it as an evidence link and explain whether it is
-        sufficient or what is missing.
+        If assistant content uses reviewed text or states evidence sufficiency, missing status,
+        or a field decision, include Markdown evidence links and explain whether the evidence is
+        sufficient or what is missing. assistant content must stay in task_spec language, and
+        link labels should be task_spec-language paraphrases unless an extracted value must stay unchanged.
         """
 
         return _review_evidences(state, field_id)
@@ -141,12 +148,14 @@ def build_tools(state: Any) -> list[Any]:
         Field writes are decision checkpoints. Use one natural sentence when a field is written,
         corrected, or marked missing; cite reviewed evidence or explain the reviewed absence basis.
 
-        Assistant content citations should use Markdown links like ["short source quote"](evidence://0001.0014.0001/S002).
-        For non-empty final_evidence, assistant content must include a short quote from reviewed evidence_texts
-        and a Markdown evidence link to either the inline selector or its paragraph/list/table block.
-        Quote the source words as the link label when possible, and explain why the linked text supports the field decision.
+        assistant content must stay in task_spec language. Assistant content citations should use
+        Markdown links like [short task_spec-language evidence label](evidence://0001.0014.0001/S002).
+        For non-empty final_evidence, assistant content must include a task_spec-language paraphrase
+        or required extracted value as the link label and a Markdown evidence link to either the inline selector or its paragraph/list/table block.
+        link labels should be task_spec-language paraphrases, not raw source quotes, unless the exact
+        source-language value is the extracted value. Explain why the linked text supports the field decision.
         Block-level evidence links are acceptable in assistant content when they are clearer,
-        for example ["short source quote"](evidence://0001.0014.0001), but final_evidence
+        for example [task_spec-language evidence label](evidence://0001.0014.0001), but final_evidence
         must still use inline selectors from review_evidences.
         For multiple selectors, repeat separate
         links. Tool arguments and final_evidence must use evidence:// links.
