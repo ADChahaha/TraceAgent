@@ -286,6 +286,154 @@ class FakeMissingRequiredFieldClient(FakeAgentClient):
         }
 
 
+class FakeMalformedFieldAgentClient(FakeAgentClient):
+    def extract_fields(
+        self,
+        *,
+        html: str,
+        task_spec: dict[str, Any],
+        run_options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self.extraction_calls.append(
+            {
+                "html": html,
+                "task_spec": task_spec,
+                "run_options": run_options,
+            }
+        )
+        return {
+            "status": "completed",
+            "failure_reason": None,
+            "result": {
+                "fields": [
+                    {
+                        "field_id": "room_numbers",
+                        "status": "resolved",
+                        "value": "1-101,1-102",
+                    }
+                ]
+            },
+            "trace": {
+                "fields": [
+                    {
+                        "field_id": "room_numbers",
+                        "status": "resolved",
+                        "evidence": {
+                            "block_ids": ["dp-p-1"],
+                            "texts": ["1-101、1-102 被列为文明寝室"],
+                            "refs": [],
+                            "status": "candidate_resolved",
+                        },
+                        "related_fields": [],
+                        "actions": [],
+                        "reason": "缺少 field_name 的坏结果",
+                        "failure_reason": None,
+                    }
+                ],
+                "warnings": [],
+                "metadata": {"source": "fake-agent"},
+            },
+        }
+
+
+class FakeTimelineExtractionAgentClient(FakeAgentClient):
+    def extract_fields(
+        self,
+        *,
+        html: str,
+        task_spec: dict[str, Any],
+        run_options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self.extraction_calls.append(
+            {
+                "html": html,
+                "task_spec": task_spec,
+                "run_options": run_options,
+            }
+        )
+        return {
+            "status": "completed",
+            "failure_reason": None,
+            "result": {
+                "fields": [
+                    {
+                        "field_name": "room_numbers",
+                        "status": "resolved",
+                        "value": "1-101,1-102",
+                    }
+                ]
+            },
+            "trace": {
+                "source_selectors": {"0001.0001.0001": "dp-p-1"},
+                "events": [
+                    {
+                        "seq": 1,
+                        "type": "model_message",
+                        "content": "先说明接下来要读原文",
+                        "tool_call_count": 1,
+                    },
+                    {
+                        "seq": 2,
+                        "type": "tool_completed",
+                        "tool": "read",
+                        "args": {"path_id": "evidence://0001.0001.0001"},
+                        "result": {"ok": True, "locator": "evidence://0001.0001.0001"},
+                    },
+                    {
+                        "seq": 3,
+                        "type": "model_message",
+                        "content": "读完后说明要保存证据",
+                        "tool_call_count": 1,
+                    },
+                    {
+                        "seq": 4,
+                        "type": "tool_completed",
+                        "tool": "add_candidate_evidence",
+                        "args": {
+                            "field_id": "room_numbers",
+                            "path_id": "evidence://0001.0001.0001",
+                        },
+                        "result": {
+                            "ok": True,
+                            "field_id": "room_numbers",
+                            "candidate_evidence": ["evidence://0001.0001.0001"],
+                        },
+                    },
+                ],
+                "actions": [
+                    {
+                        "tool_name": "read",
+                        "args": {"path_id": "evidence://0001.0001.0001"},
+                        "result": {"ok": True, "locator": "evidence://0001.0001.0001"},
+                    },
+                    {
+                        "tool_name": "add_candidate_evidence",
+                        "args": {
+                            "field_id": "room_numbers",
+                            "path_id": "evidence://0001.0001.0001",
+                        },
+                        "result": {
+                            "ok": True,
+                            "field_id": "room_numbers",
+                            "candidate_evidence": ["evidence://0001.0001.0001"],
+                        },
+                    },
+                ],
+                "fields": [
+                    {
+                        "field_name": "room_numbers",
+                        "status": "resolved",
+                        "evidence": {},
+                        "related_fields": [],
+                        "actions": [],
+                        "reason": "候选证据支持字段值",
+                        "failure_reason": None,
+                    }
+                ],
+            },
+        }
+
+
 def build_app(tmp_path: Path):
     fake_agent = FakeAgentClient()
     app = create_app(
@@ -550,6 +698,76 @@ def test_replay_uses_live_source_index_before_extraction_finishes(tmp_path: Path
     assert 'id="dp-p-1"' not in replay["display_html"]
 
 
+def test_replay_actions_preserve_model_and_tool_timeline(tmp_path: Path):
+    fake_agent = FakeTimelineExtractionAgentClient()
+    app = create_app(
+        settings=BackendSettings(database_path=tmp_path / "backend.sqlite3"),
+        agent_client=fake_agent,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/tasks",
+            data={
+                "task_type": "civilized_dormitory",
+                "task_spec": json.dumps(TASK_SPEC, ensure_ascii=False),
+            },
+            files={"files": ("sample.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        )
+
+        assert response.status_code == 200
+        task_id = response.json()["task_id"]
+        replay_response = client.get(f"/tasks/{task_id}/replay")
+
+    assert replay_response.status_code == 200
+    replay = replay_response.json()
+    assert replay["actions"] == [
+        {
+            "tool_name": "model_message",
+            "reason": "先说明接下来要读原文",
+            "result": {"ok": True},
+            "metadata": {
+                "seq": 1,
+                "event_type": "model_message",
+            },
+        },
+        {
+            "tool_name": "read",
+            "args": {"path_id": "evidence://0001.0001.0001"},
+            "result": {"ok": True, "locator": "evidence://0001.0001.0001"},
+            "metadata": {
+                "seq": 2,
+                "event_type": "tool_completed",
+            },
+        },
+        {
+            "tool_name": "model_message",
+            "reason": "读完后说明要保存证据",
+            "result": {"ok": True},
+            "metadata": {
+                "seq": 3,
+                "event_type": "model_message",
+            },
+        },
+        {
+            "tool_name": "add_candidate_evidence",
+            "args": {
+                "field_id": "room_numbers",
+                "path_id": "evidence://0001.0001.0001",
+            },
+            "result": {
+                "ok": True,
+                "field_id": "room_numbers",
+                "candidate_evidence": ["evidence://0001.0001.0001"],
+            },
+            "metadata": {
+                "seq": 4,
+                "event_type": "tool_completed",
+            },
+        },
+    ]
+
+
 def test_replay_display_html_sanitizer_keeps_large_css_fast():
     large_css = (".not-target " + ("x" * 20) + " ") * 700
     no_target_html = f"<style>{large_css}</style><body><p>正文内容</p></body>"
@@ -758,6 +976,42 @@ def test_missing_required_field_placeholder_stays_uncommitted_without_routing(tm
         assert result_field["final_value"] is None
         assert result_field["source"] == "none"
         assert result_field["committed"] is False
+
+
+def test_agent_result_missing_field_name_returns_contract_error(tmp_path: Path):
+    fake_agent = FakeMalformedFieldAgentClient()
+    app = create_app(
+        settings=BackendSettings(database_path=tmp_path / "backend.sqlite3"),
+        agent_client=fake_agent,
+    )
+    name_task_spec = {
+        "task_name": "civilized_dormitory",
+        "fields": [
+            {
+                "name": "room_numbers",
+                "display_name": "文明寝室房间号",
+                "type": "string",
+                "required": True,
+            }
+        ],
+    }
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/tasks",
+            data={
+                "task_type": "civilized_dormitory",
+                "task_spec": json.dumps(name_task_spec, ensure_ascii=False),
+            },
+            files={"file": ("sample.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        )
+
+        assert response.status_code == 200
+        task_id = response.json()["task_id"]
+
+        task_summary = client.get(f"/tasks/{task_id}").json()
+        assert task_summary["status"] == "failed"
+        assert task_summary["error_message"] == "file_extraction_agent result.fields[0] missing field_name"
 
 
 def test_agent_process_without_tool_actions_keeps_resolution_step_completed():

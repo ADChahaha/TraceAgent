@@ -1,6 +1,19 @@
 # Backend Devlog
 
-last updated: 2026-05-18 18:37:31
+last updated: 2026-05-20 20:43:54
+
+## 2026-05-20 20:43:54
+
+### 已完成工作
+
+- `GET /tasks/{task_id}/replay` 的 `actions` 现在优先从 `trace.events` 生成，把非空 `model_message` 和 `tool_completed/tool_failed` 保留在同一条时间线里。
+- 旧 trace 没有 `events` 时继续回退到 `trace.actions`，并保留剥掉旧 tool 顶层 `reason` 的兼容行为。
+- 补充 backend replay 时间线回归测试和前端终态 replay 顺序回归测试，保证连续 tool group 仍折叠在原始位置，不集中挪到文字上方。
+
+### 验证
+
+- `PYTHONPATH=. uv run --project backend pytest backend/tests/test_task_flow.py`，结果 `14 passed`。
+- `npm test -- --runInBand frontend/tests/task-detail.test.tsx`，结果 `37 passed`。
 
 ## 2026-05-18 18:37:31
 

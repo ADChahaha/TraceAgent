@@ -30,9 +30,10 @@ POST /tasks 创建任务
   -> backend 通过 HTTP 调用 file_extraction_agent 的 `/v1/file-extraction-agent/extract/stream`
   -> backend 消费 NDJSON stream，把工具过程事件写入 task_events，并用 `result_completed` 作为抽取结果收口
   -> file_extraction_agent stream 开始时先写入 `source_indexed` 事件，提前提供虚拟 path_id 到 document_processor 原始 DOM id 的内部映射；终态 ExtractionResult(result + trace) 里也保留 trace.source_selectors
+  -> backend 要求 agent 终态 `result.fields[]` 和 `trace.fields[]` 显式返回 `field_name`；缺失时按 contract error 终止任务，不做 `name` / `field_id` 兜底兼容
   -> task_service 对照 task_spec.fields 补齐 agent 没返回的预期字段，写成 failed/None 占位
   -> backend 直接提交 resolved 字段，failed/None 字段保持未提交
-  -> backend 保存抽取结果、trace 和 audit；GET /tasks/{task_id}/replay 会优先用 trace.source_selectors，处理中无 trace 时用 task_events 中最新 `source_indexed` 的 source_selectors，把 replay display_html 的可读 block id 改写成虚拟 path_id，再把 path_id -> path_id 的 source_selectors 透传给前端用于 evidence 跳转，并剥掉 replay action 顶层 reason
+  -> backend 保存抽取结果、trace 和 audit；GET /tasks/{task_id}/replay 会优先用 trace.source_selectors，处理中无 trace 时用 task_events 中最新 `source_indexed` 的 source_selectors，把 replay display_html 的可读 block id 改写成虚拟 path_id，再把 path_id -> path_id 的 source_selectors 透传给前端用于 evidence 跳转；replay.actions 优先由 trace.events 里的 model_message 和 tool_completed/tool_failed 转成同一条时间线，保留模型文字与工具折叠组的原始相对位置
 ```
 
 职责边界：
@@ -91,7 +92,7 @@ backend/
 - `main.py` 创建 FastAPI app，通过 lifespan 初始化 SQLite 连接、agent client 和服务对象，挂载 `routes/`，不写业务流程。
 - `pyproject.toml` 定义 backend 独立 Python 包、运行依赖和测试依赖；从零启动时应先执行 `pip install -e ".[dev]"`。
 - `core/config.py` 管理数据库路径、agent service 地址等配置，不管理业务 task spec。
-- `core/db.py` 初始化 SQLite 连接，不直接写业务查询。
+- `core/db.py` 初始化 SQLite 连接，不直接写业务查询；初始化时会清理旧 route/review schema 残留，避免本地旧库继续保留 `tasks.route`、`field_routes` 或人工复核旧表。
 - `core/storage.py` 只保留上传文件元信息所需的哈希工具，不落盘保存原始文件。
 - `routes/` 只做 HTTP 入参出参适配，把请求转交给 `services/`。
 - `models/schema.py` 定义 SQLite DDL。第一版没有引入 ORM，CRUD 直接使用 `sqlite3.Row` 和参数化 SQL。
@@ -274,7 +275,9 @@ trace 只展示 document_processing 和 extraction 两段。
 
 ```text
 agent_run.trace_json
-  -> outline_tree / actions / field_states
+  -> outline_tree / events / actions / field_states
+  -> events 优先生成 replay.actions 时间线：非空 model_message 变成文字段，tool_completed/tool_failed 变成工具行
+  -> 没有 events 的旧 trace 才回退到 actions，并剥掉旧 action 顶层 reason
   -> source_selectors(path_id -> document_processor 原始 DOM id)
 agent_stage_runs(document_processor)
   -> display_html

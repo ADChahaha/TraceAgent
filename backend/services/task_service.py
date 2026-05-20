@@ -447,7 +447,7 @@ class TaskService:
             "outline_tree": trace_payload.get("document_tree") or live_source_index.get("document_tree") or [],
             "source_selectors": source_selectors,
             "broad_plan": trace_payload.get("broad_plan"),
-            "actions": self._serialize_replay_actions(trace_payload.get("actions") or []),
+            "actions": self._serialize_replay_actions(trace_payload),
             "result": result_payload,
             "field_states": trace_payload.get("field_states") or {},
             "audit": {},
@@ -497,7 +497,14 @@ class TaskService:
             "created_at": event["created_at"],
         }
 
-    def _serialize_replay_actions(self, actions: Any) -> list[Any]:
+    def _serialize_replay_actions(self, trace_payload: Any) -> list[Any]:
+        if isinstance(trace_payload, dict):
+            event_actions = self._serialize_replay_actions_from_events(trace_payload.get("events"))
+            if event_actions:
+                return event_actions
+            actions = trace_payload.get("actions")
+        else:
+            actions = trace_payload
         if not isinstance(actions, list):
             return []
         serialized: list[Any] = []
@@ -507,6 +514,55 @@ class TaskService:
             else:
                 serialized.append(action)
         return serialized
+
+    def _serialize_replay_actions_from_events(self, events: Any) -> list[dict[str, Any]]:
+        if not isinstance(events, list):
+            return []
+        serialized: list[dict[str, Any]] = []
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            event_type = event.get("type")
+            if event_type == "model_message":
+                content = str(event.get("content") or "").strip()
+                if not content:
+                    continue
+                action = {
+                    "tool_name": "model_message",
+                    "reason": content,
+                    "result": {"ok": True},
+                    "metadata": {
+                        "seq": event.get("seq"),
+                        "event_type": event_type,
+                    },
+                }
+                serialized.append(self._drop_empty_metadata(action))
+                continue
+            if event_type not in {"tool_completed", "tool_failed"}:
+                continue
+            tool_name = event.get("tool") or event.get("tool_name")
+            if not isinstance(tool_name, str) or not tool_name:
+                continue
+            action = {
+                "tool_name": tool_name,
+                "args": event.get("args"),
+                "result": event.get("result"),
+                "metadata": {
+                    "seq": event.get("seq"),
+                    "event_type": event_type,
+                },
+            }
+            serialized.append(self._drop_empty_metadata({key: value for key, value in action.items() if value is not None}))
+        return serialized
+
+    def _drop_empty_metadata(self, action: dict[str, Any]) -> dict[str, Any]:
+        metadata = action.get("metadata")
+        if not isinstance(metadata, dict):
+            return action
+        clean_metadata = {key: value for key, value in metadata.items() if value is not None}
+        if clean_metadata:
+            return {**action, "metadata": clean_metadata}
+        return {key: value for key, value in action.items() if key != "metadata"}
 
     def _latest_live_source_index(self, task_id: str) -> dict[str, Any]:
         source_index: dict[str, Any] = {}
@@ -891,12 +947,13 @@ class TaskService:
             (field.get("name") or field.get("field_name")): field
             for field in task_spec.get("fields", [])
         }
-        trace_payload = extraction_result.get("trace") or {}
-        trace_by_field = self._build_trace_by_field(trace_payload)
-        for field in self._iter_extraction_result_fields(
+        normalized_fields = self._iter_extraction_result_fields(
             extraction_result,
             task_spec=task_spec,
-        ):
+        )
+        trace_payload = extraction_result.get("trace") or {}
+        trace_by_field = self._build_trace_by_field(trace_payload)
+        for field in normalized_fields:
             field_name = field["field_name"]
             field_spec = field_specs.get(field_name, {})
             trace = trace_by_field.get(field_name, {})
@@ -945,7 +1002,7 @@ class TaskService:
         result = extraction_result.get("result") or {}
         expected_fields = self._expected_task_fields(task_spec or {})
         if isinstance(result, dict) and isinstance(result.get("fields"), list):
-            fields = list(result["fields"])
+            fields = self._normalize_result_fields(result["fields"])
             return self._append_missing_expected_fields(fields, expected_fields)
         if not isinstance(result, dict):
             return self._append_missing_expected_fields([], expected_fields)
@@ -1004,14 +1061,29 @@ class TaskService:
             )
         return next_fields
 
+    def _normalize_result_fields(self, fields: list[Any]) -> list[dict[str, Any]]:
+        normalized_fields: list[dict[str, Any]] = []
+        for index, field in enumerate(fields):
+            if not isinstance(field, dict):
+                raise ValueError(f"file_extraction_agent result.fields[{index}] must be an object")
+            field_name = field.get("field_name")
+            if not isinstance(field_name, str) or not field_name:
+                raise ValueError(f"file_extraction_agent result.fields[{index}] missing field_name")
+            normalized_fields.append(field)
+        return normalized_fields
+
     def _build_trace_by_field(self, trace_payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
         traces = trace_payload.get("fields")
         if isinstance(traces, list):
-            return {
-                trace["field_name"]: trace
-                for trace in traces
-                if isinstance(trace, dict) and trace.get("field_name")
-            }
+            trace_by_field: dict[str, dict[str, Any]] = {}
+            for index, trace in enumerate(traces):
+                if not isinstance(trace, dict):
+                    raise ValueError(f"file_extraction_agent trace.fields[{index}] must be an object")
+                field_name = trace.get("field_name")
+                if not isinstance(field_name, str) or not field_name:
+                    raise ValueError(f"file_extraction_agent trace.fields[{index}] missing field_name")
+                trace_by_field[field_name] = trace
+            return trace_by_field
         field_states = trace_payload.get("field_states") or {}
         actions = trace_payload.get("actions") or []
         trace_by_field: dict[str, dict[str, Any]] = {}
