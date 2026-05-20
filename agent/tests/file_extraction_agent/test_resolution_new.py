@@ -127,6 +127,24 @@ def test_resolution_prompt_restricts_range_links_and_threads_progress_updates():
     assert "Use separate links for repeated clauses from different sections" in tools["write_field"].description
 
 
+def test_resolution_prompt_requires_parenthesized_markdown_evidence_links():
+    messages = build_resolution_messages(_state())
+    system_content = messages[0].content
+    tools = {getattr(tool, "name", getattr(tool, "__name__", "")): tool for tool in build_tools(_state())}
+
+    assert "Clickable evidence must use standard Markdown link syntax: [task_spec-language label](evidence://...)" in system_content
+    assert "Never write evidence as [evidence://...]" in system_content
+    assert "Never append a bare evidence:// URI after the sentence" in system_content
+    assert "If there is no meaningful label yet, use [证据](evidence://...) rather than [evidence://...]" in system_content
+    assert "Every assistant content evidence reference must include both square brackets for the label and parentheses for the evidence URI" in system_content
+
+    assert "Use [task_spec-language label](evidence://...) with parentheses" in tools["read"].description
+    assert "Do not write [evidence://...]" in tools["read"].description
+    assert "Do not append bare evidence:// links" in tools["read"].description
+    assert "assistant evidence links must use [label](evidence://...)" in tools["add_candidate_evidence"].description
+    assert "Do not write [evidence://...]" in tools["write_field"].description
+
+
 def test_resolution_messages_do_not_inline_initial_tree():
     messages = build_resolution_messages(_state())
     content = "\n\n".join(message.content for message in messages)

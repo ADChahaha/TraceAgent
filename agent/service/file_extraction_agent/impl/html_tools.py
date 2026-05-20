@@ -56,6 +56,9 @@ def build_tools(state: Any) -> list[Any]:
         Every read summary that states a document fact must include a Markdown evidence link.
         Do not leave document facts outside links. Use task_spec-language link labels, translating
         or paraphrasing source text instead of switching to the source document language.
+        Use [task_spec-language label](evidence://...) with parentheses for every assistant evidence link.
+        Do not write [evidence://...] as if it were a link label. Do not append bare evidence:// links
+        after a sentence; put the evidence URI inside Markdown link parentheses.
         If that summary depends on consecutive blocks in the same section, use one evidence://range/<start>/<end> link
         in assistant content instead of citing only the first block. Prefer evidence://range/<start>/<end> when consecutive blocks support the summary.
         start and end must be readable block path_ids from the same section.
@@ -94,6 +97,7 @@ def build_tools(state: Any) -> list[Any]:
         ["task_spec-language summary"](evidence://0001.0014.0001). Use task_spec-language
         link labels that describe or paraphrase the source content. Do not leave source
         words or document facts as plain quoted text.
+        assistant evidence links must use [label](evidence://...) syntax with the evidence URI in parentheses.
         Explain why the linked text may support, contradict, or qualify the field.
         If inline selectors are not available yet, block-level evidence links such as
         evidence://0001.0014.0001 are acceptable.
@@ -157,6 +161,7 @@ def build_tools(state: Any) -> list[Any]:
 
         assistant content must stay in task_spec language. Assistant content citations should use
         Markdown links like [short task_spec-language evidence label](evidence://0001.0014.0001/S002).
+        Do not write [evidence://...] and do not put evidence:// outside Markdown link parentheses.
         For non-empty final_evidence, assistant content must include a task_spec-language paraphrase
         or required extracted value as the link label and a Markdown evidence link to either the inline selector or its paragraph/list/table block.
         link labels should be task_spec-language paraphrases, not raw source quotes, unless the exact
