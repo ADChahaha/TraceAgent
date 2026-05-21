@@ -62,7 +62,7 @@ def map_state_to_result(
     trace: dict[str, Any] = {
         "events": _plain(state.events),
         "actions": _plain(state.actions),
-        "document_tree": state.document.tree_text("/", depth=3),
+        "document_tree": state.document.outline_tree(),
     }
     if state.failed_stage:
         trace["failed_stage"] = state.failed_stage
@@ -96,7 +96,7 @@ def _append_source_index_event(state: GraphState) -> None:
             "tool": "source_index",
             "result": {
                 "ok": True,
-                "document_tree": state.document.tree_text("/", depth=3),
+                "document_tree": state.document.outline_tree(),
                 "source_selectors": state.document.source_selectors(),
             },
         }

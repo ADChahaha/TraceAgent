@@ -171,6 +171,23 @@ class HtmlDocument:
                 selectors[path_id] = source_id
         return selectors
 
+    def outline_tree(self) -> list[dict[str, Any]]:
+        root = self.virtual_root
+        return [self._outline_node(child) for child in root.children]
+
+    def _outline_node(self, node: VirtualNode) -> dict[str, Any]:
+        label = node.display_name or node.title or node.name
+        entry: dict[str, Any] = {
+            "id": node.path_id,
+            "type": node.kind,
+            "text": label,
+        }
+        if node.children:
+            children = [self._outline_node(c) for c in node.children if c.kind not in READABLE_KINDS]
+            if children:
+                entry["children"] = children
+        return entry
+
     def query_table(
         self,
         path: str,

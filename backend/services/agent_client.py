@@ -82,6 +82,7 @@ class AgentClient:
                             continue
                         yield json.loads(line)
         except httpx.HTTPStatusError as exc:
+            exc.response.read()
             raise AgentServiceError(
                 f"agent service returned {exc.response.status_code}: {exc.response.text}"
             ) from exc

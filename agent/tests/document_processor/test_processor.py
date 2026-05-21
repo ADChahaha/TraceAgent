@@ -33,7 +33,9 @@ def test_process_validates_input_then_calls_pdf_pipeline(monkeypatch):
     assert "<style>" in result.display_html
     assert 'id="p001_b000"' in result.display_html
     assert "正文" in result.display_html
-    assert result.markdown == "正文"
+    assert "<!-- Cluster summary:" not in result.markdown
+    assert "<!-- cluster=" not in result.markdown
+    assert "正文" in result.markdown
     assert result.md_list == ["正文"]
     assert result.blocks[0]["block_id"] == "p001_b000"
     assert result.blocks[0]["text"] == "正文"
@@ -44,6 +46,30 @@ def test_process_validates_input_then_calls_pdf_pipeline(monkeypatch):
     assert seen_call["source_bytes"] == b"%PDF-1.4"
     assert seen_call["filename"] == "sample.PDF"
     assert file_obj.tell() == 0
+
+
+def test_process_uses_mineru_even_when_pdf_text_layer_is_readable(monkeypatch):
+    from service.document_processor import processor as processor_module
+
+    seen_call: dict[str, object] = {}
+
+    def fake_convert(source_bytes: bytes, filename: str) -> list[list[dict]]:
+        seen_call["source_bytes"] = source_bytes
+        seen_call["filename"] = filename
+        return [[{"type": "paragraph", "content": {"paragraph_content": [{"type": "text", "content": "MinerU正文"}]}}]]
+
+    monkeypatch.setattr(processor_module, "convert_pdf_bytes_to_content_list", fake_convert)
+
+    result = processor_module.process(NamedBytesIO(b"%PDF-1.4", filename="text.pdf"))
+
+    assert result.meta_info == {"engine": "mineru-pipeline"}
+    assert result.warnings == []
+    assert "MinerU正文" in result.markdown
+    assert "MinerU正文" in result.html
+    assert result.blocks[0]["block_id"] == "p001_b000"
+    assert result.md_list == ["MinerU正文"]
+    assert seen_call["source_bytes"] == b"%PDF-1.4"
+    assert seen_call["filename"] == "text.pdf"
 
 
 def test_process_accepts_explicit_pdf_type_without_filename_suffix(monkeypatch):

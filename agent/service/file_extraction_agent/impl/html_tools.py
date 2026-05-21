@@ -35,7 +35,7 @@ def build_tools(state: Any) -> list[Any]:
 
     @tool
     def read(path_id: str) -> dict[str, Any]:
-        """Only read file evidence links ending in .md, .list, or .table in tree output.
+        """Read a file evidence link ending in .md, .list, or .table from tree output.
 
         Use evidence links such as evidence://0001.0001.0002 copied from tree output. Never
         call read on document or section directories. If tree shows a directory ending with
@@ -43,34 +43,14 @@ def build_tools(state: Any) -> list[Any]:
         link.
         Paragraph .md files return plain text without sentence ids. List and table reads
         return the whole object as Markdown with Ixxx item ids or Rxxx row ids.
-        Each read call returns exactly this one paragraph, list, or table block. To inspect
-        a neighboring block, call read again with that block's evidence link.
-        read does not require an immediate add_candidate_evidence; continue browsing,
-        reviewing, adding candidates, or writing according to the evidence you need.
-        Do not narrate the read call before seeing its result. After a read result is available,
-        summarize useful source content in the next assistant turn when it changes what the
-        reviewer understands. Leave routine adjacent reads silent until they form a meaningful chunk.
-        Use natural wording to say what was inspected and whether it helps, rules out an
-        expected area, or suggests continuing elsewhere. Use read summaries to orient the reviewer, not to pre-write the final field conclusion.
-        If the read result is likely to be written soon, keep the summary short and defer the full decision sentence to write_field. Do not use fixed headings.
-        Every read summary that states a document fact must include a Markdown evidence link.
-        Do not leave document facts outside links. Use task_spec-language link labels, translating
-        or paraphrasing source text instead of switching to the source document language.
-        Use [task_spec-language label](evidence://...) with parentheses for every assistant evidence link.
-        Do not write [evidence://...] as if it were a link label. Do not append bare evidence:// links
-        after a sentence; put the evidence URI inside Markdown link parentheses.
-        If that summary depends on consecutive blocks in the same section, use one evidence://range/<start>/<end> link
-        in assistant content instead of citing only the first block. Prefer evidence://range/<start>/<end> when consecutive blocks support the summary.
-        start and end must be readable block path_ids from the same section.
-        Only use a range after reading at least two distinct consecutive sibling blocks.
-        Never use range for one block; use that block's evidence link instead.
-        range URLs use path_ids without nested evidence:// prefixes, for example evidence://range/0001.0028.0002/0001.0028.0005.
-        Do not write evidence://range/evidence://. If blocks are not direct siblings, use separate links.
-        The range link label must describe only the shared topic or operation of that whole span, not a date,
-        fee, decision, or conclusion supported by only one block.
-        If assistant content mentions source text or source meaning, make that
-        quote, summary, or source-text claim a Markdown evidence link. Use a block link
-        when inline selectors are not available yet.
+        Each read call returns exactly one paragraph, list, or table block.
+        read does not require an immediate add_candidate_evidence; continue browsing as needed.
+        After seeing the result, narrate what this block is and what it contains —
+        with actual values, not abstract layout descriptions.
+        Leave adjacent reads silent until they form a meaningful chunk worth narrating.
+        Use evidence links at appropriate granularity: section links for overviews,
+        block links for specific tables/lists, inline selectors only for extracted values.
+        Not every sentence needs a link. For consecutive blocks, use evidence://range/<start>/<end>.
         """
 
         return _read(state, path_id)
@@ -80,58 +60,32 @@ def build_tools(state: Any) -> list[Any]:
         field_id: str = "",
         path_id: str = "",
     ) -> dict[str, Any]:
-        """Add one readable paragraph/list/table evidence link as block candidate evidence.
+        """Save one readable block as candidate evidence for a field.
 
         Use exactly one field_id and one path_id evidence link. One call saves
         one paragraph, list, or table block for one field. If the same block may help
         another field, or a field needs another block, call add_candidate_evidence again.
-        This is broad note-taking, not the final evidence decision; possible or uncertain relevance is enough to add as candidate.
-        Candidate evidence can be broader than final_evidence: add blocks that may matter.
-        final_evidence is selected later after review, and it may be a smaller or different
-        inline subset of the candidate blocks.
-        Routine candidate saves can stay silent. Assistant content is not required for every candidate save.
-        Use content only when the candidate changes the evidence picture, completes a meaningful
-        evidence group, or explains a non-obvious relevance judgment.
-        This candidate is not the final field decision; it is a note for later review.
-        When source text is available, include a Markdown evidence link to the same block path_id you are saving, for example
-        ["task_spec-language summary"](evidence://0001.0014.0001). Use task_spec-language
-        link labels that describe or paraphrase the source content. Do not leave source
-        words or document facts as plain quoted text.
-        assistant evidence links must use [label](evidence://...) syntax with the evidence URI in parentheses.
-        Explain why the linked text may support, contradict, or qualify the field.
-        If inline selectors are not available yet, block-level evidence links such as
-        evidence://0001.0014.0001 are acceptable.
-        Do not pass sentence/item/row inline links; add_candidate_evidence records only block-level
-        evidence links. The evidence link must point to a readable .md/.list/.table file,
-        not a directory.
-        The candidate evidence stored by this tool is block-level evidence; call
-        review_evidences later to expand block candidate evidence into Sxxx/Ixxx/Rxxx
-        inline evidence links for final_evidence.
+        This is broad note-taking, not the final evidence decision; possible relevance is enough.
+        Candidate saves are normally silent — no assistant content needed unless the
+        candidate changes the evidence picture in a way worth narrating.
+        Do not pass sentence/item/row inline links; this tool records only block-level
+        evidence links pointing to .md/.list/.table files.
+        Call review_evidences later to expand into inline selectors.
         """
 
         return _add_candidate_evidence(state, field_id, path_id=path_id)
 
     @tool
     def review_evidences(field_id: str) -> dict[str, Any]:
-        """Review one field's block candidates and expose inline final-evidence selectors.
+        """Review one field's candidates and expose inline selectors for final evidence.
 
-        review_evidences expands block candidate evidence into inline evidence links:
-        paragraph blocks become evidence://.../Sxxx, list blocks become evidence://.../Ixxx,
-        and table blocks become evidence://.../Rxxx. It also returns evidence_texts. Use
-        these returned inline evidence links as the only source for
-        write_field(final_evidence=...).
-        Use review_evidences like checking your notes before deciding whether to write or keep reading.
-        Use content when review changes evidence sufficiency, shows what is missing, or prepares a
-        field decision. Routine review checks can stay silent.
-        Only write after review makes the evidence sufficient for the field decision.
-        When review shows enough evidence, normally call write_field for the same field in the next assistant turn.
-        Do not insert unrelated reading between a sufficient review and the write unless you name a concrete evidence gap.
-        Leave assistant content empty when the next step is an obvious write_field and the reviewed facts were already summarized after read.
-        If assistant content uses reviewed text or states evidence sufficiency, missing status,
-        or a field decision, include Markdown evidence links and explain whether the evidence is
-        sufficient or what is missing. assistant content must stay in task_spec language, and
-        link labels should be task_spec-language paraphrases unless an extracted value must stay unchanged.
-        Do not use range links to merge non-adjacent reviewed candidates; use separate links instead.
+        Expands block candidates into inline evidence links:
+        paragraphs → evidence://.../Sxxx, lists → evidence://.../Ixxx,
+        tables → evidence://.../Rxxx. Also returns evidence_texts.
+        Copy useful inline links from the result into write_field(final_evidence=...).
+        Review is normally silent. Only narrate if evidence sufficiency changes in a
+        way that matters — e.g. something is clearly missing or contradictory.
+        When review shows enough evidence, call write_field next.
         """
 
         return _review_evidences(state, field_id)
@@ -145,33 +99,14 @@ def build_tools(state: Any) -> list[Any]:
     ) -> dict[str, Any]:
         """Write or overwrite one schema field value with selected final evidence.
 
-        write_field should normally be the next tool after a sufficient review_evidences for the same field.
-        Use a recent review snapshot for the same field, and prefer writing soon after review because
-        old reviews are hard for humans to follow.
-        If the same source facts were already summarized after read, write_field content should be incremental; do not repeat the full earlier read summary.
-        final_evidence must copy inline
-        evidence:// links from review_evidences.evidence for the same field. If
-        add_candidate_evidence adds more candidates for this field after review, review again before
-        writing. Do not use block-level evidence links as final_evidence.
+        Call after review_evidences for the same field.
+        final_evidence must copy inline evidence:// links from review_evidences.evidence.
+        If more candidates were added after review, review again before writing.
+        Do not use block-level evidence links as final_evidence.
         Use status="resolved" for extracted values and status="missing" when the document
-        does not support the field. Array fields must be written as a complete array; do
-        not append items incrementally. Rewriting the same field replaces the prior value.
-        Field writes are decision checkpoints. Use one natural sentence when a field is written,
-        corrected, or marked missing; cite reviewed evidence or explain the reviewed absence basis.
-
-        assistant content must stay in task_spec language. Assistant content citations should use
-        Markdown links like [short task_spec-language evidence label](evidence://0001.0014.0001/S002).
-        Do not write [evidence://...] and do not put evidence:// outside Markdown link parentheses.
-        For non-empty final_evidence, assistant content must include a task_spec-language paraphrase
-        or required extracted value as the link label and a Markdown evidence link to either the inline selector or its paragraph/list/table block.
-        link labels should be task_spec-language paraphrases, not raw source quotes, unless the exact
-        source-language value is the extracted value. Explain why the linked text supports the field decision.
-        Block-level evidence links are acceptable in assistant content when they are clearer,
-        for example [task_spec-language evidence label](evidence://0001.0014.0001), but final_evidence
-        must still use inline selectors from review_evidences.
-        Use separate links for repeated clauses from different sections; do not replace them with a range.
-        For multiple selectors, repeat separate
-        links. Tool arguments and final_evidence must use evidence:// links.
+        does not support the field. Array fields must be written as a complete array.
+        When narrating, state the extracted fact naturally with an evidence link —
+        do not say 'field written as X' or 'filled X into Y'.
         """
 
         return _write_field(state, field_id, value, final_evidence=final_evidence, status=status)
@@ -789,7 +724,7 @@ def validate_and_build_result(state: Any) -> dict[str, Any]:
     trace = {
         "events": list(state.events),
         "actions": list(state.actions),
-        "document_tree": state.document.tree_text("/", depth=3),
+        "document_tree": state.document.outline_tree(),
         "source_selectors": state.document.source_selectors(),
     }
     return {"ok": True, "result": result, "trace": trace}
