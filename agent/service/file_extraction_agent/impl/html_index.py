@@ -751,7 +751,7 @@ def render_read_sequence_text(blocks: list[dict[str, Any]]) -> str:
     for block in blocks:
         rendered.extend(
             [
-                f"## {block.get('path_id', '')} ({block.get('kind', 'unknown')})",
+                f"<!-- block evidence://{block.get('path_id', '')} kind={block.get('kind', 'unknown')} -->",
                 "",
                 str(block.get("text", "")),
             ]
