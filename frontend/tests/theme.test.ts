@@ -5,7 +5,7 @@ const globalsCss = readFileSync(resolve(__dirname, "../src/app/globals.css"), "u
 
 function cssRule(selector: string) {
   const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return globalsCss.match(new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+  return globalsCss.match(new RegExp(`(?:^|\\n)${escapedSelector}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
 }
 
 it("Codex 主题使用统一的 light/dark token", () => {
@@ -93,4 +93,34 @@ it("Contents 面板保留可读宽度、纵向滚动和多行文本", () => {
   expect(outlineValueRule).toContain("white-space: normal;");
   expect(outlineValueRule).not.toContain("overflow: hidden;");
   expect(outlineValueRule).not.toContain("text-overflow: ellipsis;");
+});
+
+it("首页首屏只让 Tasks 列表成为滚动容器，整页工作台不滚动", () => {
+  const homeWorkbenchRule = cssRule(".home-task-workbench");
+  expect(homeWorkbenchRule).toContain("position: fixed !important;");
+  expect(homeWorkbenchRule).toContain("inset: 0;");
+  expect(homeWorkbenchRule).toContain("height: 100svh;");
+  expect(homeWorkbenchRule).toContain("overflow: hidden;");
+
+  const homeStageRule = cssRule(".home-task-stage");
+  expect(homeStageRule).toContain("height: calc(100svh - var(--replay-topbar-h));");
+  expect(homeStageRule).toContain("overflow: hidden;");
+
+  const sidebarRule =
+    Array.from(globalsCss.matchAll(/(?:^|\n)\.replay-task-sidebar\s*\{([^}]*)\}/g))
+      .map((match) => match[1])
+      .find((rule) => rule.includes("border-right")) ?? "";
+  expect(sidebarRule).toContain("height: 100%;");
+  expect(sidebarRule).toContain("min-height: 0;");
+  expect(sidebarRule).toContain("overflow: hidden;");
+
+  const sidebarInnerRule = cssRule(".replay-task-sidebar-inner");
+  expect(sidebarInnerRule).toContain("height: 100%;");
+  expect(sidebarInnerRule).toContain("min-height: 0;");
+
+  const taskListRule = cssRule(".replay-task-list");
+  expect(taskListRule).toContain("flex: 1 1 auto;");
+  expect(taskListRule).toContain("min-height: 0;");
+  expect(taskListRule).toContain("overflow-y: auto;");
+  expect(taskListRule).toContain("overflow-x: hidden;");
 });

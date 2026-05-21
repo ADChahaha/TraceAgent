@@ -16,6 +16,7 @@
   -> task-store 用 backend 返回的 TaskSummary 同步左侧任务栏
   -> 顶部单个主题按钮在 Light/Dark 间切换 Codex 风格主题，并写入 localStorage 与 html[data-theme]
   -> 首页显示 Codex New Chat 形态的新任务界面：左侧任务栏 + 中央大标题 + 居中 composer
+  -> 首页 workbench 使用固定视口布局，左侧任务栏隐藏自身溢出，只有 Tasks 列表吃掉 header 下方剩余高度并纵向滚动，避免长任务列表把整个首页顶出页面滚动条
   -> 用户在 New Chat 界面关闭左侧任务栏时，只让中央 composer 变宽，不自动显示任何右侧 Progress 或 Inspector
   -> composer 用纸夹选择 PDF，把 textarea 中的 task_spec JSON 作为任务定义
   -> 前端校验 task_spec 是 object 且 task_spec.task_name 非空，用 task_spec.task_name 推导 backend task_type
@@ -98,7 +99,7 @@ frontend/
   -> 用户点击顶部的单个主题按钮时，applyStoredTheme 写入 localStorage、更新 html[data-theme] 并广播主题变更事件
   -> 调用 listTasks() / GET /tasks 获取 backend 数据库中的最近任务
   -> syncRecentTaskSummaries 将 backend TaskSummary 合并到 recent tasks 前部
-  -> 左侧任务栏展示 task_id、处理中/处理结果、stage 和失败原因
+  -> 左侧任务栏展示 task_id、处理中/处理结果、stage 和失败原因；当任务很多时，`.home-task-workbench` 固定在 viewport，`.replay-task-sidebar` 隐藏溢出，`.replay-task-list` 作为 flex 剩余高度区域自己滚动
   -> 中央显示 `What task should we run in agent_gate?` 和创建任务 composer
   -> 用户关闭左侧任务栏时，首页仍然只保留中央 composer，不自动打开任何右侧 Progress 或 Inspector
   -> 用户通过 composer 的隐藏 file input 选择一个或多个 PDF
