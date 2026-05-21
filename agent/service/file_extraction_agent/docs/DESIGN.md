@@ -15,7 +15,7 @@
   -> 模型先调用 tree 展开目录，再用 read 浏览文件、章节和段落；模型可见 locator 统一显示为 `evidence://...`
   -> 首次有用 tree 结果后，模型用 Markdown bullet 输出短阅读地图，只说明与 task_spec 字段有关的结构和下一步阅读方向
   -> 模型像人类读文档一样推进；assistant content 是按信息增量触发的用户可见进度更新，不是工具调用日志
-  -> read 一次只打开一个 paragraph/list/table；需要继续看相邻内容时，模型必须再次调用 read
+  -> read 可以打开一个 paragraph/list/table，也可以用 `evidence://range/<start>/<end>` 一次打开同 section 下连续兄弟 block
   -> read 调用前通常不说话；read 返回后如果内容有意义，下一轮用 task_spec 主语言自然概括看了什么、是否有价值
   -> read 概括只负责给 reviewer 定位当前发现；如果同一组事实很快会被写字段，最终字段结论留到 write_field
   -> 如果某个已知 block 可能支持、反驳、限定或帮助排除字段，模型用 add_candidate_evidence 保存候选 block evidence
@@ -200,7 +200,7 @@ tree("0001", depth=2)
 
 ### `read`
 
-`read` 按虚拟文件类型返回 Markdown 阅读视图。公开工具只接收一个 `path_id` 参数。paragraph 默认返回完整正文，不带句子编号；list 和 table 默认返回完整对象并带 item/row 编号，便于模型判断这个对象是否可能支持字段。`read` 只负责阅读，不再建立“待读后判断”状态，也不限制下一步工具；模型可以继续 `tree/read/review_evidences/add_candidate_evidence/write_field/submit_result`，由 prompt 引导它在合适时机保存候选证据。
+`read` 按虚拟文件类型返回 Markdown 阅读视图。公开工具只接收一个 `path_id` 参数，但这个参数可以是单个 block link，也可以是连续读取 link：`evidence://range/<start>/<end>`。单个 paragraph 默认返回完整正文，不带句子编号；list 和 table 默认返回完整对象并带 item/row 编号，便于模型判断这个对象是否可能支持字段。range read 只允许读取同一 section 下直接相邻的 paragraph/list/table 兄弟节点，不能跨 section、跨目录、倒序或只覆盖同一个 block；返回值会把选中的多个 block 按原文顺序拼成一个 `read_range` 阅读视图。`read` 只负责阅读，不再建立“待读后判断”状态，也不限制下一步工具；模型可以继续 `tree/read/review_evidences/add_candidate_evidence/write_field/submit_result`，由 prompt 引导它在合适时机保存候选证据。
 
 `read` 一次只读取一个明确的 paragraph/list/table block：
 

@@ -272,6 +272,39 @@ def test_read_reads_one_block_and_exposes_only_path_id_argument():
     assert "第一节第二段" not in read["text"]
 
 
+def test_read_accepts_consecutive_sibling_range_locator():
+    state = _multi_section_state()
+    first = _paragraph_path_id_containing(state, "第一节第一段")
+    third = _paragraph_path_id_containing(state, "第一节第三段")
+
+    read = _read(state, f"evidence://range/{first}/{third}")
+
+    assert read["ok"] is True
+    assert read["kind"] == "read_range"
+    assert read["range_start"] == first
+    assert read["range_end"] == third
+    assert read["returned_path_ids"] == [
+        first,
+        _paragraph_path_id_containing(state, "第一节第二段"),
+        third,
+    ]
+    assert "第一节第一段" in read["text"]
+    assert "第一节第二段" in read["text"]
+    assert "第一节第三段" in read["text"]
+    assert "第一节第四段" not in read["text"]
+
+
+def test_read_rejects_range_across_sections():
+    state = _multi_section_state()
+    first = _paragraph_path_id_containing(state, "第一节第一段")
+    other_section = _paragraph_path_id_containing(state, "第二节第一段")
+
+    read = _read(state, f"evidence://range/{first}/{other_section}")
+
+    assert read["ok"] is False
+    assert "direct siblings" in read["errors"][0]["message"]
+
+
 def test_add_candidate_evidence_accepts_one_explicit_path_id_and_review_expands_inline():
     state = _state()
     paths = _paths()

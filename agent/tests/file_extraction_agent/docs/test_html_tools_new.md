@@ -1,6 +1,6 @@
 # test_html_tools_new.py
 
-这份测试覆盖抽取工具层的自由浏览和候选证据记录规则。工具围绕虚拟文件树工作：模型可见 locator 统一为 `evidence://...` link，工具内部再转回 canonical `path_id` selector。公开 `read` 工具只接收 `path_id`，一次只打开一个 paragraph/list/table 对象，不再暴露 `count/offset/limit` 这类连续读取或分页参数。`add_candidate_evidence` 通过显式 `evidence://` block link 把任意可读对象保存为字段候选 block evidence；字段写入必须基于同字段当前 `review_evidences` snapshot。
+这份测试覆盖抽取工具层的自由浏览和候选证据记录规则。工具围绕虚拟文件树工作：模型可见 locator 统一为 `evidence://...` link，工具内部再转回 canonical `path_id` selector。公开 `read` 工具只接收 `path_id`，既可以打开一个 paragraph/list/table 对象，也可以用 `evidence://range/<start>/<end>` 连续读取同 section 下的兄弟 block；工具不再暴露 `count/offset/limit` 这类分页参数。`add_candidate_evidence` 通过显式 `evidence://` block link 把任意可读对象保存为字段候选 block evidence；字段写入必须基于同字段当前 `review_evidences` snapshot。
 
 实现链路：
 
@@ -9,7 +9,8 @@ documents + task_spec
   -> build_graph_input / build_graph_state
   -> tree(path_id="") 打开根目录，tree/read 使用 tree 输出里的 evidence:// locator 浏览材料
   -> 内部工具 helper 与模型工具 schema 都不接收 reason 参数
-  -> read(evidence://...) 先校验 locator 指向可读 block，再只返回这个 block 的阅读视图
+  -> read(evidence://...) 先校验 locator 指向可读 block，再返回这个 block 的阅读视图
+  -> read(evidence://range/<start>/<end>) 校验 start/end 是同 section 下不同且连续的兄弟可读 block，再按原文顺序返回 read_range
   -> read 成功后可以继续 tree/read/review，工具层不拦截下一步
   -> add_candidate_evidence(field_id, path_id) 显式保存一个字段和一个 evidence:// block link
   -> review_evidences(field_id) 把候选 block 展开成 inline evidence links 和 evidence_texts
@@ -26,7 +27,9 @@ documents + task_spec
 - `test_read_allows_free_navigation_after_successful_read`：确认 `read` 成功后可以继续 `tree/read`，不会再返回 `READ_JUDGEMENT_REQUIRED`。
 - `test_tool_path_arguments_use_evidence_links_and_write_final_evidence_copies_review_links`：确认模型工具参数使用 `evidence://` block/inline links；根目录通过空 path_id 打开，文档目录显示为 `evidence://0001`；`add_candidate_evidence` 对模型返回候选 link，内部 state 仍保存 canonical `path_id` selector。
 - `test_bare_path_ids_are_rejected_for_model_facing_path_arguments`：确认模型面向的 `read/add_candidate_evidence` 参数拒绝裸 `path_id`，必须传 `evidence://` link。
-- `test_read_reads_one_block_and_exposes_only_path_id_argument`：确认模型可见 `read` schema 只暴露 `path_id` 参数，内部读取也只返回指定的单个 paragraph/list/table block。
+- `test_read_reads_one_block_and_exposes_only_path_id_argument`：确认模型可见 `read` schema 只暴露 `path_id` 参数，普通读取只返回指定的单个 paragraph/list/table block。
+- `test_read_accepts_consecutive_sibling_range_locator`：确认 `read` 可以接收 `evidence://range/<start>/<end>`，并一次返回同 section 下连续兄弟 block 的合并阅读视图。
+- `test_read_rejects_range_across_sections`：确认 range read 不能跨 section 或目录，只能覆盖直接相邻的可读兄弟 block。
 - `test_add_candidate_evidence_accepts_one_explicit_path_id_and_review_expands_inline`：确认 `add_candidate_evidence` 必须拿到显式 `evidence://` block link，且一次只记录一个字段和一个 paragraph/list/table block；`review_evidences` 会把 paragraph block 展开成 Sxxx inline link 和反查文本。
 - `test_add_candidate_evidence_can_add_after_other_tools_with_explicit_path_id`：确认 `add_candidate_evidence` 不依赖当前 read 状态，插入其它工具后仍可用显式 `evidence://` link 保存字段候选。
 - `test_list_and_table_read_return_all_rows_and_review_expands_all_inline`：确认 list/table 默认完整读取，保存候选 block 后 `review_evidences` 展开全部 Ixxx/Rxxx。

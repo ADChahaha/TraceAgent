@@ -135,6 +135,43 @@ class HtmlDocument:
             "has_more_in_section": has_more_in_section,
         }
 
+    def read_range(
+        self,
+        start_path_id: str,
+        end_path_id: str,
+        *,
+        offset: int = 0,
+        limit: int = 0,
+    ) -> dict[str, Any]:
+        start = self._node_by_path_id(start_path_id)
+        end = self._node_by_path_id(end_path_id)
+        if start.kind not in READABLE_KINDS or end.kind not in READABLE_KINDS:
+            raise ValueError("range endpoints must be readable files")
+        parent = self._parent_node(start)
+        if self._parent_node(end) is not parent:
+            raise ValueError("range endpoints must be direct siblings in the same section")
+        siblings = parent.children
+        start_index = siblings.index(start)
+        end_index = siblings.index(end)
+        if start_index == end_index:
+            raise ValueError("range must cover at least two readable files")
+        if end_index < start_index:
+            raise ValueError("range end must come after range start")
+        selected = siblings[start_index : end_index + 1]
+        if any(node.kind not in READABLE_KINDS for node in selected):
+            raise ValueError("range can only cover consecutive readable files")
+        blocks = [self.read_markdown(node.path, offset=offset, limit=limit) for node in selected]
+        return {
+            "path_id": start.path_id,
+            "kind": "read_range",
+            "range_start": start.path_id,
+            "range_end": end.path_id,
+            "count_returned": len(blocks),
+            "returned_path_ids": [block["path_id"] for block in blocks],
+            "blocks": blocks,
+            "text": render_read_sequence_text(blocks),
+        }
+
     def paragraph_anchors(self, path: str) -> list[dict[str, str]]:
         node = self._node(path)
         if node.kind != "paragraph":

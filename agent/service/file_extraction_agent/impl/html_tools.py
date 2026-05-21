@@ -35,15 +35,21 @@ def build_tools(state: Any) -> list[Any]:
 
     @tool
     def read(path_id: str) -> dict[str, Any]:
-        """Read a file evidence link ending in .md, .list, or .table from tree output.
+        """Read a file evidence link, or a consecutive range of sibling files.
 
         Use evidence links such as evidence://0001.0001.0002 copied from tree output. Never
         call read on document or section directories. If tree shows a directory ending with
         /, call tree on that directory first, then read a child .md/.list/.table evidence
         link.
+        To read consecutive sibling blocks in one call, pass
+        evidence://range/<start>/<end>, for example
+        evidence://range/0001.0001.0002/0001.0001.0004.
+        Range endpoints must be different readable files, direct siblings in the same
+        section, and the range must not cross a subsection or directory.
         Paragraph .md files return plain text without sentence ids. List and table reads
         return the whole object as Markdown with Ixxx item ids or Rxxx row ids.
-        Each read call returns exactly one paragraph, list, or table block.
+        A single-block read returns one paragraph, list, or table block; a range read
+        returns selected blocks together in original order.
         read does not require an immediate add_candidate_evidence; continue browsing as needed.
         After seeing the result, narrate what this block is and what it contains —
         with actual values, not abstract layout descriptions.
@@ -127,6 +133,7 @@ def build_tools(state: Any) -> list[Any]:
 
 
 EVIDENCE_LOCATOR_RE = re.compile(r"^evidence://(?P<path_id>\d{4}(?:\.\d{4})*)(?:/(?P<selector>[SIR]\d{3}(?:\.\d{3})*))?$")
+RANGE_LOCATOR_RE = re.compile(r"^evidence://range/(?P<start>\d{4}(?:\.\d{4})*)/(?P<end>\d{4}(?:\.\d{4})*)$")
 PATH_ID_RE = re.compile(r"(?<![A-Za-z0-9_/:])(\d{4}(?:\.\d{4})*)(?![A-Za-z0-9_.])")
 INLINE_SELECTOR_KEYS = {"S": "sentences", "I": "items", "R": "rows"}
 
@@ -145,6 +152,15 @@ def _read(
     state: Any,
     path_id: str,
 ) -> dict[str, Any]:
+    range_path_ids = _range_path_ids_from_locator(path_id)
+    if range_path_ids is not None:
+        start_path_id, end_path_id = range_path_ids
+        return _run_tool(
+            state,
+            "read",
+            {"path_id": path_id},
+            lambda: {"ok": True, **state.document.read_range(start_path_id, end_path_id)},
+        )
     canonical_path_id = _block_path_id_from_locator(path_id)
     return _run_tool(
         state,
@@ -416,6 +432,15 @@ def _block_path_id_from_locator(locator: Any) -> str | None:
     if selector is not None:
         return None
     return path_id
+
+
+def _range_path_ids_from_locator(locator: Any) -> tuple[str, str] | None:
+    if not isinstance(locator, str):
+        return None
+    match = RANGE_LOCATOR_RE.fullmatch(locator.strip())
+    if match is None:
+        return None
+    return match.group("start"), match.group("end")
 
 
 def _tree_path_id_from_locator(locator: Any) -> str | None:
