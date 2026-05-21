@@ -6,6 +6,7 @@ from service.document_processor.mineru_html import (
     build_semantic_document_from_blocks,
     build_semantic_document_from_content_list,
     extract_inline_id,
+    split_high_height_band,
 )
 
 
@@ -192,6 +193,345 @@ def test_build_html_wraps_h2_and_h3_in_section_hierarchy():
     assert "Exclusions body." in result.split('id="p001_b009_section"', 1)[1]
 
 
+def test_build_html_renders_body_subheadings_without_section_nodes():
+    pages = [
+        [
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "3．出願手続"}],
+                    "level": 2,
+                },
+                "bbox": [97, 53, 280, 77],
+            },
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "1）出願手順"}],
+                    "level": 2,
+                },
+                "bbox": [105, 110, 231, 127],
+            },
+            {
+                "type": "paragraph",
+                "content": {
+                    "paragraph_content": [
+                        {
+                            "type": "text",
+                            "content": "1．出願期間中に Web 出願システムにより入力してください。",
+                        }
+                    ]
+                },
+                "bbox": [94, 720, 589, 736],
+            },
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [
+                        {"type": "text", "content": "3．「エッセイ」については以下の指示に従ってください。"}
+                    ],
+                    "level": 2,
+                },
+                "bbox": [92, 486, 563, 502],
+            },
+        ]
+    ]
+
+    result = build_html_from_content_list(pages)
+
+    assert '<section class="section section-level-2" id="p001_b000_section"' in result
+    assert "<h2" in result
+    assert "3．出願手続</h2>" in result
+    assert "1）出願手順</h2>" not in result
+    assert "1．出願期間中に Web 出願システムにより入力してください。</h2>" not in result
+    assert "3．「エッセイ」については以下の指示に従ってください。</h2>" not in result
+    assert "<strong>1）出願手順</strong>" in result
+    assert "<strong>1．出願期間中に Web 出願システムにより入力してください。</strong>" in result
+    assert "<strong>3．「エッセイ」については以下の指示に従ってください。</strong>" in result
+
+
+def test_build_html_keeps_table_of_contents_entries_out_of_outline_headings():
+    pages = [
+        [
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "目次"}],
+                    "level": 2,
+                },
+                "bbox": [460, 80, 520, 105],
+            },
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "1．募集人員および試験関連日程等"}],
+                    "level": 2,
+                },
+                "bbox": [100, 150, 500, 171],
+            },
+            {
+                "type": "paragraph",
+                "content": {
+                    "paragraph_content": [{"type": "text", "content": "1）出願受付期間 P.2"}]
+                },
+                "bbox": [130, 180, 400, 199],
+            },
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "2．出願資格"}],
+                    "level": 2,
+                },
+                "bbox": [100, 220, 260, 241],
+            },
+            {
+                "type": "paragraph",
+                "content": {
+                    "paragraph_content": [{"type": "text", "content": "1）出願資格（博士課程前期課程） P.3"}]
+                },
+                "bbox": [130, 250, 500, 269],
+            },
+        ],
+        [
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "1．募集人員および試験関連日程等"}],
+                    "level": 2,
+                },
+                "bbox": [97, 53, 585, 78],
+            },
+        ],
+    ]
+
+    result = build_html_from_content_list(pages)
+
+    assert result.count('class="section section-level-2"') == 2
+    assert '<h2 id="p001_b000"' in result
+    assert "目次</h2>" in result
+    assert "p001_b001_section" not in result
+    assert "p001_b003_section" not in result
+    assert "<strong>1．募集人員および試験関連日程等</strong>" in result
+    assert "<strong>2．出願資格</strong>" in result
+    assert "1）出願受付期間 P.2" in result
+    assert '<section class="section section-level-2" id="p002_b000_section"' in result
+
+
+def test_build_markdown_demotes_deadline_title_to_body_line():
+    pages = [
+        [
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "3）出願書類"}],
+                    "level": 2,
+                },
+                "bbox": [105, 677, 231, 695],
+            },
+            {
+                "type": "paragraph",
+                "content": {
+                    "paragraph_content": [
+                        {
+                            "type": "text",
+                            "content": "・PDF ファイルは次の提出期限までに、「マイページ」上にて、提出してください。",
+                        }
+                    ]
+                },
+                "bbox": [147, 171, 811, 186],
+            },
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [
+                        {
+                            "type": "text",
+                            "content": "提出期限 2025 年9月9日（火） 日本時間 23:59 まで",
+                        }
+                    ],
+                    "level": 2,
+                },
+                "bbox": [176, 191, 647, 206],
+            },
+        ]
+    ]
+
+    html = build_html_from_content_list(pages)
+    markdown = build_markdown_from_content_list(pages)
+
+    assert "## 提出期限 2025 年9月9日（火） 日本時間 23:59 まで" not in markdown
+    assert "**提出期限 2025 年9月9日（火） 日本時間 23:59 まで**" in markdown
+    assert "提出期限 2025 年9月9日（火） 日本時間 23:59 まで</h2>" not in html
+    assert "<strong>提出期限 2025 年9月9日（火） 日本時間 23:59 まで</strong>" in html
+
+
+def test_build_markdown_demotes_compact_numbered_title_with_ascii_dot():
+    pages = [
+        [
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "Ⅰ．入学試験方式・募集人数・日程等"}],
+                    "level": 2,
+                },
+                "bbox": [88, 120, 610, 145],
+            },
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "2.日程"}],
+                    "level": 2,
+                },
+                "bbox": [105, 188, 180, 204],
+            },
+        ]
+    ]
+
+    html = build_html_from_content_list(pages)
+    markdown = build_markdown_from_content_list(pages)
+
+    assert "## 2.日程" not in markdown
+    assert "**2.日程**" in markdown
+    assert "2.日程</h2>" not in html
+    assert "<strong>2.日程</strong>" in html
+
+
+def test_build_markdown_uses_global_h2_layout_band_and_bolds_other_titles():
+    pages = [
+        [
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "Ⅰ．入学試験方式・募集人数・日程等"}],
+                    "level": 2,
+                },
+                "bbox": [88, 120, 610, 145],
+            },
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "1．入学試験方式・募集人数"}],
+                    "level": 2,
+                },
+                "bbox": [105, 170, 360, 186],
+            },
+            {
+                "type": "paragraph",
+                "content": {"paragraph_content": [{"type": "text", "content": "本文"}]},
+                "bbox": [90, 190, 500, 220],
+            },
+        ],
+        [
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "Ⅱ．出願資格・要件"}],
+                    "level": 2,
+                },
+                "bbox": [88, 120, 430, 145],
+            },
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "2．日程"}],
+                    "level": 2,
+                },
+                "bbox": [105, 170, 190, 186],
+            },
+        ],
+    ]
+
+    html = build_html_from_content_list(pages)
+    markdown = build_markdown_from_content_list(pages)
+
+    assert "## Ⅰ．入学試験方式・募集人数・日程等" in markdown
+    assert "## Ⅱ．出願資格・要件" in markdown
+    assert "**1．入学試験方式・募集人数**" in markdown
+    assert "**2．日程**" in markdown
+    assert "## 1．入学試験方式・募集人数" not in markdown
+    assert "## 2．日程" not in markdown
+    assert 'id="p001_b000_section"' in html
+    assert 'id="p002_b000_section"' in html
+    assert "1．入学試験方式・募集人数</h2>" not in html
+
+
+def test_build_markdown_clusters_h2_band_with_width_and_indent_features():
+    pages = [
+        [
+            {
+                "type": "title",
+                "content": {"title_content": [{"type": "text", "content": "Ⅰ．入学試験方式・募集人数・日程等"}], "level": 2},
+                "bbox": [88, 120, 610, 141],
+            },
+            {
+                "type": "title",
+                "content": {"title_content": [{"type": "text", "content": "学位授与方針（ディプロマ・ポリシー）"}], "level": 2},
+                "bbox": [130, 170, 430, 190],
+            },
+            {
+                "type": "title",
+                "content": {"title_content": [{"type": "text", "content": "1．入学試験方式・募集人数"}], "level": 2},
+                "bbox": [134, 230, 360, 248],
+            },
+            {
+                "type": "title",
+                "content": {"title_content": [{"type": "text", "content": "Ⅱ．出願資格・要件"}], "level": 2},
+                "bbox": [88, 300, 430, 321],
+            },
+        ]
+    ]
+
+    markdown = build_markdown_from_content_list(pages)
+
+    assert "## Ⅰ．入学試験方式・募集人数・日程等" in markdown
+    assert "## Ⅱ．出願資格・要件" in markdown
+    assert "**学位授与方針（ディプロマ・ポリシー）**" in markdown
+    assert "**1．入学試験方式・募集人数**" in markdown
+
+
+def test_build_markdown_keeps_same_height_body_subheadings_out_of_h2_cluster():
+    pages = [
+        [
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "Ⅰ．入学試験方式・募集人数・日程等"}],
+                    "level": 2,
+                },
+                "bbox": [88, 120, 610, 145],
+            },
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "1．募集人員および試験関連日程等"}],
+                    "level": 2,
+                },
+                "bbox": [100, 150, 500, 171],
+            },
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "2．出願資格"}],
+                    "level": 2,
+                },
+                "bbox": [100, 220, 260, 241],
+            },
+        ]
+    ]
+
+    markdown = build_markdown_from_content_list(pages)
+
+    assert "## Ⅰ．入学試験方式・募集人数・日程等" in markdown
+    assert "## 1．募集人員および試験関連日程等" not in markdown
+    assert "## 2．出願資格" not in markdown
+    assert "**1．募集人員および試験関連日程等**" in markdown
+    assert "**2．出願資格**" in markdown
+
+
+def test_split_high_height_band_uses_two_cluster_separation():
+    assert split_high_height_band([25, 24, 16, 16, 15, 15]) == [25, 24]
+
+
 def test_build_html_skips_pages_without_visible_content():
     pages = [
         [
@@ -245,7 +585,10 @@ def test_build_html_skips_pages_with_only_page_number():
     assert "第2页，共7页" not in result
     assert 'id="page_002"' in result
     assert [block["block_id"] for block in blocks] == ["p002_b000"]
-    assert markdown == "正文"
+    assert "<!-- Cluster summary:" not in markdown
+    assert "<!-- cluster=" not in markdown
+    assert "正文" in markdown
+    assert "第2页，共7页" not in markdown
 
 
 def test_build_outputs_skip_page_footer_noise():
@@ -350,7 +693,275 @@ def test_build_markdown_from_content_list_keeps_basic_structure():
 
     result = build_markdown_from_content_list(pages)
 
-    assert result == "## 募集要項\n- 修士課程"
+    assert "<!-- Cluster summary:" not in result
+    assert "<!-- cluster=" not in result
+    assert "## 募集要項" in result
+    assert "- 修士課程" in result
+
+
+def test_build_markdown_from_content_list_embeds_clustered_block_structure():
+    pages = [
+        [
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "立教大学大学院入試要項"}],
+                    "level": 1,
+                },
+                "bbox": [122, 210, 875, 367],
+            },
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [
+                        {
+                            "type": "text",
+                            "content": "人工知能科学研究科（一般入学試験）博士課程前期課程",
+                        }
+                    ],
+                    "level": 1,
+                },
+                "bbox": [169, 386, 825, 542],
+            },
+        ],
+        [
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "1．募集人員および試験関連日程等"}],
+                    "level": 2,
+                },
+                "bbox": [97, 53, 585, 78],
+            },
+            {
+                "type": "paragraph",
+                "content": {
+                    "paragraph_content": [
+                        {
+                            "type": "text",
+                            "content": "本研究科博士課程前期課程の入学試験は一般入学試験として実施します。",
+                        }
+                    ]
+                },
+                "bbox": [88, 88, 907, 120],
+            },
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "1）出願受付期間"}],
+                    "level": 2,
+                },
+                "bbox": [105, 110, 270, 126],
+            },
+            {
+                "type": "table",
+                "content": {
+                    "html": "<table><tr><td>出願受付期間</td><td>2025年8月14日</td></tr></table>",
+                },
+                "bbox": [90, 216, 907, 241],
+            },
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "【募集人員および試験日程に関する注意事項】"}],
+                    "level": 2,
+                },
+                "bbox": [99, 400, 465, 416],
+            },
+            {
+                "type": "paragraph",
+                "content": {
+                    "paragraph_content": [
+                        {"type": "text", "content": "(1) 募集人員は別の時期に募集する人数を含みます。"}
+                    ]
+                },
+                "bbox": [90, 430, 564, 461],
+            },
+        ],
+    ]
+
+    result = build_markdown_from_content_list(pages)
+
+    assert "<!-- Cluster summary:" not in result
+    assert "<!-- cluster=" not in result
+    assert "type=title" not in result
+    assert "# 立教大学大学院入試要項" in result
+    assert "# 人工知能科学研究科（一般入学試験）博士課程前期課程" in result
+    assert "## 1．募集人員および試験関連日程等" in result
+    assert "1）出願受付期間" in result
+    assert "【募集人員および試験日程に関する注意事項】" in result
+    assert "本研究科博士課程前期課程の入学試験は一般入学試験として実施します。" in result
+    assert "<table><tr><td>出願受付期間</td><td>2025年8月14日</td></tr></table>" in result
+    assert "markdown_title_level" not in result
+
+
+def test_build_markdown_from_content_list_separates_true_titles_from_body_subheadings():
+    pages = [
+        [
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "2026 年度"}],
+                    "level": 1,
+                },
+                "bbox": [122, 210, 875, 367],
+            },
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "立教大学大学院入試要項"}],
+                    "level": 1,
+                },
+                "bbox": [122, 210, 875, 367],
+            },
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [
+                        {
+                            "type": "text",
+                            "content": "人工知能科学研究科（一般入学試験・社会人入学試験）（秋季実施分）博士課程前期課程",
+                        }
+                    ],
+                    "level": 1,
+                },
+                "bbox": [169, 386, 825, 542],
+            },
+            {
+                "type": "paragraph",
+                "content": {
+                    "paragraph_content": [
+                        {
+                            "type": "text",
+                            "content": "本研究科博士課程前期課程の入学試験は一般入学試験として実施します。",
+                        }
+                    ]
+                },
+                "bbox": [88, 88, 907, 120],
+            },
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "1．募集人員および試験関連日程等"}],
+                    "level": 2,
+                },
+                "bbox": [97, 53, 585, 78],
+            },
+            {
+                "type": "paragraph",
+                "content": {
+                    "paragraph_content": [
+                        {
+                            "type": "text",
+                            "content": "本研究科博士課程前期課程の入学試験は一般入学試験として実施します。",
+                        }
+                    ]
+                },
+                "bbox": [88, 88, 907, 120],
+            },
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "1）出願受付期間"}],
+                    "level": 2,
+                },
+                "bbox": [105, 110, 270, 126],
+            },
+            {
+                "type": "table",
+                "content": {
+                    "html": "<table><tr><td>出願受付期間</td><td>2025年8月14日</td></tr></table>",
+                },
+                "bbox": [90, 216, 907, 241],
+            },
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "【募集人員および試験日程に関する注意事項】"}],
+                    "level": 2,
+                },
+                "bbox": [99, 400, 465, 416],
+            },
+            {
+                "type": "paragraph",
+                "content": {
+                    "paragraph_content": [
+                        {"type": "text", "content": "(1) 募集人員は別の時期に募集する人数を含みます。"}
+                    ]
+                },
+                "bbox": [90, 430, 564, 461],
+            },
+        ]
+    ]
+
+    result = build_markdown_from_content_list(pages)
+
+    assert "# 立教大学大学院入試要項" in result
+    assert "# 人工知能科学研究科（一般入学試験・社会人入学試験）（秋季実施分）博士課程前期課程" in result
+    assert "## 1．募集人員および試験関連日程等" in result
+    assert "**1）出願受付期間**" in result
+    assert "**【募集人員および試験日程に関する注意事項】**" in result
+    assert "#### 1）出願受付期間" not in result
+    assert "#### 【募集人員および試験日程に関する注意事項】" not in result
+    assert "本研究科博士課程前期課程の入学試験は一般入学試験として実施します。" in result
+    assert "<table><tr><td>出願受付期間</td><td>2025年8月14日</td></tr></table>" in result
+
+
+def test_build_markdown_from_content_list_promotes_numbered_paragraph_body_items():
+    pages = [
+        [
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "3）出願書類"}],
+                    "level": 2,
+                },
+                "bbox": [105, 677, 231, 695],
+            },
+            {
+                "type": "paragraph",
+                "content": {
+                    "paragraph_content": [
+                        {
+                            "type": "text",
+                            "content": "1．出願期間中に Web 出願システムにより入力してください。",
+                        }
+                    ]
+                },
+                "bbox": [94, 720, 589, 736],
+            },
+            {
+                "type": "paragraph",
+                "content": {
+                    "paragraph_content": [
+                        {
+                            "type": "text",
+                            "content": "2．Web 出願システムでは、志願票入力と写真のアップロード、および選考料の納入が完了すると、「マイページ」が生成されます。",
+                        }
+                    ]
+                },
+                "bbox": [92, 45, 892, 82],
+            },
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [
+                        {"type": "text", "content": "3．「エッセイ」については以下の指示に従ってください。"}
+                    ],
+                    "level": 2,
+                },
+                "bbox": [92, 486, 563, 502],
+            },
+        ]
+    ]
+
+    result = build_markdown_from_content_list(pages)
+
+    assert "**3）出願書類**" in result
+    assert "**1．出願期間中に Web 出願システムにより入力してください。**" in result
+    assert "**2．Web 出願システムでは、志願票入力と写真のアップロード、および選考料の納入が完了すると、「マイページ」が生成されます。**" in result
+    assert "**3．「エッセイ」については以下の指示に従ってください。**" in result
+    assert "## 3．「エッセイ」については以下の指示に従ってください。" not in result
 
 
 def test_build_semantic_document_groups_sections_blocks_and_inlines():

@@ -8,14 +8,19 @@ import json
 import re
 from typing import Any
 
+import numpy as np
+from sklearn.cluster import AgglomerativeClustering
+from sklearn.preprocessing import StandardScaler
+
 
 def build_html_from_content_list(pages: list[list[dict[str, Any]]]) -> str:
     """Build extraction HTML with stable ids and MinerU metadata."""
 
+    blocks = classify_markdown_blocks(markdown_blocks(pages))
     return "\n".join(
         rendered
-        for page_idx, page in enumerate(pages)
-        if (rendered := render_page(page, page_idx))
+        for page_idx in range(len(pages))
+        if (rendered := render_page_from_markdown_blocks(blocks, page_idx))
     )
 
 
@@ -195,33 +200,344 @@ def build_semantic_document_from_blocks(
 
 
 def build_markdown_from_content_list(pages: list[list[dict[str, Any]]]) -> str:
-    """Build plain markdown-like text for backend storage and audit views."""
+    """Build readable markdown from MinerU content_list_v2 pages."""
+
+    blocks = classify_markdown_blocks(markdown_blocks(pages))
+    if not blocks:
+        return ""
 
     lines: list[str] = []
-    for page in pages:
-        for block in page:
+    for block in blocks:
+        block_type = block["type"]
+        text = block["text"]
+        source = block["block"]
+        if block_type == "title":
+            if not markdown_heading_level(block):
+                lines.append(f"**{text}**")
+            else:
+                level = markdown_heading_level(block) or 2
+                lines.append(f"{'#' * level} {text}")
+        elif block_type == "paragraph" and markdown_is_body_subheading(block):
+            lines.append(f"**{text}**")
+        elif block_type in {"index", "list"}:
+            for item in text.splitlines():
+                if item.strip():
+                    lines.append(f"- {item.strip()}")
+        elif block_type == "table":
+            lines.append(source.get("content", {}).get("html") or text)
+        else:
+            lines.append(text)
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def markdown_blocks(
+    pages: list[list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Flatten rendered MinerU blocks with layout features for markdown rules."""
+
+    rendered_blocks: list[dict[str, Any]] = []
+    for page_idx, page in enumerate(pages):
+        page_no = page_idx + 1
+        for block_idx, block in enumerate(page):
             if not should_render_block(block):
                 continue
             text = block_text(block)
             if not text:
                 continue
-            block_type = block.get("type")
-            if block_type == "title":
-                level = int(block.get("content", {}).get("level") or 2)
-                level = max(1, min(level, 6))
-                lines.append(f"{'#' * level} {text}")
-            elif block_type in {"index", "list"}:
-                for item in text.splitlines():
-                    if item.strip():
-                        lines.append(f"- {item.strip()}")
-            else:
-                lines.append(text)
-        lines.append("")
-    return "\n".join(lines).strip()
+            rendered_blocks.append(markdown_block_from_source(block, page_no, block_idx))
+    return rendered_blocks
 
+
+def classify_markdown_blocks(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Classify renderable blocks once so HTML and Markdown share structure."""
+
+    toc_pages = detect_table_of_contents_pages(blocks)
+    h2_cluster_keys = infer_global_h2_cluster_keys(blocks, toc_pages)
+    for block in blocks:
+        is_toc_entry = block["page_no"] in toc_pages and not is_table_of_contents_heading(block)
+        block["is_toc_entry"] = is_toc_entry
+        block["heading_level"] = infer_markdown_heading_level(block, h2_cluster_keys)
+        if is_toc_entry and not is_table_of_contents_heading(block):
+            block["heading_level"] = None
+    return blocks
+
+
+def infer_global_h2_cluster_keys(
+    blocks: list[dict[str, Any]], toc_pages: set[int]
+) -> set[tuple[int, int]] | None:
+    candidates: list[dict[str, Any]] = []
+    for block in blocks:
+        if block.get("type") != "title":
+            continue
+        if block["page_no"] in toc_pages and not is_table_of_contents_heading(block):
+            continue
+        if is_table_of_contents_heading(block):
+            continue
+        text = normalize_inline_space(block.get("text") or "")
+        if not text or not is_global_h2_candidate(block, text):
+            continue
+        height, _width, chars, line_count, _x0, _y0 = block.get(
+            "features", [0, 0, 0, 1, 0, 0]
+        )
+        if int(line_count) > 2 or int(chars) > 100 or int(height) <= 0:
+            continue
+        candidates.append(block)
+    if len(candidates) < 2:
+        return None
+    cluster_keys = split_h2_cluster_keys(candidates)
+    if not cluster_keys:
+        return None
+    return cluster_keys
+
+
+def split_h2_cluster_keys(blocks: list[dict[str, Any]]) -> set[tuple[int, int]]:
+    if len(blocks) < 2:
+        return set()
+    feature_rows = [h2_cluster_features(block) for block in blocks]
+    if len({tuple(row) for row in feature_rows}) < 2:
+        return set()
+    features = StandardScaler().fit_transform(np.asarray(feature_rows, dtype=float))
+    labels = AgglomerativeClustering(n_clusters=2).fit_predict(features)
+    clusters = []
+    for label in sorted(set(labels)):
+        cluster_blocks = [block for block, item_label in zip(blocks, labels) if item_label == label]
+        clusters.append((h2_cluster_score(cluster_blocks), cluster_blocks))
+    clusters.sort(key=lambda item: item[0], reverse=True)
+    selected_score, selected_blocks = clusters[0]
+    other_score, _other_blocks = clusters[1]
+    if selected_score <= other_score:
+        return set()
+    return {
+        (int(block["page_no"]), int(block["block_idx"]))
+        for block in selected_blocks
+    }
+
+
+def h2_cluster_features(block: dict[str, Any]) -> list[float]:
+    text = normalize_inline_space(block.get("text") or "")
+    height, width, chars, line_count, x0, _y0 = block.get(
+        "features", [0, 0, 0, 1, 0, 0]
+    )
+    return [
+        float(height),
+        float(width),
+        -float(x0),
+        -float(chars),
+        1.0 if has_major_section_marker(text) else 0.0,
+        -float(line_count),
+    ]
+
+
+def h2_cluster_score(blocks: list[dict[str, Any]]) -> float:
+    if not blocks:
+        return float("-inf")
+    rows = [h2_cluster_features(block) for block in blocks]
+    means = [sum(values) / len(values) for values in zip(*rows)]
+    return means[0] + 0.02 * means[1] + 10.0 * means[4] + 0.01 * means[2]
+
+
+def has_major_section_marker(text: str) -> bool:
+    return bool(re.match(r"^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩIVX]+[．.]\s*", text))
+
+
+def split_high_height_band(heights: list[int]) -> list[int]:
+    unique_heights = sorted(set(heights))
+    if len(unique_heights) < 2:
+        return []
+    best_gap_idx = max(
+        range(len(unique_heights) - 1),
+        key=lambda idx: unique_heights[idx + 1] - unique_heights[idx],
+    )
+    lower_max = unique_heights[best_gap_idx]
+    upper_min = unique_heights[best_gap_idx + 1]
+    if upper_min - lower_max < 4:
+        return []
+    high_band = [height for height in heights if height >= upper_min]
+    low_band = [height for height in heights if height <= lower_max]
+    if not high_band or not low_band:
+        return []
+    return high_band
+
+
+def is_global_h2_candidate(block: dict[str, Any], text: str) -> bool:
+    source_level = int(block["block"].get("content", {}).get("level") or 0)
+    if source_level == 1:
+        return False
+    if is_deadline_body_line(text):
+        return False
+    if re.search(r"[。！？!?]\s*$", text):
+        return False
+    if re.match(r"^[0-9０-９]+[）)]\s*", text):
+        return False
+    if re.match(r"^[（(][0-9０-９一二三四五六七八九十A-Za-z]+[)）]\s*", text):
+        return False
+    if re.match(r"^【.+】$", text) or re.match(r"^<<.+>>$", text):
+        return False
+    return True
+
+
+def detect_table_of_contents_pages(blocks: list[dict[str, Any]]) -> set[int]:
+    toc_pages: set[int] = set()
+    for block in blocks:
+        if is_table_of_contents_heading(block):
+            toc_pages.add(int(block["page_no"]))
+    return toc_pages
+
+
+def is_table_of_contents_heading(block: dict[str, Any]) -> bool:
+    if block.get("type") != "title":
+        return False
+    text = normalize_table_of_contents_text(block.get("text") or "")
+    return text in {"目次", "目録", "もくじ", "contents", "tableofcontents"}
+
+
+def normalize_table_of_contents_text(text: str) -> str:
+    return re.sub(r"\s+", "", normalize_inline_space(text)).lower()
+
+
+def infer_markdown_heading_level(
+    block: dict[str, Any], h2_cluster_keys: set[tuple[int, int]] | None = None
+) -> int | None:
+    if block.get("type") != "title":
+        return None
+    if is_table_of_contents_heading(block):
+        return markdown_title_level(block)
+    if block_in_h2_cluster_keys(block, h2_cluster_keys):
+        return 2
+    if markdown_is_body_subheading(block):
+        return None
+    if h2_cluster_keys is not None:
+        return None
+    return markdown_title_level(block)
+
+
+def block_in_h2_cluster_keys(
+    block: dict[str, Any], h2_cluster_keys: set[tuple[int, int]] | None
+) -> bool:
+    if h2_cluster_keys is None:
+        return False
+    return (int(block["page_no"]), int(block["block_idx"])) in h2_cluster_keys
+
+
+def markdown_heading_level(block: dict[str, Any]) -> int | None:
+    level = block.get("heading_level")
+    if level is None:
+        return None
+    return max(1, min(int(level), 6))
+
+
+def markdown_block_from_source(
+    block: dict[str, Any],
+    page_no: int,
+    block_idx: int,
+) -> dict[str, Any]:
+    text = block_text(block)
+    return {
+        "block": block,
+        "page_no": page_no,
+        "block_idx": block_idx,
+        "type": str(block.get("type", "unknown")),
+        "text": text,
+        "features": markdown_layout_features(block, text),
+    }
+
+
+def markdown_title_level(block: dict[str, Any]) -> int:
+    source = block["block"]
+    source_level = source.get("content", {}).get("level")
+    if source_level is not None:
+        return max(1, min(int(source_level), 6))
+    return 2
+
+
+def markdown_is_body_subheading(block: dict[str, Any]) -> bool:
+    text = normalize_inline_space(block.get("text") or "")
+    if not text:
+        return False
+    block_type = block.get("type")
+    height, _width, chars, line_count, _x0, _y0 = block.get("features", [0, 0, 0, 1, 0, 0])
+    if block_type == "paragraph":
+        return (
+            int(line_count) <= 2
+            and int(chars) <= 120
+            and int(height) <= 60
+            and bool(re.match(r"^[0-9０-９]+[．.]\s*", text))
+        )
+    if (
+        block_type == "title"
+        and int(height) <= 18
+        and int(chars) <= 80
+        and is_compact_numbered_body_title(text)
+    ):
+        return True
+    if block_type == "title" and is_deadline_body_line(text):
+        return True
+    if text in {"目次", "募集要項"}:
+        return False
+    if re.match(r"^<<.+>>$", text):
+        return True
+    if re.match(r"^【.+】$", text):
+        return True
+    if re.match(r"^[（(][0-9０-９一二三四五六七八九十A-Za-z]+[)）]\s*", text):
+        return True
+    if re.match(r"^[0-9０-９]+[）)]\s*", text):
+        return True
+    if re.match(r"^[A-Z]$", text):
+        return True
+    if re.match(r"^[a-z]$", text):
+        return True
+    source = block["block"]
+    source_level = int(source.get("content", {}).get("level") or 0)
+    if source_level >= 2 and len(re.sub(r"\s+", "", text)) <= 12:
+        if not re.match(r"^\d+[．.]\s*", text):
+            return True
+    return False
+
+
+def is_compact_numbered_body_title(text: str) -> bool:
+    if re.match(r"^[0-9０-９]+[．]\s*", text):
+        return True
+    return bool(re.match(r"^[0-9０-９]+\.[^\s0-9０-９]", text))
+
+
+def is_deadline_body_line(text: str) -> bool:
+    normalized = normalize_inline_space(text)
+    has_deadline_label = any(label in normalized for label in ("提出期限", "締切", "期限"))
+    has_date = bool(
+        re.search(r"[12１２][0-9０-９]{3}\s*年\s*[0-9０-９]{1,2}\s*月\s*[0-9０-９]{1,2}\s*日", normalized)
+    )
+    has_time_or_until = bool(
+        re.search(r"[0-9０-９]{1,2}\s*[:：]\s*[0-9０-９]{2}", normalized)
+        or "まで" in normalized
+    )
+    return has_deadline_label and has_date and has_time_or_until
+
+
+def markdown_layout_features(block: dict[str, Any], text: str) -> list[int]:
+    bbox = block.get("bbox") or [0, 0, 0, 0]
+    x0, y0, x1, y1 = [int(value or 0) for value in bbox[:4]]
+    visible_text = re.sub(r"<[^>]+>", "", text)
+    chars = len(re.sub(r"\s+", "", visible_text))
+    line_count = max(1, text.count("\n") + 1)
+    return [y1 - y0, x1 - x0, chars, line_count, x0, y0]
 
 def render_page(blocks: list[dict[str, Any]], page_idx: int) -> str:
-    rendered = render_blocks_with_sections(blocks, page_idx)
+    page_blocks = [
+        markdown_block_from_source(block, page_idx + 1, block_idx)
+        for block_idx, block in enumerate(blocks)
+        if should_render_block(block)
+    ]
+    return render_page_from_markdown_blocks(classify_markdown_blocks(page_blocks), page_idx)
+
+
+def render_page_from_markdown_blocks(
+    blocks: list[dict[str, Any]], page_idx: int
+) -> str:
+    rendered = render_blocks_with_sections(
+        [block for block in blocks if block["page_no"] == page_idx + 1],
+        page_idx,
+    )
     if not rendered:
         return ""
     page_no = page_idx + 1
@@ -236,11 +552,10 @@ def render_blocks_with_sections(blocks: list[dict[str, Any]], page_idx: int) -> 
     rendered: list[str] = []
     open_section = False
     open_subsection = False
-    for block_idx, block in enumerate(blocks):
-        if not should_render_block(block):
-            continue
-        block_id = f"p{page_idx + 1:03d}_b{block_idx:03d}"
-        if is_section_heading(block):
+    for markdown_block in blocks:
+        block_id = f"p{page_idx + 1:03d}_b{markdown_block['block_idx']:03d}"
+        heading_level = markdown_heading_level(markdown_block)
+        if heading_level == 2:
             if open_subsection:
                 rendered.append("</section>")
                 open_subsection = False
@@ -252,7 +567,7 @@ def render_blocks_with_sections(blocks: list[dict[str, Any]], page_idx: int) -> 
                 f'aria-labelledby="{block_id}">'
             )
             open_section = True
-        elif is_subsection_heading(block):
+        elif heading_level == 3:
             if open_subsection:
                 rendered.append("</section>")
             rendered.append(
@@ -261,12 +576,21 @@ def render_blocks_with_sections(blocks: list[dict[str, Any]], page_idx: int) -> 
                 f'aria-labelledby="{block_id}">'
             )
             open_subsection = True
-        rendered.append(render_block(block, page_idx, block_idx))
+        rendered.append(render_markdown_block(markdown_block, page_idx))
     if open_subsection:
         rendered.append("</section>")
     if open_section:
         rendered.append("</section>")
     return rendered
+
+
+def render_markdown_block(markdown_block: dict[str, Any], page_idx: int) -> str:
+    return render_block(
+        markdown_block["block"],
+        page_idx,
+        int(markdown_block["block_idx"]),
+        markdown_block=markdown_block,
+    )
 
 
 def is_section_heading(block: dict[str, Any]) -> bool:
@@ -283,22 +607,36 @@ def heading_level_from_block(block: dict[str, Any]) -> int | None:
     return int(block.get("content", {}).get("level") or 2)
 
 
-def render_block(block: dict[str, Any], page_idx: int, block_idx: int) -> str:
+def render_block(
+    block: dict[str, Any],
+    page_idx: int,
+    block_idx: int,
+    *,
+    markdown_block: dict[str, Any] | None = None,
+) -> str:
     block_id = f"p{page_idx + 1:03d}_b{block_idx:03d}"
     block_type = block.get("type", "unknown")
     content = block.get("content", {})
     attrs = block_attrs(block_id, page_idx, block)
 
     if block_type == "title":
-        level = int(content.get("level") or 2)
-        level = max(1, min(level, 6))
+        if markdown_block is None:
+            markdown_block = classify_markdown_blocks(
+                [markdown_block_from_source(block, page_idx + 1, block_idx)]
+            )[0]
+        level = markdown_heading_level(markdown_block)
         text = flatten_text(content.get("title_content"))
+        if level is None:
+            return f"<p {attrs}><strong>{html.escape(text)}</strong></p>"
+        level = max(1, min(level, 6))
         if level >= 4:
             return f"<p {attrs}>{html.escape(text)}</p>"
         return f"<h{level} {attrs}>{html.escape(text)}</h{level}>"
 
     if block_type == "paragraph":
         text = flatten_text(content.get("paragraph_content"))
+        if markdown_is_body_subheading(markdown_block_from_source(block, page_idx + 1, block_idx)):
+            return f"<p {attrs}><strong>{html.escape(text)}</strong></p>"
         return f"<p {attrs}>{html.escape(text)}</p>"
 
     if block_type in {"index", "list"}:
