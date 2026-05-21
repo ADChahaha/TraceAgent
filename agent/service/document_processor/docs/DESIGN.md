@@ -116,11 +116,11 @@ MinerU content_list_v2 pages
   -> 从非目录 title 候选里去掉封面标题、正文句子、日期期限行和明显正文小标题
   -> 对剩余 title 候选按归一化 height/width/chars/line_count/x0 做层次聚类，height 权重为 2，不使用 y0
   -> 选出更像主章节的高置信簇作为 h2 heading_level
-  -> 目录条目和不在 h2 簇里的 title 没有 heading_level，只作为正文加粗行
+  -> 目录条目和不在 h2 簇里的 title 没有 heading_level，只作为普通正文段落
   -> 页面 wrapper 只保留 `section.page` 和 `data-page` 定位属性，不主动插入 `Page N` 可见页码
   -> HTML 和 Markdown 复用同一份 rendered block 分类结果
   -> 真 heading 才输出 h1/h2/h3 并参与 section/subsection 包裹
-  -> 正文小标题输出为 `<p><strong>...</strong></p>`，不参与 outline_tree
+  -> 正文小标题输出为普通 `<p>...</p>`，不参与 outline_tree
   -> 目录页条目保留可见文本，但不打开 section/subsection
   -> 全局 h2 高度档 title 打开 <section id="{block_id}_section">，标题本身保留为 <h2 id="{block_id}">
   -> level=3 title 打开 <section id="{block_id}_subsection">，标题本身保留为 <h3 id="{block_id}">
@@ -160,20 +160,20 @@ MinerU content_list_v2 pages
   -> 将归一化后的 height 乘以 2，强调真实章节标题和正文局部标题的字号差异
   -> 对候选做 AgglomerativeClustering(n_clusters=2, linkage="ward")
   -> 按簇内平均 height、与候选整体中位 x0 的距离和平均字符数选择 h2 章节簇
-  -> 不在 h2 簇里的 title 即使 MinerU 标成 level=2，也降级成加粗正文行
+  -> 不在 h2 簇里的 title 即使 MinerU 标成 level=2，也降级成普通正文行
   -> 以 `1）`、`【...】`、`<<...>>`、括号编号、单字母标号等样式识别正文里的小标题
   -> `2.日程` 这类 ASCII 点后无空格的紧凑编号 title 按正文小标题处理，避免把条目标题当成大章
   -> 小字号的 `title + 1．/2．/3．` 编号块也会被视为正文小标题，避免把列表内部项目当成大章
   -> 含提出期限/締切、完整日期和时间或“まで”的提示行，即使 MinerU 标成 title，也作为正文提示行
   -> paragraph 如果是短的独立 `1．` / `2．` 编号块，也作为正文小标题候选处理
-  -> 这些正文小标题不再当成 Markdown heading，而是降级为独立的加粗行
+  -> 这些正文小标题不再当成 Markdown heading，统一降级为普通正文行
   -> 真标题继续按 heading 输出，保持原文顺序和正文内容紧跟其后
   -> paragraph/list/table 保持在原文顺序中，跟随对应标题输出
 ```
 
 标题层级不是直接照抄 MinerU 的 `level`。MinerU 在部分 PDF 里会把 `1．`
 大章、`1）` 小节和 `【注意事項】` 都标成同一层；Markdown 会保留原文顺序，
-但会把正文里的小标题降级成加粗行，避免把它们和真正的章节标题混在一起。
+但会把正文里的小标题从 heading 降级，避免把它们和真正的章节标题混在一起。
 这样用户查看 Markdown 时能看到更接近人类阅读的标题结构。
 
 ## Table Handling

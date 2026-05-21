@@ -904,8 +904,12 @@ function getReplayActionSeq(action: ReplayAction): number | null {
 
 function getReplayActionIdentity(action: ReplayAction): string {
   const actionType = getActionType(action);
-  if (!actionType || actionType === "model_message") {
+  if (!actionType) {
     return "";
+  }
+  if (actionType === "model_message") {
+    const reason = getActionReason(action);
+    return reason ? stableStringify({ tool: actionType, reason }) : "";
   }
   const args = readObject(action.args) ?? {};
   const result = readObject(action.result);

@@ -10,7 +10,7 @@
   -> 只继续读取 result/replay/review，不主动读取 trace/audit；处理中任务即使 has_trace=false 也会尝试读取 replay，让原文 partial replay 能先显示
   -> 如果 summary 仍是 pending/processing 或 stream.state=running，TaskDetail 在进入或刷新详情页时固定用 after_seq=0 打开任务事件 EventSource，让 backend 从头重放当前任务事件
   -> TaskDetail 消费 backend SSE 的命名事件，例如 `task.stage_changed` 和 `agent.event`；事件 seq 只推进内部游标和 liveActions 去重，不会让每条 live event 重建 EventSource
-  -> replay 尚未生成时仍显示常规 Agent 工作区和 `Thinking`，一旦 replay 可用就原地渲染 Agent 工作区，收到 `agent.event` 时只把非空 model_message 和 tool_completed/tool_failed 追加为 live tool/message；tool_started 不显示，source_indexed 只触发 detail 刷新；live action 再按 seq 和工具参数指纹与 replay.actions 去重
+  -> replay 尚未生成时仍显示常规 Agent 工作区和 `Thinking`，一旦 replay 可用就原地渲染 Agent 工作区，收到 `agent.event` 时只把非空 model_message 和 tool_completed/tool_failed 追加为 live tool/message；tool_started 不显示，source_indexed 只触发 detail 刷新；live action 再按 seq、model_message 内容和工具参数指纹与 replay.actions 去重
   -> TaskDetail 用 GET /tasks 与 localStorage 合并最近任务
   -> ReplayReview 默认渲染“左侧任务栏 + 中间 Agent”，全局顶栏只显示任务标题和最右侧 Review 图标按钮，不显示 `Review` tab 或当前文件名
   -> 左侧任务栏显示最近任务和“新任务”入口，只能由顶部左侧 toggle 手动开关
@@ -83,6 +83,7 @@
 - `处理中任务详情先显示常规对话工作台和 Thinking，再自动刷新到 replay`：验证任务详情页进入运行中任务时不显示“正在处理任务...”占位，而是显示常规 Agent 工作区和 `Thinking`，并用轮询兜底刷新到 replay/result 可用。
 - `处理中任务详情会消费事件流并实时追加 Agent 工具输出`：验证任务详情页会监听 backend 真实 SSE 命名事件，收到 `agent.event` 后实时追加工具输出，同时阶段事件和 live event 都不会导致 EventSource 逐条重建。
 - `刷新从头回放时不把同一工具的 start、completed 和 replay action 重复显示`：验证刷新后 SSE 从 0 重放时，前端不会把同一工具在 partial replay、tool_started 和 tool_completed 中显示成多条，只保留一条可见工具记录。
+- `SSE 结束刷新 replay 后不重复显示同一 model_message`：验证任务结束触发 detail refresh 后，如果 terminal replay 带回了和 live SSE 相同的模型文字，即使两边 seq 来自不同系统，也只保留一段可见文字。
 - `空 model_message 不渲染成 Thinking 工具行，前后工具继续按组折叠`：验证 backend SSE 里的空内容 model_message 会被丢弃，不占用文字段，也不会作为 `model_message` 工具混入 tool group；后续连续工具仍按真实工具数量折叠。
 - `处理中 source_indexed 事件会刷新出原文 replay`：验证 live source index 到达后，TaskDetail 会刷新 partial replay，使运行中的任务也能拿到原文 HTML 和 selector 映射。
 - `实时追加工具输出时，用户不在底部就保持当前阅读位置`：验证 live tool 增加时，如果用户已经离开底部阅读旧内容，Agent 文字流不会改写当前 `scrollTop`。

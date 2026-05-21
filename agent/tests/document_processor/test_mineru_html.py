@@ -244,9 +244,10 @@ def test_build_html_renders_body_subheadings_without_section_nodes():
     assert "1）出願手順</h2>" not in result
     assert "1．出願期間中に Web 出願システムにより入力してください。</h2>" not in result
     assert "3．「エッセイ」については以下の指示に従ってください。</h2>" not in result
-    assert "<strong>1）出願手順</strong>" in result
-    assert "<strong>1．出願期間中に Web 出願システムにより入力してください。</strong>" in result
-    assert "<strong>3．「エッセイ」については以下の指示に従ってください。</strong>" in result
+    assert "<p id=\"p001_b001\"" in result
+    assert ">1）出願手順</p>" in result
+    assert ">1．出願期間中に Web 出願システムにより入力してください。</p>" in result
+    assert ">3．「エッセイ」については以下の指示に従ってください。</p>" in result
 
 
 def test_build_html_keeps_table_of_contents_entries_out_of_outline_headings():
@@ -310,8 +311,8 @@ def test_build_html_keeps_table_of_contents_entries_out_of_outline_headings():
     assert "目次</h2>" in result
     assert "p001_b001_section" not in result
     assert "p001_b003_section" not in result
-    assert "<strong>1．募集人員および試験関連日程等</strong>" in result
-    assert "<strong>2．出願資格</strong>" in result
+    assert ">1．募集人員および試験関連日程等</p>" in result
+    assert ">2．出願資格</p>" in result
     assert "1）出願受付期間 P.2" in result
     assert '<section class="section section-level-2" id="p002_b000_section"' in result
 
@@ -359,9 +360,10 @@ def test_build_markdown_demotes_deadline_title_to_body_line():
     markdown = build_markdown_from_content_list(pages)
 
     assert "## 提出期限 2025 年9月9日（火） 日本時間 23:59 まで" not in markdown
-    assert "**提出期限 2025 年9月9日（火） 日本時間 23:59 まで**" in markdown
+    assert "提出期限 2025 年9月9日（火） 日本時間 23:59 まで" in markdown
+    assert "**提出期限 2025 年9月9日（火） 日本時間 23:59 まで**" not in markdown
     assert "提出期限 2025 年9月9日（火） 日本時間 23:59 まで</h2>" not in html
-    assert "<strong>提出期限 2025 年9月9日（火） 日本時間 23:59 まで</strong>" in html
+    assert ">提出期限 2025 年9月9日（火） 日本時間 23:59 まで</p>" in html
 
 
 def test_build_markdown_demotes_compact_numbered_title_with_ascii_dot():
@@ -390,9 +392,10 @@ def test_build_markdown_demotes_compact_numbered_title_with_ascii_dot():
     markdown = build_markdown_from_content_list(pages)
 
     assert "## 2.日程" not in markdown
-    assert "**2.日程**" in markdown
+    assert "2.日程" in markdown
+    assert "**2.日程**" not in markdown
     assert "2.日程</h2>" not in html
-    assert "<strong>2.日程</strong>" in html
+    assert ">2.日程</p>" in html
 
 
 def test_build_markdown_uses_global_h2_layout_band_and_bolds_other_titles():
@@ -445,8 +448,10 @@ def test_build_markdown_uses_global_h2_layout_band_and_bolds_other_titles():
 
     assert "## Ⅰ．入学試験方式・募集人数・日程等" in markdown
     assert "## Ⅱ．出願資格・要件" in markdown
-    assert "**1．入学試験方式・募集人数**" in markdown
-    assert "**2．日程**" in markdown
+    assert "1．入学試験方式・募集人数" in markdown
+    assert "2．日程" in markdown
+    assert "**1．入学試験方式・募集人数**" not in markdown
+    assert "**2．日程**" not in markdown
     assert "## 1．入学試験方式・募集人数" not in markdown
     assert "## 2．日程" not in markdown
     assert 'id="p001_b000_section"' in html
@@ -484,8 +489,10 @@ def test_build_markdown_clusters_h2_band_with_width_and_indent_features():
 
     assert "## Ⅰ．入学試験方式・募集人数・日程等" in markdown
     assert "## Ⅱ．出願資格・要件" in markdown
-    assert "**学位授与方針（ディプロマ・ポリシー）**" in markdown
-    assert "**1．入学試験方式・募集人数**" in markdown
+    assert "学位授与方針（ディプロマ・ポリシー）" in markdown
+    assert "**学位授与方針（ディプロマ・ポリシー）**" not in markdown
+    assert "1．入学試験方式・募集人数" in markdown
+    assert "**1．入学試験方式・募集人数**" not in markdown
 
 
 def test_build_markdown_keeps_same_height_body_subheadings_out_of_h2_cluster():
@@ -523,8 +530,10 @@ def test_build_markdown_keeps_same_height_body_subheadings_out_of_h2_cluster():
     assert "## Ⅰ．入学試験方式・募集人数・日程等" in markdown
     assert "## 1．募集人員および試験関連日程等" not in markdown
     assert "## 2．出願資格" not in markdown
-    assert "**1．募集人員および試験関連日程等**" in markdown
-    assert "**2．出願資格**" in markdown
+    assert "1．募集人員および試験関連日程等" in markdown
+    assert "2．出願資格" in markdown
+    assert "**1．募集人員および試験関連日程等**" not in markdown
+    assert "**2．出願資格**" not in markdown
 
 
 def test_build_markdown_demotes_angle_bracket_title_after_agglomerative_clustering():
@@ -578,7 +587,8 @@ def test_build_markdown_demotes_angle_bracket_title_after_agglomerative_clusteri
     assert "## 5．合格発表" in markdown
     assert "## 6．入学手続" in markdown
     assert "## ＜選考料の返還ができる場合＞" not in markdown
-    assert "**＜選考料の返還ができる場合＞**" in markdown
+    assert "＜選考料の返還ができる場合＞" in markdown
+    assert "**＜選考料の返還ができる場合＞**" not in markdown
     assert "＜返還手続き＞" in markdown
 
 
@@ -949,8 +959,10 @@ def test_build_markdown_from_content_list_separates_true_titles_from_body_subhea
     assert "# 立教大学大学院入試要項" in result
     assert "# 人工知能科学研究科（一般入学試験・社会人入学試験）（秋季実施分）博士課程前期課程" in result
     assert "## 1．募集人員および試験関連日程等" in result
-    assert "**1）出願受付期間**" in result
-    assert "**【募集人員および試験日程に関する注意事項】**" in result
+    assert "1）出願受付期間" in result
+    assert "【募集人員および試験日程に関する注意事項】" in result
+    assert "**1）出願受付期間**" not in result
+    assert "**【募集人員および試験日程に関する注意事項】**" not in result
     assert "#### 1）出願受付期間" not in result
     assert "#### 【募集人員および試験日程に関する注意事項】" not in result
     assert "本研究科博士課程前期課程の入学試験は一般入学試験として実施します。" in result
@@ -1007,10 +1019,14 @@ def test_build_markdown_from_content_list_promotes_numbered_paragraph_body_items
 
     result = build_markdown_from_content_list(pages)
 
-    assert "**3）出願書類**" in result
-    assert "**1．出願期間中に Web 出願システムにより入力してください。**" in result
-    assert "**2．Web 出願システムでは、志願票入力と写真のアップロード、および選考料の納入が完了すると、「マイページ」が生成されます。**" in result
-    assert "**3．「エッセイ」については以下の指示に従ってください。**" in result
+    assert "3）出願書類" in result
+    assert "1．出願期間中に Web 出願システムにより入力してください。" in result
+    assert "2．Web 出願システムでは、志願票入力と写真のアップロード、および選考料の納入が完了すると、「マイページ」が生成されます。" in result
+    assert "3．「エッセイ」については以下の指示に従ってください。" in result
+    assert "**3）出願書類**" not in result
+    assert "**1．出願期間中に Web 出願システムにより入力してください。**" not in result
+    assert "**2．Web 出願システムでは、志願票入力と写真のアップロード、および選考料の納入が完了すると、「マイページ」が生成されます。**" not in result
+    assert "**3．「エッセイ」については以下の指示に従ってください。**" not in result
     assert "## 3．「エッセイ」については以下の指示に従ってください。" not in result
 
 

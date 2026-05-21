@@ -1847,6 +1847,98 @@ it("刷新从头回放时不把同一工具的 start、completed 和 replay acti
   expect(screen.getAllByText("Read passage")).toHaveLength(1);
 });
 
+it("SSE 结束刷新 replay 后不重复显示同一 model_message", async () => {
+  const processingDetail: TaskDetailData = {
+    summary: {
+      task_id: "task-no-duplicate-message",
+      status: "processing",
+      stage: "extraction",
+      has_result: false,
+      has_trace: false,
+      error_message: null,
+      stream: {
+        state: "running",
+        last_event_seq: 2
+      }
+    },
+    result: null,
+    trace: null,
+    replay: null,
+    audit: null
+  };
+  const completedDetail: TaskDetailData = {
+    ...processingDetail,
+    summary: {
+      ...processingDetail.summary,
+      status: "completed",
+      stage: "done",
+      has_result: true,
+      has_trace: true,
+      stream: {
+        state: "ended",
+        last_event_seq: 9
+      }
+    },
+    replay: {
+      ...baseReplay,
+      task_id: "task-no-duplicate-message",
+      actions: [
+        {
+          tool_name: "model_message",
+          reason: "这一段介绍出願手続。",
+          result: { ok: true },
+          metadata: { seq: 1, event_type: "model_message" }
+        }
+      ]
+    }
+  };
+  const eventSources: FakeEventSource[] = [];
+  let shouldReturnCompleted = false;
+  const createTaskEventSource = jest.fn((_taskId: string, afterSeq = 0) => {
+    const eventSource = new FakeEventSource(String(afterSeq));
+    eventSources.push(eventSource);
+    return eventSource as unknown as EventSource;
+  });
+  const loadTaskDetail = jest.fn(async () => shouldReturnCompleted ? completedDetail : processingDetail);
+
+  renderTaskDetail(processingDetail, {
+    taskId: "task-no-duplicate-message",
+    createTaskEventSource,
+    loadTaskDetail
+  });
+
+  await act(async () => {
+    eventSources[0].emitEvent("agent.event", {
+      seq: 7,
+      task_id: "task-no-duplicate-message",
+      type: "agent.event",
+      status: "processing",
+      stage: "extraction",
+      payload: {
+        type: "model_message",
+        content: "这一段介绍出願手続。"
+      }
+    });
+  });
+
+  expect(await screen.findByText("这一段介绍出願手続。")).toBeInTheDocument();
+
+  shouldReturnCompleted = true;
+  await act(async () => {
+    eventSources[0].emitEvent("task.completed", {
+      seq: 9,
+      task_id: "task-no-duplicate-message",
+      type: "task.completed",
+      status: "completed",
+      stage: "done",
+      payload: {}
+    });
+  });
+
+  await waitFor(() => expect(loadTaskDetail).toHaveBeenCalledTimes(2));
+  expect(screen.getAllByText("这一段介绍出願手続。")).toHaveLength(1);
+});
+
 it("空 model_message 不渲染成 Thinking 工具行，前后工具继续按组折叠", async () => {
   const processingDetail: TaskDetailData = {
     summary: {

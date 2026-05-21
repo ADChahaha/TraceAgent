@@ -213,12 +213,12 @@ def build_markdown_from_content_list(pages: list[list[dict[str, Any]]]) -> str:
         source = block["block"]
         if block_type == "title":
             if not markdown_heading_level(block):
-                lines.append(f"**{text}**")
+                lines.append(text)
             else:
                 level = markdown_heading_level(block) or 2
                 lines.append(f"{'#' * level} {text}")
         elif block_type == "paragraph" and markdown_is_body_subheading(block):
-            lines.append(f"**{text}**")
+            lines.append(text)
         elif block_type in {"index", "list"}:
             for item in text.splitlines():
                 if item.strip():
@@ -610,7 +610,7 @@ def render_block(
         level = markdown_heading_level(markdown_block)
         text = flatten_text(content.get("title_content"))
         if level is None:
-            return f"<p {attrs}><strong>{html.escape(text)}</strong></p>"
+            return f"<p {attrs}>{html.escape(text)}</p>"
         level = max(1, min(level, 6))
         if level >= 4:
             return f"<p {attrs}>{html.escape(text)}</p>"
@@ -619,7 +619,7 @@ def render_block(
     if block_type == "paragraph":
         text = flatten_text(content.get("paragraph_content"))
         if markdown_is_body_subheading(markdown_block_from_source(block, page_idx + 1, block_idx)):
-            return f"<p {attrs}><strong>{html.escape(text)}</strong></p>"
+            return f"<p {attrs}>{html.escape(text)}</p>"
         return f"<p {attrs}>{html.escape(text)}</p>"
 
     if block_type in {"index", "list"}:
