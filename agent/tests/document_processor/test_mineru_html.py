@@ -6,7 +6,6 @@ from service.document_processor.mineru_html import (
     build_semantic_document_from_blocks,
     build_semantic_document_from_content_list,
     extract_inline_id,
-    split_high_height_band,
 )
 
 
@@ -528,8 +527,59 @@ def test_build_markdown_keeps_same_height_body_subheadings_out_of_h2_cluster():
     assert "**2．出願資格**" in markdown
 
 
-def test_split_high_height_band_uses_two_cluster_separation():
-    assert split_high_height_band([25, 24, 16, 16, 15, 15]) == [25, 24]
+def test_build_markdown_demotes_angle_bracket_title_after_agglomerative_clustering():
+    pages = [
+        [
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "4．入学試験"}],
+                    "level": 2,
+                },
+                "bbox": [109, 52, 295, 77],
+            },
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "5．合格発表"}],
+                    "level": 2,
+                },
+                "bbox": [110, 49, 297, 76],
+            },
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "6．入学手続"}],
+                    "level": 2,
+                },
+                "bbox": [109, 52, 295, 77],
+            },
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "＜選考料の返還ができる場合＞"}],
+                    "level": 2,
+                },
+                "bbox": [109, 457, 366, 473],
+            },
+            {
+                "type": "paragraph",
+                "content": {
+                    "paragraph_content": [{"type": "text", "content": "＜返還手続き＞"}],
+                },
+                "bbox": [109, 551, 242, 567],
+            },
+        ]
+    ]
+
+    markdown = build_markdown_from_content_list(pages)
+
+    assert "## 4．入学試験" in markdown
+    assert "## 5．合格発表" in markdown
+    assert "## 6．入学手続" in markdown
+    assert "## ＜選考料の返還ができる場合＞" not in markdown
+    assert "**＜選考料の返還ができる場合＞**" in markdown
+    assert "＜返還手続き＞" in markdown
 
 
 def test_build_html_skips_pages_without_visible_content():

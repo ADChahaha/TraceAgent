@@ -11,7 +11,7 @@ MinerU pages
   -> 过滤 image/page_number/page_header/page_footer 这类不可用于推理的噪声
   -> title/paragraph/list/table 渲染成 HTML、Markdown 和 blocks
   -> 先把 rendered blocks 统一标注为目录页条目、正文小标题或真实 heading
-  -> title 不再直接照抄 MinerU level；先对全局 title 候选做二分类聚类，高置信主章节簇才进入 h2
+  -> title 不再直接照抄 MinerU level；先对全局 title 候选做层次聚类，高置信主章节簇才进入 h2
   -> 页面 wrapper 只保留定位属性，不主动插入 `Page N` 可见页码
   -> 全局 h2 高度档里的 title 在 HTML 中打开 section，收纳到下一个 h2 前的块
   -> level=3 的 title 在当前 section 中打开 subsection，收纳到下一个 h2/h3 前的块
@@ -42,8 +42,9 @@ MinerU pages
 - `test_build_html_keeps_table_of_contents_entries_out_of_outline_headings`：确认 `目次` 页里的目录项只作为可见文本保留，不会生成 section；同名真实章节在正文页仍会生成 section。
 - `test_build_markdown_demotes_deadline_title_to_body_line`：确认带日期和时间的提出期限提示行即使被 MinerU 标成 `title level=2`，也只作为正文加粗行输出，不会变成 Markdown heading 或 HTML section。
 - `test_build_markdown_demotes_compact_numbered_title_with_ascii_dot`：确认 `2.日程` 这类 ASCII 点后没有空格的紧凑编号 title 会降级为正文加粗行，同时不影响英文 `1. Definitions` 这类正式标题。
-- `test_build_markdown_uses_global_h2_layout_band_and_bolds_other_titles`：确认同一文档内按 title 版面特征二分类识别高置信 h2 簇，高档章节进入 `##`，其他 title 降级为加粗行。
-- `test_build_markdown_clusters_h2_band_with_width_and_indent_features`：确认 h2 识别不只看高度，也会利用宽度、缩进和主章节编号形态，把版面相近但语义不同的标题分开。
+- `test_build_markdown_uses_global_h2_layout_band_and_bolds_other_titles`：确认同一文档内按 title 版面特征识别高置信 h2 簇，高档章节进入 `##`，其他 title 降级为加粗行。
+- `test_build_markdown_clusters_h2_band_with_width_and_indent_features`：确认 h2 识别不只看高度，也会利用宽度、缩进、字符数和行数，把版面相近但语义不同的标题分开。
+- `test_build_markdown_demotes_angle_bracket_title_after_agglomerative_clustering`：确认层次聚类会把小字号全角尖括号局部标题降级为加粗正文行，同时真正章节标题仍输出为 `##`。
 - `test_build_html_skips_pages_without_visible_content`：确认空页和纯图片页不会进入 HTML。
 - `test_build_html_skips_pages_with_only_page_number`：确认纯页码页不会进入 HTML、blocks 或 Markdown。
 - `test_build_outputs_skip_page_footer_noise`：确认页脚版本号不会进入 extraction HTML、display HTML、blocks、Markdown 或 semantic_document。

@@ -6,11 +6,11 @@ import html
 import hashlib
 import json
 import re
+from collections import defaultdict
 from typing import Any
 
-import numpy as np
 from sklearn.cluster import AgglomerativeClustering
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler
 
 
 def build_html_from_content_list(pages: list[list[dict[str, Any]]]) -> str:
@@ -285,79 +285,62 @@ def infer_global_h2_cluster_keys(
         candidates.append(block)
     if len(candidates) < 2:
         return None
-    cluster_keys = split_h2_cluster_keys(candidates)
+    cluster_keys = select_h2_cluster_keys(candidates)
     if not cluster_keys:
         return None
     return cluster_keys
 
 
-def split_h2_cluster_keys(blocks: list[dict[str, Any]]) -> set[tuple[int, int]]:
-    if len(blocks) < 2:
-        return set()
-    feature_rows = [h2_cluster_features(block) for block in blocks]
-    if len({tuple(row) for row in feature_rows}) < 2:
-        return set()
-    features = StandardScaler().fit_transform(np.asarray(feature_rows, dtype=float))
-    labels = AgglomerativeClustering(n_clusters=2).fit_predict(features)
-    clusters = []
-    for label in sorted(set(labels)):
-        cluster_blocks = [block for block, item_label in zip(blocks, labels) if item_label == label]
-        clusters.append((h2_cluster_score(cluster_blocks), cluster_blocks))
-    clusters.sort(key=lambda item: item[0], reverse=True)
-    selected_score, selected_blocks = clusters[0]
-    other_score, _other_blocks = clusters[1]
-    if selected_score <= other_score:
-        return set()
+def select_h2_cluster_keys(candidates: list[dict[str, Any]]) -> set[tuple[int, int]]:
+    cluster_count = 2
+    vectors = normalized_h2_cluster_vectors(candidates)
+    labels = AgglomerativeClustering(n_clusters=cluster_count, linkage="ward").fit_predict(
+        vectors
+    )
+    selected_label = select_h2_cluster_label(candidates, labels)
     return {
         (int(block["page_no"]), int(block["block_idx"]))
-        for block in selected_blocks
+        for block, label in zip(candidates, labels)
+        if int(label) == selected_label
     }
 
 
-def h2_cluster_features(block: dict[str, Any]) -> list[float]:
-    text = normalize_inline_space(block.get("text") or "")
-    height, width, chars, line_count, x0, _y0 = block.get(
-        "features", [0, 0, 0, 1, 0, 0]
+def normalized_h2_cluster_vectors(candidates: list[dict[str, Any]]) -> list[list[float]]:
+    rows: list[list[float]] = []
+    for block in candidates:
+        height, width, chars, line_count, x0, _y0 = block.get(
+            "features", [0, 0, 0, 1, 0, 0]
+        )
+        rows.append([float(height), float(width), float(chars), float(line_count), float(x0)])
+    vectors = MinMaxScaler().fit_transform(rows)
+    vectors[:, 0] *= 2
+    return vectors.tolist()
+
+
+def select_h2_cluster_label(candidates: list[dict[str, Any]], labels: list[int]) -> int:
+    grouped: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for block, label in zip(candidates, labels):
+        grouped[int(label)].append(block)
+    return max(
+        grouped,
+        key=lambda label: (
+            average_feature(grouped[label], 0),
+            -abs(average_feature(grouped[label], 4) - median_feature(candidates, 4)),
+            -average_feature(grouped[label], 2),
+        ),
     )
-    return [
-        float(height),
-        float(width),
-        -float(x0),
-        -float(chars),
-        1.0 if has_major_section_marker(text) else 0.0,
-        -float(line_count),
-    ]
 
 
-def h2_cluster_score(blocks: list[dict[str, Any]]) -> float:
-    if not blocks:
-        return float("-inf")
-    rows = [h2_cluster_features(block) for block in blocks]
-    means = [sum(values) / len(values) for values in zip(*rows)]
-    return means[0] + 0.02 * means[1] + 10.0 * means[4] + 0.01 * means[2]
+def average_feature(blocks: list[dict[str, Any]], index: int) -> float:
+    return sum(float(block["features"][index]) for block in blocks) / len(blocks)
 
 
-def has_major_section_marker(text: str) -> bool:
-    return bool(re.match(r"^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩIVX]+[．.]\s*", text))
-
-
-def split_high_height_band(heights: list[int]) -> list[int]:
-    unique_heights = sorted(set(heights))
-    if len(unique_heights) < 2:
-        return []
-    best_gap_idx = max(
-        range(len(unique_heights) - 1),
-        key=lambda idx: unique_heights[idx + 1] - unique_heights[idx],
-    )
-    lower_max = unique_heights[best_gap_idx]
-    upper_min = unique_heights[best_gap_idx + 1]
-    if upper_min - lower_max < 4:
-        return []
-    high_band = [height for height in heights if height >= upper_min]
-    low_band = [height for height in heights if height <= lower_max]
-    if not high_band or not low_band:
-        return []
-    return high_band
+def median_feature(blocks: list[dict[str, Any]], index: int) -> float:
+    values = sorted(float(block["features"][index]) for block in blocks)
+    midpoint = len(values) // 2
+    if len(values) % 2:
+        return values[midpoint]
+    return (values[midpoint - 1] + values[midpoint]) / 2
 
 
 def is_global_h2_candidate(block: dict[str, Any], text: str) -> bool:

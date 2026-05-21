@@ -114,7 +114,7 @@ MinerU content_list_v2 pages
   -> 先把可渲染 block 拉平成带 page_no/block_idx/bbox 特征的 rendered blocks
   -> 识别 `目次` / `Contents` 这类目录页标题，并把同页后续条目标为目录条目
   -> 从非目录 title 候选里去掉封面标题、正文句子、日期期限行和明显正文小标题
-  -> 对剩余 title 候选按 height/width/x0/chars/line_count/编号形态做二分类聚类
+  -> 对剩余 title 候选按归一化 height/width/chars/line_count/x0 做层次聚类，height 权重为 2，不使用 y0
   -> 选出更像主章节的高置信簇作为 h2 heading_level
   -> 目录条目和不在 h2 簇里的 title 没有 heading_level，只作为正文加粗行
   -> 页面 wrapper 只保留 `section.page` 和 `data-page` 定位属性，不主动插入 `Page N` 可见页码
@@ -156,8 +156,10 @@ MinerU content_list_v2 pages
   -> 为每个 block 计算 height、width、chars、line_count、x0、y0
   -> 先识别目录页，目录条目不参与 Markdown heading 或 HTML section
   -> title 不直接照抄 MinerU level；MinerU level 只作为候选过滤特征
-  -> 对 title 候选做 AgglomerativeClustering(n_clusters=2)
-  -> 用 height、width、缩进、字符数、行数和 `Ⅰ．` 这类主章节编号形态选择 h2 簇
+  -> 从 title 候选中取 height、width、chars、line_count、x0 做 MinMax 归一化
+  -> 将归一化后的 height 乘以 2，强调真实章节标题和正文局部标题的字号差异
+  -> 对候选做 AgglomerativeClustering(n_clusters=2, linkage="ward")
+  -> 按簇内平均 height、与候选整体中位 x0 的距离和平均字符数选择 h2 章节簇
   -> 不在 h2 簇里的 title 即使 MinerU 标成 level=2，也降级成加粗正文行
   -> 以 `1）`、`【...】`、`<<...>>`、括号编号、单字母标号等样式识别正文里的小标题
   -> `2.日程` 这类 ASCII 点后无空格的紧凑编号 title 按正文小标题处理，避免把条目标题当成大章
