@@ -8,6 +8,8 @@ import {
   CheckCircle2,
   ChevronRight,
   Clock3,
+  X,
+  Eye,
   FileSearch,
   Loader2,
   Pause,
@@ -35,7 +37,9 @@ import type {
 } from "@/lib/types";
 import {
   LeftSidebarResizeHandle,
-  useLeftSidebarResize
+  RightSidebarResizeHandle,
+  useLeftSidebarResize,
+  useRightSidebarResize
 } from "@/components/sidebar-resize";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -63,7 +67,9 @@ type ActiveEvidenceSource = {
   document: TaskSourceDocument;
   evidenceUri: string;
   label: string;
+  openKey: number;
   sourceSelector: string;
+  sourceSelectors: string[];
   inlineSelector: string;
   headingText: string;
 };
@@ -82,6 +88,7 @@ type QaStreamItem =
       turnId: string | null;
       toolName: string;
       label: string;
+      evidenceUri: string | null;
       ok: boolean;
     }
   | {
@@ -137,6 +144,7 @@ export function TaskDetail({
   const [isCancelling, setIsCancelling] = React.useState(false);
   const [eventSubscriptionKey, setEventSubscriptionKey] = React.useState(0);
   const [activeEvidenceSource, setActiveEvidenceSource] = React.useState<ActiveEvidenceSource | null>(null);
+  const evidenceOpenKeyRef = React.useRef(0);
   const eventCursorRef = React.useRef({ taskId, seq: 0 });
 
   const refresh = React.useCallback(async () => {
@@ -192,7 +200,8 @@ export function TaskDetail({
     if (!source) {
       return;
     }
-    setActiveEvidenceSource(source);
+    evidenceOpenKeyRef.current += 1;
+    setActiveEvidenceSource({ ...source, openKey: evidenceOpenKeyRef.current });
   }, [summary]);
 
   React.useEffect(() => {
@@ -376,8 +385,15 @@ function QaWorkspace({
   onCancel: () => void;
 }) {
   const [isLeftPanelOpen, setIsLeftPanelOpen] = React.useState(true);
+  const [closedReviewOpenKey, setClosedReviewOpenKey] = React.useState<number | null>(null);
   const isRightPanelOpen = activeEvidenceSource !== null;
+  const isReviewOpen = activeEvidenceSource !== null && activeEvidenceSource.openKey !== closedReviewOpenKey;
+  const isVisibleRightPanelOpen = isRightPanelOpen && isReviewOpen;
   const { leftPanelWidth, resizeLeftPanelByKeyboard, startLeftPanelResize } = useLeftSidebarResize();
+  const { rightPanelWidth, resizeRightPanelByKeyboard, startRightPanelResize } = useRightSidebarResize();
+  const agentBalanceSide = getAgentBalanceSide(isLeftPanelOpen, isVisibleRightPanelOpen);
+  const agentLeftBalanceGrow = isVisibleRightPanelOpen ? getAgentBalanceGrow(rightPanelWidth) : "1fr";
+  const agentRightBalanceGrow = isLeftPanelOpen ? getAgentBalanceGrow(leftPanelWidth) : "1fr";
   const streamRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useLayoutEffect(() => {
@@ -413,11 +429,13 @@ function QaWorkspace({
       </div>
       <div
         className="replay-stage replay-stage-fullscreen grid"
+        aria-label="QA stage"
         data-left-panel-open={isLeftPanelOpen ? "true" : "false"}
-        data-right-panel-open={isRightPanelOpen ? "true" : "false"}
+        data-right-panel-open={isVisibleRightPanelOpen ? "true" : "false"}
         style={{
           "--replay-left-panel-width": `${leftPanelWidth}px`,
-          "--replay-stage-columns": qaStageColumns(isLeftPanelOpen, isRightPanelOpen),
+          "--replay-right-panel-width": `${rightPanelWidth}px`,
+          "--replay-stage-columns": qaStageColumns(isLeftPanelOpen, isVisibleRightPanelOpen),
         } as React.CSSProperties}
       >
         {isLeftPanelOpen ? (
@@ -435,9 +453,15 @@ function QaWorkspace({
         <section
           className="replay-agent-panel-slot"
           aria-label="Agent workspace"
-          data-agent-balance-side={isLeftPanelOpen ? "right" : "none"}
+          data-agent-balance-side={agentBalanceSide}
           data-agent-content-mode="centered"
           data-agent-gutter="compact"
+          style={{
+            "--replay-agent-left-balance-width": isVisibleRightPanelOpen ? "calc(var(--replay-right-panel-width) + 10px)" : "0px",
+            "--replay-agent-right-balance-width": isLeftPanelOpen ? "calc(var(--replay-left-panel-width) + 10px)" : "0px",
+            "--replay-agent-left-balance-grow": agentLeftBalanceGrow,
+            "--replay-agent-right-balance-grow": agentRightBalanceGrow,
+          } as React.CSSProperties}
         >
           <div className="replay-agent-panel" aria-label="Document QA Agent">
             <div ref={streamRef} className="replay-agent-stream" aria-label="QA conversation and reading process">
@@ -499,20 +523,30 @@ function QaWorkspace({
             </form>
           </div>
         </section>
-        {isRightPanelOpen ? (
-          <aside className="replay-review-side-panel-slot" aria-label="Right review workspace">
-            <div className="replay-source-header">
-              <div className="replay-source-title" title={activeEvidenceSource.document.filename}>
-                {activeEvidenceSource.document.filename}
+        {isVisibleRightPanelOpen ? (
+          <>
+            <RightSidebarResizeHandle
+              width={rightPanelWidth}
+              onPointerDown={startRightPanelResize}
+              onKeyDown={resizeRightPanelByKeyboard}
+            />
+            <aside className="replay-review-side-panel-slot" aria-label="Right review workspace">
+              <div className="replay-source-header">
+                <div className="replay-source-title" title={activeEvidenceSource.document.filename}>
+                  {activeEvidenceSource.document.filename}
+                </div>
+                <div className="replay-source-subtitle" title={activeEvidenceSource.evidenceUri}>
+                  {activeEvidenceSource.label}
+                </div>
+                <Button type="button" variant="ghost" size="icon" aria-label="Close document review" title="Close document review" onClick={() => setClosedReviewOpenKey(activeEvidenceSource.openKey)}>
+                  <X className="h-4 w-4" aria-hidden="true" />
+                </Button>
               </div>
-              <div className="replay-source-subtitle" title={activeEvidenceSource.evidenceUri}>
-                {activeEvidenceSource.label}
+              <div className="replay-review-side-panel-body">
+                <QaEvidenceSourceFrame source={activeEvidenceSource} />
               </div>
-            </div>
-            <div className="replay-review-side-panel-body">
-              <QaEvidenceSourceFrame source={activeEvidenceSource} />
-            </div>
-          </aside>
+            </aside>
+          </>
         ) : null}
       </div>
     </section>
@@ -572,12 +606,12 @@ function QaEvidenceSourceFrame({ source }: { source: ActiveEvidenceSource }) {
     if (!doc) {
       return;
     }
-    applyQaSourceEvidenceMarker(doc, source.sourceSelector, source.inlineSelector, source.headingText);
+    applyQaSourceEvidenceMarker(doc, source.sourceSelectors, source.inlineSelector, source.headingText);
     const target = doc.querySelector<HTMLElement>("[data-current-evidence='true']");
     if (target && typeof target.scrollIntoView === "function") {
       target.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
     }
-  }, [source.headingText, source.inlineSelector, source.sourceSelector]);
+  }, [source.headingText, source.inlineSelector, source.sourceSelectors]);
 
   React.useEffect(() => {
     applyCurrentEvidenceAndScroll();
@@ -606,12 +640,12 @@ function QaStreamRow({ item, onOpenEvidence }: { item: QaStreamItem; onOpenEvide
     );
   }
   if (item.kind === "tool-group") {
-    return <QaToolGroup item={item} />;
+    return <QaToolGroup item={item} onOpenEvidence={onOpenEvidence} />;
   }
   if (item.kind === "tool") {
     return (
       <div className={item.ok ? "replay-agent-turn qa-tool-turn" : "replay-agent-turn qa-tool-turn is-failed"}>
-        <QaToolLine item={item} />
+        <QaToolLine item={item} onOpenEvidence={onOpenEvidence} />
       </div>
     );
   }
@@ -636,7 +670,7 @@ function QaStreamRow({ item, onOpenEvidence }: { item: QaStreamItem; onOpenEvide
   );
 }
 
-function QaToolGroup({ item }: { item: Extract<QaStreamItem, { kind: "tool-group" }> }) {
+function QaToolGroup({ item, onOpenEvidence }: { item: Extract<QaStreamItem, { kind: "tool-group" }>; onOpenEvidence: (uri: string, label: string) => void }) {
   const [isExpanded, setIsExpanded] = React.useState(false);
   return (
     <div className="replay-agent-turn qa-tool-turn">
@@ -655,7 +689,7 @@ function QaToolGroup({ item }: { item: Extract<QaStreamItem, { kind: "tool-group
         {isExpanded ? (
           <div className="replay-agent-tool-group-lines">
             {item.items.map((tool) => (
-              <QaToolLine key={`${tool.seq}-${tool.toolName}`} item={tool} />
+              <QaToolLine key={`${tool.seq}-${tool.toolName}`} item={tool} onOpenEvidence={onOpenEvidence} />
             ))}
           </div>
         ) : null}
@@ -664,7 +698,20 @@ function QaToolGroup({ item }: { item: Extract<QaStreamItem, { kind: "tool-group
   );
 }
 
-function QaToolLine({ item }: { item: Extract<QaStreamItem, { kind: "tool" }> }) {
+function QaToolLine({ item, onOpenEvidence }: { item: Extract<QaStreamItem, { kind: "tool" }>; onOpenEvidence?: (uri: string, label: string) => void }) {
+  if (item.evidenceUri && onOpenEvidence) {
+    return (
+      <button
+        type="button"
+        className={item.ok ? "replay-agent-tool-line" : "replay-agent-tool-line is-failed"}
+        aria-label={`tool ${item.toolName}`}
+        onClick={() => onOpenEvidence(item.evidenceUri ?? "", item.label)}
+      >
+        <QaToolIcon toolName={item.toolName} />
+        <span className="replay-agent-tool-summary">{item.label}</span>
+      </button>
+    );
+  }
   return (
     <div className={item.ok ? "replay-agent-tool-line" : "replay-agent-tool-line is-failed"} aria-label={`tool ${item.toolName}`}>
       <QaToolIcon toolName={item.toolName} />
@@ -759,6 +806,7 @@ function eventToStreamItem(event: TaskEvent): QaStreamItem | null {
         turnId: event.turn_id ?? null,
         toolName,
         label: formatToolLabel(toolName, payload),
+        evidenceUri: getToolEvidenceUri(toolName, payload),
         ok: payloadType !== "tool_failed",
       };
     }
@@ -881,7 +929,6 @@ function isTaskRunning(summary?: Pick<TaskSummary, "status" | "stream" | "active
 function formatToolLabel(toolName: string, payload: Record<string, unknown>): string {
   const args = readObject(payload.args) ?? {};
   const query = readString(args.query);
-  const locator = readString(args.locator) || readString(args.path_id) || readString(args.path);
   if (toolName === "grep") {
     return query ? `Searched ${query}` : "Searched document";
   }
@@ -889,12 +936,60 @@ function formatToolLabel(toolName: string, payload: Record<string, unknown>): st
     return "Viewed outline";
   }
   if (toolName === "read") {
-    return locator ? `Read ${locator}` : "Read passage";
+    return `Read ${getToolTargetKind(payload, "passage")}`;
   }
   if (toolName === "inspect") {
-    return locator ? `Inspected ${locator}` : "Inspected evidence";
+    return `Inspected ${getToolTargetKind(payload, "evidence")}`;
   }
   return `Ran ${toolName}`;
+}
+
+function getToolEvidenceUri(toolName: string, payload: Record<string, unknown>): string | null {
+  if (toolName !== "read" && toolName !== "inspect") {
+    return null;
+  }
+  const args = readObject(payload.args) ?? {};
+  const result = readObject(payload.result) ?? {};
+  const locator =
+    readString(args.locator) ||
+    readString(args.path_id) ||
+    readString(args.path) ||
+    readString(result.locator) ||
+    readString(result.path_id) ||
+    readString(result.path);
+  if (!locator) {
+    return null;
+  }
+  return locator.startsWith("evidence://") ? locator : `evidence://${locator}`;
+}
+
+function getToolTargetKind(payload: Record<string, unknown>, fallback: string): string {
+  const args = readObject(payload.args) ?? {};
+  const result = readObject(payload.result) ?? {};
+  const kind =
+    readString(result.kind) ||
+    readString(result.block_kind) ||
+    readString(args.kind) ||
+    readString(args.block_kind) ||
+    readString(payload.kind);
+  return formatToolTargetKind(kind || fallback);
+}
+
+function formatToolTargetKind(kind: string): string {
+  const normalized = kind.toLowerCase().replace(/[-\s]+/g, "_");
+  if (normalized === "table_row" || normalized === "row") {
+    return "table row";
+  }
+  if (normalized === "list_item" || normalized === "item") {
+    return "list item";
+  }
+  if (normalized === "heading" || normalized === "header") {
+    return "heading";
+  }
+  if (normalized === "paragraph" || normalized === "section" || normalized === "list" || normalized === "table" || normalized === "document" || normalized === "outline" || normalized === "evidence" || normalized === "passage") {
+    return normalized;
+  }
+  return "evidence";
 }
 
 function summarizeQaToolGroup(items: Extract<QaStreamItem, { kind: "tool" }>[]): string {
@@ -902,8 +997,10 @@ function summarizeQaToolGroup(items: Extract<QaStreamItem, { kind: "tool" }>[]):
     (summary, item) => {
       if (item.toolName === "grep") {
         summary.searches += 1;
-      } else if (item.toolName === "read" || item.toolName === "inspect") {
+      } else if (item.toolName === "read") {
         summary.reads += 1;
+      } else if (item.toolName === "inspect") {
+        summary.inspects += 1;
       } else if (item.toolName === "tree") {
         summary.outlines += 1;
       } else {
@@ -911,14 +1008,17 @@ function summarizeQaToolGroup(items: Extract<QaStreamItem, { kind: "tool" }>[]):
       }
       return summary;
     },
-    { outlines: 0, other: 0, reads: 0, searches: 0 }
+    { inspects: 0, outlines: 0, other: 0, reads: 0, searches: 0 }
   );
   const parts: string[] = [];
   if (counts.reads > 0) {
     parts.push(`read ${formatCount(counts.reads, "passage")}`);
   }
+  if (counts.inspects > 0) {
+    parts.push(`inspected ${formatCount(counts.inspects, "evidence", "evidence")}`);
+  }
   if (counts.outlines > 0) {
-    parts.push(`explored ${formatCount(counts.outlines, "outline")}`);
+    parts.push(`viewed ${formatCount(counts.outlines, "outline")}`);
   }
   if (counts.searches > 0) {
     parts.push(formatCount(counts.searches, "search", "searches"));
@@ -941,7 +1041,10 @@ function QaToolIcon({ toolName }: { toolName: string }) {
   if (toolName === "grep") {
     return <Search className="replay-agent-tool-icon" aria-hidden="true" />;
   }
-  if (toolName === "read" || toolName === "inspect") {
+  if (toolName === "inspect") {
+    return <Eye className="replay-agent-tool-icon" aria-hidden="true" />;
+  }
+  if (toolName === "read") {
     return <BookOpenText className="replay-agent-tool-icon" aria-hidden="true" />;
   }
   if (toolName === "tree") {
@@ -965,8 +1068,25 @@ function StatusBadge({ status }: { status: TaskSummary["status"] }) {
 
 function qaStageColumns(isLeftPanelOpen: boolean, isRightPanelOpen: boolean): string {
   const leftColumns = isLeftPanelOpen ? "var(--replay-left-panel-width) 10px " : "";
-  const rightColumns = isRightPanelOpen ? " minmax(280px, 36vw)" : "";
+  const rightColumns = isRightPanelOpen ? " 10px var(--replay-right-panel-width)" : "";
   return `${leftColumns}minmax(0, 1fr)${rightColumns}`;
+}
+
+function getAgentBalanceSide(isLeftPanelOpen: boolean, isRightPanelOpen: boolean): "left" | "right" | "both" | "none" {
+  if (isLeftPanelOpen && isRightPanelOpen) {
+    return "both";
+  }
+  if (isLeftPanelOpen) {
+    return "left";
+  }
+  if (isRightPanelOpen) {
+    return "right";
+  }
+  return "none";
+}
+
+function getAgentBalanceGrow(panelWidth: number): string {
+  return `${Number((1 + panelWidth / 560).toFixed(3))}fr`;
 }
 
 function findEvidenceSource(summary: TaskSummary | null | undefined, uri: string, label: string): ActiveEvidenceSource | null {
@@ -975,7 +1095,8 @@ function findEvidenceSource(summary: TaskSummary | null | undefined, uri: string
     return null;
   }
   const evidenceId = getEvidenceIdFromUri(uri);
-  const sourceSelector = findSourceSelector(summary?.source_selectors ?? {}, evidenceId);
+  const sourceSelectors = findSourceSelectors(summary?.source_selectors ?? {}, evidenceId);
+  const sourceSelector = sourceSelectors[0] ?? "";
   if (!sourceSelector) {
     return null;
   }
@@ -983,7 +1104,16 @@ function findEvidenceSource(summary: TaskSummary | null | undefined, uri: string
   if (!document) {
     return null;
   }
-  return { document, evidenceUri: uri, label, sourceSelector, inlineSelector: getEvidenceInlineSelector(uri), headingText: label };
+  return { document, evidenceUri: uri, label, openKey: 0, sourceSelector, sourceSelectors, inlineSelector: getEvidenceInlineSelector(uri), headingText: label };
+}
+
+function findSourceSelectors(sourceSelectors: Record<string, string>, evidenceId: string): string[] {
+  const rangeSelectors = findRangeSourceSelectors(sourceSelectors, evidenceId);
+  if (rangeSelectors.length > 0) {
+    return rangeSelectors;
+  }
+  const sourceSelector = findSourceSelector(sourceSelectors, evidenceId);
+  return sourceSelector ? [sourceSelector] : [];
 }
 
 function findSourceSelector(sourceSelectors: Record<string, string>, evidenceId: string): string {
@@ -1024,6 +1154,78 @@ function isVirtualPathId(value: string): boolean {
   return /^\d+(?:\.\d+)+$/.test(value);
 }
 
+function findRangeSourceSelectors(sourceSelectors: Record<string, string>, evidenceId: string): string[] {
+  const range = parseEvidenceRangeId(evidenceId);
+  if (!range) {
+    return [];
+  }
+  const pathIds = getEvidenceRangePathIds(sourceSelectors, range);
+  const selectors: string[] = [];
+  for (const pathId of pathIds) {
+    const sourceSelector = sourceSelectors[pathId];
+    if (typeof sourceSelector !== "string") {
+      continue;
+    }
+    const normalizedSelector = normalizeQaSourceSelector(sourceSelector);
+    if (normalizedSelector && !selectors.includes(normalizedSelector)) {
+      selectors.push(normalizedSelector);
+    }
+  }
+  return selectors;
+}
+
+function parseEvidenceRangeId(evidenceId: string): { start: string; end: string } | null {
+  const withoutScheme = stripEvidenceScheme(evidenceId).split("#")[0] ?? "";
+  const parts = withoutScheme.split("/").filter(Boolean);
+  if (parts.length !== 3 || parts[0] !== "range") {
+    return null;
+  }
+  const [, start, end] = parts;
+  if (!isVirtualPathId(start) || !isVirtualPathId(end)) {
+    return null;
+  }
+  return { start, end };
+}
+
+function getEvidenceRangePathIds(sourceSelectors: Record<string, string>, range: { start: string; end: string }): string[] {
+  const [rangeStart, rangeEnd] = compareEvidencePathIds(range.start, range.end) <= 0 ? [range.start, range.end] : [range.end, range.start];
+  const rangePathIds = Object.keys(sourceSelectors)
+    .filter((pathId) => isVirtualPathId(pathId) && isEvidencePathIdInsideRange(pathId, rangeStart, rangeEnd))
+    .sort(compareEvidencePathIds);
+  return rangePathIds.length > 0 ? rangePathIds : [rangeStart];
+}
+
+function isEvidencePathIdInsideRange(pathId: string, rangeStart: string, rangeEnd: string): boolean {
+  const startSegments = rangeStart.split(".");
+  const endSegments = rangeEnd.split(".");
+  const pathSegments = pathId.split(".");
+  if (startSegments.length !== endSegments.length || pathSegments.length < startSegments.length) {
+    return pathId === rangeStart;
+  }
+  const startParentPath = startSegments.slice(0, -1).join(".");
+  const endParentPath = endSegments.slice(0, -1).join(".");
+  const pathParentPrefix = pathSegments.slice(0, startSegments.length - 1).join(".");
+  const pathPrefix = pathSegments.slice(0, startSegments.length).join(".");
+  if (startParentPath !== endParentPath || pathParentPrefix !== startParentPath) {
+    return false;
+  }
+  return compareEvidencePathIds(pathPrefix, rangeStart) >= 0 && compareEvidencePathIds(pathPrefix, rangeEnd) <= 0;
+}
+
+function compareEvidencePathIds(left: string, right: string): number {
+  const leftParts = stripEvidenceScheme(left).split(".").map((part) => Number.parseInt(part, 10));
+  const rightParts = stripEvidenceScheme(right).split(".").map((part) => Number.parseInt(part, 10));
+  const maxLength = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < maxLength; index += 1) {
+    const leftPart = leftParts[index] ?? 0;
+    const rightPart = rightParts[index] ?? 0;
+    if (leftPart !== rightPart) {
+      return leftPart - rightPart;
+    }
+  }
+  return 0;
+}
+
 function getEvidenceDocumentIndex(evidenceId: string, documents: TaskSourceDocument[]): number {
   const firstPart = stripEvidenceScheme(evidenceId).split(/[./]/)[0] ?? "";
   const parsed = Number.parseInt(firstPart, 10);
@@ -1038,17 +1240,19 @@ function renderQaSourceHtml(displayHtml: string): string {
   return wrapQaSourceHtml(sanitizedHtml);
 }
 
-function applyQaSourceEvidenceMarker(doc: Document, sourceSelector: string, inlineSelector: string, headingText: string): void {
+function applyQaSourceEvidenceMarker(doc: Document, sourceSelectors: string[], inlineSelector: string, headingText: string): void {
   for (const element of Array.from(doc.querySelectorAll<HTMLElement>("[data-current-evidence='true']"))) {
     element.removeAttribute("data-current-evidence");
     element.classList.remove("is-current-evidence");
   }
-  const target = findQaSourceEvidenceTarget(doc, sourceSelector, inlineSelector, headingText);
-  if (!target) {
-    return;
+  for (const sourceSelector of sourceSelectors) {
+    const target = findQaSourceEvidenceTarget(doc, sourceSelector, inlineSelector, headingText);
+    if (!target) {
+      continue;
+    }
+    target.classList.add("is-current-evidence");
+    target.setAttribute("data-current-evidence", "true");
   }
-  target.classList.add("is-current-evidence");
-  target.setAttribute("data-current-evidence", "true");
 }
 
 function findQaSourceEvidenceTarget(doc: Document, sourceSelector: string, inlineSelector: string, headingText: string): HTMLElement | null {

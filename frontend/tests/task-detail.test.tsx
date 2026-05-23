@@ -317,11 +317,76 @@ it("点击 inline evidence 会用现有任务详情数据打开右侧 review 文
   await user.click(await screen.findByRole("link", { name: "30 天通知" }));
 
   const reviewWorkspace = await screen.findByLabelText("Right review workspace");
+  expect(reviewWorkspace).not.toHaveClass("is-fullscreen");
+  expect(screen.getByLabelText("QA stage")).toHaveStyle({
+    "--replay-stage-columns": "var(--replay-left-panel-width) 10px minmax(0, 1fr) 10px var(--replay-right-panel-width)"
+  });
+  expect(within(reviewWorkspace).getByRole("button", { name: "Close document review" })).toBeInTheDocument();
   expect(within(reviewWorkspace).getByText("contract.pdf")).toBeInTheDocument();
   expect(within(reviewWorkspace).getByTitle("Source document")).toHaveAttribute(
     "srcdoc",
     expect.stringContaining("data-current-evidence=\"true\"")
   );
+});
+
+it("右侧 review panel 支持拖拽调整宽度，并让对话列按左右面板补偿居中", async () => {
+  const user = userEvent.setup();
+  const fakeEventSource = new FakeEventSource();
+  const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
+  renderTaskDetail(detailData, { createTaskEventSource });
+
+  await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledWith("qa_task_001", 0));
+  act(() => {
+    fakeEventSource.emitEvent(
+      "agent.event",
+      taskEvent({
+        seq: 5,
+        type: "agent.event",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_001",
+        payload: {
+          agent: "file_extraction_agent",
+          type: "model_message",
+          content: "需要提前 30 天通知。[30 天通知](evidence://0001.0001.0001/S001)"
+        }
+      })
+    );
+  });
+
+  await user.click(await screen.findByRole("link", { name: "30 天通知" }));
+
+  const stage = await screen.findByLabelText("QA stage");
+  const agentWorkspace = screen.getByLabelText("Agent workspace");
+  expect(stage).toHaveStyle({
+    "--replay-right-panel-width": "560px",
+    "--replay-stage-columns": "var(--replay-left-panel-width) 10px minmax(0, 1fr) 10px var(--replay-right-panel-width)"
+  });
+  expect(agentWorkspace).toHaveAttribute("data-agent-balance-side", "both");
+  expect(agentWorkspace).toHaveStyle({
+    "--replay-agent-left-balance-width": "calc(var(--replay-right-panel-width) + 10px)",
+    "--replay-agent-right-balance-width": "calc(var(--replay-left-panel-width) + 10px)",
+    "--replay-agent-left-balance-grow": "2fr",
+    "--replay-agent-right-balance-grow": "1.4fr"
+  });
+
+  const resizeHandle = screen.getByRole("separator", { name: "Resize right review" });
+  expect(resizeHandle).toHaveAttribute("aria-valuemin", "480");
+  expect(resizeHandle).toHaveAttribute("aria-valuemax", "960");
+  expect(resizeHandle).toHaveAttribute("aria-valuenow", "560");
+
+  resizeHandle.focus();
+  await user.keyboard("{ArrowLeft}");
+
+  expect(resizeHandle).toHaveAttribute("aria-valuenow", "576");
+  expect(stage).toHaveStyle({ "--replay-right-panel-width": "576px" });
+
+  fireEvent(resizeHandle, new MouseEvent("pointerdown", { bubbles: true, clientX: 700 }));
+  fireEvent(window, new MouseEvent("pointermove", { bubbles: true, clientX: 680 }));
+  fireEvent(window, new MouseEvent("pointerup", { bubbles: true, clientX: 680 }));
+
+  expect(resizeHandle).toHaveAttribute("aria-valuenow", "596");
+  expect(stage).toHaveStyle({ "--replay-right-panel-width": "596px" });
 });
 
 it("文件夹级 inline evidence 会定位到对应 header 而不是子节点", async () => {
@@ -460,6 +525,50 @@ it("切换同一文档内的 inline evidence 会在 iframe 内平滑跳转并移
     expect(secondScrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center", inline: "nearest" });
   });
   expect(sourceFrame).toHaveAttribute("srcdoc", initialSrcDoc);
+});
+
+it("range evidence 会在右侧 review 同时高亮范围内多个节点并滚到起始节点", async () => {
+  const user = userEvent.setup();
+  const fakeEventSource = new FakeEventSource();
+  const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
+  const sourceDocument = document.implementation.createHTMLDocument("source");
+  sourceDocument.body.innerHTML = '<p id="p1">First range paragraph.</p><p id="p2">Second range paragraph.</p><p id="p3">Outside paragraph.</p>';
+  const firstTarget = sourceDocument.getElementById("p1") as HTMLElement;
+  const secondTarget = sourceDocument.getElementById("p2") as HTMLElement;
+  const outsideTarget = sourceDocument.getElementById("p3") as HTMLElement;
+  const firstScrollIntoView = jest.fn();
+  firstTarget.scrollIntoView = firstScrollIntoView;
+  jest.spyOn(HTMLIFrameElement.prototype, "contentDocument", "get").mockReturnValue(sourceDocument);
+
+  renderTaskDetail(detailData, { createTaskEventSource });
+
+  await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledWith("qa_task_001", 0));
+  act(() => {
+    fakeEventSource.emitEvent(
+      "agent.event",
+      taskEvent({
+        seq: 5,
+        type: "agent.event",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_001",
+        payload: {
+          agent: "file_extraction_agent",
+          type: "model_message",
+          content: "The answer depends on [both paragraphs](evidence://range/0001.0001.0001/0001.0001.0002)."
+        }
+      })
+    );
+  });
+
+  await user.click(await screen.findByRole("link", { name: "both paragraphs" }));
+
+  await waitFor(() => {
+    expect(firstTarget.getAttribute("data-current-evidence")).toBe("true");
+    expect(secondTarget.getAttribute("data-current-evidence")).toBe("true");
+    expect(outsideTarget.hasAttribute("data-current-evidence")).toBe(false);
+    expect(firstScrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center", inline: "nearest" });
+  });
 });
 
 it("表格 row evidence 会定位到具体表格行而不是整张表", async () => {
@@ -830,8 +939,25 @@ it("连续工具事件会用 Codex 式轻量过程行默认折叠，并允许展
           agent: "file_extraction_agent",
           type: "tool_completed",
           tool: "read",
-          args: { locator: "0001.0002" },
-          result: { ok: true }
+          args: { locator: "0001.0001.0001" },
+          result: { ok: true, kind: "paragraph" }
+        }
+      })
+    );
+    fakeEventSource.emitEvent(
+      "agent.event",
+      taskEvent({
+        seq: 7,
+        type: "agent.event",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_001",
+        payload: {
+          agent: "file_extraction_agent",
+          type: "tool_completed",
+          tool: "inspect",
+          args: { locator: "evidence://0001.0001.0003/R001" },
+          result: { ok: true, kind: "table_row" }
         }
       })
     );
@@ -840,22 +966,39 @@ it("连续工具事件会用 Codex 式轻量过程行默认折叠，并允许展
   const groupToggle = await screen.findByRole("button", { name: "Expand tool activity" });
   expect(groupToggle).toHaveAttribute("aria-expanded", "false");
   expect(groupToggle.querySelector(".replay-agent-tool-group-chevron")).toBeInTheDocument();
-  expect(screen.getByText("Read 1 passage, 2 searches")).toBeInTheDocument();
+  expect(screen.getByText("Read 1 passage, inspected 1 evidence, 2 searches")).toBeInTheDocument();
   expect(screen.queryByText(/failed/i)).not.toBeInTheDocument();
-  expect(screen.queryByText("Searched 出願期間, read 0001.0002")).not.toBeInTheDocument();
+  expect(screen.queryByText(/0001\.0001/)).not.toBeInTheDocument();
   expect(screen.queryByLabelText("tool grep")).not.toBeInTheDocument();
 
   await user.click(groupToggle);
 
   expect(await screen.findByRole("button", { name: "Collapse tool activity" })).toHaveAttribute("aria-expanded", "true");
   expect(await screen.findAllByLabelText("tool grep")).toHaveLength(2);
-  expect(screen.getByLabelText("tool read")).toBeInTheDocument();
+  const readTool = screen.getByRole("button", { name: "tool read" });
+  const inspectTool = screen.getByLabelText("tool inspect");
+  expect(within(readTool).getByText("Read paragraph")).toBeInTheDocument();
+  expect(within(inspectTool).getByText("Inspected table row")).toBeInTheDocument();
+  expect(readTool.querySelector(".lucide-book-open-text")).toBeInTheDocument();
+  expect(inspectTool.querySelector(".lucide-eye")).toBeInTheDocument();
+  expect(inspectTool.querySelector(".lucide-book-open-text")).not.toBeInTheDocument();
+  expect(screen.queryByText(/0001\.0001/)).not.toBeInTheDocument();
+
+  await user.click(readTool);
+
+  const reviewWorkspace = await screen.findByLabelText("Right review workspace");
+  expect(reviewWorkspace).not.toHaveClass("is-fullscreen");
+  expect(within(reviewWorkspace).getByText("contract.pdf")).toBeInTheDocument();
+  expect(within(reviewWorkspace).getByTitle("Source document")).toHaveAttribute(
+    "srcdoc",
+    expect.stringContaining("data-current-evidence=\"true\"")
+  );
 
   act(() => {
     fakeEventSource.emitEvent(
       "agent.event",
       taskEvent({
-        seq: 7,
+        seq: 8,
         type: "agent.event",
         status: "running",
         stage: "answering",

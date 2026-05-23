@@ -109,12 +109,14 @@ TaskDetail(task_id)
   -> optimisticEvents 保存本地刚提交但还没被 SSE 确认的 user message
   -> eventToStreamItem 把 message.created / agent.event 转成可见流
   -> 点击 Markdown evidence link 时，从 evidence:// path 去掉 S/I/R inline selector，查 source_selectors 得到 display_html DOM id
+  -> 如果 evidence 是 `evidence://range/{start}/{end}`，则按 source_selectors 收集同一层级 start 到 end 范围内的所有 DOM id
   -> 如果 evidence 指向文件夹/section 级虚拟路径且没有直接 source_selector，则把虚拟路径本身作为 header DOM id/data-element-id 定位，不跳到下面的第一个子节点
   -> 为兼容旧任务，若虚拟路径 header id 也不存在，则只用 evidence 链接文本匹配同名 h1-h6 heading，不匹配正文 block
-  -> 打开右侧 review iframe；Sxxx 默认定位父 block，Ixxx 优先定位 `{block_id}_item_000` 这类列表项，Rxxx 优先定位 `{table_id}_tr_001` 这类表格数据行
+  -> 打开右侧大 review iframe；Sxxx 默认定位父 block，Ixxx 优先定位 `{block_id}_item_000` 这类列表项，Rxxx 优先定位 `{table_id}_tr_001` 这类表格数据行，range 会同时高亮多个范围节点并滚到第一个节点
+  -> 右侧 review panel 默认 560px，范围 480-960px，通过左边缘 resize separator 拖拽；键盘 ArrowLeft 增宽、ArrowRight 缩窄
   -> 同一文档内切换 evidence 时不重写 srcDoc，而是在 iframe.contentDocument 内移除旧 current evidence、给新 id/data-element-id 加 marker
   -> 对新 marker 调 scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" })，从当前滚动位置平滑跳到对应文本
-  -> Agent 内容列和输入框使用 `blank / text / blank` 三列：text = 520px 最小文字宽 + 200px 可选文字宽，窗口变窄时先扣左右空白，再扣可选文字宽，最后停在最小文字宽
+  -> Agent 内容列和输入框使用 `blank / text / blank` 三列：text = 520px 最小文字宽 + 200px 可选文字宽；左右面板打开时只调整两侧 blank 的 `fr` 比例来抵消 sidebar/review 造成的视觉偏移，窗口变窄时仍先扣空白，再扣可选文字宽，最后停在最小文字宽
   -> applyEventToSummary 用事件更新 running/ready 状态
   -> turn terminal event 后清理运行态并刷新 summary
   -> 用户提交追问 createTaskInput(task_id, content)
@@ -129,7 +131,7 @@ TaskDetail(task_id)
 
 - `message.created` 且 `role=user|assistant`：渲染为无显式角色标签的对话消息；用户消息靠右，assistant 消息靠左。
 - `agent.event` 且 `payload.type=model_message`：渲染为左侧 assistant 过程回答，支持 evidence link。
-- `agent.event` 且 `payload.type=tool_completed|tool_failed`：渲染为工具过程行；连续工具事件会默认折叠成一行低权重摘要，例如 `Read 1 passage, 1 search`，默认摘要只统计动作数量，不写失败状态；摘要按钮带开关箭头，用户可展开查看每个 tool 的具体查询或读取目标，展开明细和摘要行左边缘对齐，展开后同一组继续追加新 tool 时保持展开。
+- `agent.event` 且 `payload.type=tool_completed|tool_failed`：渲染为工具过程行；连续工具事件会默认折叠成一行低权重摘要，例如 `Read 1 passage, inspected 1 evidence, 1 search`，默认摘要只统计动作数量，不写失败状态；展开后也只显示动作和内容类型，例如 `Viewed outline`、`Read paragraph`、`Inspected table row`，不展示具体 evidence/path/locator；read/inspect 行如果带 locator 可点击打开右侧 review；展开明细和摘要行左边缘对齐，展开后同一组继续追加新 tool 时保持展开。
 - `turn.cancel_requested/cancelled/failed`：渲染简短状态行。
 - 空 `model_message` 和内部生命周期事件不进入可见对话流。
 

@@ -994,9 +994,9 @@ html[data-theme="dark"] .home-task-composer {
 .replay-agent-panel-slot[data-agent-content-mode="centered"] .replay-agent-content-frame,
 .replay-agent-panel-slot[data-agent-content-mode="centered"] .replay-agent-composer-frame {
   grid-template-columns:
-    minmax(0, 1fr)
+    minmax(0, var(--replay-agent-left-balance-grow, 1fr))
     minmax(min(100%, var(--replay-agent-readable-min-width)), var(--replay-agent-readable-max-width))
-    minmax(0, 1fr);
+    minmax(0, var(--replay-agent-right-balance-grow, 1fr));
   justify-content: center;
 }
 
