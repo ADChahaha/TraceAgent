@@ -203,7 +203,9 @@ export function UploadWorkbench({
   }
 
   function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
-    setFiles(Array.from(event.currentTarget.files ?? []));
+    const selectedFiles = Array.from(event.currentTarget.files ?? []);
+    setFiles((currentFiles) => mergeSelectedFiles(currentFiles, selectedFiles));
+    event.currentTarget.value = "";
     setError(null);
   }
 
@@ -320,7 +322,7 @@ export function UploadWorkbench({
                   >
                     <Paperclip className="h-4 w-4" />
                   </Button>
-                  <span>{files.length > 0 ? `${files.length} PDF` : "PDF"}</span>
+                  <span>{files.length > 0 ? `${files.length} PDF${files.length > 1 ? "s" : ""}` : "PDF"}</span>
                 </div>
                 <Button type="submit" size="icon" aria-label="Upload documents and ask" title="Upload documents and ask" disabled={isSubmitting}>
                   {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizonal className="h-4 w-4" />}
@@ -417,6 +419,27 @@ function getTaskResultLabel(task: RecentTask): string {
 
 function isPdfFile(file: File): boolean {
   return file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+}
+
+function mergeSelectedFiles(currentFiles: File[], selectedFiles: File[]): File[] {
+  if (selectedFiles.length === 0) {
+    return currentFiles;
+  }
+  const seen = new Set(currentFiles.map(getFileSignature));
+  const merged = [...currentFiles];
+  for (const file of selectedFiles) {
+    const signature = getFileSignature(file);
+    if (seen.has(signature)) {
+      continue;
+    }
+    seen.add(signature);
+    merged.push(file);
+  }
+  return merged;
+}
+
+function getFileSignature(file: File): string {
+  return `${file.name}::${file.size}::${file.lastModified}::${file.type}`;
 }
 
 function waitForPollInterval(

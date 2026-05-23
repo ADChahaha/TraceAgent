@@ -324,6 +324,52 @@ it("已选择的 PDF 可以逐个移除", async () => {
   expect(screen.getByText("appendix.pdf")).toBeInTheDocument();
 });
 
+it("再次选择 PDF 会追加到已选文件而不是覆盖", async () => {
+  const user = userEvent.setup();
+  const created: TaskCreated = {
+    task_id: "task-multi-add",
+    status: "ready",
+    stage: "ready",
+    error_message: null,
+    document_count: 2,
+    active_turn_id: null,
+    stream: { state: "idle", last_event_seq: 3 }
+  };
+  const createTask = jest.fn<Promise<TaskCreated>, [FormData]>(async () => created);
+  const createTaskInput = jest.fn<Promise<QaInputCreated>, [string, string]>(async () => ({
+    task_id: "task-multi-add",
+    turn_id: "turn-multi-add",
+    status: "completed",
+    agent_completion_id: "cmp-multi-add"
+  }));
+  setup(createTask, createTaskInput);
+
+  await user.upload(
+    screen.getByLabelText("PDF file input"),
+    new File(["%PDF-1.4 fake"], "contract.pdf", { type: "application/pdf" })
+  );
+  await user.upload(
+    screen.getByLabelText("PDF file input"),
+    new File(["%PDF-1.4 appendix"], "appendix.pdf", { type: "application/pdf" })
+  );
+
+  expect(screen.getByText("contract.pdf")).toBeInTheDocument();
+  expect(screen.getByText("appendix.pdf")).toBeInTheDocument();
+  expect(screen.getByText("2 PDFs")).toBeInTheDocument();
+
+  fireEvent.change(screen.getByLabelText("QA question input"), {
+    target: { value: "这两份 PDF 有什么共同点？" }
+  });
+  await user.click(screen.getByRole("button", { name: "Upload documents and ask" }));
+
+  await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+  const formData = createTask.mock.calls[0][0];
+  expect(formData.getAll("files")).toHaveLength(2);
+  expect((formData.getAll("files")[0] as File).name).toBe("contract.pdf");
+  expect((formData.getAll("files")[1] as File).name).toBe("appendix.pdf");
+  expect(await screen.findByText("task-multi-add")).toBeInTheDocument();
+});
+
 it("创建任务后左侧任务栏先显示可提问，首轮输入完成后刷新为最新摘要", async () => {
   const user = userEvent.setup();
   window.localStorage.clear();

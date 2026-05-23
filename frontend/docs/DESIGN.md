@@ -11,7 +11,7 @@
   -> HomeWorkspace 挂载 UploadWorkbench
   -> UploadWorkbench 从 localStorage 读取 recent tasks 作为首屏兜底
   -> 挂载后调用 GET /qa/tasks 同步 backend 最近任务
-  -> 用户选择一个或多个 PDF，并在 composer 输入首轮问题
+  -> 用户选择一个或多个 PDF，并在 composer 输入首轮问题；重复点 Add PDF 时会把新选择追加到当前文件列表
   -> composer 键盘语义统一为 Enter 提交、Shift+Enter 换行
   -> 首页左侧 Tasks sidebar 默认 224px，打开时始终保留 sidebar / resize handle / main 三列，用户可拖拽或用键盘调整宽度
   -> 前端校验 files 非空、文件是 PDF、问题非空

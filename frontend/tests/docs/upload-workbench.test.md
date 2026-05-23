@@ -11,6 +11,7 @@
   -> 浏览器挂载后调用 GET /qa/tasks 同步 backend 最近 QA task
   -> 左侧任务栏默认宽度是 224px，可通过 resize separator 拖拽或键盘调整
   -> 用户选择一个或多个 PDF
+  -> 反复点击 Add PDF 时，新的选择会追加到当前文件列表，而不是覆盖上一次选择
   -> 用户在 composer 输入首轮 QA 问题
   -> Enter 直接提交，Shift+Enter 在问题里保留换行
   -> 前端校验至少一个 PDF、文件类型是 PDF、问题非空
@@ -29,6 +30,7 @@
 - `首页左侧任务栏默认宽度和详情页一致，并支持键盘调整`：验证首页任务栏默认 224px，范围是 176-360px，并能通过键盘和拖拽调整。
 - `启动时从 backend 任务列表加载左侧任务栏`：验证首页会从 `GET /qa/tasks` 同步数据库任务到左侧栏。
 - `QA composer 会创建多文档 task 并提交首轮问题`：验证上传多个 PDF 后，前端只提交 `files`，拿到 task 后用同一 task 调 `/inputs` 发送首问。
+- `再次选择 PDF 会追加到已选文件而不是覆盖`：验证多次打开文件选择器时，后一次选择会累加进当前文件列表，并在提交时一次性发送全部 `files`。
 - `QA composer 用 Enter 提交问题，Shift Enter 保留换行`：验证首页 composer 的键盘语义，Shift+Enter 只插入换行，Enter 才创建 task 并提交包含换行的首问。
 - `没有 PDF 或问题为空时不会创建任务`：验证缺少 PDF 或空问题会用英文错误提示在前端拦截，不调用 backend。
 - `已选择的 PDF 可以逐个移除`：验证每个文件 chip 都能通过英文 remove 按钮独立移除。
