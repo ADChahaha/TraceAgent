@@ -1,29 +1,34 @@
 # Document Processor API
 
 This document describes the Python and HTTP contract for
-`service.document_processor`.
+`service.document_processor`。PDF 和 DOCX 使用不同入口：PDF 走 MinerU，
+DOCX 走 `python-docx`，两者返回同一个 `ProcessResult` 形状。
 
 ## Python Entry
 
 ```python
 from service.document_processor.processor import process
+from service.document_processor.docx_processor import process_docx
 
-result = process(file_obj, file_type=None)
+pdf_result = process(pdf_file_obj, file_type=None)
+docx_result = process_docx(docx_file_obj)
 ```
 
 Requirements:
 
 - `file_obj` must expose a callable `read()`.
 - If `file_obj` exposes `seek()`, the processor rewinds before and after reading.
-- `file_type` may be `"pdf"` or `".pdf"`.
-- Without `file_type`, the filename suffix must be `.pdf`.
-- If no filename exists, `document.pdf` is used.
+- PDF `file_type` may be `"pdf"` or `".pdf"`.
+- PDF without `file_type` must have `.pdf` filename suffix.
+- DOCX uses the dedicated `process_docx(...)` entry and `.docx` HTTP route.
+- If no filename exists, PDF uses `document.pdf`; DOCX uses `document.docx`.
 
 Failures:
 
 - unreadable object: `InvalidFileObjectError`
 - unsupported type: `UnsupportedFileTypeError`
-- MinerU failure: `MinerUConversionError`
+- PDF MinerU failure: `MinerUConversionError`
+- DOCX parse failure: `python-docx` raises the underlying package exception.
 
 ## HTTP
 
@@ -45,13 +50,13 @@ GET /v1/ocr/capabilities
 
 ```json
 {
-  "supported_file_types": ["pdf"],
-  "implemented_file_types": ["pdf"],
-  "engine": "mineru-pipeline"
+  "supported_file_types": ["pdf", "docx"],
+  "implemented_file_types": ["pdf", "docx"],
+  "engine": "mineru-pipeline,python-docx"
 }
 ```
 
-### Process
+### Process PDF
 
 ```text
 POST /v1/document-processor/process
@@ -62,6 +67,16 @@ POST /v1/ocr/process
 
 - `file`: required PDF upload.
 - `file_type`: optional, `pdf` or `.pdf`.
+
+### Process DOCX
+
+```text
+POST /v1/document-processor/docx/process
+```
+
+`multipart/form-data` fields:
+
+- `file`: required DOCX upload.
 
 Response:
 
@@ -80,7 +95,7 @@ Response:
 
 Fields:
 
-- `filename`: source basename, or `document.pdf`.
+- `filename`: source basename, or `document.pdf` / `document.docx`.
 - `html`: traceable extraction HTML fragment.
 - `display_html`: self-contained HTML document for user review.
 - `markdown`: markdown-like text for storage and audit views.
@@ -97,6 +112,17 @@ MinerU content_list_v2
   -> heading 到下一个 section 前的内容聚合成 section.text
   -> block 识别 lead_in/clause/paragraph/list_item/table/signature
   -> inline 切出 clause_body、condition、definition 等短片段
+```
+
+DOCX 的生成链路：
+
+```text
+python-docx Document
+  -> 按 Word body 原始顺序读取 paragraph/table
+  -> 仅 Word heading style 生成 section
+  -> 无 heading style 时保持 flat paragraph/table blocks
+  -> table row 生成 {table_block_id}_tr_NNN 证据 id
+  -> blocks[].page_no 固定为 null
 ```
 
 ## HTML Contract

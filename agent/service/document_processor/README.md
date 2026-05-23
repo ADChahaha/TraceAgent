@@ -1,12 +1,13 @@
 # Document Processor
 
-`service.document_processor` receives a PDF file object, runs MinerU pipeline,
-and returns traceable HTML for extraction plus display HTML for inspection.
+`service.document_processor` receives PDF or DOCX file objects and returns
+traceable HTML for extraction plus display HTML for inspection. PDF runs MinerU;
+DOCX is parsed from Word structure with `python-docx`.
 
 ## Supported Input
 
-- Supported: `pdf`
-- Unsupported: `docx`, `doc`, path strings
+- Supported: `pdf`, `docx`
+- Unsupported: `doc`, path strings
 
 Callers pass an opened binary file object, not a filesystem path.
 
@@ -14,8 +15,10 @@ Callers pass an opened binary file object, not a filesystem path.
 
 ```python
 from service.document_processor.processor import process
+from service.document_processor.docx_processor import process_docx
 
-result = process(file_obj, file_type=None)
+result = process(pdf_file_obj, file_type=None)
+docx_result = process_docx(docx_file_obj)
 
 print(result.filename)
 print(result.html)
@@ -26,6 +29,7 @@ HTTP endpoints:
 
 - `POST /v1/document-processor/process`
 - legacy alias: `POST /v1/ocr/process`
+- `POST /v1/document-processor/docx/process`
 
 ## Pipeline
 
@@ -41,16 +45,31 @@ HTTP endpoints:
   -> ProcessResult(filename, html, display_html, markdown, md_list, blocks, semantic_document, meta_info, warnings)
 ```
 
+```text
+调用方传入 DOCX file_obj
+  -> validate file object
+  -> read DOCX bytes
+  -> python-docx Document(BytesIO(...))
+  -> 按 Word body 原始顺序遍历 paragraph/table
+  -> 只用 Word heading style 创建 section
+  -> 无 heading style 时保留 flat paragraph/table blocks
+  -> traceable extraction HTML + self-contained display HTML
+  -> markdown, md_list, backend evidence blocks, semantic_document, meta_info, warnings
+  -> ProcessResult(filename, html, display_html, markdown, md_list, blocks, semantic_document, meta_info, warnings)
+```
+
 Source files:
 
 - `processor.py`: input validation and main orchestration.
+- `docx_processor.py`: DOCX structure parsing and HTML/semantic output.
 - `mineru_converter.py`: MinerU CLI invocation and `content_list_v2` loading.
 - `mineru_html.py`: MinerU content list to HTML conversion.
 - `schemas.py`: `ProcessResult`.
 
-`blocks` 使用和 HTML 一致的可追踪 id。普通 block id 形如
+`blocks` 使用和 HTML 一致的可追踪 id。PDF 普通 block id 形如
 `p001_b000`，列表项形如 `p001_b000_item_000`，表格行形如
-`p001_b000_tr_000`。backend 会再补上自己的 `document_id`，用于
+`p001_b000_tr_000`。DOCX block id 形如 `docx_b001`，表格行形如
+`docx_b003_tr_001`。backend 会再补上自己的 `document_id`，用于
 replay/audit 展示和字段证据定位。
 
 `semantic_document` 是 MinerU 后处理出的三层语义结构：

@@ -17,7 +17,7 @@ initialize_database(connection)
 
 ## 测试函数
 
-- `test_backend_settings_keeps_agent_service_configuration`：验证 backend 仍保留 agent service 地址、超时和 PDF 能力配置。
+- `test_backend_settings_keeps_agent_service_configuration`：验证 backend 仍保留 agent service 地址、超时和 PDF/DOCX 能力配置。
 - `test_backend_settings_loads_agent_cancel_timeout_from_env`：验证 `AGENT_SERVICE_CANCEL_TIMEOUT_SECONDS` 会覆盖后台 best-effort agent cancel 的短超时配置。
 - `test_backend_registers_qa_routes_and_removes_old_task_routes`：验证应用只挂载 QA task API，旧 `/tasks` route 已下线。
 - `test_backend_healthz_reports_ok`：验证 `/healthz` 返回 200 和 `{"status": "ok"}`，供本地启动和部署探活使用。

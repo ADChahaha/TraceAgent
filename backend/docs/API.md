@@ -7,7 +7,7 @@
 ## 基本链路
 
 ```text
-POST /qa/tasks 上传 PDF
+POST /qa/tasks 上传 PDF/DOCX
   -> backend 调 document_processor
   -> 保存 qa_documents
   -> 返回 ready task snapshot
@@ -43,6 +43,7 @@ GET /healthz
 
 ```text
 POST /v1/document-processor/process
+POST /v1/document-processor/docx/process
 POST /v1/document-qa/chat/completions
 POST /v1/document-qa/chat/completions/{completion_id}/cancel
 ```
@@ -55,7 +56,7 @@ POST /v1/document-qa/chat/completions/{completion_id}/cancel
 
 字段：
 
-- `files`：必填，上传的一个或多个 PDF；multipart 中可以重复传入多个 `files` 字段。
+- `files`：必填，上传的一个或多个 PDF/DOCX；multipart 中可以重复传入多个 `files` 字段。
 - `file`：兼容单文件字段。
 - `metadata`：可选 JSON object。
 
@@ -82,10 +83,12 @@ POST /v1/document-qa/chat/completions/{completion_id}/cancel
 multipart 请求
   -> 收集 files/file 上传项
   -> 在当前请求中读取 UploadFile bytes
-  -> 校验至少一个文件和 PDF 类型
+  -> 校验至少一个文件和 PDF/DOCX 类型
   -> 写入 qa_tasks(status=processing, stage=document_processing)
   -> 写入 task.created
   -> 逐个调用 agent document_processor
+       file_type=pdf  -> /v1/document-processor/process
+       file_type=docx -> /v1/document-processor/docx/process
   -> 写入 qa_documents 和 document.processed
   -> 将 task 置为 ready/ready
   -> 写入 task.ready
@@ -269,7 +272,7 @@ task_id
 
 ```json
 {
-  "supported_file_types": ["pdf"],
+  "supported_file_types": ["pdf", "docx"],
   "task_types": [],
   "features": {
     "document_qa": true,

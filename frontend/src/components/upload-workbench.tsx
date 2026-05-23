@@ -113,11 +113,11 @@ export function UploadWorkbench({
     setError(null);
 
     if (files.length === 0) {
-      setError("Select at least one PDF file");
+      setError("Select at least one PDF or DOCX file");
       return;
     }
-    if (files.some((file) => !isPdfFile(file))) {
-      setError("Only PDF files are supported");
+    if (files.some((file) => !isSupportedDocumentFile(file))) {
+      setError("Only PDF and DOCX files are supported");
       return;
     }
 
@@ -228,8 +228,8 @@ export function UploadWorkbench({
                 ref={fileInputRef}
                 type="file"
                 multiple
-                accept=".pdf,application/pdf"
-                aria-label="PDF file input"
+                accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                aria-label="Document file input"
                 className="sr-only"
                 onChange={handleFileChange}
               />
@@ -241,7 +241,7 @@ export function UploadWorkbench({
                   setError(null);
                 }}
                 onKeyDown={handleQuestionKeyDown}
-                placeholder="Ask a question about the uploaded PDFs"
+                placeholder="Ask a question about the uploaded documents"
                 spellCheck={true}
                 className="home-task-spec-input"
               />
@@ -276,13 +276,13 @@ export function UploadWorkbench({
                     type="button"
                     variant="ghost"
                     size="icon"
-                    aria-label="Add PDF"
-                    title="Add PDF"
+                    aria-label="Add document"
+                    title="Add document"
                     onClick={() => fileInputRef.current?.click()}
                   >
                     <Paperclip className="h-4 w-4" />
                   </Button>
-                  <span>{files.length > 0 ? `${files.length} PDF${files.length > 1 ? "s" : ""}` : "PDF"}</span>
+                  <span>{files.length > 0 ? `${files.length} document${files.length > 1 ? "s" : ""}` : "PDF/DOCX"}</span>
                 </div>
                 <Button type="submit" size="icon" aria-label="Upload documents and ask" title="Upload documents and ask" disabled={isSubmitting}>
                   {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizonal className="h-4 w-4" />}
@@ -377,8 +377,14 @@ function getTaskResultLabel(task: RecentTask): string {
   return task.status;
 }
 
-function isPdfFile(file: File): boolean {
-  return file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+function isSupportedDocumentFile(file: File): boolean {
+  const filename = file.name.toLowerCase();
+  return (
+    file.type === "application/pdf" ||
+    file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+    filename.endsWith(".pdf") ||
+    filename.endsWith(".docx")
+  );
 }
 
 function mergeSelectedFiles(currentFiles: File[], selectedFiles: File[]): File[] {

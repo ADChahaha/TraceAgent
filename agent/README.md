@@ -2,7 +2,7 @@
 
 `agent/` 是 TraceAgent 的 AI 能力层，给 `backend` 提供两个 HTTP 阶段：
 
-- `document_processor`：把 PDF 标准化成 QA 友好的语义 HTML、展示用 HTML、markdown、blocks 和处理元信息。
+- `document_processor`：把 PDF/DOCX 标准化成 QA 友好的语义 HTML、展示用 HTML、markdown、blocks 和处理元信息。
 - `file_extraction_agent`：对 backend 传入的多份语义 HTML 做多轮文档 QA chat completion，像 code agent 浏览代码仓库一样用 `tree / grep / read / inspect` 查文档，并通过 SSE 返回带 evidence link 的过程消息和终态事件。
 
 它不访问 backend SQLite，不保存多轮 conversation，也不直接连接前端。任务、messages、memory、事件续传、replay 和最终展示都由 `backend` 负责。
@@ -10,8 +10,9 @@
 ## 基本链路
 
 ```text
-backend 上传 PDF bytes
-  -> POST /v1/document-processor/process
+backend 上传 PDF/DOCX bytes
+  -> PDF POST /v1/document-processor/process
+  -> DOCX POST /v1/document-processor/docx/process
   -> document_processor 返回 html / display_html / markdown / md_list / blocks
   -> backend 保存文档、对话 messages、memory 和事件游标
   -> 用户提问时 backend 生成 completion_id
@@ -63,18 +64,29 @@ python -m uvicorn main:app --reload --host 127.0.0.1 --port 8001
 
 ```text
 POST /v1/document-processor/process
+POST /v1/document-processor/docx/process
 POST /v1/ocr/process
 ```
 
-接收 multipart PDF 文件。`/v1/ocr/process` 是兼容旧路径的同义入口。
+接收 multipart PDF 或 DOCX 文件。`/v1/ocr/process` 是 PDF 兼容旧路径的同义入口。
 
 ```text
-UploadFile
+PDF UploadFile
   -> route 层包装成可读 file-like 对象
   -> service.document_processor.processor.process(file_obj, file_type)
   -> 校验 PDF 类型和 file_obj.read()
   -> MinerU 解析 PDF bytes
   -> mineru_html 生成 html / display_html / markdown / md_list / blocks
+  -> 返回 ProcessResult
+```
+
+```text
+DOCX UploadFile
+  -> route 层包装成可读 file-like 对象
+  -> service.document_processor.docx_processor.process_docx(file_obj)
+  -> 校验 file_obj.read()
+  -> python-docx 解析 DOCX bytes
+  -> 按 Word body 原始顺序生成 html / display_html / markdown / md_list / blocks
   -> 返回 ProcessResult
 ```
 
@@ -144,12 +156,12 @@ agent/
 
 - `main.py` 只创建 FastAPI app 并挂载 routers。
 - `routes/` 只做 HTTP 协议适配和错误状态映射。
-- `service/document_processor/` 放 PDF 标准化实现。
+- `service/document_processor/` 放 PDF/DOCX 标准化实现。
 - `service/file_extraction_agent/` 放文档 QA completion 的 graph、工具、schema 和 active runtime 管理。
 
 ## 参考文档
 
 - [docs/API.md](docs/API.md)：HTTP API 和请求/响应契约。
 - [docs/DESIGN.md](docs/DESIGN.md)：agent 服务模块边界和主链路。
-- [service/document_processor/docs/DESIGN.md](service/document_processor/docs/DESIGN.md)：PDF 标准化设计。
+- [service/document_processor/docs/DESIGN.md](service/document_processor/docs/DESIGN.md)：PDF/DOCX 标准化设计。
 - [service/file_extraction_agent/docs/DESIGN.md](service/file_extraction_agent/docs/DESIGN.md)：文档 QA agent 设计。

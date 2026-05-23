@@ -147,6 +147,7 @@ export function TaskDetail({
   const composerValueRef = React.useRef("");
   const isRunningRef = React.useRef(false);
   const isCancellingRef = React.useRef(false);
+  const summaryRef = React.useRef<TaskSummary | null | undefined>(initialSummary);
 
   const refresh = React.useCallback(async () => {
     setError(null);
@@ -154,13 +155,16 @@ export function TaskDetail({
       const loaded = await loadTaskDetail(taskId);
       setDetail((current) => {
         if (!current) {
+          summaryRef.current = loaded.summary;
           return loaded;
         }
         const currentSeq = current.summary.stream?.last_event_seq ?? 0;
         const loadedSeq = loaded.summary.stream?.last_event_seq ?? 0;
         if (currentSeq > loadedSeq) {
+          summaryRef.current = current.summary;
           return current;
         }
+        summaryRef.current = loaded.summary;
         return loaded;
       });
       setRecentTasks(updateRecentTask(loaded.summary));
@@ -199,9 +203,10 @@ export function TaskDetail({
   const wasSummaryRunningRef = React.useRef(summaryIsRunning);
 
   React.useEffect(() => {
+    summaryRef.current = summary;
     isRunningRef.current = isRunning;
     isCancellingRef.current = isCancelling;
-  }, [isCancelling, isRunning]);
+  }, [isCancelling, isRunning, summary]);
 
   React.useEffect(() => {
     const wasSummaryRunning = wasSummaryRunningRef.current;
@@ -245,14 +250,23 @@ export function TaskDetail({
         setOptimisticEvents((current) => current.filter((item) => !isSameMessageEvent(item, event)));
       }
       isRunningRef.current = !(isTerminalTurnEvent(event) || event.status === "ready");
-      setDetail((current) =>
-        current
-          ? {
-              ...current,
-              summary: applyEventToSummary(current.summary, event),
-            }
-          : current
-      );
+      const hadReviewDocuments = (summaryRef.current?.documents?.length ?? 0) > 0;
+      setDetail((current) => {
+        if (!current) {
+          return current;
+        }
+        const nextSummary = applyEventToSummary(current.summary, event);
+        summaryRef.current = nextSummary;
+        return {
+          ...current,
+          summary: nextSummary,
+        };
+      });
+      if (isSourceIndexedEvent(event)) {
+        if (!hadReviewDocuments) {
+          void refresh();
+        }
+      }
       if (isTerminalTurnEvent(event)) {
         isCancellingRef.current = false;
         setIsSubmittingInput(false);
@@ -961,6 +975,12 @@ function applyEventToSummary(summary: TaskSummary, event: TaskEvent): TaskSummar
       last_event_seq: event.seq,
     },
   };
+  if (isSourceIndexedEvent(event)) {
+    next.source_selectors = {
+      ...(summary.source_selectors ?? {}),
+      ...sourceSelectorsFromSourceIndexedEvent(event),
+    };
+  }
   if (event.type === "turn.started" || event.type === "turn.created") {
     next.active_turn_id = event.turn_id ?? summary.active_turn_id ?? null;
   }
@@ -978,6 +998,22 @@ function shouldSubmitComposerOnKeyDown(event: React.KeyboardEvent<HTMLTextAreaEl
 
 function isTerminalTurnEvent(event: TaskEvent): boolean {
   return event.type === "turn.completed" || event.type === "turn.cancelled" || event.type === "turn.failed";
+}
+
+function isSourceIndexedEvent(event: TaskEvent): boolean {
+  const payload = readObject(event.payload) ?? {};
+  return event.type === "agent.event" && readString(payload.type) === "source_indexed";
+}
+
+function sourceSelectorsFromSourceIndexedEvent(event: TaskEvent): Record<string, string> {
+  const payload = readObject(event.payload) ?? {};
+  const result = readObject(payload.result) ?? {};
+  const sourceSelectors = readObject(result.source_selectors) ?? {};
+  return Object.fromEntries(
+    Object.entries(sourceSelectors)
+      .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+      .map(([key, value]) => [String(key), value])
+  );
 }
 
 function isTaskRunning(summary?: Pick<TaskSummary, "status" | "stream" | "active_turn_id"> | null): boolean {

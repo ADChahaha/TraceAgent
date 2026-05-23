@@ -1,12 +1,13 @@
 # Agent Service API
 
-这份文档记录 `agent` 服务当前对 backend 暴露的 HTTP 能力：PDF 文档标准化和多文档 QA chat completion。更细的模块设计见 [`DESIGN.md`](DESIGN.md)。
+这份文档记录 `agent` 服务当前对 backend 暴露的 HTTP 能力：PDF/DOCX 文档标准化和多文档 QA chat completion。更细的模块设计见 [`DESIGN.md`](DESIGN.md)。
 
 ## 1. 基本工作方式
 
 ```text
-backend 持有原始 PDF
-  -> POST /v1/document-processor/process
+backend 持有原始 PDF/DOCX
+  -> PDF POST /v1/document-processor/process
+  -> DOCX POST /v1/document-processor/docx/process
   -> 得到 filename + html + display_html + markdown + blocks
   -> backend 保存文档和对话状态
 
@@ -54,22 +55,24 @@ GET /healthz
 
 ```text
 POST /v1/document-processor/process
+POST /v1/document-processor/docx/process
 POST /v1/ocr/process
 ```
 
-`/v1/ocr/process` 是兼容旧路径的新旧同义入口。
+`/v1/ocr/process` 是 PDF 兼容旧路径的新旧同义入口。
 
 请求类型：`multipart/form-data`
 
 字段：
 
-- `file`：必填，上传的 PDF 文件。
-- `file_type`：可选，传 `pdf` 或 `.pdf`；不传时由文件名后缀确认。
+- PDF endpoint 的 `file`：必填，上传的 PDF 文件。
+- PDF endpoint 的 `file_type`：可选，传 `pdf` 或 `.pdf`；不传时由文件名后缀确认。
+- DOCX endpoint 的 `file`：必填，上传的 DOCX 文件。
 
 处理流程：
 
 ```text
-UploadFile
+PDF UploadFile
   -> route 层包装成可读 file-like 对象
   -> process(file_obj, file_type)
   -> 校验 PDF 类型
@@ -82,9 +85,23 @@ UploadFile
   -> route 层返回 JSON
 ```
 
+DOCX 处理流程：
+
+```text
+DOCX UploadFile
+  -> route 层包装成可读 file-like 对象
+  -> process_docx(file_obj)
+  -> python-docx Document(BytesIO(...))
+  -> 按 Word body 原始顺序遍历 paragraph/table
+  -> 只用 Word heading style 生成 section
+  -> 无 heading style 时保持 flat paragraph/table blocks
+  -> ProcessResult(filename, html, display_html, markdown, md_list, blocks, meta_info, warnings)
+  -> route 层返回 JSON
+```
+
 失败语义：
 
-- 文件对象不可读、文件类型不是 PDF 或无法确认 PDF 时返回 422。
+- 文件对象不可读、PDF 文件类型不是 PDF 或无法确认 PDF 时返回 422。
 - 解析运行时失败时向上返回服务错误。
 
 ## 5. 多文档 QA Chat Completion

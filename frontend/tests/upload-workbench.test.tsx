@@ -64,7 +64,7 @@ it("首页默认就是 Codex 式新任务界面，不再显示旧上传首屏", 
   ).toBeInTheDocument();
   expect(screen.getByRole("form", { name: "Create task composer" })).toBeInTheDocument();
   expect(screen.getByLabelText("QA question input")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Add PDF" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Add document" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Upload documents and ask" })).toBeInTheDocument();
 
   expect(screen.queryByText("上传工作台")).not.toBeInTheDocument();
@@ -169,7 +169,7 @@ it("启动时从 backend 任务列表加载左侧任务栏", async () => {
   expect(within(sidebar).getByText("task_contract_nli_hard5_enum_final_evidence_27")).toBeInTheDocument();
 });
 
-it("QA composer 会创建多文档 task 并提交首轮问题", async () => {
+it("QA composer 会创建 PDF/DOCX 多文档 task 并提交首轮问题", async () => {
   const user = userEvent.setup();
   const created: TaskCreated = {
     task_id: "task-001",
@@ -191,10 +191,12 @@ it("QA composer 会创建多文档 task 并提交首轮问题", async () => {
   const { onCreated } = setup(createTask, createTaskInput);
 
   await user.upload(
-    screen.getByLabelText("PDF file input"),
+    screen.getByLabelText("Document file input"),
     [
       new File(["%PDF-1.4 fake"], "contract.pdf", { type: "application/pdf" }),
-      new File(["%PDF-1.4 appendix"], "appendix.pdf", { type: "application/pdf" })
+      new File(["PK\u0003\u0004 appendix"], "appendix.docx", {
+        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      })
     ]
   );
   fireEvent.change(screen.getByLabelText("QA question input"), {
@@ -209,7 +211,7 @@ it("QA composer 会创建多文档 task 并提交首轮问题", async () => {
   expect(formData.get("metadata")).toBeNull();
   expect(formData.getAll("files")).toHaveLength(2);
   expect((formData.getAll("files")[0] as File).name).toBe("contract.pdf");
-  expect((formData.getAll("files")[1] as File).name).toBe("appendix.pdf");
+  expect((formData.getAll("files")[1] as File).name).toBe("appendix.docx");
   await waitFor(() => expect(createTaskInput).toHaveBeenCalledWith("task-001", "这份合同可以提前终止吗？"));
   expect(await screen.findByText("task-001")).toBeInTheDocument();
   expect(onCreated).toHaveBeenCalledWith(created);
@@ -242,7 +244,7 @@ it("QA composer 用 Enter 提交问题，Shift Enter 保留换行", async () => 
   setup(createTask, createTaskInput);
 
   await user.upload(
-    screen.getByLabelText("PDF file input"),
+    screen.getByLabelText("Document file input"),
     new File(["%PDF-1.4 fake"], "contract.pdf", { type: "application/pdf" })
   );
   const input = screen.getByLabelText("QA question input");
@@ -257,7 +259,7 @@ it("QA composer 用 Enter 提交问题，Shift Enter 保留换行", async () => 
   await waitFor(() => expect(createTaskInput).toHaveBeenCalledWith("task-keyboard", "第一行\n第二行"));
 });
 
-it("没有 PDF 或问题为空时不会创建任务", async () => {
+it("没有文档或问题为空时不会创建任务", async () => {
   const user = userEvent.setup();
   const { createTask, createTaskInput } = setup();
 
@@ -266,12 +268,12 @@ it("没有 PDF 或问题为空时不会创建任务", async () => {
   });
   await user.click(screen.getByRole("button", { name: "Upload documents and ask" }));
 
-  expect(await screen.findByText("Select at least one PDF file")).toBeInTheDocument();
+  expect(await screen.findByText("Select at least one PDF or DOCX file")).toBeInTheDocument();
   expect(createTask).not.toHaveBeenCalled();
   expect(createTaskInput).not.toHaveBeenCalled();
 
   await user.upload(
-    screen.getByLabelText("PDF file input"),
+    screen.getByLabelText("Document file input"),
     new File(["%PDF-1.4 fake"], "contract.pdf", { type: "application/pdf" })
   );
   await user.click(screen.getByRole("button", { name: "Upload documents and ask" }));
@@ -281,30 +283,32 @@ it("没有 PDF 或问题为空时不会创建任务", async () => {
   expect(createTaskInput).not.toHaveBeenCalled();
 });
 
-it("已选择的 PDF 可以逐个移除", async () => {
+it("已选择的文档可以逐个移除", async () => {
   const user = userEvent.setup();
   setup();
 
   await user.upload(
-    screen.getByLabelText("PDF file input"),
+    screen.getByLabelText("Document file input"),
     [
       new File(["%PDF-1.4 fake"], "contract.pdf", { type: "application/pdf" }),
-      new File(["%PDF-1.4 appendix"], "appendix.pdf", { type: "application/pdf" })
+      new File(["PK\u0003\u0004 appendix"], "appendix.docx", {
+        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      })
     ]
   );
 
   expect(screen.getByText("contract.pdf")).toBeInTheDocument();
-  expect(screen.getByText("appendix.pdf")).toBeInTheDocument();
+  expect(screen.getByText("appendix.docx")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Remove contract.pdf" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Remove appendix.pdf" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Remove appendix.docx" })).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "Remove contract.pdf" }));
 
   expect(screen.queryByText("contract.pdf")).not.toBeInTheDocument();
-  expect(screen.getByText("appendix.pdf")).toBeInTheDocument();
+  expect(screen.getByText("appendix.docx")).toBeInTheDocument();
 });
 
-it("再次选择 PDF 会追加到已选文件而不是覆盖", async () => {
+it("再次选择文档会追加到已选文件而不是覆盖", async () => {
   const user = userEvent.setup();
   const created: TaskCreated = {
     task_id: "task-multi-add",
@@ -325,20 +329,22 @@ it("再次选择 PDF 会追加到已选文件而不是覆盖", async () => {
   setup(createTask, createTaskInput);
 
   await user.upload(
-    screen.getByLabelText("PDF file input"),
+    screen.getByLabelText("Document file input"),
     new File(["%PDF-1.4 fake"], "contract.pdf", { type: "application/pdf" })
   );
   await user.upload(
-    screen.getByLabelText("PDF file input"),
-    new File(["%PDF-1.4 appendix"], "appendix.pdf", { type: "application/pdf" })
+    screen.getByLabelText("Document file input"),
+    new File(["PK\u0003\u0004 appendix"], "appendix.docx", {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    })
   );
 
   expect(screen.getByText("contract.pdf")).toBeInTheDocument();
-  expect(screen.getByText("appendix.pdf")).toBeInTheDocument();
-  expect(screen.getByText("2 PDFs")).toBeInTheDocument();
+  expect(screen.getByText("appendix.docx")).toBeInTheDocument();
+  expect(screen.getByText("2 documents")).toBeInTheDocument();
 
   fireEvent.change(screen.getByLabelText("QA question input"), {
-    target: { value: "这两份 PDF 有什么共同点？" }
+    target: { value: "这两份文档有什么共同点？" }
   });
   await user.click(screen.getByRole("button", { name: "Upload documents and ask" }));
 
@@ -346,7 +352,7 @@ it("再次选择 PDF 会追加到已选文件而不是覆盖", async () => {
   const formData = createTask.mock.calls[0][0];
   expect(formData.getAll("files")).toHaveLength(2);
   expect((formData.getAll("files")[0] as File).name).toBe("contract.pdf");
-  expect((formData.getAll("files")[1] as File).name).toBe("appendix.pdf");
+  expect((formData.getAll("files")[1] as File).name).toBe("appendix.docx");
   expect(await screen.findByText("task-multi-add")).toBeInTheDocument();
 });
 
@@ -372,7 +378,7 @@ it("创建任务后左侧任务栏立即显示新任务，不轮询刷新摘要"
   setup(createTask, createTaskInput, jest.fn(async () => []));
 
   await user.upload(
-    screen.getByLabelText("PDF file input"),
+    screen.getByLabelText("Document file input"),
     new File(["%PDF-1.4 fake"], "sample.pdf", { type: "application/pdf" })
   );
   fireEvent.change(screen.getByLabelText("QA question input"), {

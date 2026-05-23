@@ -8,16 +8,16 @@ from service.document_processor.schemas import ProcessResult
 from main import create_app
 
 
-def test_document_processor_capabilities_route_reports_pdf_only_processor():
+def test_document_processor_capabilities_route_reports_pdf_and_docx_processors():
     client = TestClient(create_app())
 
     response = client.get("/v1/ocr/capabilities")
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["supported_file_types"] == ["pdf"]
-    assert payload["implemented_file_types"] == ["pdf"]
-    assert payload["engine"] == "mineru-pipeline"
+    assert payload["supported_file_types"] == ["pdf", "docx"]
+    assert payload["implemented_file_types"] == ["pdf", "docx"]
+    assert payload["engine"] == "mineru-pipeline,python-docx"
 
 
 def test_document_processor_route_uses_public_processor_exception_contract():
@@ -88,4 +88,76 @@ def test_document_processor_process_route_calls_business_processor(monkeypatch):
         },
         "meta_info": {"engine": "fake"},
         "warnings": ["fake-warning"],
+    }
+
+
+def test_document_processor_docx_route_calls_docx_processor(monkeypatch):
+    from service.document_processor import docx_processor
+
+    seen_call: dict[str, object] = {}
+
+    def fake_process_docx(file_obj):
+        seen_call["file_obj"] = file_obj
+        seen_call["prefix"] = file_obj.read(4)
+        return ProcessResult(
+            filename="sample.docx",
+            html='<section id="docx_b001_section"><h1 id="docx_b001">Overview</h1></section>',
+            display_html='<html><body><h1 id="docx_b001">Overview</h1></body></html>',
+            markdown="# Overview",
+            md_list=["Overview"],
+            blocks=[
+                {
+                    "block_id": "docx_b001",
+                    "text": "Overview",
+                    "page_no": None,
+                    "kind": "heading",
+                }
+            ],
+            semantic_document={
+                "sections": [{"section_id": "docx_b001", "title": "Overview", "level": 1}],
+                "blocks": [{"block_id": "docx_b001", "text": "Overview"}],
+                "inlines": [],
+            },
+            meta_info={"engine": "python-docx"},
+            warnings=[],
+        )
+
+    monkeypatch.setattr(docx_processor, "process_docx", fake_process_docx)
+
+    client = TestClient(create_app())
+    response = client.post(
+        "/v1/document-processor/docx/process",
+        files={
+            "file": (
+                "sample.docx",
+                b"PK\x03\x04 fake",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    assert getattr(seen_call["file_obj"], "filename") == "sample.docx"
+    assert seen_call["prefix"] == b"PK\x03\x04"
+    assert response.json() == {
+        "filename": "sample.docx",
+        "html": '<section id="docx_b001_section"><h1 id="docx_b001">Overview</h1></section>',
+        "display_html": '<html><body><h1 id="docx_b001">Overview</h1></body></html>',
+        "markdown": "# Overview",
+        "md_list": ["Overview"],
+        "blocks": [
+            {
+                "block_id": "docx_b001",
+                "text": "Overview",
+                "page_no": None,
+                "kind": "heading",
+            }
+        ],
+        "semantic_document": {
+            "sections": [{"section_id": "docx_b001", "title": "Overview", "level": 1}],
+            "blocks": [{"block_id": "docx_b001", "text": "Overview"}],
+            "inlines": [],
+        },
+        "meta_info": {"engine": "python-docx"},
+        "warnings": [],
     }

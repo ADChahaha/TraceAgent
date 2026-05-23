@@ -5,8 +5,8 @@
 ## 测试链路
 
 ```text
-用户在首页选择 PDF 并输入首问
-  -> UploadWorkbench 通过英文 UI label 找到 PDF 输入框和提交按钮
+用户在首页选择 PDF/DOCX 并输入首问
+  -> UploadWorkbench 通过英文 UI label 找到文档输入框和提交按钮
   -> UploadWorkbench 调用 createTask
   -> backend 返回 task_id
   -> UploadWorkbench 调用 createTaskInput(task_id, question)

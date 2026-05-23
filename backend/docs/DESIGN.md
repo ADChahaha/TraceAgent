@@ -9,7 +9,7 @@
 backend 是多轮 QA 的持久化事实来源：
 
 ```text
-上传 PDF
+上传 PDF/DOCX
   -> backend 调 agent document_processor
   -> backend 保存 qa_documents
 
@@ -25,7 +25,7 @@ backend 是多轮 QA 的持久化事实来源：
 职责边界：
 
 - `backend` 管理 QA task、documents、messages、turns、events 和 memory。
-- `agent service` 负责 PDF 标准化和单次 document QA completion。
+- `agent service` 负责 PDF/DOCX 标准化和单次 document QA completion。
 - `backend` 通过 HTTP 调用 `agent service`，不 import `agent/` 内部包。
 - `backend` 不持久化上传原始文件 bytes；只保存 document_processor 输出的 HTML/Markdown/blocks。
 - `backend` 不内置业务 schema，也不接收 `task_spec`。
@@ -82,7 +82,7 @@ backend/
 ```text
 POST /qa/tasks multipart(files/file, metadata)
   -> routes.tasks 读取每个 UploadFile bytes
-  -> QaTaskService 校验至少一个 PDF
+  -> QaTaskService 校验至少一个 PDF 或 DOCX
   -> 先校验每个 filename 能推断为支持的 file_type
   -> qa_tasks 插入 processing/document_processing
   -> qa_events 写 task.created
@@ -90,7 +90,9 @@ POST /qa/tasks multipart(files/file, metadata)
   -> 立刻返回 processing/document_processing task snapshot
 
 后台文档线程
-  -> 逐个 AgentClient.process_document(...) 调 agent /v1/document-processor/process
+  -> 逐个 AgentClient.process_document(...) 调 agent document_processor
+       file_type=pdf  -> POST /v1/document-processor/process
+       file_type=docx -> POST /v1/document-processor/docx/process
   -> qa_documents 保存 filename/html/display_html/markdown/md_list/blocks/meta/warnings
   -> 每份文档写 document.processed
   -> 如果已有 active turn，把 task 更新为 running/answering；否则更新为 ready/ready

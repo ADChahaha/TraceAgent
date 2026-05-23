@@ -1,15 +1,15 @@
 # Backend
 
-`backend` 是多文档 QA 的会话和事件服务。它接收前端上传的 PDF，调用 `agent service` 的 `document_processor` 做文档标准化；用户每次提问时，backend 把已保存的 `documents + messages + memory` 交给 agent 的 document QA chat completion，并把模型过程事件持久化为可续传 SSE。
+`backend` 是多文档 QA 的会话和事件服务。它接收前端上传的 PDF/DOCX，调用 `agent service` 的 `document_processor` 做文档标准化；用户每次提问时，backend 把已保存的 `documents + messages + memory` 交给 agent 的 document QA chat completion，并把模型过程事件持久化为可续传 SSE。
 
 它不再维护旧的 `task_spec` 字段抽取、字段提交、result/trace/replay/audit API。backend 是多轮 QA 状态事实来源；agent 只执行单次 completion。
 
 ## 实现链路
 
 ```text
-前端上传一个或多个 PDF
+前端上传一个或多个 PDF/DOCX
   -> FastAPI POST /qa/tasks 读取每个文件 bytes
-  -> 校验 PDF 类型和 metadata
+  -> 校验 PDF/DOCX 类型和 metadata
   -> 调 agent document_processor 得到 html / display_html / markdown / blocks
   -> 保存 qa_tasks / qa_documents
   -> 写入 task.created / document.processed / task.ready 事件

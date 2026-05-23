@@ -1,4 +1,4 @@
-"""把 PDF 转 HTML 业务入口适配成 HTTP endpoints。"""
+"""把文档转 HTML 业务入口适配成 HTTP endpoints。"""
 
 from __future__ import annotations
 
@@ -66,9 +66,9 @@ async def healthz() -> HealthResponse:
 @router.get("/v1/ocr/capabilities", response_model=CapabilitiesResponse)
 async def get_capabilities() -> CapabilitiesResponse:
     return CapabilitiesResponse(
-        supported_file_types=["pdf"],
-        implemented_file_types=["pdf"],
-        engine="mineru-pipeline",
+        supported_file_types=["pdf", "docx"],
+        implemented_file_types=["pdf", "docx"],
+        engine="mineru-pipeline,python-docx",
     )
 
 
@@ -95,9 +95,35 @@ async def process_document(
     return _build_process_response(result)
 
 
+@router.post("/v1/document-processor/docx/process", response_model=ProcessResponse)
+async def process_docx_document(
+    file: UploadFile = File(...),
+) -> ProcessResponse:
+    await file.seek(0)
+    file_proxy = UploadFileProxy(
+        filename=file.filename,
+        content_type=file.content_type,
+        file=file.file,
+    )
+    try:
+        result = await run_in_threadpool(_process_docx_document, file_proxy)
+    except (InvalidFileObjectError, UnsupportedFileTypeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+
+    return _build_process_response(result)
+
+
 def _process_document(file_obj, file_type: str | None):
     process_document = import_module("service.document_processor.processor").process
     return process_document(file_obj, file_type)
+
+
+def _process_docx_document(file_obj):
+    process_docx = import_module("service.document_processor.docx_processor").process_docx
+    return process_docx(file_obj)
 
 
 def _build_process_response(result) -> ProcessResponse:

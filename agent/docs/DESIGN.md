@@ -1,6 +1,6 @@
 # Agent Service Design
 
-这份文档描述 `agent service` 当前保留的两个能力：`document_processor` 和 `file_extraction_agent`。其中 `document_processor` 负责把上传 PDF 标准化成语义 HTML；`file_extraction_agent` 在 `dev-qa` 分支上已经重构为多文档 QA chat completion agent，负责对 backend 提供的一组 HTML 文档进行可追溯问答。
+这份文档描述 `agent service` 当前保留的两个能力：`document_processor` 和 `file_extraction_agent`。其中 `document_processor` 负责把上传 PDF/DOCX 标准化成语义 HTML；`file_extraction_agent` 在 `dev-qa` 分支上已经重构为多文档 QA chat completion agent，负责对 backend 提供的一组 HTML 文档进行可追溯问答。
 
 `agent service` 不访问 backend SQLite，不持久化多轮会话，也不决定前端任务状态。backend 是 task、messages、memory、events 和 replay 的持久化事实来源；agent 只执行一次 completion，并通过 SSE 返回过程事件。跨轮上下文由 backend 组装成 OpenAI 风格 chat messages，包含 `user`、`assistant` 的 `tool_calls` 和 `tool` 消息。
 
@@ -9,7 +9,7 @@
 `agent/` 的目标是把“原始文件处理”和“文档 QA 执行”拆开：
 
 ```text
-原始 PDF
+原始 PDF/DOCX
   -> document_processor 标准化为 html / display_html / markdown / blocks
   -> backend 保存文档和对话状态
   -> file_extraction_agent 接收 documents + messages + memory
@@ -23,8 +23,9 @@
 典型交互链路是：
 
 ```text
-backend 读取上传 PDF bytes
-  -> 调用 POST /v1/document-processor/process
+backend 读取上传 PDF/DOCX bytes
+  -> PDF 调用 POST /v1/document-processor/process
+  -> DOCX 调用 POST /v1/document-processor/docx/process
   -> 拿到 filename + html + display_html + markdown + blocks
   -> backend 保存 task documents、messages、memory 和事件游标
   -> 用户每次提问时，backend 生成 completion_id
@@ -86,10 +87,11 @@ agent/
 
 ### `document_processor`
 
-输入是可读的 PDF 文件对象和可选 `file_type`。
+输入是可读的 PDF 或 DOCX 文件对象。PDF 由 `processor.process(...)` 调
+MinerU；DOCX 由 `docx_processor.process_docx(...)` 调 `python-docx`。
 
 ```text
-UploadFile / file-like object
+PDF UploadFile / file-like object
   -> 校验 file_obj.read() 是否可调用
   -> 校验或推断 PDF 类型
   -> 调用 MinerU 解析 PDF bytes
@@ -97,9 +99,19 @@ UploadFile / file-like object
   -> 返回 ProcessResult(filename, html, display_html, markdown, md_list, blocks, meta_info, warnings)
 ```
 
+```text
+DOCX UploadFile / file-like object
+  -> 校验 file_obj.read() 是否可调用
+  -> python-docx 解析 DOCX bytes
+  -> 按 Word body 原始顺序读取 paragraph/table
+  -> 只用 Word heading style 建 section；无 heading style 时保持 flat blocks
+  -> 生成语义 HTML、展示 HTML、markdown、md_list 和 blocks
+  -> 返回 ProcessResult(filename, html, display_html, markdown, md_list, blocks, meta_info, warnings)
+```
+
 失败语义：
 
-- 文件不可读、文件类型不是 PDF 或无法确认 PDF 时返回 422。
+- 文件不可读、PDF 文件类型不是 PDF 或无法确认 PDF 时返回 422。
 - MinerU 或解析运行时失败时，错误向上抛给路由层。
 
 ### `file_extraction_agent`
@@ -124,7 +136,7 @@ POST /v1/document-qa/chat/completions
 ## 5. 主链路
 
 ```text
-raw PDF
+raw PDF/DOCX
   -> document_processor
   -> backend 持久化 documents + display_html
   -> 用户提问
@@ -141,13 +153,14 @@ raw PDF
 ```text
 GET  /healthz
 POST /v1/document-processor/process
+POST /v1/document-processor/docx/process
 POST /v1/ocr/process
 POST /v1/document-qa/chat/completions
 GET  /v1/document-qa/chat/completions/{completion_id}
 POST /v1/document-qa/chat/completions/{completion_id}/cancel
 ```
 
-`/v1/ocr/process` 只是 `document_processor` 的兼容旧路径。旧字段抽取路径 `/v1/file-extraction-agent/extract/stream` 在本分支已删除。
+`/v1/ocr/process` 只是 PDF `document_processor` 的兼容旧路径。旧字段抽取路径 `/v1/file-extraction-agent/extract/stream` 在本分支已删除。
 
 ## 7. 运行时环境
 
@@ -169,7 +182,7 @@ POST /v1/document-qa/chat/completions/{completion_id}/cancel
 
 ## 8. 当前约束
 
-- `document_processor` 只处理 PDF。
+- `document_processor` 只处理 PDF 和 DOCX，不支持 legacy `.doc`。
 - `file_extraction_agent` 只处理 backend 预先整理好的 `documents(filename + html)`，不负责读取上传文件。
 - `file_extraction_agent` 接收的 `messages` 采用 OpenAI chat 结构；backend 会把上一轮 assistant 的 `tool_calls` 和对应 `tool` 结果一起重建回来。
 - QA completion 当前总是以 SSE 返回；非流式 chat completion 还没有实现。

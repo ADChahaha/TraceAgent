@@ -11,7 +11,7 @@ class BackendSettings:
     agent_service_base_url: str = "http://localhost:8001"
     agent_request_timeout_seconds: float = 1200.0
     agent_cancel_timeout_seconds: float = 2.0
-    supported_file_types: tuple[str, ...] = ("pdf",)
+    supported_file_types: tuple[str, ...] = ("pdf", "docx")
 
     def __post_init__(self) -> None:
         self.database_path = Path(self.database_path)

@@ -1,12 +1,15 @@
 # Document Processor Design
 
-`service.document_processor` converts PDF file objects into HTML that is usable
-by the extraction agent and by the backend replay view.
+`service.document_processor` converts uploaded documents into HTML that is usable
+by the extraction agent and by the backend replay view. PDF and DOCX use separate
+HTTP routes and separate processor modules because their source structures are
+different: PDF goes through MinerU/OCR, while DOCX is parsed from Word's document
+structure.
 
 ## Scope
 
-The module only handles PDF. It does not extract task fields or provide
-multiple OCR engines.
+The module handles PDF and DOCX. It does not extract task fields, and it does
+not support legacy `.doc`.
 
 ## Pipeline
 
@@ -26,11 +29,29 @@ file_obj
   -> ProcessResult(filename, html, display_html, markdown, md_list, blocks, semantic_document, meta_info, warnings)
 ```
 
+DOCX pipeline:
+
+```text
+file_obj
+  -> docx_processor.process_docx(file_obj)
+  -> processor.validate_file_obj(...)
+  -> processor.resolve_filename(...)
+  -> processor.read_source_bytes(...)
+  -> python-docx Document(BytesIO(source_bytes))
+  -> iter_block_items(document) 按 Word body 原始顺序遍历 paragraph/table
+  -> paragraph style 是 Heading 1/2/3... 时打开或切换 section stack
+  -> 普通 paragraph 保留原文顺序，生成 paragraph block
+  -> table 保留原文顺序，生成 table block 和 row evidence
+  -> 生成 html / display_html / markdown / md_list / blocks / semantic_document
+  -> ProcessResult(..., meta_info.engine="python-docx")
+```
+
 ## Files
 
 ```text
 service/document_processor/
 ├── __init__.py
+├── docx_processor.py
 ├── processor.py
 ├── schemas.py
 ├── mineru_converter.py
@@ -44,7 +65,7 @@ service/document_processor/
 
 ## `processor.py`
 
-Owns public input validation and orchestration.
+Owns the existing PDF public input validation and orchestration.
 
 - `process(file_obj, file_type=None)`: public entry point.
 - `validate_file_obj(file_obj)`: requires callable `read()`.
@@ -62,6 +83,56 @@ Owns public input validation and orchestration.
   -> meta_info.engine = "mineru-pipeline"
   -> 复用 mineru_html 生成 html/display_html/markdown/blocks/semantic_document
 ```
+
+## `docx_processor.py`
+
+Owns DOCX-specific parsing. It deliberately does not guess headings from font
+size, bold text or manual formatting. Only explicit Word heading styles create
+sections; documents without heading styles become a flat ordered set of
+paragraph/table blocks under the document root.
+
+DOCX semantic tree construction:
+
+```text
+上传的 .docx file_obj
+  -> 校验 file-like
+  -> 从 filename/name 取源文件名，没有则用 document.docx
+  -> 读取 bytes 并复位文件指针
+  -> python-docx 打开 Document(BytesIO(bytes))
+  -> 按 document.element.body 原始顺序读取 paragraph/table
+  -> paragraph 文本为空则跳过
+  -> paragraph style.name 匹配 Heading N / 标题 N 时：
+       创建 section，section_id 使用 docx_bNNN
+       用 heading level 维护 section stack
+  -> 非 heading paragraph：
+       生成 docx_bNNN paragraph block
+       如果当前有 section，挂到最近 section；否则挂到 document root
+  -> table：
+       生成 docx_bNNN table block
+       每个非空 row 生成 docx_bNNN_tr_NNN 行级 evidence
+       table 挂到当前 section 或 document root
+  -> 返回 ProcessResult
+```
+
+DOCX evidence id 只表达文档内顺序，不表达页码或 bbox：
+
+```text
+docx_b001
+docx_b002
+docx_b003_tr_001
+```
+
+输出约束：
+
+- `html` 是供 QA agent 建虚拟文档树的 traceable fragment。
+- `display_html` 是带基础样式的完整 HTML，前端右侧 review iframe 直接使用。
+- `blocks` 的 `block_id` 与 HTML DOM id 一致；table row 的 id 使用
+  `{table_block_id}_tr_NNN`。
+- `semantic_document.sections` 只来自 Word heading style。
+- 没有 heading style 时不做启发式标题识别，所有非空段落都作为
+  paragraph block 保留原顺序。
+- DOCX 没有稳定 page/bbox，`blocks[].page_no` 固定为 `None`，`meta_info`
+  标记 `engine=python-docx`。
 
 ## `mineru_converter.py`
 

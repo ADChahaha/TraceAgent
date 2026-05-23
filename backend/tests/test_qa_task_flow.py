@@ -233,6 +233,22 @@ def create_qa_task(client: TestClient) -> dict[str, Any]:
     return response.json()
 
 
+def create_docx_qa_task(client: TestClient) -> dict[str, Any]:
+    response = client.post(
+        "/qa/tasks",
+        data={"metadata": json.dumps({"workspace": "demo"}, ensure_ascii=False)},
+        files={
+            "files": (
+                "contract.docx",
+                b"PK\x03\x04 fake docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
 def sse_events(response_text: str) -> list[dict[str, Any]]:
     lines = [
         line.removeprefix("data: ")
@@ -286,6 +302,25 @@ def test_create_qa_task_processes_documents_without_task_spec(tmp_path: Path):
     assert summary_response.json()["document_count"] == 1
     assert list_response.json()["tasks"][0]["task_id"] == created["task_id"]
     assert old_route_response.status_code == 404
+
+
+def test_create_qa_task_accepts_docx_and_forwards_docx_type(tmp_path: Path):
+    app, fake_agent = build_app(tmp_path)
+
+    with TestClient(app) as client:
+        created = create_docx_qa_task(client)
+        ready_summary = wait_for_task_status(client, created["task_id"], "ready")
+        detail_response = client.get(f"/qa/tasks/{created['task_id']}")
+
+    assert created["status"] == "processing"
+    assert ready_summary["document_count"] == 1
+    assert fake_agent.document_calls[0]["filename"] == "contract.docx"
+    assert fake_agent.document_calls[0]["file_type"] == "docx"
+    assert fake_agent.document_calls[0]["content_type"] == (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    assert detail_response.status_code == 200
+    assert detail_response.json()["documents"][0]["filename"] == "contract.docx"
 
 
 def test_qa_input_runs_agent_completion_and_persists_events(tmp_path: Path):

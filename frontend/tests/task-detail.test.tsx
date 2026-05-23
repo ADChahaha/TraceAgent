@@ -329,6 +329,95 @@ it("点击 inline evidence 会用现有任务详情数据打开右侧 review 文
   );
 });
 
+it("首轮生成中收到 source_indexed 后可以立刻打开右侧 review 文档", async () => {
+  const user = userEvent.setup();
+  const fakeEventSource = new FakeEventSource();
+  const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
+  const loadTaskDetail = jest
+    .fn<Promise<TaskDetailData>, [string]>()
+    .mockResolvedValueOnce({
+      ...detailData,
+      summary: {
+        ...runningSummary,
+        documents: [
+          {
+            document_id: "doc_001",
+            filename: "contract.pdf",
+            display_html: '<html><body><p id="p1">Either party may terminate with 30 days notice.</p></body></html>'
+          }
+        ],
+        source_selectors: {}
+      }
+    })
+    .mockResolvedValue({
+      ...detailData,
+      summary: {
+        ...runningSummary,
+        documents: [
+          {
+            document_id: "doc_001",
+            filename: "contract.pdf",
+            display_html: '<html><body><p id="p1">Either party may terminate with 30 days notice.</p></body></html>'
+          }
+        ],
+        source_selectors: {
+          "0001.0001.0001": "p1"
+        }
+      }
+    });
+  renderTaskDetail({ ...detailData, summary: runningSummary }, { createTaskEventSource, loadTaskDetail });
+
+  await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledWith("qa_task_001", 0));
+  await waitFor(() => expect(loadTaskDetail).toHaveBeenCalledTimes(1));
+  act(() => {
+    fakeEventSource.emitEvent(
+      "agent.event",
+      taskEvent({
+        seq: 4,
+        type: "agent.event",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_active",
+        payload: {
+          agent: "file_extraction_agent",
+          type: "source_indexed",
+          result: {
+            ok: true,
+            document_tree: [],
+            source_selectors: {
+              "0001.0001.0001": "p1"
+            }
+          }
+        }
+      })
+    );
+    fakeEventSource.emitEvent(
+      "agent.event",
+      taskEvent({
+        seq: 5,
+        type: "agent.event",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_active",
+        payload: {
+          agent: "file_extraction_agent",
+          type: "model_message",
+          content: "需要提前 30 天通知。[30 天通知](evidence://0001.0001.0001/S001)"
+        }
+      })
+    );
+  });
+
+  await user.click(await screen.findByRole("link", { name: "30 天通知" }));
+
+  const reviewWorkspace = await screen.findByLabelText("Right review workspace");
+  expect(within(reviewWorkspace).getByText("contract.pdf")).toBeInTheDocument();
+  expect(within(reviewWorkspace).getByTitle("Source document")).toHaveAttribute(
+    "srcdoc",
+    expect.stringContaining("data-current-evidence=\"true\"")
+  );
+});
+
 it("右侧 review 会压平文档页面外框，只保留正文排版", async () => {
   const user = userEvent.setup();
   const fakeEventSource = new FakeEventSource();

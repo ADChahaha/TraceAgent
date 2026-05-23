@@ -28,6 +28,15 @@ class AgentClient:
         content_type: str | None,
         file_type: str,
     ) -> dict[str, Any]:
+        normalized_file_type = str(file_type).strip().lower().lstrip(".")
+        endpoint_by_file_type = {
+            "pdf": "/v1/document-processor/process",
+            "docx": "/v1/document-processor/docx/process",
+        }
+        endpoint = endpoint_by_file_type.get(normalized_file_type)
+        if endpoint is None:
+            raise ValueError(f"Unsupported file type: {file_type!r}")
+
         files = {
             "file": (
                 filename,
@@ -35,9 +44,9 @@ class AgentClient:
                 content_type or "application/octet-stream",
             )
         }
-        data = {"file_type": file_type}
+        data = {"file_type": normalized_file_type}
         return self._post(
-            "/v1/document-processor/process",
+            endpoint,
             files=files,
             data=data,
         )

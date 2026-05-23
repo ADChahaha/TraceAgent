@@ -5,9 +5,9 @@
 实现链路：
 
 ```text
-POST /qa/tasks 上传 PDF
+POST /qa/tasks 上传 PDF/DOCX
   -> route 读取 multipart files/file 和 metadata
-  -> qa_task_service 先校验 PDF 类型并保存 qa_tasks
+  -> qa_task_service 先校验 PDF 或 DOCX 类型并保存 qa_tasks
   -> 写入 task.created 事件
   -> 立刻返回 processing/document_processing task snapshot
   -> 后台线程调用 agent document_processor
@@ -43,6 +43,7 @@ POST /qa/tasks/{task_id}/cancel
 ## 测试函数
 
 - `test_create_qa_task_processes_documents_without_task_spec`：验证创建 QA task 不再需要 `task_spec`，接口先返回 `processing/document_processing`，后台会调用 document_processor 保存文档，并且旧 `/tasks` route 已下线。
+- `test_create_qa_task_accepts_docx_and_forwards_docx_type`：验证 `.docx` 上传会被 backend 接受，并以 `file_type=docx` 和原始 content type 转发给 agent document_processor。
 - `test_qa_input_runs_agent_completion_and_persists_events`：验证用户输入接口先返回 `queued`，后台会调用 document QA completion，持久化 user message、turn、agent model message 和 terminal event，且 evidence link 保留在 `model_message` 内容中。
 - `test_qa_input_runs_agent_completion_and_persists_events`：同时验证现有 task detail 端点会返回 `documents[].display_html` 和 `source_selectors`，前端无需调用旧 replay 或新 review 端点即可打开 evidence 原文。
 - `test_qa_second_input_sends_prior_messages_to_agent`：验证第二轮输入会把上一轮 user/assistant/tool 对话一起传给 agent，backend 是多轮状态事实来源。

@@ -15,7 +15,7 @@ def test_backend_settings_keeps_agent_service_configuration(tmp_path: Path):
 
     assert settings.agent_service_base_url == "http://localhost:8001"
     assert settings.agent_cancel_timeout_seconds == 2.0
-    assert settings.supported_file_types == ("pdf",)
+    assert settings.supported_file_types == ("pdf", "docx")
 
 
 def test_backend_settings_loads_agent_cancel_timeout_from_env(monkeypatch, tmp_path: Path):

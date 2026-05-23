@@ -11,10 +11,10 @@
   -> HomeWorkspace 挂载 UploadWorkbench
   -> UploadWorkbench 从 localStorage 读取 recent tasks 作为首屏兜底
   -> 挂载后调用 GET /qa/tasks 同步 backend 最近任务
-  -> 用户选择一个或多个 PDF，并在 composer 输入首轮问题；重复点 Add PDF 时会把新选择追加到当前文件列表
+  -> 用户选择一个或多个 PDF/DOCX，并在 composer 输入首轮问题；重复点 Add document 时会把新选择追加到当前文件列表
   -> composer 键盘语义统一为 Enter 提交、Shift+Enter 换行
   -> 首页左侧 Tasks sidebar 默认 224px，打开时始终保留 sidebar / resize handle / main 三列，用户可拖拽或用键盘调整宽度
-  -> 前端校验 files 非空、文件是 PDF、问题非空
+  -> 前端校验 files 非空、文件是 PDF 或 DOCX、问题非空
   -> POST /qa/tasks，只用 multipart files 创建 QA task
   -> HomeWorkspace 跳转 /tasks/{task_id}
   -> 后台提交 POST /qa/tasks/{task_id}/inputs，把首轮问题写入同一个 task
@@ -88,8 +88,8 @@ frontend/
 首页创建 QA task：
 
 ```text
-用户在首页选择 PDF files 和输入 question
-  -> isPdfFile 校验每个文件
+用户在首页选择 PDF/DOCX files 和输入 question
+  -> isSupportedDocumentFile 校验每个文件
   -> question.trim() 校验非空
   -> FormData append("files", file) 多次
   -> createTask(formData) POST /api/backend/qa/tasks
@@ -107,6 +107,7 @@ TaskDetail(task_id)
   -> 保存 summary.documents/source_selectors 作为右侧 review 文档索引
   -> createTaskEventSource(task_id, 0)
   -> appendTaskEvent 按 seq 去重合并事件
+  -> SSE agent.event(source_indexed) 立即把 payload.result.source_selectors 合并进当前 summary；如果当前详情缺少 documents/display_html，则补一次 GET /qa/tasks/{task_id}
   -> optimisticEvents 保存本地刚提交但还没被 SSE 确认的 user message
   -> eventToStreamItem 把 message.created / agent.event 转成可见流
   -> 点击 Markdown evidence link 时，从 evidence:// path 去掉 S/I/R inline selector，查 source_selectors 得到 display_html DOM id
@@ -159,7 +160,7 @@ API 测试
   -> 验证 /api/backend/qa/tasks、/inputs、/cancel、/events URL 与请求体
 
 首页组件测试
-  -> 验证 PDF + 首问创建 QA task
+  -> 验证 PDF/DOCX + 首问创建 QA task
   -> 验证不再发送 task_spec / task_type
   -> 验证 recent task 同步和主题按钮
 

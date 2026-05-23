@@ -51,8 +51,10 @@ it("创建 QA task 并提交首问后直接跳到新任务详情页", async () =
   render(<HomeWorkspace />);
 
   await user.upload(
-    screen.getByLabelText("PDF file input"),
-    new File(["%PDF-1.4 fake"], "sample.pdf", { type: "application/pdf" })
+    screen.getByLabelText("Document file input"),
+    new File(["PK\u0003\u0004 fake"], "sample.docx", {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    })
   );
   fireEvent.change(screen.getByLabelText("QA question input"), {
     target: { value: "这份招生简章的申请截止日期是什么？" }
