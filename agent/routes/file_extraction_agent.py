@@ -1,4 +1,4 @@
-"""HTTP route for the streaming file extraction agent."""
+"""HTTP routes for document QA chat completions."""
 
 from __future__ import annotations
 
@@ -10,21 +10,26 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from service.file_extraction_agent.schemas import (
+    DocumentQaMemory,
+    DocumentQaMessage,
     InputDocument,
     ModelConfig,
     RunOptions,
-    TaskSpec,
 )
 
 
-router = APIRouter(tags=["file-extraction-agent"])
+router = APIRouter(tags=["document-qa"])
 
 
-class ExtractStreamRequest(BaseModel):
+class ChatCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    completion_id: str
     documents: list[InputDocument]
-    task_spec: TaskSpec | dict[str, Any]
+    messages: list[DocumentQaMessage]
+    memory: DocumentQaMemory = Field(default_factory=DocumentQaMemory)
+    stream: bool = True
+    metadata: dict[str, Any] = Field(default_factory=dict)
     run_options: RunOptions | dict[str, Any] | None = None
     model_config_override: ModelConfig | dict[str, Any] | None = Field(
         default=None,
@@ -40,29 +45,43 @@ class ExtractStreamRequest(BaseModel):
     top_k: int | None = None
 
 
-@router.post("/v1/file-extraction-agent/extract/stream")
-async def extract_fields_stream(request: ExtractStreamRequest) -> StreamingResponse:
+@router.post("/v1/document-qa/chat/completions")
+async def create_chat_completion(request: ChatCompletionRequest) -> StreamingResponse:
     try:
-        stream = _extract_fields_stream(request)
+        stream = _create_chat_completion_stream(request)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
-    return StreamingResponse(stream, media_type="application/x-ndjson")
+    return StreamingResponse(stream, media_type="text/event-stream")
 
 
-def _extract_fields_stream(request: ExtractStreamRequest):
-    extract_stream = import_module("service.file_extraction_agent.processor").extract_stream
-    return extract_stream(
+@router.get("/v1/document-qa/chat/completions/{completion_id}")
+async def get_chat_completion(completion_id: str) -> dict[str, Any]:
+    del completion_id
+    return {"status": "not_implemented"}
+
+
+@router.post("/v1/document-qa/chat/completions/{completion_id}/cancel")
+async def cancel_chat_completion(completion_id: str) -> dict[str, Any]:
+    cancel_completion = import_module("service.file_extraction_agent.processor").cancel_completion
+    return cancel_completion(completion_id)
+
+
+def _create_chat_completion_stream(request: ChatCompletionRequest):
+    create_completion_stream = import_module("service.file_extraction_agent.processor").create_completion_stream
+    return create_completion_stream(
+        completion_id=request.completion_id,
         documents=request.documents,
-        task_spec=request.task_spec,
+        messages=request.messages,
+        memory=request.memory,
         run_options=request.run_options,
         model_config=_model_config(request),
     )
 
 
-def _model_config(request: ExtractStreamRequest) -> ModelConfig | dict[str, Any] | None:
+def _model_config(request: ChatCompletionRequest) -> ModelConfig | dict[str, Any] | None:
     if request.model_config_override is not None:
         return request.model_config_override
 

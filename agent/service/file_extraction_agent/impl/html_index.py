@@ -201,7 +201,7 @@ class HtmlDocument:
     def source_selectors(self) -> dict[str, str]:
         selectors: dict[str, str] = {}
         for path_id, node in self.nodes_by_path_id.items():
-            if node.kind not in READABLE_KINDS:
+            if node.kind not in READABLE_KINDS and node.kind not in {"document", "section"}:
                 continue
             source_id = source_dom_id(node.source)
             if source_id:
@@ -452,7 +452,8 @@ def build_html_document(documents: Any) -> HtmlDocument:
 
     for document_index, source in enumerate(source_documents, start=1):
         parsed_root = parse_html(source.html)
-        title = document_title(parsed_root)
+        title_node = document_title_node(parsed_root)
+        title = node_text(title_node) if title_node is not None else ""
         basename = slug_text(Path(source.filename).stem or "document")
         title_slug = slug_text(title) if title else ""
         base_name = f"{document_index:03d}-{basename}" + (f"-{title_slug}" if title_slug else "")
@@ -464,7 +465,7 @@ def build_html_document(documents: Any) -> HtmlDocument:
             path_id=f"{len(root.children) + 1:04d}",
             display_name=decode_display_name(f"{basename}" + (f"-{title_slug}" if title_slug else "")),
             kind="document",
-            source=parsed_root,
+            source=title_node,
             source_document=source.filename,
             title=title,
         )
@@ -601,12 +602,16 @@ def block_nodes(root: HtmlNode) -> list[HtmlNode]:
 
 
 def document_title(root: HtmlNode) -> str:
+    title_node = document_title_node(root)
+    return node_text(title_node) if title_node is not None else ""
+
+
+def document_title_node(root: HtmlNode) -> HtmlNode | None:
     for node in walk(root):
         if node.tag in {"h1", "title"}:
-            text = node_text(node)
-            if text:
-                return text
-    return ""
+            if node_text(node):
+                return node
+    return None
 
 
 def list_items(node: HtmlNode) -> list[dict[str, Any]]:

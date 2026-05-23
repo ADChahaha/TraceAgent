@@ -1,27 +1,39 @@
-"""Adapt public HTML extraction inputs into internal graph input."""
+"""Adapt public document QA completion inputs into internal graph input."""
 
 from __future__ import annotations
 
 from typing import Any
 
 from service.file_extraction_agent.impl.html_index import build_html_document
-from service.file_extraction_agent.impl.html_state import HtmlExtractionInput
-from service.file_extraction_agent.schemas import FieldDefinition, InputDocument, RunOptions, TaskSpec
+from service.file_extraction_agent.impl.html_state import DocumentQaCompletionInput
+from service.file_extraction_agent.schemas import (
+    DocumentQaMemory,
+    DocumentQaMessage,
+    InputDocument,
+    RunOptions,
+)
 
 
-def build_graph_input(
+def build_completion_input(
     *,
+    completion_id: str,
     documents: Any,
-    task_spec: Any,
+    messages: Any,
+    memory: Any = None,
     run_options: Any = None,
-) -> HtmlExtractionInput:
+) -> DocumentQaCompletionInput:
+    if not isinstance(completion_id, str) or not completion_id.strip():
+        raise ValueError("completion_id is required")
     normalized_documents = normalize_documents(documents)
-    normalized_task_spec = normalize_task_spec(task_spec)
+    normalized_messages = normalize_messages(messages)
+    normalized_memory = normalize_memory(memory)
     normalized_run_options = normalize_run_options(run_options)
     document = build_html_document([item.model_dump() for item in normalized_documents])
-    return HtmlExtractionInput(
+    return DocumentQaCompletionInput(
+        completion_id=completion_id,
         documents=normalized_documents,
-        task_spec=normalized_task_spec,
+        messages=normalized_messages,
+        memory=normalized_memory,
         document=document,
         run_options=normalized_run_options,
     )
@@ -49,26 +61,38 @@ def normalize_documents(documents: Any) -> list[InputDocument]:
     return normalized
 
 
-def normalize_task_spec(task_spec: Any) -> TaskSpec:
-    if task_spec is None:
-        raise ValueError("task_spec is required")
-    if isinstance(task_spec, TaskSpec):
-        spec = task_spec
-    elif isinstance(task_spec, dict):
-        spec = TaskSpec(**task_spec)
-    else:
-        fields = getattr(task_spec, "fields", None)
-        instructions = getattr(task_spec, "instructions", None)
-        spec = TaskSpec(fields=fields, instructions=instructions)
+def normalize_messages(messages: Any) -> list[DocumentQaMessage]:
+    if not isinstance(messages, list) or not messages:
+        raise ValueError("messages must be a non-empty list")
+    normalized: list[DocumentQaMessage] = []
+    for item in messages:
+        if isinstance(item, DocumentQaMessage):
+            normalized.append(item)
+        elif isinstance(item, dict):
+            normalized.append(DocumentQaMessage(**item))
+        else:
+            normalized.append(
+                DocumentQaMessage(
+                    role=getattr(item, "role", "user"),
+                    content=getattr(item, "content", ""),
+                )
+            )
+    return normalized
 
-    if not spec.fields:
-        raise ValueError("task_spec.fields must be non-empty")
-    for field_def in spec.fields:
-        if not isinstance(field_def, FieldDefinition):
-            raise ValueError("task_spec fields must be FieldDefinition-compatible")
-        if not field_def.name:
-            raise ValueError("field name is required")
-    return spec
+
+def normalize_memory(memory: Any) -> DocumentQaMemory:
+    if memory is None:
+        return DocumentQaMemory()
+    if isinstance(memory, DocumentQaMemory):
+        return memory
+    if isinstance(memory, dict):
+        return DocumentQaMemory(**memory)
+    return DocumentQaMemory(
+        reading_history=list(getattr(memory, "reading_history", []) or []),
+        evidence_notes=list(getattr(memory, "evidence_notes", []) or []),
+        prior_answers=list(getattr(memory, "prior_answers", []) or []),
+        open_threads=list(getattr(memory, "open_threads", []) or []),
+    )
 
 
 def normalize_run_options(run_options: Any) -> RunOptions:
@@ -85,4 +109,10 @@ def normalize_run_options(run_options: Any) -> RunOptions:
     return options
 
 
-__all__ = ["build_graph_input", "normalize_documents", "normalize_task_spec", "normalize_run_options"]
+__all__ = [
+    "build_completion_input",
+    "normalize_documents",
+    "normalize_messages",
+    "normalize_memory",
+    "normalize_run_options",
+]

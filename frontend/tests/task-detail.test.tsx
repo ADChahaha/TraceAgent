@@ -1,164 +1,105 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import {
-  getTaskAudit,
-  getTaskResult,
-  getTaskSummary,
-  getTaskTrace,
+  cancelTask,
+  createTaskInput,
+  getTaskEventsUrl,
   loadTaskDetail
 } from "@/lib/api";
 import { TaskDetail } from "@/components/task-detail";
 import type {
+  QaInputCreated,
   TaskDetailData,
-  TaskReplay,
-  TaskResult,
+  TaskEvent,
   TaskSummary
 } from "@/lib/types";
 
-const completedSummary: TaskSummary = {
-  task_id: "task-001",
-  status: "completed",
-  stage: "done",
-  has_result: true,
-  has_trace: true,
+const readySummary: TaskSummary = {
+  task_id: "qa_task_001",
+  status: "ready",
+  stage: "ready",
+  error_message: null,
+  document_count: 1,
+  active_turn_id: null,
   stream: {
-    state: "ended",
+    state: "idle",
+    last_event_seq: 3
+  }
+};
+
+const readyDetailSummary: TaskSummary = {
+  ...readySummary,
+  documents: [
+    {
+      document_id: "doc_001",
+      filename: "contract.pdf",
+      display_html: '<html><body><p id="p1">Either party may terminate with 30 days notice.</p><p id="p2">The notice must be written.</p><table id="table1"><tr id="table1_tr_000"><th>Clause</th><th>Value</th></tr><tr id="table1_tr_001"><td>Notice</td><td>30 days</td></tr></table></body></html>'
+    }
+  ],
+  source_selectors: {
+    "0001.0001.0001": "p1",
+    "0001.0001.0002": "p2",
+    "0001.0001.0003": "table1"
+  }
+};
+
+const runningSummary: TaskSummary = {
+  ...readySummary,
+  status: "running",
+  stage: "answering",
+  active_turn_id: "turn_active",
+  stream: {
+    state: "running",
     last_event_seq: 8
   }
 };
 
-const baseReplay: TaskReplay = {
-  task_id: "task-001",
-  status: "completed",
-  stage: "done",
-  documents: [{ document_id: "doc-1", filename: "sample.pdf" }],
-  display_html:
-    '<h1 id="p001_b000">文明寝室名单</h1><p id="0001.0000.0001">1-101、1-102 被列为文明寝室</p><p id="0001.0000.0002">一号楼包含文明寝室</p>',
-  source_selectors: {
-    "0001.0000.0001": "0001.0000.0001",
-    "0001.0000.0002": "0001.0000.0002"
-  },
-  outline_tree: [
-    {
-      id: "p001_b000",
-      type: "TITLE",
-      text: "文明寝室名单",
-      children: []
-    }
-  ],
-  broad_plan: { plan: ["读取文明寝室名单"] },
-  actions: [
-    {
-      tool_name: "model_message",
-      reason: "候选证据支持字段值",
-      result: { ok: true }
-    },
-    {
-      tool_name: "write_field",
-      args: {
-        field_id: "room_numbers",
-        value: "1-101,1-102",
-        final_evidence: [
-          {
-            path: "/001-sample/001-Notice.md",
-            sentences: ["0001.0000.0001"]
-          }
-        ],
-        status: "resolved"
-      },
-      result: {
-        ok: true,
-        field: {
-          field_id: "room_numbers",
-          status: "resolved",
-          value: "1-101,1-102",
-          evidence: [
-            {
-              path: "/001-sample/001-Notice.md",
-              sentences: ["0001.0000.0001"]
-            }
-          ],
-          evidence_texts: [
-            {
-              path: "/001-sample/001-Notice.md",
-              selector: "0001.0000.0001",
-              text: "1-101、1-102 被列为文明寝室"
-            }
-          ],
-          reason: "候选证据支持字段值"
-        }
-      }
-    }
-  ],
-  result: { room_numbers: "1-101,1-102" },
-  field_states: {},
-  audit: {}
-};
-
-const encodedFilenameReplay: TaskReplay = {
-  ...baseReplay,
-  documents: [{ document_id: "doc-1", filename: "/contracts/Confidentiality%20and%20Non-Disclosure%20Agreement.pdf" }]
-};
-
-const completedResult: TaskResult = {
-  task_id: "task-001",
-  status: "completed",
-  fields: [
-    {
-      field_name: "room_numbers",
-      display_name: "文明寝室房间号",
-      agent_value: "1-101,1-102",
-      final_value: "1-101,1-102",
-      field_status: "resolved",
-      source: "agent",
-      committed: true
-    }
-  ]
-};
-
-const processedDisplayHtml =
-  '<!doctype html><html lang="en"><head><meta charset="utf-8"><style>body { margin: 0; background: #f3f4f6; } main { max-width: 980px; margin: 0 auto; padding: 24px; } .page { background: #fff; padding: 44px 56px; }</style><script>window.__sourceScriptRan = true;</script></head><body><main><section class="page"><h1 id="p001_b000">文明寝室名单</h1><p id="0001.0000.0001">1-101、1-102 被列为文明寝室</p><p id="0001.0000.0002">一号楼包含文明寝室</p></section></main></body></html>';
-
 const detailData: TaskDetailData = {
-  summary: completedSummary,
-  result: completedResult,
+  summary: readyDetailSummary,
+  result: null,
   trace: null,
-  replay: baseReplay,
+  replay: null,
   audit: null
 };
 
+const recentTaskSummaries: TaskSummary[] = [
+  readySummary,
+  {
+    task_id: "qa_task_002",
+    status: "running",
+    stage: "answering",
+    error_message: null,
+    document_count: 2,
+    active_turn_id: "turn_002",
+    stream: {
+      state: "running",
+      last_event_seq: 4
+    }
+  }
+];
+
 class FakeEventSource extends EventTarget {
   closed = false;
+  onerror: ((event: Event) => void) | null = null;
 
   constructor(public readonly url = "") {
     super();
   }
 
-  emit(payload: unknown) {
-    this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(payload) }));
+  emitEvent(eventName: string, payload: TaskEvent) {
+    this.dispatchEvent(new MessageEvent(eventName, { data: JSON.stringify(payload) }));
   }
 
-  emitEvent(eventName: string, payload: unknown) {
-    this.dispatchEvent(new MessageEvent(eventName, { data: JSON.stringify(payload) }));
+  emitError() {
+    this.onerror?.(new Event("error"));
+    this.dispatchEvent(new Event("error"));
   }
 
   close() {
     this.closed = true;
   }
 }
-
-const recentTaskSummaries: TaskSummary[] = [
-  completedSummary,
-  {
-    task_id: "task-002",
-    status: "processing",
-    stage: "extraction",
-    has_result: false,
-    has_trace: true,
-    created_at: "2026-05-18T09:00:00Z"
-  }
-];
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -180,16 +121,32 @@ function renderTaskDetail(
     taskId?: string;
     loadTaskDetail?: (taskId: string) => Promise<TaskDetailData>;
     listTasks?: () => Promise<TaskSummary[]>;
+    createTaskInput?: (taskId: string, content: string) => Promise<QaInputCreated>;
+    cancelTask?: (taskId: string) => Promise<unknown>;
     createTaskEventSource?: (taskId: string, afterSeq?: number) => EventSource;
   } = {}
 ) {
   const taskId = options.taskId ?? data.summary.task_id;
   const loadTaskDetailImpl = options.loadTaskDetail ?? (async () => data);
   const listTasksImpl = options.listTasks ?? (async () => recentTaskSummaries);
+  const createTaskInputImpl =
+    options.createTaskInput ??
+    (async () => ({
+      task_id: taskId,
+      turn_id: "turn_created",
+      status: "queued",
+      agent_completion_id: null
+    }));
+  const cancelTaskImpl = options.cancelTask ?? (async () => ({ task_id: taskId, status: "cancelling" }));
+
   const injectedLoadTaskDetail = jest.fn(loadTaskDetailImpl) as jest.MockedFunction<
     (taskId: string) => Promise<TaskDetailData>
   >;
   const listTasks = jest.fn(listTasksImpl) as jest.MockedFunction<() => Promise<TaskSummary[]>>;
+  const injectedCreateTaskInput = jest.fn(createTaskInputImpl) as jest.MockedFunction<
+    (taskId: string, content: string) => Promise<QaInputCreated>
+  >;
+  const injectedCancelTask = jest.fn(cancelTaskImpl) as jest.MockedFunction<(taskId: string) => Promise<unknown>>;
 
   const renderResult = render(
     <TaskDetail
@@ -197,2283 +154,732 @@ function renderTaskDetail(
       initialSummary={data.summary}
       loadTaskDetail={injectedLoadTaskDetail}
       listTasks={listTasks}
+      createTaskInput={injectedCreateTaskInput}
+      cancelTask={injectedCancelTask}
       createTaskEventSource={options.createTaskEventSource}
     />
   );
 
-  return { injectedLoadTaskDetail, listTasks, ...renderResult };
+  return { injectedLoadTaskDetail, listTasks, injectedCreateTaskInput, injectedCancelTask, ...renderResult };
 }
 
-function getSourceFrameHtml(sourceViewer: HTMLElement): string {
-  const frame = within(sourceViewer).getByTitle("原文文档") as HTMLIFrameElement;
-  return frame.dataset.currentSourceHtml || frame.getAttribute("srcdoc") || "";
-}
-
-function modelMessage(content: string): TaskReplay["actions"][number] {
+function taskEvent(overrides: Partial<TaskEvent>): TaskEvent {
   return {
-    tool_name: "model_message",
-    reason: content,
-    result: { ok: true }
+    seq: overrides.seq ?? 1,
+    task_id: overrides.task_id ?? "qa_task_001",
+    turn_id: overrides.turn_id ?? null,
+    type: overrides.type ?? "message.created",
+    status: overrides.status ?? "ready",
+    stage: overrides.stage ?? "ready",
+    payload: overrides.payload ?? {},
+    created_at: overrides.created_at ?? "2026-05-23T00:00:00Z"
   };
 }
 
-function createMultiFieldDetail(taskId = "task-001"): TaskDetailData {
-  return {
-    ...detailData,
-    summary: {
-      ...completedSummary,
-      task_id: taskId
-    },
-    result: {
-      ...completedResult,
-      task_id: taskId,
-      fields: [
-        completedResult.fields[0],
-        {
-          field_name: "building_name",
-          display_name: "楼栋名称",
-          agent_value: "一号楼",
-          final_value: "一号楼",
-          field_status: "resolved",
-          source: "agent",
-          committed: true
-        },
-        {
-          field_name: "missing_required",
-          display_name: "缺失字段",
-          agent_value: null,
-          final_value: null,
-          field_status: "failed",
-          source: null,
-          committed: false
-        }
-      ]
-    },
-    replay: {
-      ...baseReplay,
-      task_id: taskId,
-      actions: [
-        ...baseReplay.actions,
-        {
-          tool_name: "write_field",
-          reason: "楼栋证据充分",
-          args: {
-            field_id: "building_name",
-            value: "一号楼",
-            final_evidence: [
-              {
-                path: "/001-sample/001-Notice.md",
-                sentences: ["0001.0000.0002"]
-              }
-            ],
-            status: "resolved"
-          },
-          result: {
-            ok: true,
-            field: {
-              field_id: "building_name",
-              status: "resolved",
-              value: "一号楼",
-              evidence: [
-                {
-                  path: "/001-sample/001-Notice.md",
-                  sentences: ["0001.0000.0002"]
-                }
-              ],
-              evidence_texts: [
-                {
-                  path: "/001-sample/001-Notice.md",
-                  selector: "0001.0000.0002",
-                  text: "一号楼包含文明寝室"
-                }
-              ],
-              reason: "楼栋证据充分"
-            }
-          }
-        }
-      ]
-    }
-  };
-}
-
-it("loadTaskDetail 只拉 replay 所需数据，不再加载 trace 和 audit", async () => {
+it("loadTaskDetail 只读取 QA task summary，不再请求 result/replay/trace/audit", async () => {
   global.fetch = jest.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.endsWith("/tasks/task-001")) {
-      return jsonResponse(completedSummary);
-    }
-    if (url.endsWith("/tasks/task-001/result")) {
-      return jsonResponse(completedResult);
-    }
-    if (url.endsWith("/tasks/task-001/replay")) {
-      return jsonResponse(baseReplay);
+    if (url.endsWith("/api/backend/qa/tasks/qa_task_001")) {
+      return jsonResponse(readyDetailSummary);
     }
     throw new Error(`unexpected fetch: ${url}`);
   });
 
-  const loaded = await loadTaskDetail("task-001");
+  const loaded = await loadTaskDetail("qa_task_001");
 
-  expect(loaded.summary).toEqual(completedSummary);
-  expect(loaded.result).toEqual(completedResult);
-  expect(loaded.replay).toEqual(baseReplay);
+  expect(loaded.summary).toEqual(readyDetailSummary);
+  expect(loaded.result).toBeNull();
   expect(loaded.trace).toBeNull();
+  expect(loaded.replay).toBeNull();
   expect(loaded.audit).toBeNull();
+  expect(global.fetch).not.toHaveBeenCalledWith(expect.stringContaining("/result"), expect.anything());
+  expect(global.fetch).not.toHaveBeenCalledWith(expect.stringContaining("/replay"), expect.anything());
   expect(global.fetch).not.toHaveBeenCalledWith(expect.stringContaining("/trace"), expect.anything());
   expect(global.fetch).not.toHaveBeenCalledWith(expect.stringContaining("/audit"), expect.anything());
-  expect(global.fetch).not.toHaveBeenCalledWith(expect.stringContaining("/review"), expect.anything());
 });
 
-it("loadTaskDetail 在处理中也拉 replay 以便实时显示原文", async () => {
-  const processingSummary: TaskSummary = {
-    task_id: "task-live-source",
-    status: "processing",
-    stage: "extraction",
-    has_result: false,
-    has_trace: false,
-    error_message: null,
-    stream: {
-      state: "running",
-      last_event_seq: 4
-    }
-  };
-  const runningReplay: TaskReplay = {
-    ...baseReplay,
-    task_id: "task-live-source",
-    status: "processing",
-    stage: "extraction",
-    actions: []
-  };
+it("QA API 会提交输入、取消 active turn，并生成可续传事件 URL", async () => {
   global.fetch = jest.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.endsWith("/tasks/task-live-source")) {
-      return jsonResponse(processingSummary);
+    if (url.endsWith("/api/backend/qa/tasks/qa_task_001/inputs")) {
+      return jsonResponse({
+        task_id: "qa_task_001",
+        turn_id: "turn_001",
+        status: "completed",
+        agent_completion_id: "cmp_001"
+      });
     }
-    if (url.endsWith("/tasks/task-live-source/replay")) {
-      return jsonResponse(runningReplay);
+    if (url.endsWith("/api/backend/qa/tasks/qa_task_001/cancel")) {
+      return jsonResponse({
+        task_id: "qa_task_001",
+        turn_id: "turn_001",
+        status: "cancelling"
+      });
     }
     throw new Error(`unexpected fetch: ${url}`);
   });
 
-  const loaded = await loadTaskDetail("task-live-source");
-
-  expect(loaded.summary).toEqual(processingSummary);
-  expect(loaded.result).toBeNull();
-  expect(loaded.replay).toEqual(runningReplay);
-  expect(global.fetch).not.toHaveBeenCalledWith(expect.stringContaining("/result"), expect.anything());
-});
-
-it("低层 API 仍保留 trace 和 audit 读取能力", async () => {
-  global.fetch = jest.fn(async (input: RequestInfo | URL) => {
-    const url = String(input);
-    if (url.endsWith("/tasks/task-001")) {
-      return jsonResponse(completedSummary);
-    }
-    if (url.endsWith("/tasks/task-001/result")) {
-      return jsonResponse(completedResult);
-    }
-    if (url.endsWith("/tasks/task-001/trace")) {
-      return jsonResponse({ task_id: "task-001", fields: [] });
-    }
-    if (url.endsWith("/tasks/task-001/audit")) {
-      return jsonResponse({ task_id: "task-001", status: "completed", field_commits: [] });
-    }
-    throw new Error(`unexpected fetch: ${url}`);
-  });
-
-  await expect(getTaskSummary("task-001")).resolves.toEqual(completedSummary);
-  await expect(getTaskResult("task-001")).resolves.toEqual(completedResult);
-  await expect(getTaskTrace("task-001")).resolves.toEqual({ task_id: "task-001", fields: [] });
-  await expect(getTaskAudit("task-001")).resolves.toEqual({
-    task_id: "task-001",
+  await expect(createTaskInput("qa_task_001", "通知期限是多少？", { max_tool_calls: 12 })).resolves.toEqual({
+    task_id: "qa_task_001",
+    turn_id: "turn_001",
     status: "completed",
-    field_commits: []
+    agent_completion_id: "cmp_001"
+  });
+  await expect(cancelTask("qa_task_001")).resolves.toEqual({
+    task_id: "qa_task_001",
+    turn_id: "turn_001",
+    status: "cancelling"
+  });
+
+  expect(getTaskEventsUrl("qa_task_001", 5)).toBe("/api/backend/qa/tasks/qa_task_001/events?after_seq=5");
+  expect(global.fetch).toHaveBeenCalledWith(
+    "/api/backend/qa/tasks/qa_task_001/inputs",
+    expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ content: "通知期限是多少？", run_options: { max_tool_calls: 12 } })
+    })
+  );
+  expect(global.fetch).toHaveBeenCalledWith(
+    "/api/backend/qa/tasks/qa_task_001/cancel",
+    expect.objectContaining({ method: "POST" })
+  );
+});
+
+it("任务详情会从 QA 事件流重建用户问题、模型回答和 inline evidence", async () => {
+  const fakeEventSource = new FakeEventSource();
+  const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
+  renderTaskDetail(detailData, { createTaskEventSource });
+
+  await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledWith("qa_task_001", 0));
+  act(() => {
+    fakeEventSource.emitEvent(
+      "message.created",
+      taskEvent({
+        seq: 4,
+        type: "message.created",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_001",
+        payload: { role: "user", content: "这份合同可以提前终止吗？" }
+      })
+    );
+    fakeEventSource.emitEvent(
+      "agent.event",
+      taskEvent({
+        seq: 5,
+        type: "agent.event",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_001",
+        payload: {
+          agent: "file_extraction_agent",
+          type: "model_message",
+          content: "可以提前终止，但需要提前 30 天通知。[30 天通知](evidence://0001.0001.0001/S001)"
+        }
+      })
+    );
+  });
+
+  const qaStream = await screen.findByLabelText("QA conversation and reading process");
+  expect(within(qaStream).getByText("这份合同可以提前终止吗？")).toBeInTheDocument();
+  expect(within(qaStream).getByText("可以提前终止，但需要提前 30 天通知。")).toBeInTheDocument();
+  expect(within(qaStream).getByRole("link", { name: "30 天通知" })).toHaveAttribute(
+    "href",
+    "evidence://0001.0001.0001/S001"
+  );
+});
+
+it("点击 inline evidence 会用现有任务详情数据打开右侧 review 文档", async () => {
+  const user = userEvent.setup();
+  const fakeEventSource = new FakeEventSource();
+  const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
+  renderTaskDetail(detailData, { createTaskEventSource });
+
+  await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledWith("qa_task_001", 0));
+  act(() => {
+    fakeEventSource.emitEvent(
+      "agent.event",
+      taskEvent({
+        seq: 5,
+        type: "agent.event",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_001",
+        payload: {
+          agent: "file_extraction_agent",
+          type: "model_message",
+          content: "需要提前 30 天通知。[30 天通知](evidence://0001.0001.0001/S001)"
+        }
+      })
+    );
+  });
+
+  await user.click(await screen.findByRole("link", { name: "30 天通知" }));
+
+  const reviewWorkspace = await screen.findByLabelText("Right review workspace");
+  expect(within(reviewWorkspace).getByText("contract.pdf")).toBeInTheDocument();
+  expect(within(reviewWorkspace).getByTitle("Source document")).toHaveAttribute(
+    "srcdoc",
+    expect.stringContaining("data-current-evidence=\"true\"")
+  );
+});
+
+it("文件夹级 inline evidence 会定位到对应 header 而不是子节点", async () => {
+  const user = userEvent.setup();
+  const fakeEventSource = new FakeEventSource();
+  const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
+  const sourceDocument = document.implementation.createHTMLDocument("source");
+  sourceDocument.body.innerHTML = '<h2 id="0001.0001">Termination</h2><p id="p1">Either party may terminate with 30 days notice.</p><p id="p2">The notice must be written.</p>';
+  const headerTarget = sourceDocument.getElementById("0001.0001") as HTMLElement;
+  const childTarget = sourceDocument.getElementById("p1") as HTMLElement;
+  const headerScrollIntoView = jest.fn();
+  headerTarget.scrollIntoView = headerScrollIntoView;
+  jest.spyOn(HTMLIFrameElement.prototype, "contentDocument", "get").mockReturnValue(sourceDocument);
+
+  renderTaskDetail(detailData, { createTaskEventSource });
+
+  await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledWith("qa_task_001", 0));
+  act(() => {
+    fakeEventSource.emitEvent(
+      "agent.event",
+      taskEvent({
+        seq: 5,
+        type: "agent.event",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_001",
+        payload: {
+          agent: "file_extraction_agent",
+          type: "model_message",
+          content: "相关内容在[终止条款](evidence://0001.0001)里。"
+        }
+      })
+    );
+  });
+
+  await user.click(await screen.findByRole("link", { name: "终止条款" }));
+
+  await waitFor(() => {
+    expect(headerTarget.getAttribute("data-current-evidence")).toBe("true");
+    expect(childTarget.hasAttribute("data-current-evidence")).toBe(false);
+    expect(headerScrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center", inline: "nearest" });
   });
 });
 
-it("任务详情默认显示左任务栏、Agent 工作区，不在全局顶栏显示 Review tab", async () => {
-  renderTaskDetail();
-
-  const topbar = await screen.findByLabelText("Replay 顶部工具栏");
-  expect(within(topbar).queryByRole("tablist", { name: "右侧工作栏选项卡" })).not.toBeInTheDocument();
-  expect(within(topbar).queryByRole("tab", { name: "Review" })).not.toBeInTheDocument();
-  expect(within(topbar).getByRole("button", { name: "打开右侧 Review" })).toHaveAttribute("aria-pressed", "false");
-  expect(within(topbar).getByText("task-001")).toHaveAttribute("title", "task-001");
-  expect(within(topbar).queryByText("task-001 / sample.pdf")).not.toBeInTheDocument();
-  expect(await screen.findByLabelText("任务工作台左侧任务栏")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "关闭任务栏" })).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: "新任务" })).toHaveAttribute("href", "/");
-  expect(screen.getByRole("link", { name: /task-001/ })).toHaveAttribute("href", "/tasks/task-001");
-  expect(screen.getByRole("link", { name: /task-002/ })).toHaveAttribute("href", "/tasks/task-002");
-  expect(screen.getByLabelText("Agent 中间工作区")).toBeInTheDocument();
-  expect(screen.getByLabelText("Agent 中间工作区")).toHaveAttribute("data-agent-content-mode", "centered");
-  expect(screen.getByText("候选证据支持字段值")).toBeInTheDocument();
-  expect(screen.getByLabelText("Agent 对话输入框")).toBeInTheDocument();
-  expect(screen.queryByLabelText("字段进度面板")).not.toBeInTheDocument();
-  expect(screen.queryByLabelText("右侧 Review 工作栏")).not.toBeInTheDocument();
-  expect(screen.queryByLabelText("Inspector 面板")).not.toBeInTheDocument();
-});
-
-it("关闭左栏且未打开右栏时，Agent 仍保持居中内容框", async () => {
+it("旧 source_selectors 缺少文件夹映射时会用链接文本定位 header", async () => {
   const user = userEvent.setup();
-  renderTaskDetail();
+  const fakeEventSource = new FakeEventSource();
+  const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
+  const sourceDocument = document.implementation.createHTMLDocument("source");
+  sourceDocument.body.innerHTML = '<h2 id="h1">Termination</h2><p id="p1">Either party may terminate with 30 days notice.</p>';
+  const headerTarget = sourceDocument.getElementById("h1") as HTMLElement;
+  const childTarget = sourceDocument.getElementById("p1") as HTMLElement;
+  const headerScrollIntoView = jest.fn();
+  headerTarget.scrollIntoView = headerScrollIntoView;
+  jest.spyOn(HTMLIFrameElement.prototype, "contentDocument", "get").mockReturnValue(sourceDocument);
 
-  await user.click(await screen.findByRole("button", { name: "关闭任务栏" }));
+  renderTaskDetail(detailData, { createTaskEventSource });
 
-  const agentArea = screen.getByLabelText("Agent 中间工作区");
-  expect(screen.queryByLabelText("任务工作台左侧任务栏")).not.toBeInTheDocument();
-  expect(screen.queryByLabelText("右侧 Review 工作栏")).not.toBeInTheDocument();
-  expect(agentArea).toHaveAttribute("data-agent-balance-side", "none");
-  expect(agentArea).toHaveAttribute("data-agent-content-mode", "centered");
-});
-
-it("Agent 流直接显示完整文字和工具行，不再暴露 replay 播放控制", async () => {
-  const directStreamDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...baseReplay,
-      actions: [
-        modelMessage("读取 [文明寝室证据](evidence://0001.0000.0001)"),
-        {
-          tool_name: "read",
-          args: { path: "/001-sample/001-Notice.md" },
-          result: { ok: true, path: "/001-sample/001-Notice.md", kind: "paragraph" }
-        },
-        modelMessage("写入文明寝室字段"),
-        {
-          tool_name: "write_field",
-          args: {
-            field_id: "room_numbers",
-            value: "1-101,1-102",
-            final_evidence: []
-          },
-          result: {
-            ok: true,
-            field: {
-              field_id: "room_numbers",
-              status: "resolved",
-              value: "1-101,1-102",
-              evidence: [],
-              reason: "写入文明寝室字段"
-            }
-          }
+  await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledWith("qa_task_001", 0));
+  act(() => {
+    fakeEventSource.emitEvent(
+      "agent.event",
+      taskEvent({
+        seq: 5,
+        type: "agent.event",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_001",
+        payload: {
+          agent: "file_extraction_agent",
+          type: "model_message",
+          content: "I found the relevant section in [Termination](evidence://0001.0001)."
         }
-      ]
-    }
-  };
-  renderTaskDetail(directStreamDetail);
+      })
+    );
+  });
 
-  const agentArea = await screen.findByLabelText("Agent 中间工作区");
-  expect(within(agentArea).getAllByText((_, element) => element?.textContent === "读取 文明寝室证据").length).toBeGreaterThan(0);
-  expect(screen.getByRole("link", { name: "文明寝室证据" })).toBeInTheDocument();
-  expect(screen.getByText("写入文明寝室字段")).toBeInTheDocument();
-  expect(screen.getByText("Read passage")).toBeInTheDocument();
-  expect(screen.getByText("Filled room_numbers")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "自动播放" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "暂停自动播放" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "下一步" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("slider")).not.toBeInTheDocument();
+  await user.click(await screen.findByRole("link", { name: "Termination" }));
+
+  await waitFor(() => {
+    expect(headerTarget.getAttribute("data-current-evidence")).toBe("true");
+    expect(childTarget.hasAttribute("data-current-evidence")).toBe(false);
+    expect(headerScrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center", inline: "nearest" });
+  });
 });
 
-it("Agent 工具行按真实工具显示英文摘要和语义图标", async () => {
+it("切换同一文档内的 inline evidence 会在 iframe 内平滑跳转并移动高亮", async () => {
   const user = userEvent.setup();
-  const toolDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...baseReplay,
-      actions: [
-        {
-          tool_name: "tree",
-          reason: "",
-          args: { path_id: "evidence://0000", depth: 3 },
-          result: { ok: true, locator: "evidence://0000" }
-        },
-        {
-          tool_name: "read",
-          reason: "",
-          args: { path_id: "evidence://0000.0001.0001.0001" },
-          result: {
-            ok: true,
-            locator: "evidence://0000.0001.0001.0001",
-            kind: "paragraph",
-            text: "1-101、1-102 被列为文明寝室"
-          }
-        },
-        {
-          tool_name: "add_candidate_evidence",
-          reason: "",
-          args: { field_id: "room_numbers", path_id: "evidence://0000.0001.0001.0001" },
-          result: { ok: true, field_id: "room_numbers", candidate_evidence: ["evidence://0000.0001.0001.0001"] }
-        },
-        {
-          tool_name: "review_evidences",
-          reason: "",
-          args: { field_id: "room_numbers" },
-          result: { ok: true, field_id: "room_numbers", evidence: ["evidence://0000.0001.0001.0001/S001"] }
-        },
-        {
-          tool_name: "write_field",
-          reason: "",
-          args: { field_id: "room_numbers", value: "1-101,1-102", final_evidence: [] },
-          result: {
-            ok: true,
-            field: {
-              field_id: "room_numbers",
-              status: "resolved",
-              value: "1-101,1-102",
-              evidence: []
-            }
-          }
-        },
-        {
-          tool_name: "submit_result",
-          reason: "",
+  const fakeEventSource = new FakeEventSource();
+  const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
+  const sourceDocument = document.implementation.createHTMLDocument("source");
+  sourceDocument.body.innerHTML = '<p id="p1">Either party may terminate with 30 days notice.</p><p id="p2">The notice must be written.</p>';
+  const firstTarget = sourceDocument.getElementById("p1") as HTMLElement;
+  const secondTarget = sourceDocument.getElementById("p2") as HTMLElement;
+  const firstScrollIntoView = jest.fn();
+  const secondScrollIntoView = jest.fn();
+  firstTarget.scrollIntoView = firstScrollIntoView;
+  secondTarget.scrollIntoView = secondScrollIntoView;
+  jest.spyOn(HTMLIFrameElement.prototype, "contentDocument", "get").mockReturnValue(sourceDocument);
+
+  renderTaskDetail(detailData, { createTaskEventSource });
+
+  await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledWith("qa_task_001", 0));
+  act(() => {
+    fakeEventSource.emitEvent(
+      "agent.event",
+      taskEvent({
+        seq: 5,
+        type: "agent.event",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_001",
+        payload: {
+          agent: "file_extraction_agent",
+          type: "model_message",
+          content: "[30 天通知](evidence://0001.0001.0001/S001) 还必须是 [书面通知](evidence://0001.0001.0002/S001)。"
+        }
+      })
+    );
+  });
+
+  await user.click(await screen.findByRole("link", { name: "30 天通知" }));
+  const sourceFrame = await screen.findByTitle("Source document");
+  const initialSrcDoc = sourceFrame.getAttribute("srcdoc");
+
+  await waitFor(() => {
+    expect(firstTarget.getAttribute("data-current-evidence")).toBe("true");
+    expect(firstScrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center", inline: "nearest" });
+  });
+
+  await user.click(await screen.findByRole("link", { name: "书面通知" }));
+
+  await waitFor(() => {
+    expect(firstTarget.hasAttribute("data-current-evidence")).toBe(false);
+    expect(secondTarget.getAttribute("data-current-evidence")).toBe("true");
+    expect(secondScrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center", inline: "nearest" });
+  });
+  expect(sourceFrame).toHaveAttribute("srcdoc", initialSrcDoc);
+});
+
+it("表格 row evidence 会定位到具体表格行而不是整张表", async () => {
+  const user = userEvent.setup();
+  const fakeEventSource = new FakeEventSource();
+  const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
+  const sourceDocument = document.implementation.createHTMLDocument("source");
+  sourceDocument.body.innerHTML = '<table id="table1"><tr id="table1_tr_000"><th>Clause</th><th>Value</th></tr><tr id="table1_tr_001"><td>Notice</td><td>30 days</td></tr></table>';
+  const tableTarget = sourceDocument.getElementById("table1") as HTMLElement;
+  const rowTarget = sourceDocument.getElementById("table1_tr_001") as HTMLElement;
+  const rowScrollIntoView = jest.fn();
+  rowTarget.scrollIntoView = rowScrollIntoView;
+  jest.spyOn(HTMLIFrameElement.prototype, "contentDocument", "get").mockReturnValue(sourceDocument);
+
+  renderTaskDetail(detailData, { createTaskEventSource });
+
+  await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledWith("qa_task_001", 0));
+  act(() => {
+    fakeEventSource.emitEvent(
+      "agent.event",
+      taskEvent({
+        seq: 5,
+        type: "agent.event",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_001",
+        payload: {
+          agent: "file_extraction_agent",
+          type: "model_message",
+          content: "通知期限是 30 天。[表格行](evidence://0001.0001.0003/R001)"
+        }
+      })
+    );
+  });
+
+  await user.click(await screen.findByRole("link", { name: "表格行" }));
+
+  await waitFor(() => {
+    expect(tableTarget.hasAttribute("data-current-evidence")).toBe(false);
+    expect(rowTarget.getAttribute("data-current-evidence")).toBe("true");
+    expect(rowScrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center", inline: "nearest" });
+  });
+});
+
+it("任务详情不显示 Agent 面板内部标题栏", async () => {
+  renderTaskDetail(detailData);
+
+  const agentPanel = await screen.findByLabelText("Document QA Agent");
+  expect(within(agentPanel).getByLabelText("QA conversation and reading process")).toBeInTheDocument();
+  expect(within(agentPanel).queryByText("Document QA")).not.toBeInTheDocument();
+  expect(within(agentPanel).queryByText("ready")).not.toBeInTheDocument();
+});
+
+it("任务详情左侧任务栏默认宽度和首页一致，并支持键盘调整", async () => {
+  const user = userEvent.setup();
+  renderTaskDetail(detailData);
+
+  const resizeHandle = await screen.findByRole("separator", { name: "Resize left sidebar" });
+  expect(resizeHandle).toHaveAttribute("aria-valuemin", "176");
+  expect(resizeHandle).toHaveAttribute("aria-valuemax", "360");
+  expect(resizeHandle).toHaveAttribute("aria-valuenow", "224");
+
+  resizeHandle.focus();
+  await user.keyboard("{ArrowRight}");
+
+  expect(resizeHandle).toHaveAttribute("aria-valuenow", "240");
+
+  fireEvent(resizeHandle, new MouseEvent("pointerdown", { bubbles: true, clientX: 100 }));
+  fireEvent(window, new MouseEvent("pointermove", { bubbles: true, clientX: 120 }));
+  fireEvent(window, new MouseEvent("pointerup", { bubbles: true, clientX: 120 }));
+
+  expect(resizeHandle).toHaveAttribute("aria-valuenow", "260");
+});
+
+it("任务详情会显示工具阅读过程并在 turn 完成后恢复可追问状态", async () => {
+  const fakeEventSource = new FakeEventSource();
+  const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
+  renderTaskDetail({ ...detailData, summary: runningSummary }, { createTaskEventSource });
+
+  expect(await screen.findByRole("button", { name: "Pause answer" })).toBeInTheDocument();
+  act(() => {
+    fakeEventSource.emitEvent(
+      "agent.event",
+      taskEvent({
+        seq: 9,
+        type: "agent.event",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_active",
+        payload: {
+          agent: "file_extraction_agent",
+          type: "tool_completed",
+          tool: "grep",
+          args: { query: "termination" },
+          result: { ok: true }
+        }
+      })
+    );
+    fakeEventSource.emitEvent(
+      "turn.completed",
+      taskEvent({
+        seq: 10,
+        type: "turn.completed",
+        status: "ready",
+        stage: "ready",
+        turn_id: "turn_active",
+        payload: { turn_id: "turn_active" }
+      })
+    );
+  });
+
+  expect(await screen.findByText("Searched termination")).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "Send question" })).toBeInTheDocument();
+});
+
+it("追问会复用同一个 task 提交下一轮输入", async () => {
+  const user = userEvent.setup();
+  let resolveInput: (value: QaInputCreated) => void = () => {};
+  const createTaskInput = jest.fn(
+    () =>
+      new Promise<QaInputCreated>((resolve) => {
+        resolveInput = resolve;
+      })
+  );
+  const { injectedCreateTaskInput } = renderTaskDetail(detailData, { createTaskInput });
+
+  await user.type(await screen.findByLabelText("QA question input"), "通知期限是多少？");
+  await user.click(screen.getByRole("button", { name: "Send question" }));
+
+  await waitFor(() =>
+    expect(injectedCreateTaskInput).toHaveBeenCalledWith("qa_task_001", "通知期限是多少？")
+  );
+  const qaStream = await screen.findByLabelText("QA conversation and reading process");
+  expect(within(qaStream).getByText("通知期限是多少？")).toBeInTheDocument();
+  expect(screen.getByLabelText("QA question input")).toHaveValue("");
+  resolveInput({
+    task_id: "qa_task_001",
+    turn_id: "turn_created",
+    status: "queued",
+    agent_completion_id: null
+  });
+});
+
+it("追问 composer 用 Enter 提交问题，Shift Enter 保留换行", async () => {
+  const user = userEvent.setup();
+  const createTaskInput = jest.fn(
+    () =>
+      new Promise<QaInputCreated>(() => {
+        // 保持 pending，测试只关心键盘触发提交和本地清空输入框。
+      })
+  );
+  renderTaskDetail(detailData, { createTaskInput });
+
+  const input = await screen.findByLabelText("QA question input");
+  await user.type(input, "第一行{Shift>}{Enter}{/Shift}第二行");
+
+  expect(input).toHaveValue("第一行\n第二行");
+  expect(createTaskInput).not.toHaveBeenCalled();
+
+  await user.keyboard("{Enter}");
+
+  await waitFor(() => expect(createTaskInput).toHaveBeenCalledWith("qa_task_001", "第一行\n第二行"));
+  expect(input).toHaveValue("");
+});
+
+it("追问提交后会立即显示重复用户消息并追加 Thinking 状态", async () => {
+  const user = userEvent.setup();
+  const fakeEventSource = new FakeEventSource();
+  const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
+  const createTaskInput = jest.fn(
+    () =>
+      new Promise<QaInputCreated>(() => {
+        // 保持请求 pending，验证前端本地提交态。
+      })
+  );
+  renderTaskDetail(detailData, { createTaskEventSource, createTaskInput });
+
+  await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledWith("qa_task_001", 0));
+  act(() => {
+    fakeEventSource.emitEvent(
+      "message.created",
+      taskEvent({
+        seq: 4,
+        type: "message.created",
+        status: "ready",
+        stage: "ready",
+        turn_id: "turn_001",
+        payload: { role: "user", content: "通知期限是多少？" }
+      })
+    );
+  });
+
+  await user.type(await screen.findByLabelText("QA question input"), "通知期限是多少？");
+  await user.click(screen.getByRole("button", { name: "Send question" }));
+
+  await waitFor(() => expect(createTaskInput).toHaveBeenCalledWith("qa_task_001", "通知期限是多少？"));
+  const qaStream = await screen.findByLabelText("QA conversation and reading process");
+  expect(within(qaStream).getAllByText("通知期限是多少？")).toHaveLength(2);
+  expect(within(qaStream).getByText("Thinking")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Pause answer" })).toBeInTheDocument();
+});
+
+it("追问提交后会立即按当前 seq 重新连接 SSE，不等待输入请求返回", async () => {
+  const user = userEvent.setup();
+  const eventSources: FakeEventSource[] = [];
+  const createTaskEventSource = jest.fn((_taskId: string, afterSeq = 0) => {
+    const eventSource = new FakeEventSource(String(afterSeq));
+    eventSources.push(eventSource);
+    return eventSource as unknown as EventSource;
+  });
+  const createTaskInput = jest.fn(
+    () =>
+      new Promise<QaInputCreated>(() => {
+        // 保持 pending，验证前端不会等 POST 返回才续连事件流。
+      })
+  );
+  renderTaskDetail(detailData, { createTaskEventSource, createTaskInput });
+
+  await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledWith("qa_task_001", 0));
+  act(() => {
+    eventSources[0].emitEvent(
+      "message.created",
+      taskEvent({
+        seq: 4,
+        type: "message.created",
+        status: "ready",
+        stage: "ready",
+        turn_id: "turn_001",
+        payload: { role: "user", content: "上一轮问题" }
+      })
+    );
+  });
+
+  await user.type(await screen.findByLabelText("QA question input"), "下一轮问题");
+  await user.click(screen.getByRole("button", { name: "Send question" }));
+
+  await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledTimes(2));
+  expect(createTaskEventSource).toHaveBeenLastCalledWith("qa_task_001", 4);
+});
+
+it("SSE error 不主动关闭事件源，避免空闲连接断开后只能刷新恢复", async () => {
+  const fakeEventSource = new FakeEventSource();
+  const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
+  renderTaskDetail(detailData, { createTaskEventSource });
+
+  await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledWith("qa_task_001", 0));
+  act(() => {
+    fakeEventSource.emitError();
+  });
+
+  expect(fakeEventSource.closed).toBe(false);
+});
+
+it("Thinking 使用 Codex 式跳动指示器，不渲染问号或 spinner", async () => {
+  const user = userEvent.setup();
+  const createTaskInput = jest.fn(
+    () =>
+      new Promise<QaInputCreated>(() => {
+        // 保持 pending，验证 thinking 占位的视觉结构。
+      })
+  );
+  renderTaskDetail(detailData, { createTaskInput });
+
+  await user.type(await screen.findByLabelText("QA question input"), "请继续");
+  await user.click(screen.getByRole("button", { name: "Send question" }));
+
+  const thinking = await screen.findByLabelText("Assistant is thinking");
+  expect(within(thinking).getByText("Thinking")).toBeInTheDocument();
+  expect(thinking.querySelector(".qa-thinking-bounce")).toBeInTheDocument();
+  expect(thinking.querySelector(".animate-spin")).not.toBeInTheDocument();
+  expect(within(thinking).queryByText("?")).not.toBeInTheDocument();
+});
+
+it("QA 对话使用左右布局，用户消息在右侧，assistant 消息在左侧且不显示角色标签", async () => {
+  const fakeEventSource = new FakeEventSource();
+  const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
+  renderTaskDetail(detailData, { createTaskEventSource });
+
+  await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledWith("qa_task_001", 0));
+  act(() => {
+    fakeEventSource.emitEvent(
+      "message.created",
+      taskEvent({
+        seq: 4,
+        type: "message.created",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_001",
+        payload: { role: "user", content: "我的申请截止日是什么？" }
+      })
+    );
+    fakeEventSource.emitEvent(
+      "agent.event",
+      taskEvent({
+        seq: 5,
+        type: "agent.event",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_001",
+        payload: {
+          agent: "file_extraction_agent",
+          type: "model_message",
+          content: "申请截止日在募集要项中说明。"
+        }
+      })
+    );
+  });
+
+  const userMessage = screen.getByText("我的申请截止日是什么？").closest(".qa-message-turn");
+  const assistantMessage = screen.getByText("申请截止日在募集要项中说明。").closest(".qa-message-turn");
+  expect(userMessage).toHaveClass("is-user");
+  expect(assistantMessage).toHaveClass("is-assistant");
+  expect(screen.queryByText("You")).not.toBeInTheDocument();
+  expect(screen.queryByText("AI")).not.toBeInTheDocument();
+});
+
+it("连续工具事件会用 Codex 式轻量过程行默认折叠，并允许展开查看每个 tool", async () => {
+  const user = userEvent.setup();
+  const fakeEventSource = new FakeEventSource();
+  const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
+  renderTaskDetail(detailData, { createTaskEventSource });
+
+  await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledWith("qa_task_001", 0));
+  act(() => {
+    fakeEventSource.emitEvent(
+      "agent.event",
+      taskEvent({
+        seq: 4,
+        type: "agent.event",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_001",
+        payload: {
+          agent: "file_extraction_agent",
+          type: "tool_completed",
+          tool: "grep",
+          args: { query: "出願期間" },
+          result: { ok: true }
+        }
+      })
+    );
+    fakeEventSource.emitEvent(
+      "agent.event",
+      taskEvent({
+        seq: 5,
+        type: "agent.event",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_001",
+        payload: {
+          agent: "file_extraction_agent",
+          type: "tool_failed",
+          tool: "grep",
+          args: { query: "入試方式" },
+          result: { ok: false }
+        }
+      })
+    );
+    fakeEventSource.emitEvent(
+      "agent.event",
+      taskEvent({
+        seq: 6,
+        type: "agent.event",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_001",
+        payload: {
+          agent: "file_extraction_agent",
+          type: "tool_completed",
+          tool: "read",
+          args: { locator: "0001.0002" },
+          result: { ok: true }
+        }
+      })
+    );
+  });
+
+  const groupToggle = await screen.findByRole("button", { name: "Expand tool activity" });
+  expect(groupToggle).toHaveAttribute("aria-expanded", "false");
+  expect(groupToggle.querySelector(".replay-agent-tool-group-chevron")).toBeInTheDocument();
+  expect(screen.getByText("Read 1 passage, 2 searches")).toBeInTheDocument();
+  expect(screen.queryByText(/failed/i)).not.toBeInTheDocument();
+  expect(screen.queryByText("Searched 出願期間, read 0001.0002")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("tool grep")).not.toBeInTheDocument();
+
+  await user.click(groupToggle);
+
+  expect(await screen.findByRole("button", { name: "Collapse tool activity" })).toHaveAttribute("aria-expanded", "true");
+  expect(await screen.findAllByLabelText("tool grep")).toHaveLength(2);
+  expect(screen.getByLabelText("tool read")).toBeInTheDocument();
+
+  act(() => {
+    fakeEventSource.emitEvent(
+      "agent.event",
+      taskEvent({
+        seq: 7,
+        type: "agent.event",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_001",
+        payload: {
+          agent: "file_extraction_agent",
+          type: "tool_completed",
+          tool: "tree",
           args: {},
           result: { ok: true }
         }
-      ]
-    }
-  };
-  renderTaskDetail(toolDetail);
+      })
+    );
+  });
 
-  const agentArea = await screen.findByLabelText("Agent 中间工作区");
-  const toolGroup = within(agentArea).getByRole("group", { name: "5 collapsed tools" });
-  expect(within(toolGroup).getByText("Explored 2 files, saved 1 evidence item, reviewed 1 evidence set, filled 1 field")).toBeInTheDocument();
-  expect(within(toolGroup).queryByText("Viewed outline -> Read passage -> Saved evidence for room_numbers")).not.toBeInTheDocument();
-  expect(within(agentArea).queryByText("Reviewed evidence for room_numbers")).not.toBeInTheDocument();
-  expect(within(agentArea).queryByText("Filled room_numbers")).not.toBeInTheDocument();
-  expect(within(agentArea).queryByText("Submitted result")).not.toBeInTheDocument();
-
-  await user.click(within(toolGroup).getByRole("button", { name: "展开 5 个工具调用" }));
-
-  expect(within(agentArea).getByText("Viewed outline")).toBeInTheDocument();
-  expect(within(agentArea).getByText("Read passage")).toBeInTheDocument();
-  expect(within(agentArea).getByText("Saved evidence for room_numbers")).toBeInTheDocument();
-  expect(within(agentArea).getByText("Reviewed evidence for room_numbers")).toBeInTheDocument();
-  expect(within(agentArea).getByText("Filled room_numbers")).toBeInTheDocument();
-  expect(within(agentArea).getByLabelText("tool tree")).toHaveAttribute("data-tool-icon", "list-tree");
-  expect(within(agentArea).getByLabelText("tool read")).toHaveAttribute("data-tool-icon", "book-user");
-  expect(within(agentArea).getByLabelText("tool add_candidate_evidence")).toHaveAttribute("data-tool-icon", "bookmark-plus");
-  expect(within(agentArea).getByLabelText("tool review_evidences")).toHaveAttribute("data-tool-icon", "file-check");
-  expect(within(agentArea).getByLabelText("tool write_field")).toHaveAttribute("data-tool-icon", "pen-line");
-  expect(within(agentArea).queryByLabelText("tool submit_result")).not.toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "Collapse tool activity" })).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByLabelText("tool tree")).toBeInTheDocument();
 });
 
-it("单个 tool 保持直出，不会折叠成 group", async () => {
-  const singleToolDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...baseReplay,
-      actions: [
-        {
-          tool_name: "read",
-          reason: "",
-          args: { path_id: "evidence://0000" },
-          result: { ok: true, locator: "evidence://0000", kind: "paragraph", text: "single tool evidence" }
-        }
-      ]
-    }
-  };
-  renderTaskDetail(singleToolDetail);
-
-  const agentArea = await screen.findByLabelText("Agent 中间工作区");
-  expect(within(agentArea).queryByRole("group", { name: /collapsed tools/ })).not.toBeInTheDocument();
-  expect(within(agentArea).getByLabelText("tool read")).toBeInTheDocument();
-  expect(within(agentArea).getByText("Read passage")).toBeInTheDocument();
-});
-
-it("tool action 的旧 reason 字段不进入 Agent 文字流", async () => {
-  const reasonlessToolDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...baseReplay,
-      actions: [
-        {
-          tool_name: "read",
-          reason: "这个旧 reason 不应该显示",
-          args: { path_id: "evidence://0001.0000.0001" },
-          result: { ok: true, locator: "evidence://0001.0000.0001", kind: "paragraph", text: "1-101、1-102 被列为文明寝室" }
-        }
-      ]
-    }
-  };
-  renderTaskDetail(reasonlessToolDetail);
-
-  const agentArea = await screen.findByLabelText("Agent 中间工作区");
-  expect(within(agentArea).queryByText("这个旧 reason 不应该显示")).not.toBeInTheDocument();
-  expect(within(agentArea).getByLabelText("tool read")).toBeInTheDocument();
-  expect(within(agentArea).getByText("Read passage")).toBeInTheDocument();
-});
-
-it("Agent 文字后的连续多个 tool 整组折叠，不先直出第一条 tool", async () => {
+it("运行中发送按钮会切换为暂停按钮并调用 cancel", async () => {
   const user = userEvent.setup();
-  const foldedToolsDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...baseReplay,
-      actions: [
-        modelMessage("先读取总览文字"),
-        {
-          tool_name: "read",
-          args: { path_id: "evidence://0000" },
-          result: { ok: true, locator: "evidence://0000", kind: "paragraph" }
-        },
-        {
-          tool_name: "tree",
-          reason: "",
-          args: { path_id: "evidence://0000", depth: 2 },
-          result: { ok: true, locator: "evidence://0000" }
-        },
-        {
-          tool_name: "read",
-          reason: "",
-          args: { path_id: "evidence://0000.0001" },
-          result: { ok: true, locator: "evidence://0000.0001", kind: "paragraph" }
-        },
-        {
-          tool_name: "add_candidate_evidence",
-          reason: "",
-          args: { field_id: "room_numbers", path_id: "evidence://0000.0001" },
-          result: { ok: true, field_id: "room_numbers", candidate_evidence: ["evidence://0000.0001"] }
-        },
-        {
-          tool_name: "review_evidences",
-          reason: "",
-          args: { field_id: "room_numbers" },
-          result: { ok: true, field_id: "room_numbers", evidence: ["evidence://0000.0001/S001"] }
-        },
-        modelMessage("最后写入字段"),
-        {
-          tool_name: "write_field",
-          args: { field_id: "room_numbers", value: "1-101,1-102", final_evidence: [] },
-          result: {
-            ok: true,
-            field: {
-              field_id: "room_numbers",
-              status: "resolved",
-              value: "1-101,1-102",
-              evidence: []
-            }
-          }
-        }
-      ]
-    }
-  };
-  renderTaskDetail(foldedToolsDetail);
+  const { injectedCancelTask } = renderTaskDetail({ ...detailData, summary: runningSummary });
 
-  const agentArea = await screen.findByLabelText("Agent 中间工作区");
-  expect(within(agentArea).getByText("先读取总览文字")).toBeInTheDocument();
-  expect(within(agentArea).getByText("最后写入字段")).toBeInTheDocument();
-  expect(within(agentArea).getByText("Filled room_numbers")).toBeInTheDocument();
+  await user.click(await screen.findByRole("button", { name: "Pause answer" }));
 
-  const toolGroup = within(agentArea).getByRole("group", { name: "5 collapsed tools" });
-  expect(within(toolGroup).getByText("Explored 3 files, saved 1 evidence item, reviewed 1 evidence set")).toBeInTheDocument();
-  expect(within(toolGroup).queryByText("Read passage -> Viewed outline -> Saved evidence for room_numbers")).not.toBeInTheDocument();
-  expect(within(agentArea).queryByLabelText("tool read")).not.toBeInTheDocument();
-  expect(within(agentArea).queryByLabelText("tool tree")).not.toBeInTheDocument();
-  expect(within(agentArea).queryByLabelText("tool add_candidate_evidence")).not.toBeInTheDocument();
-  expect(within(agentArea).queryByLabelText("tool review_evidences")).not.toBeInTheDocument();
-
-  await user.click(within(toolGroup).getByRole("button", { name: "展开 5 个工具调用" }));
-
-  expect(within(agentArea).getAllByLabelText("tool read")).toHaveLength(2);
-  expect(within(agentArea).getByLabelText("tool tree")).toBeInTheDocument();
-  expect(within(agentArea).getByLabelText("tool add_candidate_evidence")).toBeInTheDocument();
-  expect(within(agentArea).getByLabelText("tool review_evidences")).toBeInTheDocument();
-});
-
-it("终态 replay 保留文字和 tool group 的原始时间线位置", async () => {
-  const timelineDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...baseReplay,
-      actions: [
-        modelMessage("先说明接下来读取原文"),
-        {
-          tool_name: "read",
-          args: { path_id: "evidence://0001.0000.0001" },
-          result: { ok: true, locator: "evidence://0001.0000.0001", kind: "paragraph" },
-          metadata: { seq: 2 }
-        },
-        {
-          tool_name: "add_candidate_evidence",
-          args: { field_id: "room_numbers", path_id: "evidence://0001.0000.0001" },
-          result: { ok: true, field_id: "room_numbers", candidate_evidence: ["evidence://0001.0000.0001"] },
-          metadata: { seq: 3 }
-        },
-        modelMessage("读完后说明将写入字段"),
-        {
-          tool_name: "write_field",
-          args: { field_id: "room_numbers", value: "1-101,1-102", final_evidence: [] },
-          result: {
-            ok: true,
-            field: {
-              field_id: "room_numbers",
-              status: "resolved",
-              value: "1-101,1-102",
-              evidence: []
-            }
-          },
-          metadata: { seq: 5 }
-        }
-      ]
-    }
-  };
-  renderTaskDetail(timelineDetail);
-
-  const agentArea = await screen.findByLabelText("Agent 中间工作区");
-  const firstMessage = within(agentArea).getByText("先说明接下来读取原文");
-  const toolGroup = within(agentArea).getByRole("group", { name: "2 collapsed tools" });
-  const secondMessage = within(agentArea).getByText("读完后说明将写入字段");
-  const writeField = within(agentArea).getByText("Filled room_numbers");
-  expect(firstMessage.compareDocumentPosition(toolGroup) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(toolGroup.compareDocumentPosition(secondMessage) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(secondMessage.compareDocumentPosition(writeField) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-});
-
-it("顶部最右侧 Review 按钮打开右侧字段 Progress，字段列表只按字段排序", async () => {
-  const user = userEvent.setup();
-  renderTaskDetail(createMultiFieldDetail());
-
-  expect(await screen.findByLabelText("任务工作台左侧任务栏")).toBeInTheDocument();
-  expect(screen.queryByLabelText("字段进度面板")).not.toBeInTheDocument();
-
-  const topbar = screen.getByLabelText("Replay 顶部工具栏");
-  const reviewButton = within(topbar).getByRole("button", { name: "打开右侧 Review" });
-  expect(reviewButton).toHaveClass("replay-topbar-review-toggle");
-  await user.click(reviewButton);
-
-  expect(screen.getByLabelText("任务工作台左侧任务栏")).toBeInTheDocument();
-  expect(within(topbar).getByRole("button", { name: "关闭右侧 Review" })).toHaveAttribute("aria-pressed", "true");
-  const rightPanel = screen.getByLabelText("右侧 Review 工作栏");
-  const rightTabs = within(rightPanel).getByRole("tablist", { name: "右侧工作栏选项卡" });
-  expect(within(rightTabs).getByRole("tab", { name: "Review" })).toHaveAttribute("aria-selected", "true");
-  const progress = screen.getByLabelText("字段进度面板");
-  expect(progress).toBeInTheDocument();
-  expect(within(progress).getByRole("button", { name: /文明寝室房间号/ })).toBeInTheDocument();
-  expect(within(progress).getByRole("button", { name: /楼栋名称/ })).toBeInTheDocument();
-  expect(within(progress).getByRole("button", { name: /缺失字段/ })).toBeInTheDocument();
-  expect(within(progress).queryByRole("heading", { name: "Review" })).not.toBeInTheDocument();
-  expect(within(progress).queryByRole("heading", { name: "Reject" })).not.toBeInTheDocument();
-  expect(within(progress).queryByRole("heading", { name: "Accept" })).not.toBeInTheDocument();
-
-  await user.click(within(topbar).getByRole("button", { name: "关闭右侧 Review" }));
-  expect(screen.queryByLabelText("右侧 Review 工作栏")).not.toBeInTheDocument();
-});
-
-it("字段 Progress 显示字段摘要，点击字段不会占用 Review 工作区", async () => {
-  const user = userEvent.setup();
-  renderTaskDetail(createMultiFieldDetail());
-
-  await user.click(await screen.findByRole("button", { name: "打开右侧 Review" }));
-  const progress = screen.getByLabelText("字段进度面板");
-  expect(within(progress).getByText("候选证据支持字段值")).toBeInTheDocument();
-  expect(within(progress).getByText("楼栋证据充分")).toBeInTheDocument();
-
-  await user.click(within(progress).getByRole("button", { name: /楼栋名称/ }));
-
-  expect(within(progress).getByRole("button", { name: /楼栋名称/ })).toHaveAttribute("aria-pressed", "true");
-  expect(screen.getByLabelText("Agent 中间工作区")).toBeInTheDocument();
-  expect(screen.queryByLabelText("Inspector 面板")).not.toBeInTheDocument();
-  expect(screen.queryByRole("tablist", { name: "Inspector detail tabs" })).not.toBeInTheDocument();
-});
-
-it("点击 evidence 链接会打开顶层原文 tab，并定位高亮对应位置", async () => {
-  const user = userEvent.setup();
-  const evidenceDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...baseReplay,
-      actions: [
-        modelMessage("查看 [文明寝室证据](evidence://0001.0000.0001)"),
-        {
-          tool_name: "read",
-          args: {
-            path: "/001-sample/001-Notice.md"
-          },
-          result: {
-            ok: true,
-            path: "/001-sample/001-Notice.md",
-            kind: "paragraph",
-            text: "1-101、1-102 被列为文明寝室"
-          }
-        }
-      ]
-    }
-  };
-  renderTaskDetail(evidenceDetail);
-
-  expect(await screen.findByLabelText("任务工作台左侧任务栏")).toBeInTheDocument();
-  await user.click(screen.getByRole("link", { name: "文明寝室证据" }));
-
-  const rightPanel = screen.getByLabelText("右侧 Review 工作栏");
-  const workspaceTabs = within(rightPanel).getByRole("tablist", { name: "右侧工作栏选项卡" });
-  expect(within(workspaceTabs).getByRole("tab", { name: "Review" })).toHaveAttribute("aria-selected", "false");
-  expect(within(workspaceTabs).getByRole("tab", { name: "sample.pdf" })).toHaveAttribute("aria-selected", "true");
-  const sourceViewer = within(rightPanel).getByLabelText("原文查看器");
-  const sourceFrameHtml = getSourceFrameHtml(sourceViewer);
-  expect(screen.getByLabelText("Agent 中间工作区")).toBeInTheDocument();
-  expect(sourceFrameHtml).not.toContain("Field value");
-  expect(sourceFrameHtml).not.toContain("Evidence text");
-  expect(sourceFrameHtml).not.toContain("Original location");
-  expect(sourceFrameHtml).toContain("文明寝室名单");
-  expect(sourceFrameHtml).toContain("一号楼包含文明寝室");
-  expect(sourceFrameHtml).toContain('id="0001.0000.0001" class="is-current-evidence" data-current-evidence="true"');
-  expect(sourceFrameHtml).toContain("data-agent-gate-source-frame");
-  expect(sourceFrameHtml).toContain("scroll-behavior: smooth !important");
-  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "0001.0000.0001");
-  expect(screen.queryByText("evidence://0001.0000.0001")).not.toBeInTheDocument();
-  expect(screen.queryByLabelText("Inspector 面板")).not.toBeInTheDocument();
-});
-
-it("Agent model_message 用受控 Markdown 渲染面向用户的 outline", async () => {
-  const user = userEvent.setup();
-  const outlineDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...baseReplay,
-      actions: [
-        modelMessage(
-          [
-            "我先把结构分成几块：",
-            "",
-            "- **募集概要**：确认 [募集人員](evidence://0001.0000.0001)",
-            "- `修士課程`：继续核对出愿条件"
-          ].join("\n")
-        )
-      ]
-    }
-  };
-  renderTaskDetail(outlineDetail);
-
-  const agentArea = await screen.findByLabelText("Agent 中间工作区");
-  expect(within(agentArea).getByText("募集概要", { selector: "strong" })).toBeInTheDocument();
-  expect(within(agentArea).getByText("修士課程", { selector: "code" })).toBeInTheDocument();
-  expect(within(agentArea).getAllByRole("listitem")).toHaveLength(2);
-
-  await user.click(within(agentArea).getByRole("link", { name: "募集人員" }));
-
-  const rightPanel = screen.getByLabelText("右侧 Review 工作栏");
-  expect(within(rightPanel).getByRole("tab", { name: "sample.pdf" })).toHaveAttribute("aria-selected", "true");
-  expect(getSourceFrameHtml(within(rightPanel).getByLabelText("原文查看器"))).toContain(
-    'id="0001.0000.0001" class="is-current-evidence" data-current-evidence="true"'
-  );
-  expect(within(agentArea).queryByText("evidence://0001.0000.0001")).not.toBeInTheDocument();
-});
-
-it("点击连续 block range evidence 链接会打开原文并高亮整段连续 block", async () => {
-  const user = userEvent.setup();
-  const evidenceDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...baseReplay,
-      display_html:
-        '<main><section class="page"><p id="0001.0028.0002">先注册 Web 出願系统。</p><p id="0001.0028.0003">再输入志愿信息。</p><p id="0001.0028.0004">然后缴纳选考料并生成マイページ。</p><p id="0001.0028.0005">最后上传 PDF 出願书类。</p></section></main>',
-      source_selectors: {
-        "0001.0028.0002": "0001.0028.0002",
-        "0001.0028.0003": "0001.0028.0003",
-        "0001.0028.0004": "0001.0028.0004",
-        "0001.0028.0005": "0001.0028.0005"
-      },
-      actions: [
-        modelMessage("出愿流程见 [出願手順一式](evidence://range/0001.0028.0002/0001.0028.0005)"),
-        {
-          tool_name: "read",
-          args: { path_id: "evidence://0001.0028.0002" },
-          result: { ok: true, locator: "evidence://0001.0028.0002", kind: "paragraph", text: "先注册 Web 出願系统。" }
-        }
-      ]
-    }
-  };
-  renderTaskDetail(evidenceDetail);
-
-  expect(await screen.findByLabelText("任务工作台左侧任务栏")).toBeInTheDocument();
-  await user.click(screen.getByRole("link", { name: "出願手順一式" }));
-
-  const rightPanel = screen.getByLabelText("右侧 Review 工作栏");
-  expect(within(rightPanel).getByRole("tab", { name: "sample.pdf" })).toHaveAttribute("aria-selected", "true");
-  const sourceViewer = within(rightPanel).getByLabelText("原文查看器");
-  const sourceFrameHtml = getSourceFrameHtml(sourceViewer);
-  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "0001.0028.0002");
-  expect(sourceFrameHtml).toContain('id="0001.0028.0002" class="is-current-evidence" data-current-evidence="true"');
-  expect(sourceFrameHtml).toContain('id="0001.0028.0003" class="is-current-evidence" data-current-evidence="true"');
-  expect(sourceFrameHtml).toContain('id="0001.0028.0004" class="is-current-evidence" data-current-evidence="true"');
-  expect(sourceFrameHtml).toContain('id="0001.0028.0005" class="is-current-evidence" data-current-evidence="true"');
-});
-
-it("点击 section-level range evidence 链接会高亮该 section range 下的连续可读 block", async () => {
-  const user = userEvent.setup();
-  const evidenceDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...baseReplay,
-      display_html:
-        '<main><section class="page"><p id="0001.0016.0001">募集人員は若干名。</p><p id="0001.0017.0001">出願期間は指定期間内。</p><p id="0001.0019.0002">試験日は別表の通り。</p><p id="0001.0020.0001">入学手続は合格後に行う。</p></section></main>',
-      source_selectors: {
-        "0001.0016.0001": "0001.0016.0001",
-        "0001.0017.0001": "0001.0017.0001",
-        "0001.0019.0002": "0001.0019.0002",
-        "0001.0020.0001": "0001.0020.0001"
-      },
-      outline_tree: [
-        {
-          id: "0001.0016",
-          text: "募集・日程",
-          children: [
-            { id: "0001.0017", text: "出願期間", children: [] },
-            { id: "0001.0019", text: "試験日", children: [] }
-          ]
-        }
-      ],
-      actions: [
-        modelMessage("募集と日程は [募集・日程の章](evidence://range/0001.0016/0001.0019) で確認します。")
-      ]
-    }
-  };
-  renderTaskDetail(evidenceDetail);
-
-  await user.click(await screen.findByRole("link", { name: "募集・日程の章" }));
-
-  const rightPanel = screen.getByLabelText("右侧 Review 工作栏");
-  const sourceViewer = within(rightPanel).getByLabelText("原文查看器");
-  const sourceFrameHtml = getSourceFrameHtml(sourceViewer);
-  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "0001.0016.0001");
-  expect(sourceFrameHtml).toContain('id="0001.0016.0001" class="is-current-evidence" data-current-evidence="true"');
-  expect(sourceFrameHtml).toContain('id="0001.0017.0001" class="is-current-evidence" data-current-evidence="true"');
-  expect(sourceFrameHtml).toContain('id="0001.0019.0002" class="is-current-evidence" data-current-evidence="true"');
-  expect(sourceFrameHtml).not.toContain('id="0001.0020.0001" class="is-current-evidence" data-current-evidence="true"');
-});
-
-it("点击 evidence 后 Contents 会选中对应 outline 节点并滚到固定锚点", async () => {
-  const user = userEvent.setup();
-  const originalScrollTo = HTMLElement.prototype.scrollTo;
-  const scrollTo = jest.fn();
-  Object.defineProperty(HTMLElement.prototype, "scrollTo", {
-    configurable: true,
-    value: scrollTo
-  });
-  const evidenceDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...baseReplay,
-      display_html:
-        '<main><section class="page"><h2 id="0001.0028">出願流程</h2><p id="0001.0028.0002">先注册 Web 出願系统。</p><p id="0001.0028.0003">再上传 PDF 出願书类。</p></section></main>',
-      source_selectors: {
-        "0001.0028.0002": "0001.0028.0002",
-        "0001.0028.0003": "0001.0028.0003"
-      },
-      outline_tree: [
-        {
-          id: "0001.0028",
-          text: "出願流程",
-          children: []
-        }
-      ],
-      actions: [
-        modelMessage("出願流程见 [出願手順一式](evidence://range/0001.0028.0002/0001.0028.0003)")
-      ]
-    }
-  };
-  try {
-    renderTaskDetail(evidenceDetail);
-
-    const contentsList = await screen.findByRole("tree");
-    const outlineItem = screen.getByText("出願流程").closest('[role="treeitem"]');
-    expect(outlineItem).not.toBeNull();
-    Object.defineProperty(contentsList, "clientHeight", { configurable: true, value: 420 });
-    Object.defineProperty(outlineItem!, "clientHeight", { configurable: true, value: 28 });
-    Object.defineProperty(outlineItem!, "offsetTop", { configurable: true, value: 300 });
-
-    await user.click(await screen.findByRole("link", { name: "出願手順一式" }));
-
-    expect(screen.getByLabelText("Contents")).toBeInTheDocument();
-    expect(outlineItem).toHaveAttribute("aria-selected", "true");
-    await waitFor(() => {
-      expect(scrollTo).toHaveBeenCalledWith({ top: 204, behavior: "auto" });
-    });
-  } finally {
-    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
-      configurable: true,
-      value: originalScrollTo
-    });
-  }
-});
-
-it("点击 Contents 节点会打开右侧原文并定位到对应结构位置", async () => {
-  const user = userEvent.setup();
-  renderTaskDetail();
-
-  await user.click(await screen.findByRole("treeitem", { name: "文明寝室名单" }));
-
-  const rightPanel = screen.getByLabelText("右侧 Review 工作栏");
-  expect(within(rightPanel).getByRole("tab", { name: "sample.pdf" })).toHaveAttribute("aria-selected", "true");
-  const sourceViewer = within(rightPanel).getByLabelText("原文查看器");
-  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "p001_b000");
-  expect(getSourceFrameHtml(sourceViewer)).toContain('id="p001_b000" class="is-current-evidence" data-current-evidence="true"');
-});
-
-it("点击 Contents section 节点会定位到该 section 下第一个可读 block", async () => {
-  const user = userEvent.setup();
-  const evidenceDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...baseReplay,
-      display_html:
-        '<main><section class="page"><p id="0001.0028.0002">先注册 Web 出願系统。</p><p id="0001.0028.0003">再上传 PDF 出願书类。</p></section></main>',
-      source_selectors: {
-        "0001.0028.0002": "0001.0028.0002",
-        "0001.0028.0003": "0001.0028.0003"
-      },
-      outline_tree: [
-        {
-          id: "0001.0028",
-          text: "出願流程",
-          children: []
-        }
-      ]
-    }
-  };
-  renderTaskDetail(evidenceDetail);
-
-  await user.click(await screen.findByRole("treeitem", { name: "出願流程" }));
-
-  const sourceViewer = within(screen.getByLabelText("右侧 Review 工作栏")).getByLabelText("原文查看器");
-  const sourceFrameHtml = getSourceFrameHtml(sourceViewer);
-  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "0001.0028.0002");
-  expect(sourceFrameHtml).toContain('id="0001.0028.0002" class="is-current-evidence" data-current-evidence="true"');
-  expect(sourceFrameHtml).toContain('id="0001.0028.0003" class="is-current-evidence" data-current-evidence="true"');
-});
-
-it("Contents 点击发起导航时不会被右侧滚动同步立刻覆盖", async () => {
-  const user = userEvent.setup();
-  const evidenceDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...baseReplay,
-      display_html:
-        '<main><section class="page"><p id="0001.0001.0001">第一节内容。</p><p id="0001.0002.0001">第二节内容。</p></section></main>',
-      source_selectors: {
-        "0001.0001.0001": "0001.0001.0001",
-        "0001.0002.0001": "0001.0002.0001"
-      },
-      outline_tree: [
-        { id: "0001.0001", text: "第一节", children: [] },
-        { id: "0001.0002", text: "第二节", children: [] }
-      ]
-    }
-  };
-  renderTaskDetail(evidenceDetail);
-
-  const firstOutlineItem = await screen.findByRole("treeitem", { name: "第一节" });
-  const secondOutlineItem = await screen.findByRole("treeitem", { name: "第二节" });
-  await user.click(secondOutlineItem);
-  const sourceFrame = within(screen.getByLabelText("原文查看器")).getByTitle("原文文档") as HTMLIFrameElement;
-  await new Promise((resolve) => window.setTimeout(resolve, 0));
-  sourceFrame.contentDocument?.body.insertAdjacentHTML("beforeend", '<p id="0001.0001.0001">第一节内容。</p><p id="0001.0002.0001">第二节内容。</p>');
-  await new Promise((resolve) => window.setTimeout(resolve, 1300));
-  sourceFrame.contentWindow?.dispatchEvent(new sourceFrame.contentWindow.Event("scroll"));
-
-  await waitFor(() => {
-    expect(secondOutlineItem).toHaveAttribute("aria-selected", "true");
-    expect(firstOutlineItem).toHaveAttribute("aria-selected", "false");
-  });
-  expect(within(screen.getByLabelText("右侧 Review 工作栏")).getByLabelText("原文查看器")).toHaveAttribute("data-highlight-selector", "0001.0002.0001");
-});
-
-it("Agent evidence 链接发起导航时不会被右侧滚动同步立刻覆盖", async () => {
-  const user = userEvent.setup();
-  const evidenceDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...baseReplay,
-      display_html:
-        '<main><section class="page"><p id="0001.0001.0001">第一节内容。</p><p id="0001.0002.0001">第二节内容。</p></section></main>',
-      source_selectors: {
-        "0001.0001.0001": "0001.0001.0001",
-        "0001.0002.0001": "0001.0002.0001"
-      },
-      outline_tree: [
-        { id: "0001.0001", text: "第一节", children: [] },
-        { id: "0001.0002", text: "第二节", children: [] }
-      ],
-      actions: [
-        modelMessage("看 [第二节证据](evidence://0001.0002.0001)")
-      ]
-    }
-  };
-  renderTaskDetail(evidenceDetail);
-
-  const firstOutlineItem = await screen.findByRole("treeitem", { name: "第一节" });
-  const secondOutlineItem = await screen.findByRole("treeitem", { name: "第二节" });
-  await user.click(await screen.findByRole("link", { name: "第二节证据" }));
-  const sourceFrame = within(screen.getByLabelText("原文查看器")).getByTitle("原文文档") as HTMLIFrameElement;
-  Object.defineProperty(sourceFrame.contentWindow!, "requestAnimationFrame", {
-    configurable: true,
-    value: (callback: FrameRequestCallback) => {
-      callback(0);
-      return 1;
-    }
-  });
-  Object.defineProperty(sourceFrame.contentWindow!, "cancelAnimationFrame", {
-    configurable: true,
-    value: jest.fn()
-  });
-  sourceFrame.contentDocument?.body.insertAdjacentHTML("beforeend", '<p id="0001.0001.0001">第一节内容。</p><p id="0001.0002.0001">第二节内容。</p>');
-  await new Promise((resolve) => window.setTimeout(resolve, 0));
-  sourceFrame.contentWindow?.dispatchEvent(new sourceFrame.contentWindow.Event("scroll"));
-
-  await waitFor(() => {
-    expect(secondOutlineItem).toHaveAttribute("aria-selected", "true");
-    expect(firstOutlineItem).toHaveAttribute("aria-selected", "false");
-  });
-  expect(within(screen.getByLabelText("右侧 Review 工作栏")).getByLabelText("原文查看器")).toHaveAttribute("data-highlight-selector", "0001.0002.0001");
-});
-
-it("右侧手动滚动后会恢复 Contents 跟随原文", async () => {
-  const user = userEvent.setup();
-  const evidenceDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...baseReplay,
-      display_html:
-        '<main><section class="page"><p id="0001.0001.0001">第一节内容。</p><p id="0001.0002.0001">第二节内容。</p></section></main>',
-      source_selectors: {
-        "0001.0001.0001": "0001.0001.0001",
-        "0001.0002.0001": "0001.0002.0001"
-      },
-      outline_tree: [
-        { id: "0001.0001", text: "第一节", children: [] },
-        { id: "0001.0002", text: "第二节", children: [] }
-      ],
-      actions: [
-        modelMessage("看 [第二节证据](evidence://0001.0002.0001)")
-      ]
-    }
-  };
-  renderTaskDetail(evidenceDetail);
-
-  const firstOutlineItem = await screen.findByRole("treeitem", { name: "第一节" });
-  const secondOutlineItem = await screen.findByRole("treeitem", { name: "第二节" });
-  await user.click(await screen.findByRole("link", { name: "第二节证据" }));
-  const sourceFrame = within(screen.getByLabelText("原文查看器")).getByTitle("原文文档") as HTMLIFrameElement;
-  await new Promise((resolve) => window.setTimeout(resolve, 0));
-  sourceFrame.contentDocument?.body.insertAdjacentHTML("beforeend", '<p id="0001.0001.0001">第一节内容。</p><p id="0001.0002.0001">第二节内容。</p>');
-  sourceFrame.contentWindow?.dispatchEvent(new sourceFrame.contentWindow.WheelEvent("wheel"));
-  sourceFrame.contentWindow?.dispatchEvent(new sourceFrame.contentWindow.Event("scroll"));
-
-  await waitFor(() => {
-    expect(firstOutlineItem).toHaveAttribute("aria-selected", "true");
-    expect(secondOutlineItem).toHaveAttribute("aria-selected", "false");
-  });
-});
-
-it("连续 block range evidence 会按起始 block 所属文件打开正确原文 tab", async () => {
-  const user = userEvent.setup();
-  const evidenceDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...baseReplay,
-      documents: [
-        { document_id: "doc-1", filename: "sample-a.pdf" },
-        { document_id: "doc-2", filename: "sample-b.pdf" }
-      ],
-      display_html:
-        '<main><section class="page"><p id="0002.0001.0001">先在第二份文件中确认报名资格。</p><p id="0002.0001.0002">再准备并上传修士申请书类。</p></section></main>',
-      source_selectors: {
-        "0002.0001.0001": "0002.0001.0001",
-        "0002.0001.0002": "0002.0001.0002"
-      },
-      actions: [
-        modelMessage("第二份材料见 [修士申请流程](evidence://range/0002.0001.0001/0002.0001.0002)")
-      ]
-    }
-  };
-  renderTaskDetail(evidenceDetail);
-
-  expect(await screen.findByLabelText("任务工作台左侧任务栏")).toBeInTheDocument();
-  await user.click(screen.getByRole("link", { name: "修士申请流程" }));
-
-  const rightPanel = screen.getByLabelText("右侧 Review 工作栏");
-  expect(within(rightPanel).getByRole("tab", { name: "sample-b.pdf" })).toHaveAttribute("aria-selected", "true");
-  const sourceViewer = within(rightPanel).getByLabelText("原文查看器");
-  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "0002.0001.0001");
-});
-
-it("原文文件 tab 只显示解码后的文件名，原文内容上方不再重复文件标题", async () => {
-  const user = userEvent.setup();
-  const evidenceDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...encodedFilenameReplay,
-      actions: [
-        modelMessage("查看 [文明寝室证据](evidence://0001.0000.0001)"),
-        {
-          tool_name: "read",
-          args: { path: "/001-sample/001-Notice.md" },
-          result: { ok: true, path: "/001-sample/001-Notice.md", kind: "paragraph", text: "1-101、1-102 被列为文明寝室" }
-        }
-      ]
-    }
-  };
-  renderTaskDetail(evidenceDetail);
-
-  expect(await screen.findByLabelText("任务工作台左侧任务栏")).toBeInTheDocument();
-  await user.click(screen.getByRole("link", { name: "文明寝室证据" }));
-
-  const rightPanel = screen.getByLabelText("右侧 Review 工作栏");
-  expect(within(rightPanel).getByRole("tab", { name: "Confidentiality and Non-Disclosure Agreement.pdf" })).toHaveAttribute("aria-selected", "true");
-  expect(within(rightPanel).queryByRole("tab", { name: /%20/ })).not.toBeInTheDocument();
-  expect(within(rightPanel).queryByRole("tab", { name: "/contracts/Confidentiality and Non-Disclosure Agreement.pdf" })).not.toBeInTheDocument();
-  const sourceViewer = within(rightPanel).getByLabelText("原文查看器");
-  expect(within(sourceViewer).queryByText("Confidentiality and Non-Disclosure Agreement.pdf")).not.toBeInTheDocument();
-  expect(within(sourceViewer).queryByText("Confidentiality%20and%20Non-Disclosure%20Agreement.pdf")).not.toBeInTheDocument();
-  expect(within(sourceViewer).queryByText("/contracts/Confidentiality and Non-Disclosure Agreement.pdf")).not.toBeInTheDocument();
-});
-
-it("点号 evidence URI 会打开原文文件 tab 并映射到真实 DOM 位置", async () => {
-  const user = userEvent.setup();
-  const evidenceDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...encodedFilenameReplay,
-      display_html:
-        '<main><section class="page"><p id="0001.0000.0008">前一段</p><p id="0001.0000.0009" data-element-id="0001.0000.0009">ii) proprietary, non-public or confidential information</p></section></main>',
-      source_selectors: { "0001.0000.0009": "0001.0000.0009" },
-      actions: [
-        modelMessage("查看 [定义证据](evidence://0001.0000.0009)"),
-        {
-          tool_name: "read",
-          args: { path_id: "evidence://0001.0000.0009" },
-          result: {
-            ok: true,
-            locator: "evidence://0001.0000.0009",
-            kind: "paragraph",
-            text: "ii) proprietary, non-public or confidential information"
-          }
-        }
-      ]
-    }
-  };
-  renderTaskDetail(evidenceDetail);
-
-  expect(await screen.findByLabelText("任务工作台左侧任务栏")).toBeInTheDocument();
-  await user.click(screen.getByRole("link", { name: "定义证据" }));
-
-  const rightPanel = screen.getByLabelText("右侧 Review 工作栏");
-  expect(within(rightPanel).getByRole("tab", { name: "Confidentiality and Non-Disclosure Agreement.pdf" })).toHaveAttribute("aria-selected", "true");
-  const sourceViewer = within(rightPanel).getByLabelText("原文查看器");
-  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "0001.0000.0009");
-  expect(getSourceFrameHtml(sourceViewer)).toContain('id="0001.0000.0009" data-element-id="0001.0000.0009" class="is-current-evidence" data-current-evidence="true"');
-});
-
-it("0001.0019.0001 这类 base locator 会按实际段落定位，不会错配成旧 DOM id", async () => {
-  const user = userEvent.setup();
-  const evidenceDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...baseReplay,
-      display_html:
-        '<main><section class="page"><h1 id="p001_b000">标题</h1><p id="0001.0019.0001">or (c) has been independently acquired or developed by the undersigned or any of its Representatives without violation of any obligation under this NDA;</p></section></main>',
-      source_selectors: { "0001.0019.0001": "0001.0019.0001" },
-      actions: [
-        {
-          tool_name: "read",
-          args: { path_id: "evidence://0001.0019.0001" },
-          result: {
-            ok: true,
-            locator: "evidence://0001.0019.0001",
-            kind: "paragraph",
-            text: "normalized virtual tree text that cannot be matched against the display HTML"
-          }
-        },
-        modelMessage("保存 [独立开发例外](evidence://0001.0019.0001)"),
-        {
-          tool_name: "add_candidate_evidence",
-          args: { field_id: "nda_12_decision", path_id: "evidence://0001.0019.0001" },
-          result: { ok: true, field_id: "nda_12_decision", candidate_evidence: ["evidence://0001.0019.0001"] }
-        }
-      ]
-    }
-  };
-  renderTaskDetail(evidenceDetail);
-
-  expect(await screen.findByLabelText("任务工作台左侧任务栏")).toBeInTheDocument();
-  await user.click(screen.getByRole("link", { name: "独立开发例外" }));
-
-  const rightPanel = screen.getByLabelText("右侧 Review 工作栏");
-  const sourceViewer = within(rightPanel).getByLabelText("原文查看器");
-  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "0001.0019.0001");
-  expect(getSourceFrameHtml(sourceViewer)).toContain('id="0001.0019.0001" class="is-current-evidence" data-current-evidence="true"');
-});
-
-it("旧 replay 没有 source_selectors 时，evidence 链接只打开原文，不猜测 DOM 高亮位置", async () => {
-  const user = userEvent.setup();
-  const quoteText = "including any documents or copies (paper, electronic or otherwise) thereof";
-  const longClause =
-    "1. To maintain the Information in the strictest of confidence and to control the dissemination of the Information, including any documents or copies (paper, electronic or otherwise) thereof contained in the Information in accordance with the terms and conditions of this Confidentiality and Non-Disclosure Agreement (“NDA”);";
-  const evidenceDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...baseReplay,
-      display_html: `<main><section id="page_001"><h1>CONFIDENTIALITY AND NON-DISCLOSURE AGREEMENT</h1><p id="p001_b012">${longClause}</p><p id="p004_b004">OR</p></section></main>`,
-      source_selectors: undefined,
-      actions: [
-        modelMessage(`查看 [${quoteText}](evidence://0000.0001.0012)`),
-        {
-          tool_name: "read",
-          args: { path_id: "evidence://0000.0001.0012" },
-          result: {
-            ok: true,
-            locator: "evidence://0000.0001.0012",
-            kind: "paragraph",
-            text: longClause
-          }
-        }
-      ]
-    }
-  };
-  renderTaskDetail(evidenceDetail);
-
-  expect(await screen.findByLabelText("任务工作台左侧任务栏")).toBeInTheDocument();
-  await user.click(screen.getByRole("link", { name: quoteText }));
-
-  const sourceViewer = within(screen.getByLabelText("右侧 Review 工作栏")).getByLabelText("原文查看器");
-  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "");
-  expect(getSourceFrameHtml(sourceViewer)).toContain(longClause);
-  expect(getSourceFrameHtml(sourceViewer)).not.toContain('class="is-current-evidence" data-current-evidence="true"');
-  expect(getSourceFrameHtml(sourceViewer)).not.toContain('<mark class="is-current-evidence"');
-});
-
-it("完整原文 tab 填满右侧框体，不再强制固定纸面宽度或横向滚动", async () => {
-  const user = userEvent.setup();
-  const evidenceDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...baseReplay,
-      display_html: processedDisplayHtml,
-      actions: [
-        modelMessage("查看 [文明寝室证据](evidence://0001.0000.0001)"),
-        {
-          tool_name: "read",
-          args: {
-            path: "/001-sample/001-Notice.md"
-          },
-          result: {
-            ok: true,
-            path: "/001-sample/001-Notice.md",
-            kind: "paragraph",
-            text: "1-101、1-102 被列为文明寝室"
-          }
-        }
-      ]
-    }
-  };
-  renderTaskDetail(evidenceDetail);
-
-  expect(await screen.findByLabelText("任务工作台左侧任务栏")).toBeInTheDocument();
-  await user.click(screen.getByRole("link", { name: "文明寝室证据" }));
-
-  const sourceViewer = screen.getByLabelText("原文查看器");
-  const sourceFrame = within(sourceViewer).getByTitle("原文文档");
-  const sourceFrameHtml = getSourceFrameHtml(sourceViewer);
-  expect(sourceFrame).toHaveClass("replay-source-frame");
-  expect(sourceFrameHtml).toContain("data-agent-gate-source-frame");
-  expect(sourceFrameHtml).toContain("width: 100% !important");
-  expect(sourceFrameHtml).toContain("max-width: 100% !important");
-  expect(sourceFrameHtml).toContain("box-sizing: border-box");
-  expect(sourceFrameHtml).toContain("overflow-x: hidden !important");
-  expect(sourceFrameHtml).toContain("background: #ffffff !important");
-  expect(sourceFrameHtml).toContain("padding: 0 !important");
-  expect(sourceFrameHtml).toContain("border-radius: 0 !important");
-  expect(sourceFrameHtml).toContain("box-shadow: none !important");
-  expect(sourceFrameHtml).toContain("overflow-x: hidden !important");
-  expect(sourceFrameHtml).toContain("table-layout: fixed !important");
-  expect(sourceFrameHtml).toContain("white-space: pre-wrap !important");
-  expect(sourceFrameHtml).toContain("overflow-wrap: anywhere !important");
-  expect(sourceFrameHtml).not.toContain("min-width: 1060px !important");
-  expect(sourceFrameHtml).not.toContain("width: 980px !important");
-  expect(sourceFrameHtml).not.toContain("min-width: 980px !important");
-  expect(sourceFrameHtml).toContain('id="0001.0000.0001" class="is-current-evidence" data-current-evidence="true"');
-  expect(sourceFrameHtml).not.toContain("<script>");
-});
-
-it("同一文件内不同 evidence 复用同一个原文文件 tab，只更新定位高亮", async () => {
-  const user = userEvent.setup();
-  const multiFieldDetail = createMultiFieldDetail();
-  const evidenceDetail: TaskDetailData = {
-    ...multiFieldDetail,
-    replay: {
-      ...multiFieldDetail.replay!,
-      actions: [
-        modelMessage("查看 [第一条证据](evidence://0001.0000.0001) 和 [第二条证据](evidence://0001.0000.0002)"),
-        {
-          tool_name: "read",
-          args: { path: "/001-sample/001-Notice.md" },
-          result: { ok: true, path: "/001-sample/001-Notice.md", kind: "paragraph", text: "1-101、1-102 被列为文明寝室" }
-        }
-      ]
-    }
-  };
-  renderTaskDetail(evidenceDetail);
-
-  expect(await screen.findByLabelText("任务工作台左侧任务栏")).toBeInTheDocument();
-  await user.click(screen.getByRole("link", { name: "第一条证据" }));
-  await user.click(screen.getByRole("tab", { name: "Review" }));
-  await user.click(screen.getByRole("link", { name: "第二条证据" }));
-
-  const rightPanel = screen.getByLabelText("右侧 Review 工作栏");
-  const workspaceTabs = within(rightPanel).getByRole("tablist", { name: "右侧工作栏选项卡" });
-  expect(within(workspaceTabs).getByRole("tab", { name: "sample.pdf" })).toHaveAttribute("aria-selected", "true");
-  expect(within(workspaceTabs).queryByRole("tab", { name: "第一条证据" })).not.toBeInTheDocument();
-  expect(within(workspaceTabs).queryByRole("tab", { name: "第二条证据" })).not.toBeInTheDocument();
-  expect(within(workspaceTabs).getAllByRole("tab")).toHaveLength(2);
-  const sourceViewer = within(rightPanel).getByLabelText("原文查看器");
-  const sourceFrameHtml = getSourceFrameHtml(sourceViewer);
-  expect(sourceFrameHtml).toContain("文明寝室名单");
-  expect(sourceFrameHtml).toContain("1-101、1-102 被列为文明寝室");
-  expect(sourceFrameHtml).toContain('id="0001.0000.0002" class="is-current-evidence" data-current-evidence="true"');
-  expect(sourceFrameHtml).not.toContain("Field value");
-  expect(screen.queryByText("evidence://0001.0000.0002")).not.toBeInTheDocument();
-
-  await user.click(within(workspaceTabs).getByRole("button", { name: "关闭 sample.pdf" }));
-
-  expect(within(workspaceTabs).queryByRole("tab", { name: "sample.pdf" })).not.toBeInTheDocument();
-  expect(within(workspaceTabs).getByRole("tab", { name: "Review" })).toHaveAttribute("aria-selected", "true");
-  expect(screen.getByLabelText("Agent 中间工作区")).toBeInTheDocument();
-  expect(screen.getByLabelText("字段进度面板")).toBeInTheDocument();
-});
-
-it("同一原文 tab 内连续点击不同 evidence 不重写 iframe srcDoc", async () => {
-  const user = userEvent.setup();
-  const evidenceDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...baseReplay,
-      actions: [
-        modelMessage("查看 [第一条证据](evidence://0001.0000.0001) 和 [第二条证据](evidence://0001.0000.0002)")
-      ]
-    }
-  };
-  renderTaskDetail(evidenceDetail);
-
-  await user.click(await screen.findByRole("link", { name: "第一条证据" }));
-  const sourceViewer = within(screen.getByLabelText("右侧 Review 工作栏")).getByLabelText("原文查看器");
-  const sourceFrame = within(sourceViewer).getByTitle("原文文档") as HTMLIFrameElement;
-  const firstSrcDoc = sourceFrame.getAttribute("srcdoc");
-
-  await user.click(screen.getByRole("link", { name: "第二条证据" }));
-
-  expect(sourceFrame.getAttribute("srcdoc")).toBe(firstSrcDoc);
-  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "0001.0000.0002");
-  expect(getSourceFrameHtml(sourceViewer)).toContain('id="0001.0000.0002" class="is-current-evidence" data-current-evidence="true"');
-  expect(getSourceFrameHtml(sourceViewer)).not.toContain('id="0001.0000.0001" class="is-current-evidence" data-current-evidence="true"');
-});
-
-it("重复点击同一个 Contents 节点也会刷新右侧定位请求", async () => {
-  const user = userEvent.setup();
-  renderTaskDetail();
-
-  const contentsNode = await screen.findByRole("treeitem", { name: "文明寝室名单" });
-  await user.click(contentsNode);
-  const sourceViewer = within(screen.getByLabelText("右侧 Review 工作栏")).getByLabelText("原文查看器");
-  const firstNavigationKey = sourceViewer.getAttribute("data-navigation-key");
-
-  await user.click(contentsNode);
-
-  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "p001_b000");
-  expect(sourceViewer.getAttribute("data-navigation-key")).not.toBe(firstNavigationKey);
-});
-
-it("不同文件的 evidence 才会打开不同原文文件 tab", async () => {
-  const user = userEvent.setup();
-  const multiDocumentDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...baseReplay,
-      documents: [
-        { document_id: "doc-1", filename: "sample-a.pdf" },
-        { document_id: "doc-2", filename: "sample-b.pdf" }
-      ],
-      actions: [
-        modelMessage("查看 [第一份](evidence://0001.0000.0001) 和 [第二份](evidence://0002.0000.0002)"),
-        {
-          tool_name: "read",
-          args: { path: "/001-sample/001-Notice.md" },
-          result: { ok: true, path: "/001-sample/001-Notice.md", kind: "paragraph", text: "1-101、1-102 被列为文明寝室" }
-        }
-      ]
-    }
-  };
-  renderTaskDetail(multiDocumentDetail);
-
-  expect(await screen.findByLabelText("任务工作台左侧任务栏")).toBeInTheDocument();
-  await user.click(screen.getByRole("link", { name: "第一份" }));
-  await user.click(screen.getByRole("link", { name: "第二份" }));
-
-  const workspaceTabs = within(screen.getByLabelText("右侧 Review 工作栏")).getByRole("tablist", { name: "右侧工作栏选项卡" });
-  expect(within(workspaceTabs).getByRole("tab", { name: "sample-a.pdf" })).toBeInTheDocument();
-  expect(within(workspaceTabs).getByRole("tab", { name: "sample-b.pdf" })).toHaveAttribute("aria-selected", "true");
-  expect(within(workspaceTabs).getAllByRole("tab")).toHaveLength(3);
-});
-
-it("右侧原文栏可以拉伸到更宽，便于查看完整文件", async () => {
-  renderTaskDetail();
-
-  await userEvent.click(await screen.findByRole("button", { name: "打开右侧 Review" }));
-
-  expect(screen.getByRole("separator", { name: "调整 Contents 宽度" })).toHaveAttribute("aria-valuemax", "520");
-  const rightResizeHandle = screen.getByRole("separator", { name: "调整右侧栏宽度" });
-  expect(rightResizeHandle).toHaveAttribute("aria-valuemax", "920");
-});
-
-it("点击 read 和 add_candidate_evidence 工具行会打开对应顶层原文 tab", async () => {
-  const user = userEvent.setup();
-  const toolJumpDetail: TaskDetailData = {
-    ...detailData,
-    replay: {
-      ...baseReplay,
-      actions: [
-        {
-          tool_name: "read",
-          args: { path_id: "evidence://0001.0000.0001" },
-          result: {
-            ok: true,
-            locator: "evidence://0001.0000.0001",
-            path_id: "0001.0000.0001",
-            kind: "paragraph",
-            text: "1-101、1-102 被列为文明寝室"
-          }
-        },
-        {
-          tool_name: "add_candidate_evidence",
-          args: { field_id: "room_numbers", path_id: "evidence://0001.0000.0001" },
-          result: {
-            ok: true,
-            field_id: "room_numbers",
-            candidate_evidence: ["evidence://0001.0000.0001"]
-          }
-        }
-      ]
-    }
-  };
-  renderTaskDetail(toolJumpDetail);
-
-  expect(await screen.findByLabelText("任务工作台左侧任务栏")).toBeInTheDocument();
-  const agentArea = screen.getByLabelText("Agent 中间工作区");
-  const toolGroup = within(agentArea).getByRole("group", { name: "2 collapsed tools" });
-  await user.click(within(toolGroup).getByRole("button", { name: "展开 2 个工具调用" }));
-
-  const readToolLink = screen.getByRole("link", { name: "tool read" });
-  expect(readToolLink).toHaveAttribute("href", "evidence://0001.0000.0001");
-  await user.click(readToolLink);
-
-  const rightPanel = screen.getByLabelText("右侧 Review 工作栏");
-  expect(within(rightPanel).getByRole("tab", { name: "sample.pdf" })).toHaveAttribute("aria-selected", "true");
-  expect(screen.getByLabelText("Agent 中间工作区")).toBeInTheDocument();
-  const sourceViewer = within(rightPanel).getByLabelText("原文查看器");
-  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "0001.0000.0001");
-  let sourceFrameHtml = getSourceFrameHtml(sourceViewer);
-  expect(sourceFrameHtml).toContain("文明寝室名单");
-  expect(sourceFrameHtml).toContain("一号楼包含文明寝室");
-  expect(sourceFrameHtml).toContain('id="0001.0000.0001" class="is-current-evidence" data-current-evidence="true"');
-
-  await user.click(within(rightPanel).getByRole("tab", { name: "Review" }));
-  const addCandidateEvidenceToolLink = screen.getByRole("link", { name: "tool add_candidate_evidence" });
-  expect(addCandidateEvidenceToolLink).toHaveAttribute("href", "evidence://0001.0000.0001");
-  await user.click(addCandidateEvidenceToolLink);
-
-  expect(within(screen.getByLabelText("右侧 Review 工作栏")).getByRole("tab", { name: "sample.pdf" })).toHaveAttribute("aria-selected", "true");
-  expect(within(screen.getByLabelText("右侧 Review 工作栏")).getByLabelText("原文查看器")).toHaveAttribute("data-highlight-selector", "0001.0000.0001");
-  sourceFrameHtml = getSourceFrameHtml(within(screen.getByLabelText("右侧 Review 工作栏")).getByLabelText("原文查看器"));
-  expect(sourceFrameHtml).toContain('id="0001.0000.0001" class="is-current-evidence" data-current-evidence="true"');
-});
-
-it("failed 任务会展示 backend 返回的失败原因", async () => {
-  const failedSummary: TaskSummary = {
-    task_id: "task-001",
-    status: "failed",
-    stage: "extraction",
-    has_result: false,
-    has_trace: false,
-    error_message: "OCR worker crashed"
-  };
-  renderTaskDetail({
-    summary: failedSummary,
-    result: null,
-    trace: null,
-    replay: null,
-    audit: null
-  });
-
-  expect(await screen.findByText("任务失败")).toBeInTheDocument();
-  expect(screen.getByText("OCR worker crashed")).toBeInTheDocument();
-  expect(screen.getByText("task-001 / no replay")).toBeInTheDocument();
-});
-
-it("failed 但已有 replay 的任务仍展示 Agent 工作区", async () => {
-  const failedWithReplay: TaskDetailData = {
-    ...detailData,
-    summary: {
-      ...completedSummary,
-      status: "failed",
-      stage: "extraction",
-      error_message: "字段抽取失败"
-    }
-  };
-
-  renderTaskDetail(failedWithReplay);
-
-  expect(await screen.findByText("任务失败")).toBeInTheDocument();
-  expect(screen.getByText("字段抽取失败")).toBeInTheDocument();
-  expect(screen.getByLabelText("Agent 中间工作区")).toBeInTheDocument();
-  expect(screen.getByLabelText("Agent 文字流")).toBeInTheDocument();
-});
-
-it("处理中任务详情先显示常规对话工作台和 Thinking，再自动刷新到 replay", async () => {
-  jest.useFakeTimers();
-  const processingDetail: TaskDetailData = {
-    summary: {
-      task_id: "task-live",
-      status: "processing",
-      stage: "document_processing",
-      has_result: false,
-      has_trace: false,
-      error_message: null,
-      stream: {
-        state: "running",
-        last_event_seq: 1
-      }
-    },
-    result: null,
-    trace: null,
-    replay: null,
-    audit: null
-  };
-  const completedLiveDetail: TaskDetailData = {
-    ...detailData,
-    summary: {
-      ...completedSummary,
-      task_id: "task-live",
-      stream: {
-        state: "ended",
-        last_event_seq: 8
-      }
-    },
-    result: {
-      ...completedResult,
-      task_id: "task-live"
-    },
-    replay: {
-      ...baseReplay,
-      task_id: "task-live"
-    }
-  };
-  const loadTaskDetail = jest
-    .fn<Promise<TaskDetailData>, [string]>()
-    .mockResolvedValueOnce(processingDetail)
-    .mockResolvedValueOnce(completedLiveDetail);
-
-  try {
-    renderTaskDetail(processingDetail, { taskId: "task-live", loadTaskDetail });
-
-    expect(await screen.findByLabelText("Agent 中间工作区")).toBeInTheDocument();
-    expect(screen.getByLabelText("Agent 文字流")).toBeInTheDocument();
-    expect(screen.getByText("Thinking")).toBeInTheDocument();
-    expect(screen.queryByText("正在处理任务...")).not.toBeInTheDocument();
-    expect(screen.queryByText("暂无 replay 数据。")).not.toBeInTheDocument();
-
-    await jest.advanceTimersByTimeAsync(1500);
-
-    expect(await screen.findByText("候选证据支持字段值")).toBeInTheDocument();
-    await waitFor(() => expect(loadTaskDetail).toHaveBeenCalledTimes(2));
-  } finally {
-    jest.useRealTimers();
-  }
-});
-
-it("处理中任务详情会消费事件流并实时追加 Agent 工具输出", async () => {
-  const processingDetail: TaskDetailData = {
-    summary: {
-      task_id: "task-streaming",
-      status: "processing",
-      stage: "extraction",
-      has_result: false,
-      has_trace: false,
-      error_message: null,
-      stream: {
-        state: "running",
-        last_event_seq: 1
-      }
-    },
-    result: null,
-    trace: null,
-    replay: null,
-    audit: null
-  };
-  const eventSources: FakeEventSource[] = [];
-  const createTaskEventSource = jest.fn((_taskId: string, afterSeq = 0) => {
-    const eventSource = new FakeEventSource(String(afterSeq));
-    eventSources.push(eventSource);
-    return eventSource as unknown as EventSource;
-  });
-
-  renderTaskDetail(processingDetail, {
-    taskId: "task-streaming",
-    createTaskEventSource,
-    loadTaskDetail: async () => processingDetail
-  });
-
-  expect(await screen.findByText("Thinking")).toBeInTheDocument();
-  expect(createTaskEventSource).toHaveBeenCalledWith("task-streaming", 0);
-
-  await act(async () => {
-    eventSources[0].emitEvent("task.stage_changed", {
-      seq: 2,
-      task_id: "task-streaming",
-      type: "task.stage_changed",
-      status: "processing",
-      stage: "extraction",
-      payload: {}
-    });
-  });
-
-  expect(createTaskEventSource).toHaveBeenCalledTimes(1);
-
-  await act(async () => {
-    eventSources[0].emitEvent("agent.event", {
-      seq: 3,
-      task_id: "task-streaming",
-      type: "agent.event",
-      status: "processing",
-      stage: "extraction",
-      payload: {
-        type: "model_message",
-        content: "查看目录"
-      }
-    });
-    eventSources[0].emitEvent("agent.event", {
-      seq: 4,
-      task_id: "task-streaming",
-      type: "agent.event",
-      status: "processing",
-      stage: "extraction",
-      payload: {
-        type: "tool_completed",
-        tool: "tree",
-        result: { ok: true }
-      }
-    });
-  });
-
-  expect(await screen.findByText("查看目录")).toBeInTheDocument();
-  expect(screen.getByText("Viewed outline")).toBeInTheDocument();
-  expect(createTaskEventSource).toHaveBeenCalledTimes(1);
-});
-
-it("刷新从头回放时不把同一工具的 start、completed 和 replay action 重复显示", async () => {
-  const readAction = {
-    tool_name: "read",
-    args: { path_id: "0001.0000.0001" },
-    result: { ok: true, locator: "0001.0000.0001", kind: "paragraph", text: "1-101、1-102 被列为文明寝室" }
-  };
-  const processingDetail: TaskDetailData = {
-    summary: {
-      task_id: "task-no-duplicate-live",
-      status: "processing",
-      stage: "extraction",
-      has_result: false,
-      has_trace: false,
-      error_message: null,
-      stream: {
-        state: "running",
-        last_event_seq: 4
-      }
-    },
-    result: null,
-    trace: null,
-    replay: {
-      ...baseReplay,
-      task_id: "task-no-duplicate-live",
-      status: "processing",
-      stage: "extraction",
-      actions: [modelMessage("读取证据"), readAction]
-    },
-    audit: null
-  };
-  const eventSources: FakeEventSource[] = [];
-  const createTaskEventSource = jest.fn((_taskId: string, afterSeq = 0) => {
-    const eventSource = new FakeEventSource(String(afterSeq));
-    eventSources.push(eventSource);
-    return eventSource as unknown as EventSource;
-  });
-
-  renderTaskDetail(processingDetail, {
-    taskId: "task-no-duplicate-live",
-    createTaskEventSource,
-    loadTaskDetail: async () => processingDetail
-  });
-
-  expect(await screen.findByText("Read passage")).toBeInTheDocument();
-  expect(screen.getAllByText("Read passage")).toHaveLength(1);
-
-  await act(async () => {
-    eventSources[0].emitEvent("agent.event", {
-      seq: 2,
-      task_id: "task-no-duplicate-live",
-      type: "agent.event",
-      status: "processing",
-      stage: "extraction",
-      payload: {
-        type: "tool_started",
-        tool: "read",
-        args: { path_id: "0001.0000.0001" }
-      }
-    });
-    eventSources[0].emitEvent("agent.event", {
-      seq: 3,
-      task_id: "task-no-duplicate-live",
-      type: "agent.event",
-      status: "processing",
-      stage: "extraction",
-      payload: {
-        type: "tool_completed",
-        tool: "read",
-        args: { path_id: "0001.0000.0001" },
-        result: { ok: true, locator: "0001.0000.0001", kind: "paragraph", text: "1-101、1-102 被列为文明寝室" }
-      }
-    });
-  });
-
-  expect(screen.getAllByText("读取证据")).toHaveLength(1);
-  expect(screen.getAllByText("Read passage")).toHaveLength(1);
-});
-
-it("SSE 结束刷新 replay 后不重复显示同一 model_message", async () => {
-  const processingDetail: TaskDetailData = {
-    summary: {
-      task_id: "task-no-duplicate-message",
-      status: "processing",
-      stage: "extraction",
-      has_result: false,
-      has_trace: false,
-      error_message: null,
-      stream: {
-        state: "running",
-        last_event_seq: 2
-      }
-    },
-    result: null,
-    trace: null,
-    replay: null,
-    audit: null
-  };
-  const completedDetail: TaskDetailData = {
-    ...processingDetail,
-    summary: {
-      ...processingDetail.summary,
-      status: "completed",
-      stage: "done",
-      has_result: true,
-      has_trace: true,
-      stream: {
-        state: "ended",
-        last_event_seq: 9
-      }
-    },
-    replay: {
-      ...baseReplay,
-      task_id: "task-no-duplicate-message",
-      actions: [
-        {
-          tool_name: "model_message",
-          reason: "这一段介绍出願手続。",
-          result: { ok: true },
-          metadata: { seq: 1, event_type: "model_message" }
-        }
-      ]
-    }
-  };
-  const eventSources: FakeEventSource[] = [];
-  let shouldReturnCompleted = false;
-  const createTaskEventSource = jest.fn((_taskId: string, afterSeq = 0) => {
-    const eventSource = new FakeEventSource(String(afterSeq));
-    eventSources.push(eventSource);
-    return eventSource as unknown as EventSource;
-  });
-  const loadTaskDetail = jest.fn(async () => shouldReturnCompleted ? completedDetail : processingDetail);
-
-  renderTaskDetail(processingDetail, {
-    taskId: "task-no-duplicate-message",
-    createTaskEventSource,
-    loadTaskDetail
-  });
-
-  await act(async () => {
-    eventSources[0].emitEvent("agent.event", {
-      seq: 7,
-      task_id: "task-no-duplicate-message",
-      type: "agent.event",
-      status: "processing",
-      stage: "extraction",
-      payload: {
-        type: "model_message",
-        content: "这一段介绍出願手続。"
-      }
-    });
-  });
-
-  expect(await screen.findByText("这一段介绍出願手続。")).toBeInTheDocument();
-
-  shouldReturnCompleted = true;
-  await act(async () => {
-    eventSources[0].emitEvent("task.completed", {
-      seq: 9,
-      task_id: "task-no-duplicate-message",
-      type: "task.completed",
-      status: "completed",
-      stage: "done",
-      payload: {}
-    });
-  });
-
-  await waitFor(() => expect(loadTaskDetail).toHaveBeenCalledTimes(2));
-  expect(screen.getAllByText("这一段介绍出願手続。")).toHaveLength(1);
-});
-
-it("空 model_message 不渲染成 Thinking 工具行，前后工具继续按组折叠", async () => {
-  const processingDetail: TaskDetailData = {
-    summary: {
-      task_id: "task-empty-content",
-      status: "processing",
-      stage: "extraction",
-      has_result: false,
-      has_trace: false,
-      error_message: null,
-      stream: {
-        state: "running",
-        last_event_seq: 1
-      }
-    },
-    result: null,
-    trace: null,
-    replay: null,
-    audit: null
-  };
-  const eventSources: FakeEventSource[] = [];
-  const createTaskEventSource = jest.fn((_taskId: string, afterSeq = 0) => {
-    const eventSource = new FakeEventSource(String(afterSeq));
-    eventSources.push(eventSource);
-    return eventSource as unknown as EventSource;
-  });
-
-  renderTaskDetail(processingDetail, {
-    taskId: "task-empty-content",
-    createTaskEventSource,
-    loadTaskDetail: async () => processingDetail
-  });
-
-  expect(await screen.findByText("Thinking")).toBeInTheDocument();
-
-  await act(async () => {
-    eventSources[0].emitEvent("agent.event", {
-      seq: 2,
-      task_id: "task-empty-content",
-      type: "agent.event",
-      status: "processing",
-      stage: "extraction",
-      payload: {
-        type: "model_message",
-        content: ""
-      }
-    });
-    eventSources[0].emitEvent("agent.event", {
-      seq: 3,
-      task_id: "task-empty-content",
-      type: "agent.event",
-      status: "processing",
-      stage: "extraction",
-      payload: {
-        type: "tool_completed",
-        tool: "tree",
-        reason: "",
-        result: { ok: true }
-      }
-    });
-    eventSources[0].emitEvent("agent.event", {
-      seq: 4,
-      task_id: "task-empty-content",
-      type: "agent.event",
-      status: "processing",
-      stage: "extraction",
-      payload: {
-        type: "tool_completed",
-        tool: "read",
-        reason: "",
-        result: { ok: true, locator: "evidence://0001.0000.0001", kind: "paragraph" }
-      }
-    });
-  });
-
-  const agentArea = screen.getByLabelText("Agent 中间工作区");
-  const toolGroup = await within(agentArea).findByRole("group", { name: "2 collapsed tools" });
-  expect(within(toolGroup).getByText("Explored 2 files")).toBeInTheDocument();
-  expect(within(agentArea).queryByText("Thinking")).not.toBeInTheDocument();
-  expect(within(agentArea).queryByLabelText("tool model_message")).not.toBeInTheDocument();
-});
-
-it("处理中 source_indexed 事件会刷新出原文 replay", async () => {
-  const processingDetail: TaskDetailData = {
-    summary: {
-      task_id: "task-live-source",
-      status: "processing",
-      stage: "extraction",
-      has_result: false,
-      has_trace: false,
-      error_message: null,
-      stream: {
-        state: "running",
-        last_event_seq: 1
-      }
-    },
-    result: null,
-    trace: null,
-    replay: null,
-    audit: null
-  };
-  const processingWithReplay: TaskDetailData = {
-    ...processingDetail,
-    replay: {
-      ...baseReplay,
-      task_id: "task-live-source",
-      status: "processing",
-      stage: "extraction",
-      actions: []
-    }
-  };
-  const eventSources: FakeEventSource[] = [];
-  const createTaskEventSource = jest.fn((_taskId: string, afterSeq = 0) => {
-    const eventSource = new FakeEventSource(String(afterSeq));
-    eventSources.push(eventSource);
-    return eventSource as unknown as EventSource;
-  });
-  const loadTaskDetail = jest
-    .fn<Promise<TaskDetailData>, [string]>()
-    .mockResolvedValueOnce(processingDetail)
-    .mockResolvedValueOnce(processingWithReplay);
-
-  renderTaskDetail(processingDetail, {
-    taskId: "task-live-source",
-    createTaskEventSource,
-    loadTaskDetail
-  });
-
-  expect(await screen.findByText("Thinking")).toBeInTheDocument();
-
-  await act(async () => {
-    eventSources[0].emitEvent("agent.event", {
-      seq: 2,
-      task_id: "task-live-source",
-      type: "agent.event",
-      status: "processing",
-      stage: "extraction",
-      payload: {
-        type: "source_indexed",
-        tool: "source_index",
-        result: {
-          ok: true,
-          source_selectors: { "0001.0000.0001": "0001.0000.0001" }
-        }
-      }
-    });
-  });
-
-  await waitFor(() => expect(loadTaskDetail).toHaveBeenCalledTimes(2));
-  expect(await screen.findByLabelText("Agent 中间工作区")).toBeInTheDocument();
-});
-
-it("实时追加工具输出时，用户不在底部就保持当前阅读位置", async () => {
-  const processingDetail: TaskDetailData = {
-    summary: {
-      task_id: "task-no-autoscroll",
-      status: "processing",
-      stage: "extraction",
-      has_result: false,
-      has_trace: false,
-      error_message: null,
-      stream: {
-        state: "running",
-        last_event_seq: 1
-      }
-    },
-    result: null,
-    trace: null,
-    replay: null,
-    audit: null
-  };
-  const eventSources: FakeEventSource[] = [];
-  const createTaskEventSource = jest.fn((_taskId: string, afterSeq = 0) => {
-    const eventSource = new FakeEventSource(String(afterSeq));
-    eventSources.push(eventSource);
-    return eventSource as unknown as EventSource;
-  });
-
-  renderTaskDetail(processingDetail, {
-    taskId: "task-no-autoscroll",
-    createTaskEventSource,
-    loadTaskDetail: async () => processingDetail
-  });
-
-  const agentStream = await screen.findByLabelText("Agent 文字流");
-  Object.defineProperty(agentStream, "scrollHeight", { configurable: true, value: 999 });
-  Object.defineProperty(agentStream, "clientHeight", { configurable: true, value: 120 });
-  agentStream.scrollTop = 17;
-  await act(async () => {
-    agentStream.dispatchEvent(new Event("scroll"));
-  });
-
-  await act(async () => {
-    eventSources[0].emitEvent("agent.event", {
-      seq: 2,
-      task_id: "task-no-autoscroll",
-      type: "agent.event",
-      status: "processing",
-      stage: "extraction",
-      payload: {
-        type: "tool_completed",
-        tool: "read",
-        args: { path_id: "evidence://0001.0000.0001" },
-        result: { ok: true, locator: "evidence://0001.0000.0001", kind: "paragraph", text: "1-101 被列为文明寝室" }
-      }
-    });
-  });
-
-  expect(await screen.findByText("Read passage")).toBeInTheDocument();
-  expect(agentStream.scrollTop).toBe(17);
-});
-
-it("实时追加工具输出时，用户在底部就继续跟随到底部", async () => {
-  const processingDetail: TaskDetailData = {
-    summary: {
-      task_id: "task-autoscroll-bottom",
-      status: "processing",
-      stage: "extraction",
-      has_result: false,
-      has_trace: false,
-      error_message: null,
-      stream: {
-        state: "running",
-        last_event_seq: 1
-      }
-    },
-    result: null,
-    trace: null,
-    replay: null,
-    audit: null
-  };
-  const eventSources: FakeEventSource[] = [];
-  const createTaskEventSource = jest.fn((_taskId: string, afterSeq = 0) => {
-    const eventSource = new FakeEventSource(String(afterSeq));
-    eventSources.push(eventSource);
-    return eventSource as unknown as EventSource;
-  });
-
-  renderTaskDetail(processingDetail, {
-    taskId: "task-autoscroll-bottom",
-    createTaskEventSource,
-    loadTaskDetail: async () => processingDetail
-  });
-
-  const agentStream = await screen.findByLabelText("Agent 文字流");
-  let streamScrollHeight = 500;
-  Object.defineProperty(agentStream, "scrollHeight", {
-    configurable: true,
-    get: () => streamScrollHeight
-  });
-  Object.defineProperty(agentStream, "clientHeight", { configurable: true, value: 100 });
-  agentStream.scrollTop = 400;
-  await act(async () => {
-    agentStream.dispatchEvent(new Event("scroll"));
-  });
-
-  streamScrollHeight = 999;
-  await act(async () => {
-    eventSources[0].emitEvent("agent.event", {
-      seq: 2,
-      task_id: "task-autoscroll-bottom",
-      type: "agent.event",
-      status: "processing",
-      stage: "extraction",
-      payload: {
-        type: "tool_completed",
-        tool: "read",
-        args: { path_id: "evidence://0001.0000.0001" },
-        result: { ok: true, locator: "evidence://0001.0000.0001", kind: "paragraph", text: "1-101 被列为文明寝室" }
-      }
-    });
-  });
-
-  expect(await screen.findByText("Read passage")).toBeInTheDocument();
-  expect(agentStream.scrollTop).toBe(999);
-});
-
-it("处理中已有 replay 时，live read 工具行能打开原文并高亮", async () => {
-  const processingDetail: TaskDetailData = {
-    summary: {
-      task_id: "task-live-highlight",
-      status: "processing",
-      stage: "extraction",
-      has_result: false,
-      has_trace: false,
-      error_message: null,
-      stream: {
-        state: "running",
-        last_event_seq: 1
-      }
-    },
-    result: null,
-    trace: null,
-    replay: {
-      ...baseReplay,
-      task_id: "task-live-highlight",
-      status: "processing",
-      stage: "extraction",
-      actions: []
-    },
-    audit: null
-  };
-  const eventSources: FakeEventSource[] = [];
-  const createTaskEventSource = jest.fn((_taskId: string, afterSeq = 0) => {
-    const eventSource = new FakeEventSource(String(afterSeq));
-    eventSources.push(eventSource);
-    return eventSource as unknown as EventSource;
-  });
-
-  renderTaskDetail(processingDetail, {
-    taskId: "task-live-highlight",
-    createTaskEventSource,
-    loadTaskDetail: async () => processingDetail
-  });
-
-  await act(async () => {
-    eventSources[0].emitEvent("agent.event", {
-      seq: 2,
-      task_id: "task-live-highlight",
-      type: "agent.event",
-      status: "processing",
-      stage: "extraction",
-      payload: {
-        type: "tool_completed",
-        tool: "read",
-        args: { path_id: "evidence://0001.0000.0001" },
-        result: { ok: true, locator: "evidence://0001.0000.0001", kind: "paragraph", text: "1-101、1-102 被列为文明寝室" }
-      }
-    });
-  });
-
-  const readToolLink = await screen.findByRole("link", { name: "tool read" });
-  await userEvent.click(readToolLink);
-
-  const sourceViewer = within(screen.getByLabelText("右侧 Review 工作栏")).getByLabelText("原文查看器");
-  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "0001.0000.0001");
-  expect(getSourceFrameHtml(sourceViewer)).toContain('id="0001.0000.0001" class="is-current-evidence" data-current-evidence="true"');
-});
-
-it("处理中已有 replay actions 时，live 裸 path_id 可跳原文且字段 Progress 实时更新", async () => {
-  const processingDetail: TaskDetailData = {
-    summary: {
-      task_id: "task-live-merge",
-      status: "processing",
-      stage: "extraction",
-      has_result: false,
-      has_trace: false,
-      error_message: null,
-      stream: {
-        state: "running",
-        last_event_seq: 1
-      }
-    },
-    result: null,
-    trace: null,
-    replay: {
-      ...baseReplay,
-      task_id: "task-live-merge",
-      status: "processing",
-      stage: "extraction",
-      actions: [
-        {
-          tool_name: "tree",
-          reason: "",
-          args: { path_id: "0001.0000.0000" },
-          result: { ok: true, locator: "0001.0000.0000" }
-        }
-      ]
-    },
-    audit: null
-  };
-  const eventSources: FakeEventSource[] = [];
-  const createTaskEventSource = jest.fn((_taskId: string, afterSeq = 0) => {
-    const eventSource = new FakeEventSource(String(afterSeq));
-    eventSources.push(eventSource);
-    return eventSource as unknown as EventSource;
-  });
-
-  renderTaskDetail(processingDetail, {
-    taskId: "task-live-merge",
-    createTaskEventSource,
-    loadTaskDetail: async () => processingDetail
-  });
-
-  expect(await screen.findByText("Viewed outline")).toBeInTheDocument();
-
-  await act(async () => {
-    eventSources[0].emitEvent("agent.event", {
-      seq: 2,
-      task_id: "task-live-merge",
-      type: "agent.event",
-      status: "processing",
-      stage: "extraction",
-      payload: {
-        type: "tool_completed",
-        tool: "read",
-        args: { path_id: "0001.0000.0001" },
-        result: { ok: true, locator: "0001.0000.0001", kind: "paragraph", text: "1-101、1-102 被列为文明寝室" }
-      }
-    });
-    eventSources[0].emitEvent("agent.event", {
-      seq: 3,
-      task_id: "task-live-merge",
-      type: "agent.event",
-      status: "processing",
-      stage: "extraction",
-      payload: {
-        type: "tool_completed",
-        tool: "write_field",
-        args: {
-          field_id: "room_numbers",
-          value: "1-101,1-102",
-          final_evidence: [
-            {
-              path: "/001-sample/001-Notice.md",
-              sentences: ["0001.0000.0001"]
-            }
-          ],
-          status: "resolved"
-        },
-        result: {
-          ok: true,
-          field: {
-            field_id: "room_numbers",
-            status: "resolved",
-            value: "1-101,1-102",
-            evidence: [
-              {
-                path: "/001-sample/001-Notice.md",
-                sentences: ["0001.0000.0001"]
-              }
-            ],
-            reason: "实时写入字段"
-          }
-        }
-      }
-    });
-  });
-
-  const agentArea = screen.getByLabelText("Agent 中间工作区");
-  const toolGroup = await within(agentArea).findByRole("group", { name: "3 collapsed tools" });
-  await userEvent.click(within(toolGroup).getByRole("button", { name: "展开 3 个工具调用" }));
-
-  const readToolLink = await screen.findByRole("link", { name: "tool read" });
-  expect(readToolLink).toHaveAttribute("href", "evidence://0001.0000.0001");
-  await userEvent.click(readToolLink);
-
-  const sourceViewer = within(screen.getByLabelText("右侧 Review 工作栏")).getByLabelText("原文查看器");
-  expect(sourceViewer).toHaveAttribute("data-highlight-selector", "0001.0000.0001");
-  expect(getSourceFrameHtml(sourceViewer)).toContain('id="0001.0000.0001" class="is-current-evidence" data-current-evidence="true"');
-
-  await userEvent.click(within(screen.getByLabelText("右侧 Review 工作栏")).getByRole("tab", { name: "Review" }));
-
-  const progress = screen.getByLabelText("字段进度面板");
-  expect(within(progress).getByRole("button", { name: /room_numbers/ })).toBeInTheDocument();
-  expect(within(progress).getByText("实时写入字段")).toBeInTheDocument();
-});
-
-it("已展开的 live tool group 追加新工具后保持展开", async () => {
-  const user = userEvent.setup();
-  const processingDetail: TaskDetailData = {
-    summary: {
-      task_id: "task-live-expanded-group",
-      status: "processing",
-      stage: "extraction",
-      has_result: false,
-      has_trace: false,
-      error_message: null,
-      stream: {
-        state: "running",
-        last_event_seq: 1
-      }
-    },
-    result: null,
-    trace: null,
-    replay: {
-      ...baseReplay,
-      task_id: "task-live-expanded-group",
-      status: "processing",
-      stage: "extraction",
-      actions: [
-        {
-          tool_name: "tree",
-          args: { path_id: "0001.0000.0000" },
-          result: { ok: true, locator: "0001.0000.0000" }
-        },
-        {
-          tool_name: "read",
-          args: { path_id: "0001.0000.0001" },
-          result: { ok: true, locator: "0001.0000.0001", kind: "paragraph", text: "1-101、1-102 被列为文明寝室" }
-        }
-      ]
-    },
-    audit: null
-  };
-  const eventSources: FakeEventSource[] = [];
-  const createTaskEventSource = jest.fn((_taskId: string, afterSeq = 0) => {
-    const eventSource = new FakeEventSource(String(afterSeq));
-    eventSources.push(eventSource);
-    return eventSource as unknown as EventSource;
-  });
-
-  renderTaskDetail(processingDetail, {
-    taskId: "task-live-expanded-group",
-    createTaskEventSource,
-    loadTaskDetail: async () => processingDetail
-  });
-
-  const agentArea = await screen.findByLabelText("Agent 中间工作区");
-  const initialToolGroup = await within(agentArea).findByRole("group", { name: "2 collapsed tools" });
-  await user.click(within(initialToolGroup).getByRole("button", { name: "展开 2 个工具调用" }));
-  expect(within(initialToolGroup).getByRole("button", { name: "收起 2 个工具调用" })).toHaveAttribute("aria-expanded", "true");
-  expect(within(agentArea).getByText("Viewed outline")).toBeInTheDocument();
-  expect(within(agentArea).getByText("Read passage")).toBeInTheDocument();
-
-  await act(async () => {
-    eventSources[0].emitEvent("agent.event", {
-      seq: 2,
-      task_id: "task-live-expanded-group",
-      type: "agent.event",
-      status: "processing",
-      stage: "extraction",
-      payload: {
-        type: "tool_completed",
-        tool: "add_candidate_evidence",
-        args: { field_id: "room_numbers", path_id: "0001.0000.0001" },
-        result: {
-          ok: true,
-          field_id: "room_numbers",
-          candidate_evidence: ["0001.0000.0001"]
-        }
-      }
-    });
-  });
-
-  const updatedToolGroup = await within(agentArea).findByRole("group", { name: "3 collapsed tools" });
-  expect(within(updatedToolGroup).getByRole("button", { name: "收起 3 个工具调用" })).toHaveAttribute("aria-expanded", "true");
-  expect(within(agentArea).getByText("Saved evidence for room_numbers")).toBeInTheDocument();
+  await waitFor(() => expect(injectedCancelTask).toHaveBeenCalledWith("qa_task_001"));
 });

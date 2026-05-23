@@ -1,4 +1,18 @@
-last updated: 2026-05-13 21:12:49
+last updated: 2026-05-23 00:00:00
+
+## 2026-05-23 00:00:00
+
+### 已完成工作
+
+- 将 `file_extraction_agent` 从字段抽取重构为多文档 QA chat completion agent，输入改为 `completion_id + documents + messages + memory`。
+- HTTP 入口改为 `POST /v1/document-qa/chat/completions` 和 `POST /v1/document-qa/chat/completions/{completion_id}/cancel`，旧 `/v1/file-extraction-agent/extract/stream` 不再暴露。
+- 模型工具集收口为 `tree / grep / read / inspect`，证据通过 `model_message` 中的 Markdown `evidence://` link 在过程里呈现。
+- agent 仅保存 active completion 的内存取消状态；多轮 messages、memory 和事件持久化由 backend 负责。
+- 同步更新 agent 顶层 README/API/DESIGN、`file_extraction_agent` README/DESIGN、backend QA 草案设计，以及对应测试说明文档。
+
+### 验证
+
+- `conda run -n agent-gate python -m pytest tests -q`，结果 `91 passed`。
 
 ## 2026-05-13 21:12:49
 

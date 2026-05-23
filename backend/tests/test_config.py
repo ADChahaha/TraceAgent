@@ -5,38 +5,44 @@ import sqlite3
 
 from fastapi.testclient import TestClient
 
-from backend.core.db import initialize_database
 from backend.core.config import BackendSettings
+from backend.core.db import initialize_database
 from backend.main import create_app
 
 
-def test_backend_settings_does_not_define_builtin_task_specs(tmp_path: Path):
+def test_backend_settings_keeps_agent_service_configuration(tmp_path: Path):
     settings = BackendSettings(database_path=tmp_path / "backend.sqlite3")
 
-    assert not hasattr(settings, "task_specs")
-    assert not hasattr(settings, "task_specs_dir")
+    assert settings.agent_service_base_url == "http://localhost:8001"
+    assert settings.supported_file_types == ("pdf",)
 
 
-def test_backend_does_not_register_builtin_experiment_routes(tmp_path: Path):
+def test_backend_registers_qa_routes_and_removes_old_task_routes(tmp_path: Path):
     app = create_app(settings=BackendSettings(database_path=tmp_path / "backend.sqlite3"))
     registered_paths = {route.path for route in app.routes}
 
     with TestClient(app) as client:
-        response = client.get("/experiments/contract-nli")
+        old_response = client.get("/tasks")
 
-    assert all(not path.startswith("/experiments/") for path in registered_paths)
-    assert response.status_code == 404
+    assert "/qa/tasks" in registered_paths
+    assert "/qa/tasks/{task_id}/inputs" in registered_paths
+    assert "/qa/tasks/{task_id}/events" in registered_paths
+    assert "/qa/tasks/{task_id}/cancel" in registered_paths
+    assert "/tasks" not in registered_paths
+    assert old_response.status_code == 404
 
 
-def test_backend_does_not_register_manual_check_routes(tmp_path: Path):
+def test_backend_healthz_reports_ok(tmp_path: Path):
     app = create_app(settings=BackendSettings(database_path=tmp_path / "backend.sqlite3"))
-    registered_paths = {route.path for route in app.routes}
 
-    assert "/tasks/{task_id}/review" not in registered_paths
-    assert all("review" not in path for path in registered_paths)
+    with TestClient(app) as client:
+        response = client.get("/healthz")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
 
 
-def test_database_initialization_removes_legacy_route_and_review_schema():
+def test_database_initialization_creates_qa_schema_and_drops_old_field_schema():
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row
     connection.executescript(
@@ -54,50 +60,36 @@ def test_database_initialization_removes_legacy_route_and_review_schema():
             updated_at TEXT NOT NULL,
             completed_at TEXT
         );
+        CREATE TABLE extracted_fields (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            field_name TEXT NOT NULL
+        );
+        CREATE TABLE field_traces (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            field_name TEXT NOT NULL
+        );
         CREATE TABLE field_routes (
             id TEXT PRIMARY KEY,
             task_id TEXT NOT NULL,
             field_name TEXT NOT NULL,
-            route TEXT NOT NULL,
-            route_reason TEXT NOT NULL,
-            needs_review INTEGER NOT NULL,
-            created_at TEXT NOT NULL
+            route TEXT NOT NULL
         );
         CREATE TABLE reviews (
             id TEXT PRIMARY KEY,
-            task_id TEXT NOT NULL,
-            decision TEXT NOT NULL,
-            comment TEXT,
-            reviewer TEXT,
-            created_at TEXT NOT NULL
+            task_id TEXT NOT NULL
         );
         CREATE TABLE review_fields (
             id TEXT PRIMARY KEY,
             review_id TEXT NOT NULL,
             task_id TEXT NOT NULL,
-            field_name TEXT NOT NULL,
-            agent_value_json TEXT,
-            review_value_json TEXT,
-            final_value_json TEXT,
-            decision TEXT NOT NULL,
-            comment TEXT
+            field_name TEXT NOT NULL
         );
         CREATE TABLE field_commits (
             id TEXT PRIMARY KEY,
             task_id TEXT NOT NULL,
-            field_name TEXT NOT NULL,
-            final_value_json TEXT,
-            route TEXT NOT NULL,
-            reviewed INTEGER NOT NULL,
-            review_decision TEXT,
-            agent_value_json TEXT,
-            review_value_json TEXT,
-            evidence_refs_json TEXT NOT NULL,
-            used_global_lookup INTEGER NOT NULL,
-            used_validation_rule INTEGER NOT NULL,
-            related_fields_json TEXT NOT NULL,
-            committed_by TEXT NOT NULL,
-            committed_at TEXT NOT NULL
+            field_name TEXT NOT NULL
         );
         """
     )
@@ -110,15 +102,14 @@ def test_database_initialization_removes_legacy_route_and_review_schema():
             "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()
     }
-    task_columns = {row["name"] for row in connection.execute("PRAGMA table_info(tasks)").fetchall()}
-    commit_columns = {row["name"] for row in connection.execute("PRAGMA table_info(field_commits)").fetchall()}
+    qa_task_columns = {row["name"] for row in connection.execute("PRAGMA table_info(qa_tasks)").fetchall()}
 
+    assert {"qa_tasks", "qa_documents", "qa_messages", "qa_turns", "qa_events"} <= table_names
+    assert "tasks" not in table_names
+    assert "extracted_fields" not in table_names
+    assert "field_traces" not in table_names
     assert "field_routes" not in table_names
     assert "reviews" not in table_names
     assert "review_fields" not in table_names
-    assert "route" not in task_columns
-    assert "route_reason" not in task_columns
-    assert "route" not in commit_columns
-    assert "reviewed" not in commit_columns
-    assert "review_decision" not in commit_columns
-    assert "review_value_json" not in commit_columns
+    assert "field_commits" not in table_names
+    assert {"id", "status", "stage", "memory_json", "active_turn_id"} <= qa_task_columns

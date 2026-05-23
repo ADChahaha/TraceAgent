@@ -438,16 +438,16 @@ export function ReplayReview({
 	      } as React.CSSProperties;
       return (
         <section
-          aria-label="Replay 全屏文档工作台"
+          aria-label="Replay document workspace"
           className="replay-review-root replay-review-root-fullscreen replay-task-workbench bg-background"
         >
-          <div className="replay-topbar" aria-label="Replay 顶部工具栏">
+          <div className="replay-topbar" aria-label="Replay top bar">
             <div className="replay-topbar-main">
               <button
                 type="button"
                 className="replay-topbar-back"
-                aria-label={isLeftPanelOpen ? "关闭任务栏" : "打开任务栏"}
-                title={isLeftPanelOpen ? "关闭任务栏" : "打开任务栏"}
+                aria-label={isLeftPanelOpen ? "Close sidebar" : "Open sidebar"}
+                title={isLeftPanelOpen ? "Close sidebar" : "Open sidebar"}
                 onClick={() => setIsLeftPanelOpen((current) => !current)}
               >
                 {isLeftPanelOpen ? <PanelLeftClose className="h-4 w-4" aria-hidden="true" /> : <PanelLeftOpen className="h-4 w-4" aria-hidden="true" />}
@@ -471,7 +471,7 @@ export function ReplayReview({
             style={pendingStageStyle}
           >
             {isLeftPanelOpen ? (
-              <aside className="replay-task-sidebar overflow-hidden bg-background" aria-label="任务工作台左侧任务栏">
+              <aside className="replay-task-sidebar overflow-hidden bg-background" aria-label="Task sidebar">
                 <TaskSidebar tasks={recentTasks} activeTaskId={currentTaskId} />
               </aside>
             ) : null}
@@ -507,7 +507,7 @@ export function ReplayReview({
                   onPointerDown={(event) => startPanelResize("field-progress", event)}
                   onKeyDown={(event) => resizePanelByKeyboard("field-progress", event)}
                 />
-                <aside className="replay-review-side-panel-slot" aria-label="右侧 Review 工作栏">
+                <aside className="replay-review-side-panel-slot" aria-label="Right review workspace">
                   <WorkspaceTabStrip
                     sourceTabs={[]}
                     activeTabId={REVIEW_TAB_ID}
@@ -530,27 +530,27 @@ export function ReplayReview({
     }
     return (
       <div className="rounded-md border border-dashed p-8 text-sm text-muted-foreground">
-        暂无 replay 数据。
+        No replay data.
       </div>
     );
   }
 
   return (
     <section
-      aria-label="Replay 全屏文档工作台"
+      aria-label="Replay document workspace"
       className={
         hasFieldProgressFields
           ? "replay-review-root replay-review-root-fullscreen replay-task-workbench has-field-write bg-background"
           : "replay-review-root replay-review-root-fullscreen replay-task-workbench bg-background"
       }
     >
-      <div className="replay-topbar" aria-label="Replay 顶部工具栏">
+      <div className="replay-topbar" aria-label="Replay top bar">
         <div className="replay-topbar-main">
           <button
             type="button"
             className="replay-topbar-back"
-            aria-label={isLeftPanelOpen ? "关闭任务栏" : "打开任务栏"}
-            title={isLeftPanelOpen ? "关闭任务栏" : "打开任务栏"}
+            aria-label={isLeftPanelOpen ? "Close sidebar" : "Open sidebar"}
+            title={isLeftPanelOpen ? "Close sidebar" : "Open sidebar"}
             onClick={() => setIsLeftPanelOpen((current) => !current)}
           >
             {isLeftPanelOpen ? <PanelLeftClose className="h-4 w-4" aria-hidden="true" /> : <PanelLeftOpen className="h-4 w-4" aria-hidden="true" />}
@@ -575,7 +575,7 @@ export function ReplayReview({
         style={stageStyle}
       >
         {isLeftPanelOpen ? (
-          <aside className="replay-task-sidebar overflow-hidden bg-background" aria-label="任务工作台左侧任务栏">
+          <aside className="replay-task-sidebar overflow-hidden bg-background" aria-label="Task sidebar">
             <TaskSidebar tasks={recentTasks} activeTaskId={taskId ?? replay.task_id} />
           </aside>
         ) : null}
@@ -613,7 +613,7 @@ export function ReplayReview({
               onPointerDown={(event) => startPanelResize("outline", event)}
               onKeyDown={(event) => resizePanelByKeyboard("outline", event)}
             />
-            <aside className="replay-outline-panel-slot" aria-label="Contents 面板">
+            <aside className="replay-outline-panel-slot" aria-label="Contents panel">
               <OutlinePanel
                 outlineTree={replay!.outline_tree!}
                 fieldStates={replay?.field_states}
@@ -635,7 +635,7 @@ export function ReplayReview({
               onPointerDown={(event) => startPanelResize("field-progress", event)}
               onKeyDown={(event) => resizePanelByKeyboard("field-progress", event)}
             />
-            <aside className="replay-review-side-panel-slot" aria-label="右侧 Review 工作栏">
+            <aside className="replay-review-side-panel-slot" aria-label="Right review workspace">
               <WorkspaceTabStrip
                 sourceTabs={sourceTabs}
                 activeTabId={activeWorkspaceTabId}
@@ -679,7 +679,7 @@ function ReviewPanelToggleButton({
   isOpen: boolean;
   onToggle: () => void;
 }) {
-  const label = isOpen ? "关闭右侧 Review" : "打开右侧 Review";
+  const label = isOpen ? "Close right review" : "Open right review";
   return (
     <button
       type="button"
@@ -720,18 +720,18 @@ function PanelResizeHandle({
   const resizeMetadata =
     side === "left"
       ? {
-          label: "调整左侧栏宽度",
+          label: "Resize left sidebar",
           min: LEFT_PANEL_MIN_WIDTH,
           max: LEFT_PANEL_MAX_WIDTH,
         }
       : side === "outline"
         ? {
-            label: "调整 Contents 宽度",
+            label: "Resize contents panel",
             min: OUTLINE_PANEL_MIN_WIDTH,
             max: OUTLINE_PANEL_MAX_WIDTH,
           }
         : {
-            label: "调整右侧栏宽度",
+            label: "Resize right sidebar",
             min: RIGHT_PANEL_MIN_WIDTH,
             max: RIGHT_PANEL_MAX_WIDTH,
           };
@@ -765,12 +765,12 @@ function TaskSidebar({
     <div className="replay-task-sidebar-inner">
       <div className="replay-task-sidebar-header">
         <span className="replay-task-sidebar-label">Tasks</span>
-        <Link href="/" className="replay-new-task-link" aria-label="新任务">
+        <Link href="/" className="replay-new-task-link" aria-label="New task">
           <Plus className="h-4 w-4" aria-hidden="true" />
-          <span>新任务</span>
+          <span>New task</span>
         </Link>
       </div>
-      <nav className="replay-task-list" aria-label="最近任务">
+      <nav className="replay-task-list" aria-label="Recent tasks">
         {tasks.length > 0 ? (
           tasks.map((task) => (
             <Link
@@ -786,7 +786,7 @@ function TaskSidebar({
             </Link>
           ))
         ) : (
-          <p className="replay-task-empty">暂无最近任务。</p>
+          <p className="replay-task-empty">No recent tasks.</p>
         )}
       </nav>
     </div>
@@ -805,7 +805,7 @@ function FieldProgressPanel({
   const selectedField = fields.find((field) => field.sourceName === selectedFieldName) ?? fields[0] ?? null;
 
   return (
-    <section className="replay-field-progress-panel" aria-label="字段进度面板">
+    <section className="replay-field-progress-panel" aria-label="Field progress panel">
       <div className="replay-side-panel-header">
         <div>
           <div className="replay-side-panel-title">Field Progress</div>
@@ -822,7 +822,7 @@ function FieldProgressPanel({
           />
         ))}
         {fields.length === 0 ? (
-          <p className="replay-field-progress-empty">暂无字段进度。</p>
+          <p className="replay-field-progress-empty">No field progress yet.</p>
         ) : null}
       </div>
     </section>
@@ -978,7 +978,7 @@ function FieldProgressRow({
     >
       <span className="replay-field-row-main">
         <span className="replay-field-row-title">{field.fieldName}</span>
-        <span className="replay-field-row-value">{valuePreview || "暂无字段值"}</span>
+        <span className="replay-field-row-value">{valuePreview || "No field value"}</span>
         {summaryPreview ? <span className="replay-field-row-summary">{summaryPreview}</span> : null}
       </span>
       <span className="replay-field-row-meta">
@@ -1001,7 +1001,7 @@ function WorkspaceTabStrip({
   onCloseTab: (tabId: string) => void;
 }) {
   return (
-    <div className="replay-workspace-tabs" role="tablist" aria-label="右侧工作栏选项卡">
+    <div className="replay-workspace-tabs" role="tablist" aria-label="Right workspace tabs">
       <button
         type="button"
         role="tab"
@@ -1029,7 +1029,7 @@ function WorkspaceTabStrip({
           <button
             type="button"
             className="replay-workspace-tab-close"
-            aria-label={`关闭 ${tab.label}`}
+            aria-label={`Close ${tab.label}`}
             onClick={(event) => {
               event.stopPropagation();
               onCloseTab(tab.id);
@@ -1077,23 +1077,23 @@ function ReviewWorkspacePanel({
   return (
     <div
       className="replay-agent-panel-slot"
-      aria-label="Agent 中间工作区"
+      aria-label="Agent workspace"
       data-agent-balance-side={agentBalanceSide}
       data-agent-content-mode={agentContentMode}
       data-agent-gutter={agentContentMode === "centered" ? "compact" : "none"}
     >
-      <section className="replay-agent-panel" aria-label="Agent 工具回放">
+      <section className="replay-agent-panel" aria-label="Agent tool replay">
         <div className="replay-agent-header">
           <span className="replay-agent-title">AI</span>
           <span className="replay-agent-step">
             {visibleActionCount === 0 ? "0 tool calls" : `${visibleActionCount} tool calls`}
           </span>
         </div>
-        <div ref={agentStreamRef} className="replay-agent-stream" aria-label="Agent 文字流">
-          <div className="replay-agent-centered-content" aria-label="Agent 居中文字流内容">
-            <div className="replay-agent-content-frame" aria-label="Agent 中间文字框">
+        <div ref={agentStreamRef} className="replay-agent-stream" aria-label="Agent text stream">
+          <div className="replay-agent-centered-content" aria-label="Agent centered text stream content">
+            <div className="replay-agent-content-frame" aria-label="Agent center text frame">
               <AgentBalanceSpacer side="left" active={agentContentMode === "centered"} />
-              <div className="replay-agent-readable-column" aria-label="Agent 阅读列">
+              <div className="replay-agent-readable-column" aria-label="Agent reading column">
                 {agentStreamItems.length > 0 ? (
                   agentStreamItems.map((streamItem) => {
                     if (streamItem.kind === "message") {
@@ -1103,7 +1103,7 @@ function ReviewWorkspacePanel({
                       return (
                         <div
                           key={`message-${actionIndex}-${toolName}-${target}`}
-                          aria-label={`第 ${visibleStepNumber} 步 ${toolName} 文字`}
+                          aria-label={`Step ${visibleStepNumber} ${toolName} text`}
                           className="replay-agent-turn replay-agent-message-turn"
                         >
                           <div className="replay-agent-message">
@@ -1135,7 +1135,7 @@ function ReviewWorkspacePanel({
                     return (
                       <div
                         key={`${actionIndex}-${toolName}-${target}`}
-                        aria-label={`第 ${visibleStepNumber} 步 ${toolName}`}
+                        aria-label={`Step ${visibleStepNumber} ${toolName}`}
                         className="replay-agent-turn"
                       >
                         <AgentToolLine action={action} ok={ok} onOpenActionSource={onOpenActionSource} />
@@ -1144,7 +1144,7 @@ function ReviewWorkspacePanel({
                   })
                 ) : (
                   <div className="replay-agent-turn is-current">
-                    <div className="replay-agent-empty">{pendingLabel ?? "等待工具调用。"}</div>
+                    <div className="replay-agent-empty">{pendingLabel ?? "Waiting for tool calls."}</div>
                   </div>
                 )}
               </div>
@@ -1154,28 +1154,28 @@ function ReviewWorkspacePanel({
         </div>
         <form
           className="replay-agent-composer"
-          aria-label="Agent 对话区"
+          aria-label="Agent composer"
           onSubmit={(event) => {
             event.preventDefault();
             onComposerSubmit();
           }}
         >
-          <div className="replay-agent-composer-balance-row" aria-label="Agent 居中输入区">
-            <div className="replay-agent-composer-frame" aria-label="Agent 中间输入框">
+          <div className="replay-agent-composer-balance-row" aria-label="Agent centered input area">
+            <div className="replay-agent-composer-frame" aria-label="Agent center input frame">
               <AgentBalanceSpacer side="left" active={agentContentMode === "centered"} />
-              <div className="replay-agent-composer-readable-column" aria-label="Agent 输入阅读列">
+              <div className="replay-agent-composer-readable-column" aria-label="Agent input reading column">
                 <textarea
-                  aria-label="Agent 对话输入框"
+                  aria-label="Agent message input"
                   value={composerValue}
                   onChange={(event) => onComposerChange(event.currentTarget.value)}
                   placeholder="Ask for follow-up changes"
                   className="replay-agent-composer-input"
                 />
                 <div className="replay-agent-composer-actions">
-                  <Button type="button" variant="ghost" size="icon" aria-label="添加文件">
+                  <Button type="button" variant="ghost" size="icon" aria-label="Add file">
                     <Paperclip className="h-4 w-4" aria-hidden="true" />
                   </Button>
-                  <Button type="submit" size="icon" aria-label="发送消息">
+                  <Button type="submit" size="icon" aria-label="Send message">
                     <SendHorizonal className="h-4 w-4" aria-hidden="true" />
                   </Button>
                 </div>
@@ -1319,13 +1319,13 @@ function SourceTabPanel({
   return (
     <div
       className="replay-source-panel-slot"
-      aria-label="原文查看器"
+      aria-label="Source viewer"
       data-highlight-selector={highlightSelector}
       data-navigation-key={tab.navigationKey}
     >
       <iframe
         ref={sourceFrameRef}
-        title="原文文档"
+        title="Source document"
         className="replay-source-document replay-source-frame"
         srcDoc={sourceFrameSrcDoc}
         referrerPolicy="no-referrer"
@@ -1438,7 +1438,7 @@ function ReplayStatusBadge({ status }: { status: TaskSummary["status"] }) {
   if (status === "completed") {
     return <Badge variant="success">{status}</Badge>;
   }
-  if (status === "processing" || status === "pending") {
+  if (status === "processing" || status === "running") {
     return <Badge variant="warning">{status}</Badge>;
   }
   if (status === "failed") {
@@ -1523,7 +1523,7 @@ function AgentToolGroup({
         type="button"
         className="replay-agent-tool-group-toggle"
         aria-expanded={isExpanded}
-        aria-label={`${isExpanded ? "收起" : "展开"} ${items.length} 个工具调用`}
+        aria-label={`${isExpanded ? "Collapse" : "Expand"} ${items.length} tool calls`}
         onClick={() => onToggleExpanded(groupId)}
       >
         {isExpanded ? (

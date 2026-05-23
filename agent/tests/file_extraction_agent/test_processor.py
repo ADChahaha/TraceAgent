@@ -4,38 +4,87 @@ import pytest
 
 from service.file_extraction_agent.impl import model_factory as model_factory_module
 from service.file_extraction_agent.impl.model_factory import build_chat_model, normalize_model_config
-from service.file_extraction_agent.processor import extract_stream
+from service.file_extraction_agent.processor import cancel_completion, create_completion_stream
 from service.file_extraction_agent.schemas import ModelConfig
 
 
-def test_extract_stream_builds_documents_input_and_runs_stream_graph(monkeypatch):
+def test_create_completion_stream_builds_completion_input_and_runs_graph(monkeypatch):
     captured = {}
 
     def fake_build_resolution_model(config):
         captured["config"] = config
         return "resolution-model"
 
-    def fake_run_graph_stream(extraction_input, resolution_model):
-        captured["documents"] = extraction_input.documents
-        captured["field"] = extraction_input.task_spec.fields[0].name
+    def fake_run_completion_graph_stream(completion_input, resolution_model):
+        captured["completion_id"] = completion_input.completion_id
+        captured["documents"] = completion_input.documents
+        captured["messages"] = completion_input.messages
         captured["model"] = resolution_model
-        yield '{"type":"result_completed"}\n'
+        yield 'event: completion.completed\ndata: {"id":"cmp_123"}\n\n'
 
     monkeypatch.setattr("service.file_extraction_agent.processor.build_resolution_model", fake_build_resolution_model)
-    monkeypatch.setattr("service.file_extraction_agent.processor.run_extraction_graph_stream", fake_run_graph_stream)
+    monkeypatch.setattr("service.file_extraction_agent.processor.run_completion_graph_stream", fake_run_completion_graph_stream)
 
     events = list(
-        extract_stream(
+        create_completion_stream(
+            completion_id="cmp_123",
             documents=[{"filename": "notice.html", "html": '<p id="p1">通知</p>'}],
-            task_spec={"fields": [{"name": "title"}]},
+            messages=[{"role": "user", "content": "问题"}],
             model_config=ModelConfig(resolution_model_name="resolution"),
         )
     )
 
-    assert events == ['{"type":"result_completed"}\n']
+    assert events == ['event: completion.completed\ndata: {"id":"cmp_123"}\n\n']
+    assert captured["completion_id"] == "cmp_123"
     assert captured["documents"][0].filename == "notice.html"
-    assert captured["field"] == "title"
+    assert captured["messages"][0].content == "问题"
     assert captured["model"] == "resolution-model"
+
+
+def test_create_completion_stream_validates_input_before_iteration(monkeypatch):
+    called = False
+
+    def fake_build_resolution_model(config):
+        nonlocal called
+        called = True
+        return "resolution-model"
+
+    monkeypatch.setattr("service.file_extraction_agent.processor.build_resolution_model", fake_build_resolution_model)
+
+    with pytest.raises(ValueError, match="documents"):
+        create_completion_stream(
+            completion_id="cmp_123",
+            documents=[],
+            messages=[{"role": "user", "content": "问题"}],
+            model_config=ModelConfig(resolution_model_name="resolution"),
+        )
+
+    assert called is False
+
+
+def test_create_completion_stream_registers_active_completion_before_iteration(monkeypatch):
+    def fake_build_resolution_model(config):
+        return "resolution-model"
+
+    def fake_run_completion_graph_stream(completion_input, resolution_model):
+        del completion_input, resolution_model
+        yield 'event: completion.completed\ndata: {"id":"cmp_early_cancel"}\n\n'
+
+    monkeypatch.setattr("service.file_extraction_agent.processor.build_resolution_model", fake_build_resolution_model)
+    monkeypatch.setattr("service.file_extraction_agent.processor.run_completion_graph_stream", fake_run_completion_graph_stream)
+
+    stream = create_completion_stream(
+        completion_id="cmp_early_cancel",
+        documents=[{"filename": "notice.html", "html": '<p id="p1">通知</p>'}],
+        messages=[{"role": "user", "content": "问题"}],
+        model_config=ModelConfig(resolution_model_name="resolution"),
+    )
+
+    assert cancel_completion("cmp_early_cancel") == {"id": "cmp_early_cancel", "status": "cancelling"}
+    assert list(stream) == [
+        'event: completion.cancelled\ndata: {"id":"cmp_early_cancel","type":"completion.cancelled","status":"cancelled"}\n\n'
+    ]
+    assert cancel_completion("cmp_early_cancel") == {"id": "cmp_early_cancel", "status": "not_found"}
 
 
 def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):

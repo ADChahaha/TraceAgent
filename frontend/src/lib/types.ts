@@ -1,13 +1,14 @@
 export type TaskStatus =
-  | "pending"
   | "processing"
+  | "ready"
+  | "running"
   | "completed"
   | "failed";
 
 export type TaskStage =
-  | "uploaded"
   | "document_processing"
-  | "extraction"
+  | "ready"
+  | "answering"
   | "done";
 
 export type BasicFieldType = "string" | "number" | "boolean" | "list[string]" | "list[number]" | "null";
@@ -23,9 +24,10 @@ export interface Capabilities {
   supported_file_types: string[];
   task_types: string[];
   features: {
-    trace: boolean;
-    audit: boolean;
-    external_task_spec: boolean;
+    document_qa?: boolean;
+    multi_turn?: boolean;
+    event_stream?: boolean;
+    cancel?: boolean;
     multiple_files?: boolean;
   };
 }
@@ -35,6 +37,8 @@ export interface TaskCreated {
   status: TaskStatus;
   stage: TaskStage;
   error_message?: string | null;
+  document_count?: number;
+  active_turn_id?: string | null;
   stream?: TaskStreamState;
 }
 
@@ -43,26 +47,42 @@ export interface TaskSummary {
   status: TaskStatus;
   stage: TaskStage;
   error_message?: string | null;
-  has_result?: boolean;
-  has_trace?: boolean;
+  document_count?: number;
+  documents?: TaskSourceDocument[];
+  source_selectors?: Record<string, string>;
+  active_turn_id?: string | null;
   created_at?: string;
   updated_at?: string;
   stream?: TaskStreamState;
 }
 
+export interface TaskSourceDocument {
+  document_id: string;
+  filename: string;
+  display_html: string;
+}
+
 export interface TaskStreamState {
-  state: "running" | "ended" | string;
+  state: "idle" | "running" | string;
   last_event_seq: number;
 }
 
 export interface TaskEvent {
   seq: number;
   task_id: string;
+  turn_id?: string | null;
   type: string;
   status: TaskStatus | string;
   stage: TaskStage | string;
   payload: Record<string, unknown>;
   created_at?: string;
+}
+
+export interface QaInputCreated {
+  task_id: string;
+  turn_id: string;
+  status: "queued" | "in_progress" | "completed" | "cancelled" | "failed" | string;
+  agent_completion_id?: string | null;
 }
 
 export interface TaskList {

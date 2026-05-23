@@ -1,36 +1,36 @@
 # `upload-workbench.test.tsx`
 
-这组测试覆盖首页新的 Codex 式新任务界面。测试用注入的 `createTask`、`getTaskSummary` 和 `listTasks` 隔离真实 backend，只验证首页任务栏、居中新任务 composer 和 `task_spec` 提交流程的可观察行为。
+这组测试覆盖首页 QA 新任务入口。测试用注入的 `createTask`、`createTaskInput`、`getTaskSummary` 和 `listTasks` 隔离真实 backend，只验证首页任务栏、任务栏 resize、PDF 上传、首轮问题提交、英文 UI 文案和主题切换这些用户可见行为。
 
 ## 测试链路
 
 ```text
 用户打开 /
-  -> 首页直接渲染 Codex New Chat 形态的新任务界面，不再显示旧上传工作台首屏
-  -> 服务端首帧不读取 localStorage 中的 recent tasks 或 theme，避免 SSR HTML 与客户端 hydrate 首帧不一致
-  -> 浏览器挂载后通过 useSyncExternalStore 读取本地 recent tasks 和主题快照，并继续请求 backend 任务列表
-  -> 左侧任务栏从 backend GET /tasks 加载最近任务
-  -> 中间区域显示居中的新任务标题和 composer，不展示正在执行的 Agent 文字流
-  -> 用户关闭左侧任务栏时，新任务界面仍然不自动显示右侧 Progress 或 Review
-  -> composer 通过纸夹按钮选择 PDF
-  -> 已选择 PDF 以 chip 展示，用户可以在创建任务前逐个移除误选文件
-  -> 用户把 task_spec JSON 粘贴到对话框
-  -> 前端校验 task_spec 是 object 且 task_spec.task_name 非空
-  -> 用 task_spec.task_name 作为 backend 需要的 task_type
-  -> 用重复 files 字段和 task_spec 组装 FormData
-  -> POST /tasks 创建任务
-  -> 左侧任务栏立即显示处理中
-  -> 轮询 GET /tasks/{task_id} 后更新为处理结果，任务状态明细使用 status/stage 命名，不再保留旧 route 命名
+  -> UploadWorkbench 渲染 Codex New Chat 形态工作台
+  -> 服务端首帧不读取 localStorage，客户端挂载后同步本地 recent tasks
+  -> 浏览器挂载后调用 GET /qa/tasks 同步 backend 最近 QA task
+  -> 左侧任务栏默认宽度是 224px，可通过 resize separator 拖拽或键盘调整
+  -> 用户选择一个或多个 PDF
+  -> 用户在 composer 输入首轮 QA 问题
+  -> Enter 直接提交，Shift+Enter 在问题里保留换行
+  -> 前端校验至少一个 PDF、文件类型是 PDF、问题非空
+  -> FormData 只重复追加 files，不再发送 task_spec / task_type
+  -> POST /qa/tasks 创建多文档 QA task
+  -> 左侧任务栏立即显示新 task，状态以英文 status / stage 呈现，并跳转详情页
+  -> 后台 POST /qa/tasks/{task_id}/inputs 提交首轮问题
+  -> 用 GET /qa/tasks/{task_id} 刷新摘要
 ```
 
 ## 测试函数
 
-- `首页默认就是 Codex 式新任务界面，不再显示旧上传首屏`：验证首屏保留任务栏和居中新任务 composer，旧的“上传工作台/能力边界/task_type/metadata”界面以及执行态 Agent 文字流不存在。
-- `首页服务端首帧不读取 localStorage，避免服务端 HTML 与客户端 hydrate 不一致`：验证 server render 不会把浏览器 localStorage 中的最近任务写进首帧 HTML，客户端挂载后才同步本地任务。
-- `New Chat 关闭左侧任务栏后不自动显示右侧 Progress`：验证新任务界面关闭左侧任务栏后只保留中央 composer，不弹出右侧进度栏。
-- `启动时从 backend 任务列表加载左侧任务栏`：验证首页挂载后会从 backend 任务列表同步数据库任务到左侧任务栏。
-- `task_spec composer 会用 task_name 作为 task_type 并提交 PDF files`：验证 composer 提交时从 `task_spec.task_name` 推导 `task_type`，并用重复 `files` 字段发送多个 PDF。
-- `没有 PDF 或缺少 task_name 时不会创建任务`：验证创建任务前会拦截缺少 PDF 和缺少 `task_spec.task_name` 的输入。
-- `已选择的 PDF 可以逐个移除`：验证用户误选多个 PDF 后，每个文件 chip 都有可访问的移除按钮，点击后只删除对应文件。
-- `创建任务后左侧任务栏先显示处理中，轮询完成后显示处理结果`：验证新任务先进入左侧任务栏，轮询拿到终态后更新终态标签，并确认任务列表不再保留旧 `replay-task-route` DOM 命名。
-- `主题切换仍在任务工作台顶部生效`：验证顶部单个主题按钮仍写入 `html[data-theme]` 和 localStorage。
+- `首页默认就是 Codex 式新任务界面，不再显示旧上传首屏`：验证首页只显示任务栏和 QA composer，不显示旧上传工作台、task_type、metadata 或执行态 Agent 流。
+- `首页服务端首帧不读取 localStorage，避免服务端 HTML 与客户端 hydrate 不一致`：验证 SSR 不读取浏览器缓存，客户端挂载后再显示本地 recent task。
+- `New Chat 关闭左侧任务栏后不自动显示右侧 Progress`：验证首页关闭左栏后仍只保留中央 QA composer。
+- `首页左侧任务栏默认宽度和详情页一致，并支持键盘调整`：验证首页任务栏默认 224px，范围是 176-360px，并能通过键盘和拖拽调整。
+- `启动时从 backend 任务列表加载左侧任务栏`：验证首页会从 `GET /qa/tasks` 同步数据库任务到左侧栏。
+- `QA composer 会创建多文档 task 并提交首轮问题`：验证上传多个 PDF 后，前端只提交 `files`，拿到 task 后用同一 task 调 `/inputs` 发送首问。
+- `QA composer 用 Enter 提交问题，Shift Enter 保留换行`：验证首页 composer 的键盘语义，Shift+Enter 只插入换行，Enter 才创建 task 并提交包含换行的首问。
+- `没有 PDF 或问题为空时不会创建任务`：验证缺少 PDF 或空问题会用英文错误提示在前端拦截，不调用 backend。
+- `已选择的 PDF 可以逐个移除`：验证每个文件 chip 都能通过英文 remove 按钮独立移除。
+- `创建任务后左侧任务栏先显示可提问，首轮输入完成后刷新为最新摘要`：验证新 task 进入 recent tasks 后以 `ready / ready` 这类英文状态显示，并继续刷新 summary。
+- `主题切换仍在任务工作台顶部生效`：验证顶部英文主题按钮仍同步 `html[data-theme]` 和 localStorage。

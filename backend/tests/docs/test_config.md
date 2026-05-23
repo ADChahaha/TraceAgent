@@ -1,25 +1,23 @@
-# `test_config.py`
+# test_config.py
 
-这组测试覆盖 `backend` 的配置和接口边界，重点验证 task spec 不写死在 Python 代码里，也不暴露内置实验数据源。
+这份测试覆盖 backend QA-only 重构后的全局配置、路由挂载和数据库初始化。
 
-## 测试链路
+实现链路：
 
 ```text
-BackendSettings(...)
-  -> 只管理数据库、agent service 地址和支持文件类型
-  -> 不创建 task_specs / task_specs_dir 属性
-  -> POST /tasks 必须从请求表单接收 task_spec
-FastAPI app 启动
-  -> 只挂任务和能力接口
-  -> 路由表中不注册 /experiments/... 这类内置实验接口
-  -> 路由表中不注册旧人工检查接口
-  -> 数据库初始化会清理旧 route/review schema 残留，避免本地旧库继续暴露 route 列或旧人工复核表
-  -> 访问历史实验路径时只能得到 404
+create_app(...)
+  -> 挂载 /qa/tasks 系列 API
+  -> 挂载 /healthz 健康检查 API
+  -> 不再挂载旧 /tasks 字段抽取 API
+
+initialize_database(connection)
+  -> 删除旧 tasks / extracted_fields / field_traces / field_commits 等字段抽取 schema
+  -> 创建 qa_tasks / qa_documents / qa_messages / qa_turns / qa_events
 ```
 
 ## 测试函数
 
-- `test_backend_settings_does_not_define_builtin_task_specs`：验证 `BackendSettings` 不暴露内置 task specs 或默认 task spec 目录，避免 backend 对具体业务字段 schema 做兜底。
-- `test_backend_does_not_register_builtin_experiment_routes`：验证 backend 路由表不再注册 `/experiments/...` 内置实验接口，避免缺数据时返回 404 却仍然暴露实验 route 的假阳性。
-- `test_backend_does_not_register_manual_check_routes`：验证 backend 路由表不再注册旧人工检查接口，避免删除 route 功能后仍能从 HTTP 层进入人工审核流程。
-- `test_database_initialization_removes_legacy_route_and_review_schema`：验证启动初始化遇到旧 SQLite schema 时，会移除 `tasks.route/route_reason`、`field_commits` 的旧 review/route 列，以及 `field_routes/reviews/review_fields` 旧表。
+- `test_backend_settings_keeps_agent_service_configuration`：验证 backend 仍保留 agent service 地址、超时和 PDF 能力配置。
+- `test_backend_registers_qa_routes_and_removes_old_task_routes`：验证应用只挂载 QA task API，旧 `/tasks` route 已下线。
+- `test_backend_healthz_reports_ok`：验证 `/healthz` 返回 200 和 `{"status": "ok"}`，供本地启动和部署探活使用。
+- `test_database_initialization_creates_qa_schema_and_drops_old_field_schema`：验证数据库初始化会创建 QA 会话表，并删除旧字段抽取/审核/提交表。

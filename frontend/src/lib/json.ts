@@ -16,11 +16,11 @@ export function parseJsonObject(input: string, fieldName: string): JsonParseResu
   try {
     const parsed = JSON.parse(input);
     if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
-      return { ok: false, error: `${fieldName} 必须是合法 JSON object` };
+      return { ok: false, error: `${fieldName} must be a valid JSON object` };
     }
     return { ok: true, value: parsed as JsonObject };
   } catch {
-    return { ok: false, error: `${fieldName} 必须是合法 JSON object` };
+    return { ok: false, error: `${fieldName} must be a valid JSON object` };
   }
 }
 

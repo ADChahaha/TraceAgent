@@ -101,9 +101,9 @@ def test_source_selectors_map_readable_path_ids_to_original_dom_ids():
 
     source_selectors = document.source_selectors()
 
-    assert "0001" not in source_selectors
-    assert "0001.0001" not in source_selectors
-    assert "0001.0002" not in source_selectors
+    assert source_selectors["0001"] == "t1"
+    assert source_selectors["0001.0001"] == "h1"
+    assert source_selectors["0001.0002"] == "h2"
     assert source_selectors["0001.0001.0001"] == "p1"
     assert source_selectors["0001.0001.0002"] == "p2"
     assert source_selectors["0001.0002.0001"] == "l1"

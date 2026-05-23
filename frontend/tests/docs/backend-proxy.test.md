@@ -1,22 +1,22 @@
 # `backend-proxy.test.ts`
 
-这组测试覆盖 Next route handler 代理 backend 的基础行为，避免浏览器直接跨域访问 FastAPI。
+这组测试覆盖 Next route handler 对 backend 的透明代理。前端仍只访问 `/api/backend/*`，由代理把路径和 body 转发给 FastAPI。
 
 ## 测试链路
 
 ```text
 浏览器请求 /api/backend/*
-  -> forwardBackendRequest 解析目标 path
-  -> 按 BACKEND_BASE_URL 组装 backend URL
-  -> multipart 请求按原始 body 和 boundary 透传
-  -> text/event-stream 响应直接透传 ReadableStream，不等待完整 body
-  -> backend 响应状态、content-type 和 body 原样返回给浏览器
-  -> fetcher mock 只负责返回或抛出 Response；目标 URL、method、headers 和 body 统一从 mock.calls 里断言
+  -> forwardBackendRequest 解析 pathSegments
+  -> 按 BACKEND_BASE_URL 拼出 backend URL
+  -> multipart body 以原始 ArrayBuffer 透传
+  -> application/json body 原样透传
+  -> text/event-stream 直接返回 ReadableStream
+  -> backend 状态码、content-type 和响应体返回给浏览器
 ```
 
 ## 测试函数
 
-- `会把 multipart 表单转发到 backend 目标路径`：验证上传任务的 multipart 表单会被转发到 backend `/tasks`，并保留原始 boundary，避免重新组装 FormData 导致真实 PDF 上传失败。
-- `会保留 backend 错误状态和 detail 响应`：验证 backend 返回 `422` 和 `detail` 时，前端代理不会吞掉错误语义。
-- `backend 不可达时会返回明确的 502 detail`：验证 backend 未启动或网络失败时，代理返回稳定的 `502` 和 `backend unavailable`，前端可以展示清晰错误。
-- `会把 text/event-stream 响应作为流转发，不先读成完整文本`：验证任务事件 SSE 不会被 Next 代理 `.text()` 缓冲，前端可以实时收到 backend 事件。
+- `会把 multipart 表单转发到 backend 目标路径`：验证 `/api/backend/qa/tasks` 上传会被转发到 backend `/qa/tasks`，并保留 multipart boundary。
+- `会保留 backend 错误状态和 detail 响应`：验证 `/qa/tasks/{task_id}/inputs` 返回 `422 detail` 时代理不会吞掉错误。
+- `backend 不可达时会返回明确的 502 detail`：验证 backend 连接失败时返回稳定的 `backend unavailable`。
+- `会把 text/event-stream 响应作为流转发，不先读成完整文本`：验证 `/qa/tasks/{task_id}/events` SSE 会被流式透传。

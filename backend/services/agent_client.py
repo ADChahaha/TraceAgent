@@ -35,52 +35,32 @@ class AgentClient:
             data=data,
         )
 
-    def extract_fields(
+    def create_document_qa_completion_stream(
         self,
         *,
-        html: str,
-        task_spec: dict[str, Any],
-        run_options: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        result_completed: dict[str, Any] | None = None
-        for event in self.extract_fields_stream(
-            html=html,
-            task_spec=task_spec,
-            run_options=run_options,
-        ):
-            if event.get("type") == "result_completed":
-                result_completed = event
-        if result_completed is None:
-            raise AgentServiceError("agent service stream ended without result_completed")
-        return self._extract_result_from_stream_event(result_completed)
-
-    def extract_fields_stream(
-        self,
-        *,
-        html: str,
-        task_spec: dict[str, Any],
+        completion_id: str,
+        documents: list[dict[str, Any]],
+        messages: list[dict[str, str]],
+        memory: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
         run_options: dict[str, Any] | None = None,
     ):
         payload: dict[str, Any] = {
-            "documents": [
-                {
-                    "filename": "document.html",
-                    "html": html,
-                }
-            ],
-            "task_spec": task_spec,
+            "completion_id": completion_id,
+            "documents": documents,
+            "messages": messages,
+            "memory": memory,
+            "stream": True,
+            "metadata": metadata or {},
         }
         if run_options is not None:
             payload["run_options"] = run_options
-        url = f"{self.base_url}/v1/file-extraction-agent/extract/stream"
+        url = f"{self.base_url}/v1/document-qa/chat/completions"
         try:
             with httpx.Client(timeout=self.timeout_seconds) as client:
                 with client.stream("POST", url, json=payload) as response:
                     response.raise_for_status()
-                    for line in response.iter_lines():
-                        if not line:
-                            continue
-                        yield json.loads(line)
+                    yield from _iter_sse_payloads(response)
         except httpx.HTTPStatusError as exc:
             exc.response.read()
             raise AgentServiceError(
@@ -89,7 +69,10 @@ class AgentClient:
         except httpx.HTTPError as exc:
             raise AgentServiceError(f"agent service request failed: {exc}") from exc
         except json.JSONDecodeError as exc:
-            raise AgentServiceError(f"agent service returned invalid stream JSON: {exc}") from exc
+            raise AgentServiceError(f"agent service returned invalid SSE JSON: {exc}") from exc
+
+    def cancel_document_qa_completion(self, completion_id: str) -> dict[str, Any]:
+        return self._post(f"/v1/document-qa/chat/completions/{completion_id}/cancel")
 
     def _post(self, path: str, **kwargs) -> dict[str, Any]:
         url = f"{self.base_url}{path}"
@@ -105,10 +88,24 @@ class AgentClient:
             raise AgentServiceError(f"agent service request failed: {exc}") from exc
         return response.json()
 
-    def _extract_result_from_stream_event(self, event: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "status": event.get("status") or "completed",
-            "failure_reason": event.get("failure_reason"),
-            "result": event.get("result") or {},
-            "trace": event.get("trace") or {},
-        }
+
+def _iter_sse_payloads(response: httpx.Response):
+    event_lines: list[str] = []
+    for line in response.iter_lines():
+        if line == "":
+            payload = _parse_sse_payload(event_lines)
+            event_lines = []
+            if payload is not None:
+                yield payload
+            continue
+        event_lines.append(line)
+    payload = _parse_sse_payload(event_lines)
+    if payload is not None:
+        yield payload
+
+
+def _parse_sse_payload(lines: list[str]) -> dict[str, Any] | None:
+    data_lines = [line.removeprefix("data: ") for line in lines if line.startswith("data: ")]
+    if not data_lines:
+        return None
+    return json.loads("\n".join(data_lines))

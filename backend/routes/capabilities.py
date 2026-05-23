@@ -5,6 +5,11 @@ from fastapi import APIRouter, Request
 router = APIRouter(tags=["capabilities"])
 
 
+@router.get("/healthz")
+def healthz():
+    return {"status": "ok"}
+
+
 @router.get("/capabilities")
 def get_capabilities(request: Request):
     settings = request.app.state.settings
@@ -12,9 +17,10 @@ def get_capabilities(request: Request):
         "supported_file_types": list(settings.supported_file_types),
         "task_types": [],
         "features": {
-            "trace": True,
-            "audit": True,
-            "external_task_spec": True,
+            "document_qa": True,
+            "multi_turn": True,
+            "event_stream": True,
+            "cancel": True,
             "multiple_files": True,
         },
     }

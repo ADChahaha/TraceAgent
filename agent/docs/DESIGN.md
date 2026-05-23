@@ -1,31 +1,52 @@
 # Agent Service Design
 
-这份文档描述 `agent service` 当前只保留的两个阶段：`document_processor` 和 `file_extraction_agent`。它的职责很窄，只负责把上传文件标准化成可读文档，再把这些文档交给抽取器产出字段结果和 trace；任务状态、字段提交、审计和任何人工审核都由 `backend` 处理。
+这份文档描述 `agent service` 当前保留的两个能力：`document_processor` 和 `file_extraction_agent`。其中 `document_processor` 负责把上传 PDF 标准化成语义 HTML；`file_extraction_agent` 在 `dev-qa` 分支上已经重构为多文档 QA chat completion agent，负责对 backend 提供的一组 HTML 文档进行可追溯问答。
 
-## 目标
+`agent service` 不访问 backend SQLite，不持久化多轮会话，也不决定前端任务状态。backend 是 task、messages、memory、events 和 replay 的持久化事实来源；agent 只执行一次 completion，并通过 SSE 返回过程事件。
 
-`agent/` 的目标是把“原始文件处理”和“字段抽取”拆开，避免一个模块同时承担文件解析、模型抽取、结果拼装和持久化。
+## 1. 目标
 
-## 与 Backend 的关系
+`agent/` 的目标是把“原始文件处理”和“文档 QA 执行”拆开：
 
-`agent service` 不直接访问 `backend` 的 SQLite，也不保存任务状态。
+```text
+原始 PDF
+  -> document_processor 标准化为 html / display_html / markdown / blocks
+  -> backend 保存文档和对话状态
+  -> file_extraction_agent 接收 documents + messages + memory
+  -> agent 像 code agent 浏览代码仓库一样 tree/grep/read/inspect 文档
+  -> agent 用 model_message + evidence link 流式回答
+  -> backend 持久化事件并转发给前端
+```
+
+## 2. 与 Backend 的关系
 
 典型交互链路是：
 
 ```text
 backend 读取上传 PDF bytes
-  -> 调用 document_processor
-  -> 拿到 filename + html / display_html / markdown / blocks
-  -> 组织 documents(filename + html)
-  -> 调用 file_extraction_agent
-  -> 拿到 result_completed(fields + trace)
-  -> backend 直接提交 resolved 字段，failed/None 字段保持未提交
-  -> backend 写入最终结果和 audit
+  -> 调用 POST /v1/document-processor/process
+  -> 拿到 filename + html + display_html + markdown + blocks
+  -> backend 保存 task documents、messages、memory 和事件游标
+  -> 用户每次提问时，backend 生成 completion_id
+  -> 调用 POST /v1/document-qa/chat/completions
+       body = documents(filename + html) + messages + memory + run_options
+  -> agent 返回 text/event-stream
+       completion.created
+       source_indexed
+       model_message / tool_started / tool_completed / tool_failed
+       completion.completed / completion.cancelled / completion.failed
+  -> backend 入库、转发给前端，并更新下一轮 messages/memory
 ```
 
-也就是说，`agent service` 只负责文档标准化和字段抽取，不负责任务治理、字段提交、审计或人工审核。
+`agent service` 不负责：
 
-## 当前结构
+- 前端任务创建、任务列表和断线续传。
+- 多轮 messages 的长期保存。
+- 用户上传文件的持久化。
+- replay HTML 的最终组装。
+- cancel 后的前端连接管理；它只提供 completion 级取消信号。
+
+## 3. 当前结构
 
 ```text
 agent/
@@ -56,95 +77,101 @@ agent/
         │   ├── model_factory.py
         │   └── resolution_new.py
         └── docs/
-            ├── API.md
             └── DESIGN.md
 ```
 
-`agent/pyproject.toml` 负责打包 `routes/` 和 `service/`。`routes/` 只做 HTTP 协议适配，真实实现统一放在 `service` 包内，并通过 `service.document_processor` 和 `service.file_extraction_agent` 访问。
+`routes/` 只做 HTTP 协议适配，真实实现统一放在 `service/` 包内。
 
-## 模块边界
+## 4. 模块边界
 
 ### `document_processor`
 
-- 输入是可读的 PDF 文件对象和可选 `file_type`
-- 先校验文件对象和文件类型，再交给 MinerU 解析
-- 输出 `ProcessResult(filename + html + display_html + markdown + md_list + blocks + meta_info + warnings)`
-- 提供 Python 入口 `service.document_processor.processor.process(...)`
-- 提供 HTTP 入口 `routes/document_processor.py`
-
-处理链路：
+输入是可读的 PDF 文件对象和可选 `file_type`。
 
 ```text
 UploadFile / file-like object
-  -> 校验可读性和 PDF 类型
+  -> 校验 file_obj.read() 是否可调用
+  -> 校验或推断 PDF 类型
   -> 调用 MinerU 解析 PDF bytes
-  -> 生成语义 HTML、展示 HTML、markdown 和 blocks
-  -> 返回 ProcessResult
+  -> 生成语义 HTML、展示 HTML、markdown、md_list 和 blocks
+  -> 返回 ProcessResult(filename, html, display_html, markdown, md_list, blocks, meta_info, warnings)
 ```
 
-失败时：
+失败语义：
 
-- 文件不可读、文件类型不是 PDF 或无法确认 PDF 时返回 422
-- 解析运行时失败时，错误向上抛给路由层
+- 文件不可读、文件类型不是 PDF 或无法确认 PDF 时返回 422。
+- MinerU 或解析运行时失败时，错误向上抛给路由层。
 
 ### `file_extraction_agent`
 
-- 输入是 `documents(filename + html)`、外部 `task_spec` 和可选 `run_options`
-- 先由 `input_adapter.py` 校验 documents、task_spec 和运行预算
-- 再由 `html_index.py` 把每个 HTML 变成只读虚拟文件树
-- 再由 `resolution_new.py` 通过 `tree / read / add_candidate_evidence / review_evidences / write_field / submit_result` 完成字段抽取
-- 最后由 `graph.py` 把工具调用序列化成 NDJSON 事件，并用 `result_completed` 收口
-
-处理链路：
+输入是 backend 每轮提供的 `completion_id + documents + messages + memory + run_options`。
 
 ```text
-documents(filename + html) + task_spec
-  -> input_adapter 校验 documents/task_spec/run_options
-  -> html_index 构建虚拟文件树、path 索引和 list/table 编号
-  -> resolution_new 执行 tree/read/add_candidate_evidence/review_evidences/write_field/submit_result
-  -> graph 输出 NDJSON 工具事件
-  -> result_completed 返回 fields[] 和 trace
+POST /v1/document-qa/chat/completions
+  -> route 解析 ChatCompletionRequest
+  -> processor.create_completion_stream(...)
+  -> input_adapter 校验 completion_id/documents/messages/run_options
+  -> html_index 把多份 HTML 构建成只读 virtual document repository
+  -> graph 输出 completion.created 和 source_indexed
+  -> resolution_new 让模型通过 tree / grep / read / inspect 浏览文档
+  -> html_tools 把每次工具调用写成 tool_started/tool_completed/tool_failed
+  -> model_message 在阅读过程中内嵌 evidence:// Markdown link
+  -> completion.completed / completion.cancelled / completion.failed 收口 SSE
 ```
 
-这里的 `review_evidences` 只是抽取链路内部的证据复看工具，不是人工审核流程，也不代表 backend 还有单独的 review gate。
+`file_extraction_agent` 第一版只在内存 `_ACTIVE_COMPLETIONS` 保存 active runtime，用于取消正在运行的 completion。它不保存历史 completion，也不支持多 worker 进程共享 cancel 状态。
 
-## 主链路
+## 5. 主链路
 
 ```text
 raw PDF
   -> document_processor
-  -> documents(filename + html)
-  -> file_extraction_agent stream
-  -> result_completed(fields[] + trace)
-  -> backend commit / audit
+  -> backend 持久化 documents + display_html
+  -> 用户提问
+  -> backend 调用 document QA chat completion
+  -> agent stream 输出阅读过程、工具调用和 evidence-linked answer
+  -> backend 保存 events/messages/memory
+  -> 下一轮用户提问时 backend 再传入更新后的 messages/memory
 ```
 
-## HTTP 入口
+## 6. HTTP 入口
 
-当前对外只保留这几个路径：
+当前对外保留这些路径：
 
-- `GET /healthz`
-- `POST /v1/document-processor/process`
-- `POST /v1/ocr/process`
-- `POST /v1/file-extraction-agent/extract/stream`
+```text
+GET  /healthz
+POST /v1/document-processor/process
+POST /v1/ocr/process
+POST /v1/document-qa/chat/completions
+GET  /v1/document-qa/chat/completions/{completion_id}
+POST /v1/document-qa/chat/completions/{completion_id}/cancel
+```
 
-`/v1/ocr/process` 只是 `document_processor` 的兼容旧路径。
+`/v1/ocr/process` 只是 `document_processor` 的兼容旧路径。旧字段抽取路径 `/v1/file-extraction-agent/extract/stream` 在本分支已删除。
 
-## 运行时环境
+## 7. 运行时环境
 
-`document_processor` 和 `file_extraction_agent` 使用的常见环境变量：
+常见环境变量：
 
 - `BASE_URL`
 - `OPENAI_API_KEY`
-- `RESOLUTION_MODEL`
+- `RESOLUTION_MODEL` 或 `MODEL`
+- `TEMPERATURE`
+- `TOP_P`
+- `TOP_K`
+- `REASONING_EFFORT`
+- `MODEL_MAX_RETRIES`
+- `MODEL_REQUEST_TIMEOUT`
 - `MINERU_BIN`
 - `DOCUMENT_PROCESSOR_MINERU_LANG`
 
-这里只保留文档处理和字段抽取所需模型，不再有额外阶段。
+`document_processor` 使用 MinerU 相关变量；`file_extraction_agent` 使用模型连接变量。
 
-## 当前约束
+## 8. 当前约束
 
-- `document_processor` 只处理 PDF
-- `file_extraction_agent` 只处理 backend 预先整理好的 documents，不负责读取上传文件
-- 抽取失败会在 NDJSON 中体现，并由 `result_completed` 或失败事件收口
-- 字段提交、任务状态和审计都由 backend 决定
+- `document_processor` 只处理 PDF。
+- `file_extraction_agent` 只处理 backend 预先整理好的 `documents(filename + html)`，不负责读取上传文件。
+- QA completion 当前总是以 SSE 返回；非流式 chat completion 还没有实现。
+- `GET /v1/document-qa/chat/completions/{completion_id}` 当前是占位调试接口。
+- cancellation 是 cooperative cancellation：agent 在 graph event 边界检查 cancel flag，不强杀正在进行中的模型请求。
+- 第一版要求单进程/单 worker 部署；多 uvicorn worker 会让内存 `_ACTIVE_COMPLETIONS` 不共享，导致 cancel 可能找不到目标 completion。

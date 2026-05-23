@@ -1,4 +1,4 @@
-"""Top-level streaming orchestration for virtual-tree extraction."""
+"""Top-level streaming orchestration for document QA completions."""
 
 from __future__ import annotations
 
@@ -6,26 +6,27 @@ import json
 from dataclasses import asdict, is_dataclass
 from typing import Any, Iterable
 
-from service.file_extraction_agent.impl.html_state import GraphState, HtmlExtractionInput, build_graph_state
+from service.file_extraction_agent.impl.html_state import DocumentQaCompletionInput, GraphState, build_graph_state
 from service.file_extraction_agent.impl.resolution_new import run_resolution_stream
-from service.file_extraction_agent.schemas import ExtractionResult
 
 
-def run_extraction_graph_stream(
-    extraction_input: HtmlExtractionInput,
+def run_completion_graph_stream(
+    completion_input: DocumentQaCompletionInput,
     resolution_model: Any = None,
 ) -> Iterable[str]:
-    state = build_graph_state(extraction_input)
+    state = build_graph_state(completion_input)
     emitted = 0
+    _append_completion_event(state, "completion.created", status="in_progress")
     _append_source_index_event(state)
     while emitted < len(state.events):
-        yield json.dumps(_plain(state.events[emitted]), ensure_ascii=False) + "\n"
+        yield _sse(state.events[emitted])
         emitted += 1
+
     outcome: Any = {"ok": False, "errors": [{"message": "resolution did not run"}]}
     try:
         for outcome in run_resolution_stream(state, resolution_model):
             while emitted < len(state.events):
-                yield json.dumps(_plain(state.events[emitted]), ensure_ascii=False) + "\n"
+                yield _sse(state.events[emitted])
                 emitted += 1
     except Exception as exc:
         state.failed_stage = "resolution"
@@ -33,47 +34,33 @@ def run_extraction_graph_stream(
         outcome = {"ok": False, "errors": [{"message": str(exc)}]}
 
     while emitted < len(state.events):
-        yield json.dumps(_plain(state.events[emitted]), ensure_ascii=False) + "\n"
+        yield _sse(state.events[emitted])
         emitted += 1
 
-    if not any(event.get("type") == "result_completed" for event in state.events):
-        result = map_state_to_result(
-            state,
-            status="failed",
-            failure_reason=_failure_reason(outcome),
-        )
-        event = {
-            "seq": state.next_seq,
-            "type": "result_completed",
-            "tool": "submit_result",
-            "result": result.result,
-            "trace": result.trace,
-        }
-        state.next_seq += 1
-        yield json.dumps(_plain(event), ensure_ascii=False) + "\n"
+    if _resolution_failed(outcome):
+        _append_completion_event(state, "completion.failed", status="failed", error=_failure_reason(outcome))
+    else:
+        _append_completion_event(state, "completion.completed", status="completed")
+    yield _sse(state.events[-1])
 
 
-def map_state_to_result(
+def _append_completion_event(
     state: GraphState,
-    status: str = "completed",
-    failure_reason: str | None = None,
-) -> ExtractionResult:
-    fields = [_field_with_evidence_texts(state, state.field_states[field.name]) for field in state.task_spec.fields if field.name in state.field_states]
-    trace: dict[str, Any] = {
-        "events": _plain(state.events),
-        "actions": _plain(state.actions),
-        "document_tree": state.document.outline_tree(),
+    event_type: str,
+    *,
+    status: str,
+    error: str | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "seq": state.next_seq,
+        "id": state.completion_id,
+        "type": event_type,
+        "status": status,
     }
-    if state.failed_stage:
-        trace["failed_stage"] = state.failed_stage
-    if failure_reason:
-        trace["failure_reason"] = failure_reason
-    return ExtractionResult(
-        status=status,  # type: ignore[arg-type]
-        result={"fields": _plain(fields)},
-        failure_reason=failure_reason,
-        trace=trace,
-    )
+    if error:
+        payload["error"] = error
+    state.next_seq += 1
+    state.events.append(payload)
 
 
 def _append_failure_event(state: GraphState, exc: Exception) -> None:
@@ -104,18 +91,8 @@ def _append_source_index_event(state: GraphState) -> None:
     state.next_seq += 1
 
 
-def _field_with_evidence_texts(state: GraphState, field_state: dict[str, Any]) -> dict[str, Any]:
-    normalized = {
-        **field_state,
-        "field_name": field_state.get("field_id"),
-    }
-    normalized.pop("field_id", None)
-    if "evidence_texts" in normalized:
-        return normalized
-    return {
-        **normalized,
-        "evidence_texts": state.document.evidence_texts(field_state.get("evidence") or []),
-    }
+def _resolution_failed(outcome: Any) -> bool:
+    return isinstance(outcome, dict) and outcome.get("ok") is False
 
 
 def _failure_reason(outcome: Any) -> str:
@@ -124,6 +101,12 @@ def _failure_reason(outcome: Any) -> str:
         if errors:
             return "; ".join(str(error.get("message", error)) if isinstance(error, dict) else str(error) for error in errors)
     return "resolution failed"
+
+
+def _sse(event: dict[str, Any]) -> str:
+    event_type = event.get("type", "message")
+    data = json.dumps(_plain(event), ensure_ascii=False, separators=(",", ":"))
+    return f"event: {event_type}\ndata: {data}\n\n"
 
 
 def _plain(value: Any) -> Any:
@@ -136,4 +119,4 @@ def _plain(value: Any) -> Any:
     return value
 
 
-__all__ = ["run_extraction_graph_stream", "map_state_to_result"]
+__all__ = ["run_completion_graph_stream"]

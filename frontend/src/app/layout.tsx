@@ -6,12 +6,12 @@ import { Toaster } from "@/components/ui/sonner";
 
 export const metadata: Metadata = {
   title: "Agent Gate",
-  description: "文档上传、字段治理、人工复核和审计工作台"
+  description: "Document QA workspace with traceable agent evidence"
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="zh-CN">
+    <html lang="en">
       <body>
         <ThemeBootstrap />
         <div className="mx-auto w-full max-w-7xl px-5 py-8 sm:px-8">{children}</div>

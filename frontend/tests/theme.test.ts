@@ -32,7 +32,10 @@ it("Agent turn 使用更开的上下间距，工具行内部保持紧凑", () =>
   expect(globalsCss).toMatch(/\.replay-agent-turn\s*\{[^}]*gap:\s*14px;/);
   expect(globalsCss).toMatch(/\.replay-agent-tool-line\s*\{[^}]*gap:\s*8px;/);
   expect(globalsCss).toMatch(/\.replay-agent-tool-group\s*\{[^}]*gap:\s*8px;/);
-  expect(globalsCss).toMatch(/\.replay-agent-tool-group-toggle\s*\{[^}]*grid-template-columns:\s*auto minmax\(0,\s*1fr\);[^}]*gap:\s*8px;/);
+  expect(globalsCss).toMatch(/\.replay-agent-tool-group-toggle\s*\{[^}]*grid-template-columns:\s*auto minmax\(0,\s*1fr\) auto;[^}]*gap:\s*8px;/);
+  expect(cssRule(".replay-agent-tool-group-lines")).not.toContain("padding-left:");
+  expect(cssRule(".replay-agent-tool-group-chevron")).toContain("transition: transform 140ms ease;");
+  expect(globalsCss).toMatch(/\.replay-agent-tool-group\.is-expanded\s+\.replay-agent-tool-group-chevron\s*\{[^}]*transform:\s*rotate\(90deg\);/);
   expect(globalsCss).toMatch(/\.replay-agent-tool-icon\s*\{[^}]*height:\s*14px;[^}]*width:\s*14px;/);
   expect(globalsCss).toMatch(/\.home-task-file-remove\s*\{[^}]*width:\s*18px;[^}]*height:\s*18px;/);
 });
@@ -67,10 +70,14 @@ it("Replay stage 在窄视口也使用左右栏列布局，不把 Review 原文�
   expect(baseFullscreenBlock).toContain("column-gap: 0;");
 });
 
-it("Agent 阅读列先压缩弹性留白，再压缩正文宽度", () => {
-  expect(globalsCss).toContain("--replay-agent-readable-max-width: 720px;");
+it("Agent 阅读列按最小文字宽、可选文字宽、空白的顺序收缩", () => {
+  expect(globalsCss).toContain("--replay-agent-readable-min-width: 520px;");
+  expect(globalsCss).toContain("--replay-agent-readable-optional-width: 200px;");
+  expect(globalsCss).toContain(
+    "--replay-agent-readable-max-width: calc(var(--replay-agent-readable-min-width) + var(--replay-agent-readable-optional-width));",
+  );
   expect(globalsCss).toMatch(
-    /\.replay-agent-panel-slot\[data-agent-content-mode="centered"\]\s+\.replay-agent-content-frame,\s*\.replay-agent-panel-slot\[data-agent-content-mode="centered"\]\s+\.replay-agent-composer-frame\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*minmax\(0,\s*var\(--replay-agent-readable-max-width\)\)\s*minmax\(0,\s*1fr\);/,
+    /\.replay-agent-panel-slot\[data-agent-content-mode="centered"\]\s+\.replay-agent-content-frame,\s*\.replay-agent-panel-slot\[data-agent-content-mode="centered"\]\s+\.replay-agent-composer-frame\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*minmax\(min\(100%,\s*var\(--replay-agent-readable-min-width\)\),\s*var\(--replay-agent-readable-max-width\)\)\s*minmax\(0,\s*1fr\);/,
   );
   expect(globalsCss).not.toContain("--replay-agent-compact-gutter-width");
   expect(globalsCss).not.toContain("@container (max-width: 820px)");
@@ -106,6 +113,10 @@ it("首页首屏只让 Tasks 列表成为滚动容器，整页工作台不滚动
   expect(homeStageRule).toContain("height: calc(100svh - var(--replay-topbar-h));");
   expect(homeStageRule).toContain("overflow: hidden;");
 
+  expect(globalsCss).toMatch(
+    /\.home-task-workbench\[data-left-panel-open="true"\]\s+\.home-task-stage\s*\{[^}]*grid-template-columns:\s*var\(--replay-left-panel-width\)\s+10px\s+minmax\(0,\s*1fr\);/
+  );
+
   const sidebarRule =
     Array.from(globalsCss.matchAll(/(?:^|\n)\.replay-task-sidebar\s*\{([^}]*)\}/g))
       .map((match) => match[1])
@@ -123,4 +134,22 @@ it("首页首屏只让 Tasks 列表成为滚动容器，整页工作台不滚动
   expect(taskListRule).toContain("min-height: 0;");
   expect(taskListRule).toContain("overflow-y: auto;");
   expect(taskListRule).toContain("overflow-x: hidden;");
+});
+
+it("首页打开左侧栏时窄视口仍保留侧栏和拖拽手柄", () => {
+  expect(globalsCss).toMatch(
+    /\.home-task-workbench\[data-left-panel-open="true"\]\s+\.home-task-stage\s*\{[^}]*grid-template-columns:\s*var\(--replay-left-panel-width\)\s+10px\s+minmax\(0,\s*1fr\);/
+  );
+  expect(globalsCss).toMatch(
+    /\.home-task-workbench\s+\.replay-panel-resize-handle,\s*\.replay-task-workbench\s+\.replay-panel-resize-handle\s*\{[^}]*display:\s*inline-flex;/
+  );
+  expect(globalsCss).not.toMatch(
+    /@media\s*\(max-width:\s*900px\)\s*\{[\s\S]*?\.home-task-workbench\[data-left-panel-open="true"\]\s+\.home-task-stage,\s*\.home-task-workbench\[data-left-panel-open="false"\]\s+\.home-task-stage\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\);/
+  );
+  expect(globalsCss).not.toMatch(
+    /@media\s*\(max-width:\s*900px\)\s*\{[\s\S]*?\.home-task-workbench\s+\.replay-task-sidebar\s*\{[\s\S]*?display:\s*none;/
+  );
+  expect(globalsCss).toMatch(
+    /@media\s*\(max-width:\s*900px\)\s*\{[\s\S]*?\.home-task-workbench\[data-left-panel-open="false"\]\s+\.replay-task-sidebar,\s*\.home-task-workbench\[data-left-panel-open="false"\]\s+\.replay-panel-resize-handle\s*\{[\s\S]*?display:\s*none;/
+  );
 });

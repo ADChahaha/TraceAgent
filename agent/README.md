@@ -2,10 +2,10 @@
 
 `agent/` 是 TraceAgent 的 AI 能力层，给 `backend` 提供两个 HTTP 阶段：
 
-- `document_processor`：把 PDF 标准化成抽取友好的 HTML、展示用 HTML、markdown、blocks 和处理元信息。
-- `file_extraction_agent`：在多个语义 HTML 文档上按外部 `task_spec` 做字段抽取，并用 NDJSON stream 返回工具事件、字段写入和最终结果。
+- `document_processor`：把 PDF 标准化成 QA 友好的语义 HTML、展示用 HTML、markdown、blocks 和处理元信息。
+- `file_extraction_agent`：对 backend 传入的多份语义 HTML 做多轮文档 QA chat completion，像 code agent 浏览代码仓库一样用 `tree / grep / read / inspect` 查文档，并通过 SSE 返回带 evidence link 的过程消息和终态事件。
 
-它不访问 backend SQLite，不保存任务状态，也不执行人工复核。任务、最终结果、审计和字段提交都由 `backend` 负责。
+它不访问 backend SQLite，不保存多轮 conversation，也不直接连接前端。任务、messages、memory、事件续传、replay 和最终展示都由 `backend` 负责。
 
 ## 基本链路
 
@@ -13,12 +13,12 @@
 backend 上传 PDF bytes
   -> POST /v1/document-processor/process
   -> document_processor 返回 html / display_html / markdown / md_list / blocks
-  -> backend 保存文档结构，并把多文档整理为 documents(filename + html)
-  -> POST /v1/file-extraction-agent/extract/stream
-  -> file_extraction_agent 流式返回工具事件和 result_completed
-  -> backend 从 result_completed、evidence selector 和工具事件组装最终字段结果
-  -> backend 直接提交 resolved 字段，failed/None 字段保持未提交
-  -> backend 写入 final result / audit
+  -> backend 保存文档、对话 messages、memory 和事件游标
+  -> 用户提问时 backend 生成 completion_id
+  -> POST /v1/document-qa/chat/completions
+  -> file_extraction_agent 流式返回 completion.created / source_indexed / model_message / tool_* / completion.*
+  -> backend 持久化事件并转发给前端
+  -> 下一轮问题由 backend 再次携带 documents + messages + memory 调用 agent
 ```
 
 ## 本地启动
@@ -50,12 +50,16 @@ export DOCUMENT_PROCESSOR_MINERU_LANG="japan"
 python -m uvicorn main:app --reload --host 127.0.0.1 --port 8001
 ```
 
+第一版 QA cancel 依赖单进程内存 `_ACTIVE_COMPLETIONS`，不要使用多个 uvicorn worker。
+
 启动后可访问：
 
 - `GET /healthz`
 - `GET /docs`
 
 ## HTTP 入口
+
+### 文档标准化
 
 ```text
 POST /v1/document-processor/process
@@ -74,43 +78,51 @@ UploadFile
   -> 返回 ProcessResult
 ```
 
-```text
-POST /v1/file-extraction-agent/extract/stream
-```
-
-接收 backend 准备好的 `documents(filename + html)`、外部 `task_spec`、可选 `run_options` 和可选模型覆盖配置，返回 `application/x-ndjson`。
+### 多文档 QA chat completion
 
 ```text
-documents + task_spec
-  -> input_adapter 校验 documents、task_spec.fields 和 run_options
-  -> html_index 构建 /001-filename-title/... 只读虚拟文件树
-  -> resolution_new 按字段调用 tree / read / add_candidate_evidence / review_evidences / write_field / submit_result
-  -> graph 逐行输出 tool_started / tool_completed / tool_failed / field_written / result_completed
+POST /v1/document-qa/chat/completions
+GET  /v1/document-qa/chat/completions/{completion_id}
+POST /v1/document-qa/chat/completions/{completion_id}/cancel
 ```
 
-### 抽取工具和 stream 粒度
+`POST /chat/completions` 接收 backend 准备好的 `documents(filename + html)`、多轮 `messages`、可选 `memory`、可选 `run_options` 和可选模型配置，返回 `text/event-stream`。
 
-`file_extraction_agent` 的可解释性来自真实工具调用、用户可见 `reason` 和可反查 evidence selector。agent 不直接连接前端，也不写 DB；backend 后续负责消费 NDJSON、入库和转发。
+```text
+completion_id + documents + messages + memory
+  -> input_adapter 校验 completion_id、documents、messages 和 max_tool_calls
+  -> html_index 构建只读 semantic virtual tree
+  -> graph 输出 completion.created + source_indexed
+  -> resolution_new 构建 QA prompt 并调用模型
+  -> html_tools 提供 tree / grep / read / inspect
+  -> model_message 在过程中引用 evidence:// link
+  -> graph/processor 输出 completion.completed / completion.cancelled / completion.failed
+```
+
+### QA 工具和 stream 粒度
+
+`file_extraction_agent` 的可追溯性来自用户可见 `model_message`、真实工具调用和可反查 evidence selector。agent 不写 DB；backend 负责消费 SSE、入库和转发。
 
 | Tool / Event | 粒度 | 保留的关键信息 | 用途 |
 | --- | --- | --- | --- |
 | `tree(path_id, depth)` | 文件树导航 | `evidence://` locator、展开深度、目录/文件名 | 追踪模型先看了哪些文档和章节。 |
-| `read(path_id)` | 文件读取 | `.md/.list/.table` locator、Markdown 阅读视图 | 追踪模型读了哪个 paragraph、list 或 table 文件。 |
-| `add_candidate_evidence(field_id, path_id)` | 候选证据记录 | 字段 id、一个 block 级 `evidence://` locator | 追踪模型看到哪些对象可能支持、反驳或限定字段。 |
-| `review_evidences(field_id)` | 候选证据复看 | 字段描述、当前值、候选 block、展开后的 inline selector 和反查文本 | 帮助模型像看笔记一样筛选最终证据。 |
-| `write_field(field_id, value, final_evidence, status)` | 字段写入 | 字段 id、值、最终 inline selector、状态、可见说明 | 追踪字段最终为什么被写入或标记缺失。 |
-| `submit_result()` | 结果校验 | 当前字段缓冲、校验结果或错误 | 追踪本轮抽取是否通过 schema 和证据校验。 |
-| `result_completed` | 最终收口 | `fields[]`、trace、失败原因 | 给 backend 一个完整可入库的最终事件。 |
+| `grep(query, scope, kind, max_results)` | 候选搜索 | 命中文档、section、block locator、preview、match_spans | 像 `rg` 一样定位候选 block；不作为最终证据。 |
+| `read(locator)` | 上下文读取 | 单个 block 或连续 range 的 Markdown 阅读视图 | 追踪模型实际读了哪些 paragraph/list/table。 |
+| `inspect(locator)` | 精确证据展开 | `Sxxx` / `Ixxx` / `Rxxx` inline link 和反查文本 | 支撑具体事实、条件、金额、日期、冲突和最终结论。 |
+| `model_message` | 用户可见过程 | 自然语言说明 + Markdown evidence link | 让用户边看边验证模型阅读过程，而不是只看最终答案。 |
+| `completion.completed` | 正常终态 | completion id、status | 本轮 QA 完成并关闭 SSE。 |
+| `completion.cancelled` | 取消终态 | completion id、status | backend 调 cancel 后收口本轮流。 |
+| `completion.failed` | 失败终态 | completion id、status、error | resolution 失败后收口本轮流。 |
 
-这套工具让前端可以把抽取过程回放成：
+这套工具让前端可以把 QA 过程回放成：
 
 ```text
-展开目录
-  -> 读取 paragraph/list/table
-  -> 记录可能相关的候选 block evidence
-  -> 复看字段候选并展开 inline evidence
-  -> 写入字段值和 final_evidence
-  -> 提交并校验结果
+模型说明下一步要查什么
+  -> 搜索候选 block
+  -> 读取上下文
+  -> 展开句子/列表项/表格行证据
+  -> 在过程消息或最终回答里引用 evidence link
+  -> completion 终态关闭本轮流
 ```
 
 ## 目录结构
@@ -133,11 +145,11 @@ agent/
 - `main.py` 只创建 FastAPI app 并挂载 routers。
 - `routes/` 只做 HTTP 协议适配和错误状态映射。
 - `service/document_processor/` 放 PDF 标准化实现。
-- `service/file_extraction_agent/` 放字段抽取 graph、工具和 schema。
+- `service/file_extraction_agent/` 放文档 QA completion 的 graph、工具、schema 和 active runtime 管理。
 
 ## 参考文档
 
 - [docs/API.md](docs/API.md)：HTTP API 和请求/响应契约。
 - [docs/DESIGN.md](docs/DESIGN.md)：agent 服务模块边界和主链路。
 - [service/document_processor/docs/DESIGN.md](service/document_processor/docs/DESIGN.md)：PDF 标准化设计。
-- [service/file_extraction_agent/docs/DESIGN.md](service/file_extraction_agent/docs/DESIGN.md)：字段抽取设计。
+- [service/file_extraction_agent/docs/DESIGN.md](service/file_extraction_agent/docs/DESIGN.md)：文档 QA agent 设计。

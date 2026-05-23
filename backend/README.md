@@ -1,34 +1,40 @@
 # Backend
 
-`backend` 是 TraceAgent 的任务治理服务。它接收前端或脚本上传的一个或多个 PDF、`task_type` 和外部传入的 `task_spec`，调用 `agent service` 完成文档标准化和字段抽取，然后把任务状态、最终结果、审计记录保存在本地 SQLite。
+`backend` 是多文档 QA 的会话和事件服务。它接收前端上传的 PDF，调用 `agent service` 的 `document_processor` 做文档标准化；用户每次提问时，backend 把已保存的 `documents + messages + memory` 交给 agent 的 document QA chat completion，并把模型过程事件持久化为可续传 SSE。
+
+它不再维护旧的 `task_spec` 字段抽取、字段提交、result/trace/replay/audit API。backend 是多轮 QA 状态事实来源；agent 只执行单次 completion。
 
 ## 实现链路
 
 ```text
-上传一个或多个 PDF + task_type + task_spec
-  -> FastAPI `POST /tasks` 读取每个文件 bytes
-  -> 校验文件类型和 task_spec，创建 tasks 记录
-  -> 逐个 HTTP 调用 agent service 的 document_processor
-  -> 每个文件生成 document_id，并保存 markdown、md_list、blocks 和处理元信息，不保存原始文件
-  -> 合并多个文件的 html 作为字段抽取输入，markdown、md_list 和 blocks 留作展示、证据回填和 trace
-  -> HTTP 调用 file_extraction_agent
-  -> 保存 agent_runs、extracted_fields 和 field_traces
-  -> 对照 task_spec.fields 补齐 agent 没返回的字段占位，缺失字段写成 failed/None
-  -> 直接提交 resolved 字段，failed/None 字段保持未提交
-  -> 写入最终结果和 audit
-```
+前端上传一个或多个 PDF
+  -> FastAPI POST /qa/tasks 读取每个文件 bytes
+  -> 校验 PDF 类型和 metadata
+  -> 调 agent document_processor 得到 html / display_html / markdown / blocks
+  -> 保存 qa_tasks / qa_documents
+  -> 写入 task.created / document.processed / task.ready 事件
 
-第一版采用请求内创建、后台处理模型：`POST /tasks` 先返回 `pending/uploaded`，随后由后台任务继续跑 document processing 和 extraction。调用方通过 `GET /tasks/{task_id}` 轮询 `completed/done` 或 `failed/done`。
+用户提交问题
+  -> POST /qa/tasks/{task_id}/inputs
+  -> 保存 user message 和 turn.created
+  -> 读取 qa_documents 组装 documents(filename + html)
+  -> 读取 qa_messages 组装多轮 messages
+  -> 读取 qa_tasks.memory_json 组装 memory
+  -> 调 agent POST /v1/document-qa/chat/completions
+  -> 持久化 agent.event，包括 model_message、tool_* 和 completion.*
+  -> completion.completed 时保存 assistant message，清理 active_turn_id
+  -> 前端通过 GET /qa/tasks/{task_id}/events?after_seq=n 续传事件
+```
 
 ## 主要 API
 
 ```text
-POST /tasks
-GET  /tasks/{task_id}
-GET  /tasks/{task_id}/result
-GET  /tasks/{task_id}/trace
-GET  /tasks/{task_id}/replay
-GET  /tasks/{task_id}/audit
+POST /qa/tasks
+GET  /qa/tasks
+GET  /qa/tasks/{task_id}
+POST /qa/tasks/{task_id}/inputs
+GET  /qa/tasks/{task_id}/events?after_seq=0
+POST /qa/tasks/{task_id}/cancel
 GET  /capabilities
 GET  /healthz
 ```
@@ -61,8 +67,6 @@ AGENT_SERVICE_BASE_URL=http://localhost:8001
 AGENT_SERVICE_TIMEOUT_SECONDS=1200
 ```
 
-`backend` 不内置任何业务 task spec，也不从默认目录兜底加载。调用方必须在 `POST /tasks` 的 multipart 表单中传入 `task_spec` JSON。当前能力声明只支持 PDF；新版上传字段为可重复的 `files`，旧版单文件 `file` 字段仍兼容。
-
 启动方式：
 
 ```bash
@@ -71,7 +75,7 @@ AGENT_SERVICE_BASE_URL=http://127.0.0.1:8001 uvicorn backend.main:app --reload -
 
 ## 测试
 
-后端测试使用 fake agent client，不依赖真实 OCR、LLM 或人工审核流程：
+后端测试使用 fake agent client，不依赖真实 OCR 或 LLM：
 
 ```bash
 PYTHONPATH=. pytest backend/tests -q

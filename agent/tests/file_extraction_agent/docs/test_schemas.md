@@ -1,22 +1,21 @@
 # test_schemas.py
 
-这组测试覆盖 `service.file_extraction_agent.schemas` 的公开输入契约，确保 task spec、模型配置、运行预算和抽取结果的基础结构稳定。
+这组测试覆盖 `document-qa chat/completions` 的公开 schema。schema 不再描述字段抽取任务，而是描述一次 QA completion 所需的文档、历史消息、压缩记忆、模型配置和运行预算。
 
 实现链路：
 
 ```text
-调用方传入 task_spec / model_config / run_options
-  -> Pydantic 或 dataclass schema 解析
-  -> 校验字段定义、模型参数和默认值
-  -> 返回后续 graph 可消费的结构化对象
+backend 传入 completion_id + documents + messages + memory
+  -> DocumentQaCompletionRequest 校验每个 document 的 filename/html
+  -> DocumentQaMessage 保留 user/assistant/system 消息
+  -> DocumentQaMemory 为 reading_history/evidence_notes/prior_answers/open_threads 提供空列表默认值
+  -> processor 用 RunOptions 和 ModelConfig 继续控制模型与工具预算
 ```
 
 ## 测试函数
 
-- `test_task_spec_normalizes_field_dicts`：确认字段定义可以从 dict 或 `FieldDefinition` 构造，并且 `field_name` 会归一化到 `name`。
-- `test_field_definition_rejects_untyped_list`：确认字段类型不再接受宽泛的 `list`，调用方必须声明 `list[string]` 或 `list[number]`。
-- `test_field_definition_accepts_tagged_enum_variants_with_basic_payload_types`：确认 `enum` 字段可以声明多个 tagged variants，每个 variant 的 payload 类型只允许 `string`、`number`、`boolean`、`list[string]`、`list[number]` 或 `null`，并兼容 `bool` 写法归一化为 `boolean`。
-- `test_field_definition_rejects_invalid_enum_shapes`：确认 `enum` 字段必须声明 variants、variant 名称不能重复、payload 类型不能是对象等复杂结构，非 enum 字段也不能携带 variants。
-- `test_model_config_keeps_stage_model_names_and_sampling_options`：确认 resolution 模型名、采样参数、连接配置、重试次数和请求超时会原样保存。
-- `test_run_options_defaults_to_tool_budget_only`：确认运行预算默认只暴露 `max_tool_calls`。
-- `test_extraction_result_defaults_to_completed_empty_payload`：确认空 `ExtractionResult` 默认是 completed，并带空 result/trace。
+- `test_completion_request_accepts_documents_messages_and_memory`：验证 completion request 可以接收多文档、历史消息和压缩记忆，并归一成公开 schema 对象。
+- `test_memory_defaults_to_empty_lists`：验证 memory 默认不会共享可变列表，缺省时四类记忆都是空列表。
+- `test_completion_status_values_match_public_events`：验证 completion 状态枚举和公开事件语义一致。
+- `test_model_config_keeps_resolution_model_and_sampling_options`：验证模型配置仍保留 base URL、key、模型名、采样参数、重试和超时。
+- `test_run_options_defaults_to_tool_budget_only`：验证运行预算默认只保留工具调用上限。

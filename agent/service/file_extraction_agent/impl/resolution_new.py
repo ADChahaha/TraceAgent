@@ -1,14 +1,10 @@
-"""Resolution loop for virtual-tree file extraction."""
+"""Resolution loop for document QA completions."""
 
 from __future__ import annotations
 
 from typing import Any, Iterable
 
-from langchain_core.messages import (
-    HumanMessage,
-    SystemMessage,
-    message_chunk_to_message,
-)
+from langchain_core.messages import HumanMessage, SystemMessage, message_chunk_to_message
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import MessagesState
 from langgraph.prebuilt import ToolNode
@@ -19,130 +15,82 @@ from service.file_extraction_agent.impl.html_tools import build_tools
 def build_resolution_messages(state: Any) -> list[Any]:
     system = SystemMessage(
         content=(
-            "You are reading a document to extract specific fields. "
-            "Your goal is to extract fields according to task_spec and finally call submit_result.\n\n"
+            "You are reading documents in a virtual repository to answer user questions. "
+            "Navigate the document tree using the provided tools, then answer with evidence.\n\n"
 
             "## Narration Style\n"
-            "You are helping someone build a mental model of a document they haven't read. "
-            "Think: a knowledgeable colleague who pre-read the document and is now walking you through it. "
-            "After your narration, they should understand the document's structure, key content, "
-            "and where to find specific details — without having read it themselves.\n\n"
+            "You are a colleague investigating documents in real time. Show your full "
+            "thought process — every turn must have visible reasoning before the tool call.\n\n"
+            "Each turn follows this pattern:\n"
+            "1. Analyze: what do I need to find? What keywords or sections are relevant?\n"
+            "2. React: what did the previous result tell me? Is it enough?\n"
+            "3. Decide: what's my next move and why?\n\n"
+            "Never call a tool silently. Always show your thinking first.\n\n"
+            "Example investigation (user asked about program requirements):\n\n"
+            "  'I need to find program requirements. Let me search for keywords "
+            "like \"requirements\" or \"eligibility\" to locate the relevant section.'\n"
+            "  → [grep call]\n\n"
+            "  'Got 3 hits. The most relevant is in [Section 4](evidence://0001.0004) "
+            "which seems to cover program-specific requirements. But the preview only "
+            "shows a partial sentence — I need more context to understand the full "
+            "eligibility criteria.'\n"
+            "  → [read call]\n\n"
+            "  'This paragraph lists [GPA 3.0 and TOEFL 80](evidence://0001.0004.0003/S001) "
+            "as minimum requirements. But it references \"Appendix 2\" for additional documents. "
+            "That table might have more conditions — let me find it.'\n"
+            "  → [grep call]\n\n"
+            "  'Found [Appendix 2](evidence://0001.0007.0002) — it's a checklist of required "
+            "documents. Nothing about additional academic requirements, just paperwork. "
+            "So the core requirements are GPA and TOEFL only.'\n"
+            "  → [final answer]\n\n"
+            "Key principles:\n"
+            "- Think like a researcher: hypothesize, search, evaluate, iterate.\n"
+            "- Say what's missing or insufficient, not just what you found.\n"
+            "- When a result is partial, explain what's still unclear and where to look.\n"
+            "- Cite evidence inline as you discover it, not just in the final answer.\n"
+            "- The journey IS the value — users want to see HOW you found the answer.\n\n"
 
-            "For each section:\n"
-            "1. Read the section's blocks silently (empty assistant content during reads).\n"
-            "2. When you have read enough to understand the section, output ONE narration:\n"
-            "   a. Section heading as markdown ## with evidence link:\n"
-            "      ## [Section Title](evidence://range/start/end)\n"
-            "   b. First sentence = what this section IS and its role in the document.\n"
-            "   c. Sub-headings as ### or #### with their content below them.\n"
-            "      Use the document's own titles verbatim, not your summary.\n"
-            "      Heading-level decisions:\n"
-            "        - If the document has a table of contents (目次/目录/Contents), it is the\n"
-            "          exhaustive authority on heading structure. Only items that appear in the TOC\n"
-            "          (or are clearly peer-formatted siblings of TOC items) may be headings.\n"
-            "          Items NOT in the TOC are body content — never promote them to headings\n"
-            "          regardless of how title-like they appear.\n"
-            "        - TOC nesting defines heading depth: top-level TOC items → ##,\n"
-            "          indented/sub-items in TOC → ###, further indented → ####, etc.\n"
-            "        - Consistency rule: headings at the same level must share a uniform numbering\n"
-            "          system and similar title style. If an item's format does not match its\n"
-            "          siblings at that level, it is not a heading — demote it to body content.\n"
-            "        - If no TOC exists, use your judgment: a short titled label that introduces a\n"
-            "          distinct topic block is a heading; a sentence-length item is body content.\n"
-            "          Apply the consistency rule across siblings.\n"
-            "   d. Under each sub-heading, state key facts with [label](evidence://...) links.\n"
-            "      Do NOT append field names (→ `field_name`) in the narration — narration is\n"
-            "      purely for the reader. Field mapping happens silently via extraction tools.\n"
-            "   e. Connections to other sections or non-obvious points at the end.\n"
-            "3. One top-level document section = one narration. Do not merge multiple sections.\n"
-            "4. After the narration, do extraction (add_candidate_evidence → review → write) silently.\n"
-            "5. Then transition sentence → move to next section.\n\n"
+            "## Evidence Rules\n"
+            "Every factual statement about the document MUST include a Markdown evidence "
+            "link when first stated. No exceptions.\n\n"
+            "Format:\n"
+            "- Block link: [label](evidence://0001.0002.0003)\n"
+            "- Range link: [label](evidence://range/0001.0002.0003/0001.0002.0006)\n"
+            "- Inline sentence: [label](evidence://0001.0002.0003/S001)\n"
+            "- Inline list item: [label](evidence://0001.0002.0003/I001)\n"
+            "- Inline table row: [label](evidence://0001.0002.0003/R001)\n\n"
+            "Use block links for section-level observations. Use inline links for "
+            "concrete facts: dates, amounts, conditions, names, exceptions.\n"
+            "Never use bare evidence:// URIs — always wrap in [label](...).\n\n"
 
-            "Between sections, a transition that shows how the document's logic flows.\n"
-            "Not just 'next is X' but WHY it follows: 'Now that we know who can apply, the next question is how.'\n\n"
+            "## Final Answer\n"
+            "- Answer in the same language as the user's question.\n"
+            "- Conclusion first, then supporting details with evidence links.\n"
+            "- Numbers and specifics over vague adjectives.\n"
+            "- State facts directly. Never say 'the document shows' or 'it states that'.\n"
+            "- If the document does not contain the answer, say so explicitly.\n\n"
 
-            "Good example:\n"
-            "  ## [第3条 契約条件](evidence://range/0001.0008/0001.0012)\n\n"
-            "  This is the core commercial section — everything else in the contract serves these terms.\n\n"
-            "  ### 3.1 契約期間\n\n"
-            "  [Apr 2025 – Mar 2026, auto-renews unless 90-day notice](evidence://0001.0009)\n\n"
-            "  ### 3.2 報酬\n\n"
-            "  [$8,500/mo excl. tax, paid 15th of following month](evidence://0001.0010)\n\n"
-            "  ### 3.3 中途解約\n\n"
-            "  [Penalty: 50% of remaining term](evidence://0001.0011) — ties back to the notice period above\n\n"
-            "  ### 3.4 秘密保持\n\n"
-            "  NDA survives 2 years post-termination (referenced again in §12)\n\n"
-
-            "Bad: 'This chapter defines the core conditions of the agreement including duration, fees, and exit clauses.'\n"
-            "(Describes the document instead of building understanding.)\n\n"
-
-            "Rules:\n"
-            "- Conclusion first, details second. Lead with what the section IS, then its sub-headings.\n"
-            "- Numbers > adjectives. '35,000 yen by 8/18' not 'a fee must be paid by the deadline'.\n"
-            "- State facts, never describe what the document 'shows' or 'contains'.\n"
-            "- Show connections between sections ('this deadline ties back to...').\n"
-            "- Flag non-obvious things: exceptions, gotchas, things that differ from expectations.\n"
-            "- Sub-headings = the document's own labels verbatim (not your summary).\n"
-            "  Surface every useful subtitle the top-level outline omits.\n"
-            "- Density: when a sub-section contains multiple similar items (documents, dates,\n"
-            "  conditions), use a compact bullet list — one line per item with **bold label** +\n"
-            "  key attributes inline. Do not write a full sentence for each item.\n"
-            "  Example: '- **成績・単位証明書** — 出身大学発行原本（本学卒業見込者は不要）'\n"
-            "- EVERY narration MUST have at least one evidence:// link. Transitions are exempt.\n"
-            "- Links: [human label](evidence://...). Never bare URIs.\n"
-            "- Silent between sections unless something is ambiguous or conflicting.\n"
-            "- No machine phrasing: 'field written as', 'directory shows', 'filled X into Y'.\n"
-            "- Narrate in the task_spec language. Keep proper nouns in original form.\n\n"
-
-            "## Extraction Flow\n"
-            "Narration and extraction happen in the same pass but are separate outputs.\n"
-            "Narration = markdown for the reader (no field names, no tool references).\n"
-            "Extraction = silent tool calls (add_candidate_evidence → review_evidences → write_field).\n"
-            "Read top-to-bottom in document order. When you encounter a relevant fact, narrate it\n"
-            "for the reader, then silently save and write it to the appropriate field.\n"
-            "For cross-section fields: save as you go, write when complete.\n"
-            "Do NOT batch reads then writes. Do NOT reorder to match the field list.\n\n"
-
-            "## Evidence Link Format\n"
-            "- Single block: evidence://0001.0002.0003\n"
-            "- Range (siblings): evidence://range/0001.0002.0003/0001.0002.0006\n"
-            "- Sentence: evidence://<block>/Sxxx. List item: evidence://<block>/Ixxx. Table row: evidence://<block>/Rxxx.\n"
-            "- Range only for siblings; never when start equals end.\n\n"
-
-            "## Tool Rules\n"
-            "- One tool per turn. No write_field in same turn as review_evidences.\n"
-            "- Empty assistant content for mechanical steps (review_evidences).\n"
-            "- Before first tool call: 2-3 sentence overview of what this document IS (type, issuer, scope).\n"
-            "  Do NOT describe your plan or strategy. Never say 'I will extract...', 'I'll focus on...', 'Let me look at...'.\n"
-            "  Good: 'This is Rikkyo University's 2026 graduate admissions guide for the AI Science program (Master's, Fall intake).'\n"
-            "  Bad: 'I will read the document top to bottom and extract fields for the Master's program.'\n"
-            "- No repeating facts across turns."
+            "## Discipline\n"
+            "- One tool per turn.\n"
+            "- Do not repeat reads of the same block.\n"
+            "- After reading enough to answer, stop investigating and give your answer.\n"
+            "- Your final message must be text (the answer), not a tool call."
         )
     )
-    human = HumanMessage(
-        content="\n\n".join(
-            [
-                "Task fields:\n" + _task_fields_text(state.task_spec),
-                "Use tree first to inspect the virtual file tree, then read specific files from tree output.",
-            ]
-        )
+    parts = [
+        "Conversation:\n" + _messages_text(state.messages),
+    ]
+    memory_text = _memory_text(state.memory)
+    if memory_text.strip():
+        parts.append("Context from prior turns:\n" + memory_text)
+    parts.append(
+        "Investigate the documents using the tools, then end with a concise "
+        "final answer as your last assistant message."
     )
-    return [system, human]
+    return [system, HumanMessage(content="\n\n".join(parts))]
 
 
-def run_resolution(state: Any, resolution_model: Any) -> dict[str, Any]:
-    outcome: dict[str, Any] = {
-        "ok": False,
-        "errors": [{"message": "resolution did not run"}],
-    }
-    for outcome in run_resolution_stream(state, resolution_model):
-        pass
-    return outcome
-
-
-def run_resolution_stream(
-    state: Any, resolution_model: Any
-) -> Iterable[dict[str, Any]]:
+def run_resolution_stream(state: Any, resolution_model: Any) -> Iterable[dict[str, Any]]:
     tools = build_tools(state)
     messages = build_resolution_messages(state)
     if _supports_bind_tools(resolution_model):
@@ -153,17 +101,7 @@ def run_resolution_stream(
             config={"recursion_limit": state.run_options.max_tool_calls * 2 + 10},
         ):
             yield {"ok": None, "output": output}
-        completed = [
-            event for event in state.events if event.get("type") == "result_completed"
-        ]
-        if completed:
-            yield {"ok": True, "output": output}
-            return
-        yield {
-            "ok": False,
-            "errors": [{"message": "resolution did not submit result"}],
-            "output": output,
-        }
+        yield {"ok": True, "output": output}
         return
     yield from _run_fake_model_loop_stream(state, resolution_model, messages, tools)
 
@@ -180,8 +118,6 @@ def build_resolution_graph(resolution_model: Any, tools: list[Any], state: Any):
 
     def should_continue(graph_state: MessagesState):
         if len(state.actions) >= state.run_options.max_tool_calls:
-            return END
-        if any(event.get("type") == "result_completed" for event in state.events):
             return END
         last_message = graph_state["messages"][-1]
         if getattr(last_message, "tool_calls", None):
@@ -225,53 +161,35 @@ def _keep_first_raw_tool_call(message: Any, first_tool_call: Any) -> None:
     if first_id is None:
         additional_kwargs["tool_calls"] = raw_tool_calls[:1]
         return
-    matching_raw_calls = [
-        call for call in raw_tool_calls if _read(call, "id") == first_id
-    ]
-    additional_kwargs["tool_calls"] = (
-        matching_raw_calls[:1] if matching_raw_calls else raw_tool_calls[:1]
-    )
-
-
-def _run_fake_model_loop(
-    state: Any, model: Any, messages: list[Any], tools: list[Any]
-) -> dict[str, Any]:
-    outcome: dict[str, Any] = {
-        "ok": False,
-        "errors": [{"message": "resolution did not run"}],
-    }
-    for outcome in _run_fake_model_loop_stream(state, model, messages, tools):
-        pass
-    return outcome
+    matching_raw_calls = [call for call in raw_tool_calls if _read(call, "id") == first_id]
+    additional_kwargs["tool_calls"] = matching_raw_calls[:1] if matching_raw_calls else raw_tool_calls[:1]
 
 
 def _run_fake_model_loop_stream(
-    state: Any, model: Any, messages: list[Any], tools: list[Any]
+    state: Any,
+    model: Any,
+    messages: list[Any],
+    tools: list[Any],
 ) -> Iterable[dict[str, Any]]:
-    tool_map = {
-        getattr(tool, "name", getattr(tool, "__name__", "")): tool for tool in tools
-    }
+    tool_map = {getattr(tool, "name", getattr(tool, "__name__", "")): tool for tool in tools}
     for _ in range(state.run_options.max_tool_calls):
         call = model.invoke(messages)
         content = _plain_json(_read(call, "content", ""))
         state.current_model_content = content if isinstance(content, str) else ""
         name = _read(call, "tool_name") or _read(call, "name")
         args = _read(call, "arguments", {}) or _read(call, "args", {}) or {}
+        if content:
+            _record_plain_model_message(state, content, name, args)
+        if not name:
+            yield {"ok": True, "output": call}
+            return
         selected = tool_map.get(name)
         if selected is None:
             yield {"ok": False, "errors": [{"message": f"unknown tool: {name}"}]}
             return
-        result = (
-            selected.invoke(args) if hasattr(selected, "invoke") else selected(**args)
-        )
+        result = selected.invoke(args) if hasattr(selected, "invoke") else selected(**args)
         messages.append({"tool": name, "result": result})
         yield result
-        if (
-            name == "submit_result"
-            and isinstance(result, dict)
-            and result.get("ok") is True
-        ):
-            return
     yield {"ok": False, "errors": [{"message": "max_tool_calls exceeded"}]}
 
 
@@ -291,9 +209,7 @@ def _invoke_model_message(model: Any, messages: list[Any]) -> Any:
             return attempt_model.invoke(messages)
         except Exception as exc:
             errors.append((str(attempt_name), exc))
-    details = "; ".join(
-        f"{name}: {type(error).__name__}: {error}" for name, error in errors
-    )
+    details = "; ".join(f"{name}: {type(error).__name__}: {error}" for name, error in errors)
     raise RuntimeError(f"all model call attempts failed: {details}")
 
 
@@ -313,9 +229,7 @@ def _stream_model_message(model: Any, messages: list[Any]) -> Any:
         raise RuntimeError("model does not support stream")
     streamed_message: Any = None
     for chunk in stream(messages):
-        streamed_message = (
-            chunk if streamed_message is None else streamed_message + chunk
-        )
+        streamed_message = chunk if streamed_message is None else streamed_message + chunk
     if streamed_message is None:
         raise RuntimeError("model stream returned no chunks")
     return message_chunk_to_message(streamed_message)
@@ -339,6 +253,19 @@ def _record_model_message(state: Any, message: Any) -> None:
     state.next_seq += 1
 
 
+def _record_plain_model_message(state: Any, content: str, tool_name: str | None, args: dict[str, Any]) -> None:
+    state.events.append(
+        {
+            "seq": state.next_seq,
+            "type": "model_message",
+            "content": content,
+            "tool_call_count": 1 if tool_name else 0,
+            "tool_calls": ([{"name": tool_name, "args": _plain_json(args)}] if tool_name else []),
+        }
+    )
+    state.next_seq += 1
+
+
 def _message_content_text(content: Any) -> str:
     if isinstance(content, str):
         return content
@@ -356,22 +283,24 @@ def _message_content_text(content: Any) -> str:
     return "".join(parts)
 
 
-def _task_fields_text(task_spec: Any) -> str:
+def _messages_text(messages: list[Any]) -> str:
     lines = []
-    for field in getattr(task_spec, "fields", []) or []:
-        detail = f"- {field.name}: type={field.type}, required={field.required}"
-        variants = getattr(field, "variants", []) or []
-        if getattr(field, "type", None) == "enum" and variants:
-            variant_text = ", ".join(
-                f"{variant.name}({variant.type})" for variant in variants
-            )
-            detail += f", variants={variant_text}"
-            detail += ', write_field value shape: {"variant": "<variant name>", "value": <payload>}'
-        detail += f", description={field.description or ''}"
-        lines.append(detail)
-    if getattr(task_spec, "instructions", None):
-        lines.append("Instructions: " + task_spec.instructions)
+    for message in messages:
+        role = getattr(message, "role", "")
+        content = getattr(message, "content", "")
+        lines.append(f"{role}: {content}")
     return "\n".join(lines)
+
+
+def _memory_text(memory: Any) -> str:
+    sections: list[str] = []
+    prior_answers = getattr(memory, "prior_answers", []) or []
+    if prior_answers:
+        sections.append("Previous answers in this session:\n" + "\n---\n".join(str(a) for a in prior_answers[-5:]))
+    open_threads = getattr(memory, "open_threads", []) or []
+    if open_threads:
+        sections.append("Open threads: " + "; ".join(str(t) for t in open_threads))
+    return "\n\n".join(sections)
 
 
 def _read(value: Any, key: str, default: Any = None) -> Any:
@@ -401,7 +330,6 @@ def _plain_json(value: Any) -> Any:
 
 __all__ = [
     "build_resolution_messages",
-    "run_resolution",
     "run_resolution_stream",
     "build_resolution_graph",
     "_invoke_model_message",

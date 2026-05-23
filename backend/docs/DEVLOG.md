@@ -1,6 +1,21 @@
 # Backend Devlog
 
-last updated: 2026-05-20 20:43:54
+last updated: 2026-05-23 03:47:46
+
+## 2026-05-23 03:47:46
+
+### 已完成工作
+
+- backend 破坏式重构为 QA-only 服务，状态事实来源改为 `qa_tasks / qa_documents / qa_messages / qa_turns / qa_events`。
+- 旧 `/tasks`、`result/trace/replay/audit`、字段抽取 schema、字段提交和审计相关 CRUD/service 已下线。
+- 新增 `/qa/tasks`、`/qa/tasks/{task_id}/inputs`、`/qa/tasks/{task_id}/events` 和 `/qa/tasks/{task_id}/cancel` API。
+- `AgentClient` 改为调用 document QA chat completions 和 completion cancel，不再调用旧 file extraction stream。
+- 同步更新 backend README、API/DESIGN 文档和 QA-only 测试说明。
+
+### 验证
+
+- `PYTHONPATH=. pytest backend/tests -q`，结果 `8 passed`。
+- `cd agent && conda run -n agent-gate python -m pytest tests -q`，结果 `91 passed`。
 
 ## 2026-05-20 20:43:54
 

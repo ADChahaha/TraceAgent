@@ -1,156 +1,77 @@
 # Backend API 设计
 
-这份文档定义 `backend` 当前的 API。后端负责创建任务、保存任务状态、持久化事件、组织字段提交和审计记录；`agent service` 继续负责文档标准化和字段抽取，不直接写 backend 数据库。
+这份文档定义 backend 当前 QA-only API。backend 负责创建多文档 QA task、保存标准化文档、持久化多轮 messages/memory、消费 agent completion SSE，并向前端提供可续传事件流。
 
-当前设计把 API 分成三类：
-
-```text
-任务快照
-  -> GET /tasks/{task_id}
-  -> 回答任务现在是什么状态、是否已经结束、最后一条事件序号是多少
-
-任务事件流
-  -> GET /tasks/{task_id}/events
-  -> 回答任务过程中发生了什么，支持全量回放和断线续传
-
-业务读模型
-  -> GET /tasks/{task_id}/result|trace|replay|audit
-  -> 给结果页、回放页和审计页直接读取已经整理好的视图
-```
+旧 `/tasks`、`/tasks/{id}/result`、`/tasks/{id}/trace`、`/tasks/{id}/replay` 和 `/tasks/{id}/audit` 已下线。
 
 ## 基本链路
 
-一次文档治理任务的主链路如下：
-
 ```text
-前端上传一个或多个 PDF、task_type、task_spec 和 metadata
-  -> POST /tasks 创建任务
-  -> backend 生成 task_id，写入 task.created 事件
-  -> POST /tasks 立即返回 task_id、pending/uploaded 和 stream.last_event_seq
-  -> 前端打开 GET /tasks/{task_id}/events?after_seq=n 接收实时事件
-  -> backend 后台逐个调用 document_processor，把上传文件转成 markdown/html/blocks
-  -> backend 保存每个文件的标准化结果，不保存原始文件 bytes
-  -> backend 将 documents(filename + html) 和 task_spec 传给 file_extraction_agent stream 入口
-  -> backend 消费 NDJSON stream，把工具过程事件归一成 task_events
-  -> backend 用 result_completed 保存抽取结果和 trace
-  -> backend 对照 task_spec.fields 补齐 agent 没返回的字段，占位写成 failed/None
-  -> backend 直接提交 resolved 字段，failed/None 字段保持未提交
-  -> backend 保存最终结果和 audit
+POST /qa/tasks 上传 PDF
+  -> backend 调 document_processor
+  -> 保存 qa_documents
+  -> 返回 ready task snapshot
+
+POST /qa/tasks/{task_id}/inputs 提交问题
+  -> 保存 user message
+  -> 创建 turn
+  -> 调 agent /v1/document-qa/chat/completions
+  -> 保存 agent.event 和 assistant message
+  -> terminal event 收口本轮 turn
+
+GET /qa/tasks/{task_id}/events?after_seq=n
+  -> 返回 seq > n 的持久化事件
+  -> 当前没有 active turn 且事件已发完时关闭 SSE
 ```
-
-关键边界：
-
-- `events` 是任务过程日志，用于实时 UI、回放和断线续传。
-- `snapshot` 是任务当前状态，不返回完整 result、trace 或 replay。
-- `result` 是最终字段结果。
-- `trace` 是 agent 执行和证据细节。
-- `replay` 是前端回放页读模型，可以由事件和 trace 重建，但保留独立接口能让页面刷新后直接读取。
-- `audit` 是字段最终提交后的责任链路，覆盖 agent 自动提交和失败占位信息。
 
 ## API 列表
 
 ```text
-POST /tasks
-GET  /tasks
-GET  /tasks/{task_id}
-GET  /tasks/{task_id}/events
-GET  /tasks/{task_id}/result
-GET  /tasks/{task_id}/trace
-GET  /tasks/{task_id}/replay
-GET  /tasks/{task_id}/audit
-GET  /capabilities
-GET  /healthz
+POST /qa/tasks
+GET  /qa/tasks
+GET  /qa/tasks/{task_id}
+
+POST /qa/tasks/{task_id}/inputs
+GET  /qa/tasks/{task_id}/events?after_seq=0
+POST /qa/tasks/{task_id}/cancel
+
+GET /capabilities
+GET /healthz
 ```
 
 内部 agent service API：
 
 ```text
 POST /v1/document-processor/process
-POST /v1/file-extraction-agent/extract/stream
+POST /v1/document-qa/chat/completions
+POST /v1/document-qa/chat/completions/{completion_id}/cancel
 ```
 
-## 通用状态
+## `POST /qa/tasks`
 
-任务业务状态 `status`：
-
-```text
-pending
-processing
-completed
-failed
-```
-
-任务处理阶段 `stage`：
-
-```text
-uploaded
-document_processing
-extraction
-done
-```
-
-事件流状态 `stream.state`：
-
-```text
-running
-ended
-```
-
-`stream.state` 只描述事件流是否还会继续产生新事件；任务成功或失败仍然看 `status`。
-
-## 事件模型
-
-任务事件必须持久化，不能只放在内存里。每个事件使用任务内递增的 `seq` 作为续传游标。
-
-推荐事件类型：
-
-```text
-task.created
-task.stage_changed
-document.processed
-agent.event
-field.written
-task.completed
-task.failed
-```
-
-`agent.event` 用于承载 agent service 的原始或归一化 stream 事件，例如 `tool_started`、`tool_completed`、`tool_failed`、`candidate_evidence_added`、`field_written` 和 `result_completed`。backend 不转发 tool 顶层 `reason`；模型可见文字由 `model_message.content` 事件承载。如果某类 agent 事件已经被 backend 提升成业务事件，例如字段写入，也可以同时写入 `field.written`，但前端要以 `seq` 去重。
-
-## `POST /tasks`
-
-创建一次文档治理任务。
+创建一个 QA task，并同步完成文档标准化。
 
 请求类型：`multipart/form-data`
 
 字段：
 
 - `files`：必填，上传的一个或多个 PDF；multipart 中可以重复传入多个 `files` 字段。
-- `file`：兼容旧版单文件字段；新前端应使用 `files`。
-- `task_type`：必填，调用方定义的任务类型标识。
-- `task_spec`：必填，显式字段 schema；后端不提供默认 task spec。
-- `metadata`：可选，调用方透传的任务元信息。
-
-请求示例：
-
-```bash
-curl -X POST "http://localhost:8000/tasks" \
-  -F "files=@sample.pdf" \
-  -F "files=@supplement.pdf" \
-  -F "task_type=civilized_dormitory" \
-  -F 'task_spec={"task_name":"civilized_dormitory","fields":[{"field_name":"room_numbers","display_name":"文明寝室房间号","type":"string","required":true,"critical":true}]}'
-```
+- `file`：兼容单文件字段。
+- `metadata`：可选 JSON object。
 
 响应示例：
 
 ```json
 {
-  "task_id": "task_xxx",
-  "status": "pending",
-  "stage": "uploaded",
+  "task_id": "qa_task_xxx",
+  "status": "ready",
+  "stage": "ready",
   "error_message": null,
+  "document_count": 1,
+  "active_turn_id": null,
   "stream": {
-    "state": "running",
-    "last_event_seq": 1
+    "state": "idle",
+    "last_event_seq": 3
   }
 }
 ```
@@ -160,132 +81,214 @@ curl -X POST "http://localhost:8000/tasks" \
 ```text
 multipart 请求
   -> 收集 files/file 上传项
-  -> 在当前请求中读取 UploadFile bytes，避免后台任务开始前文件对象关闭
-  -> 校验至少一个文件、文件类型、task_type 和 task_spec JSON object
-  -> 写入 tasks，状态为 pending/uploaded
-  -> 写入 task.created 事件，seq=1
-  -> 返回 task_id、状态快照和 stream.last_event_seq
-  -> 后台继续执行 document_processing / extraction
+  -> 在当前请求中读取 UploadFile bytes
+  -> 校验至少一个文件和 PDF 类型
+  -> 写入 qa_tasks(status=processing, stage=document_processing)
+  -> 写入 task.created
+  -> 逐个调用 agent document_processor
+  -> 写入 qa_documents 和 document.processed
+  -> 将 task 置为 ready/ready
+  -> 写入 task.ready
+  -> 返回 task snapshot
 ```
 
-## `GET /tasks`
+## `GET /qa/tasks`
 
-查询最近任务摘要列表，用于工作台恢复已有任务。
+查询最近 QA task 摘要。
 
 查询参数：
 
-- `limit`：可选，默认 `20`，后端应限制在 `1..100`。
+- `limit`：可选，默认 `20`，后端限制在 `1..100`。
 
-响应示例：
+响应：
 
 ```json
 {
   "tasks": [
     {
-      "task_id": "task_xxx",
-      "status": "completed",
-      "stage": "done",
-      "error_message": null,
-      "has_result": true,
-      "has_trace": true
+      "task_id": "qa_task_xxx",
+      "status": "ready",
+      "stage": "ready",
+      "document_count": 2,
+      "active_turn_id": null,
+      "stream": {"state": "idle", "last_event_seq": 9}
     }
   ]
 }
 ```
 
-`GET /tasks` 只返回摘要，不返回完整字段结果、trace、replay 或审计明细。
+## `GET /qa/tasks/{task_id}`
 
-## `GET /tasks/{task_id}`
+返回单个 QA task detail。它复用 task snapshot 字段，并额外携带 evidence review 所需的只读文档视图。
 
-返回任务当前快照：
+处理步骤：
+
+```text
+task_id
+  -> 读取 qa_tasks 生成 summary
+  -> 读取 qa_documents 生成 documents(document_id, filename, display_html)
+  -> 扫描 task 的 agent.event(source_indexed)，取最新 source_selectors
+  -> 返回 summary + documents + source_selectors
+```
+
+响应会比 `GET /qa/tasks` 列表项多这些字段：
 
 ```json
 {
-  "task_id": "task_xxx",
-  "status": "completed",
-  "stage": "done",
-  "error_message": null,
-  "has_result": true,
-  "has_trace": true,
-  "stream": {
-    "state": "ended",
-    "last_event_seq": 8
+  "documents": [
+    {
+      "document_id": "doc_xxx",
+      "filename": "contract.pdf",
+      "display_html": "<html>...</html>"
+    }
+  ],
+  "source_selectors": {
+    "0001.0001.0001": "p1"
   }
 }
 ```
 
-它不返回完整字段结果、trace、replay 或 audit commit。
+## `POST /qa/tasks/{task_id}/inputs`
 
-## `GET /tasks/{task_id}/result`
+向某个 QA task 提交一轮用户问题。
 
-返回最终字段结果：
+请求类型：`application/json`
+
+字段：
+
+- `content`：必填，用户问题。
+- `run_options`：可选，透传给 agent completion，例如 `max_tool_calls`。
+
+请求示例：
 
 ```json
 {
-  "task_id": "task_xxx",
-  "status": "completed",
-  "fields": [
-    {
-      "field_name": "room_numbers",
-      "display_name": "文明寝室房间号",
-      "agent_value": "1-101,1-102",
-      "final_value": "1-101,1-102",
-      "field_status": "resolved",
-      "source": "agent",
-      "committed": true
-    },
-    {
-      "field_name": "missing_required",
-      "display_name": "缺失字段",
-      "agent_value": null,
-      "final_value": null,
-      "field_status": "failed",
-      "source": "none",
-      "committed": false
-    }
-  ]
+  "content": "这份合同可以提前终止吗？",
+  "run_options": {"max_tool_calls": 80}
 }
 ```
 
-字段说明：
-
-- `agent_value`：agent 抽取阶段的原始字段值。
-- `final_value`：最终提交值；resolved 字段会与 agent_value 一致，failed/None 字段保持 `null`。
-- `source`：`agent` 或 `none`。
-- `committed`：是否已经写入 audit。
-
-## `GET /tasks/{task_id}/trace`
-
-返回抽取 trace 视图：
+处理步骤：
 
 ```text
-documents + agent_runs + agent_stage_runs + field_traces
-  -> 组装 document_processing / extraction 摘要步骤
+content
+  -> 校验 task 存在且没有 active turn
+  -> 写入 qa_messages(role=user)
+  -> 写入 qa_turns(status=queued)
+  -> task.status=running, stage=answering, active_turn_id=turn_id
+  -> 写入 message.created / turn.created / turn.started
+  -> 组装 documents(filename + html)
+  -> 组装 messages(user/assistant 历史 + 当前问题)
+  -> 读取 memory_json
+  -> 调 agent document QA completion stream
+  -> 每条 agent SSE 写成 agent.event
+  -> completion.completed 时保存最后一条非空 model_message 为 assistant message
+  -> turn.completed，task 回到 ready/ready
 ```
 
-trace 里只保留文档处理和字段抽取，不再包含 route validation 或人工审核。
+响应示例：
 
-## `GET /tasks/{task_id}/replay`
+```json
+{
+  "task_id": "qa_task_xxx",
+  "turn_id": "turn_xxx",
+  "status": "completed",
+  "agent_completion_id": "cmp_xxx"
+}
+```
 
-返回前端回放页需要的文档、展示 HTML、actions 和 result payload：
+同一个 task 同时只能有一个 active turn；若已有 `queued / in_progress / cancelling` turn，返回 409。
+
+## `GET /qa/tasks/{task_id}/events`
+
+以 SSE 返回持久化事件，支持 `after_seq` 续传。
 
 ```text
-documents + agent_runs + agent_stage_runs
-  -> display_html
-  -> outline_tree
-  -> broad_plan
-  -> actions，剥掉 tool action 顶层 reason
-  -> result
+GET /qa/tasks/{task_id}/events?after_seq=12
 ```
 
-## `GET /tasks/{task_id}/audit`
+SSE data 示例：
 
-返回字段提交记录。每条 commit 只记录抽取结果和提交元数据，不再包含 route/review 字段。
+```json
+{
+  "seq": 13,
+  "task_id": "qa_task_xxx",
+  "turn_id": "turn_xxx",
+  "type": "agent.event",
+  "status": "running",
+  "stage": "answering",
+  "payload": {
+    "agent": "file_extraction_agent",
+    "type": "model_message",
+    "content": "可以提前终止。[证据](evidence://0001.0001.0001/S001)"
+  },
+  "created_at": "2026-05-23T00:00:00Z"
+}
+```
+
+关闭语义：
+
+```text
+没有 active turn 且 seq > after_seq 的已有事件已经发送完
+  -> 关闭 SSE
+
+存在 active turn
+  -> 等待新事件
+```
+
+## `POST /qa/tasks/{task_id}/cancel`
+
+取消当前 active turn。
+
+处理步骤：
+
+```text
+task_id
+  -> 查找 active turn
+  -> turn.status=cancelling
+  -> 如果已有 agent_completion_id，调用 agent cancel
+  -> 写入 turn.cancel_requested
+  -> 第一版同步 worker 立即写入 turn.cancelled 并清理 active_turn_id
+```
+
+响应：
+
+```json
+{
+  "task_id": "qa_task_xxx",
+  "turn_id": "turn_xxx",
+  "status": "cancelling"
+}
+```
+
+没有 active turn 时返回 409。
 
 ## `GET /capabilities`
 
-返回支持文件类型、任务类型和 feature flags。当前不暴露 route 或 review 决策列表。
+返回当前后端能力：
 
-## 事件续传
+```json
+{
+  "supported_file_types": ["pdf"],
+  "task_types": [],
+  "features": {
+    "document_qa": true,
+    "multi_turn": true,
+    "event_stream": true,
+    "cancel": true,
+    "multiple_files": true
+  }
+}
+```
 
-`GET /tasks/{task_id}/events?after_seq=n` 会从 `seq > n` 的事件开始继续返回。只要任务已经结束，`stream.state` 就会变成 `ended`。
+## `GET /healthz`
+
+用于本地启动检查和部署探活。该接口不访问 agent service，也不执行数据库读写，只确认 backend FastAPI 进程可响应请求。
+
+处理链路：
+
+```text
+GET /healthz
+  -> routes.capabilities.healthz()
+  -> 返回 {"status": "ok"}
+```

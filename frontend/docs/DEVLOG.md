@@ -1,6 +1,23 @@
 # Frontend Devlog
 
-last updated: 2026-05-05 15:21:45
+last updated: 2026-05-23 04:15:14
+
+## 2026-05-23 04:15:14
+
+### 已完成工作
+
+- 前端切换到 QA-only API：`/qa/tasks`、`/inputs`、`/events`、`/cancel`。
+- 首页创建流程改为“上传 PDF + 首轮问题”，不再提交 `task_spec`、`task_type` 或字段 schema。
+- 任务详情页改为 SSE 事件驱动的多轮 QA 工作台，直接渲染用户消息、模型过程消息、工具过程和 inline evidence link。
+- 运行中右下角发送按钮切换为暂停按钮，点击后调用当前 task 的 cancel 接口。
+- 同步更新 `frontend/docs/DESIGN.md` 和前端测试说明文档。
+
+### 验证
+
+- `npm test -- --runInBand`，结果 `6 suites / 29 tests passed`。
+- `npm run lint` 通过。
+- `npm run build` 通过。
+- 浏览器打开 `http://127.0.0.1:3000` 检查首页上传与 QA 输入；backend 未启动时详情页能展示后端不可用错误。
 
 ## 2026-05-05 15:21:45
 

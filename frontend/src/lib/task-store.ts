@@ -5,8 +5,9 @@ export interface RecentTask {
   status: TaskSummary["status"];
   stage: TaskSummary["stage"];
   error_message?: string | null;
-  has_result?: boolean;
-  has_trace?: boolean;
+  document_count?: number;
+  active_turn_id?: string | null;
+  stream?: TaskSummary["stream"];
   created_at: string;
   updated_at?: string;
 }
@@ -128,8 +129,9 @@ function toRecentTask(task: TaskCreated | TaskSummary, existing?: RecentTask): R
     status: task.status,
     stage: task.stage,
     error_message: task.error_message ?? null,
-    has_result: "has_result" in task ? task.has_result : existing?.has_result,
-    has_trace: "has_trace" in task ? task.has_trace : existing?.has_trace,
+    document_count: task.document_count ?? existing?.document_count,
+    active_turn_id: task.active_turn_id ?? existing?.active_turn_id ?? null,
+    stream: task.stream ?? existing?.stream,
     created_at: backendCreatedAt ?? existing?.created_at ?? new Date().toISOString(),
     updated_at: backendUpdatedAt ?? existing?.updated_at
   };

@@ -1,58 +1,38 @@
 # Backend Design
 
-这份文档是 `backend` 的设计入口，面向当前仅保留文档处理、字段抽取、结果提交和审计的实现。接口细节见 [API.md](API.md)。
+这份文档是 `backend` 的设计入口。当前 backend 已破坏式重构为 QA-only：它不再执行字段抽取、字段提交、审计或 replay 组装，而是负责多文档 QA task 的文档保存、多轮消息状态、agent completion 事件持久化和取消。
+
+接口细节见 [API.md](API.md)。
 
 ## 1. 目标与边界
 
-`backend` 负责把 `agent service` 产出的抽取结果变成可治理、可追责的业务任务。它不重新实现 OCR 或字段抽取，而是围绕上传文件、任务状态、最终结果和审计记录组织流程。
-
-任务的真实链路是：
+backend 是多轮 QA 的持久化事实来源：
 
 ```text
-POST /tasks 创建任务
-  -> 写入 task.created 事件并返回 task_id / stream.last_event_seq
-  -> 前端打开 GET /tasks/{task_id}/events?after_seq=n
-  -> backend 后台处理文档、消费 file_extraction_agent NDJSON stream
-  -> 每个阶段写入 task_events，前端按 seq 实时渲染或断线补拉
-  -> 终态后 result / replay / audit 作为整理后的读模型继续可直接读取
-```
+上传 PDF
+  -> backend 调 agent document_processor
+  -> backend 保存 qa_documents
 
-核心链路是：
-
-```text
-前端或脚本上传一个或多个 PDF + task_type + task_spec
-  -> backend 创建任务记录
-  -> POST /tasks 立即返回 task_id 和 pending/uploaded
-  -> backend 后台继续执行文档处理和字段抽取
-  -> backend 通过 HTTP 逐个调用 document_processor，把上传文件转成 markdown + blocks
-  -> backend 保存标准化文本结果，不保存原始文件
-  -> backend 合并多个文件的 html 作为字段抽取输入，markdown、md_list 和 blocks 留作展示和证据回填
-  -> backend 通过 HTTP 调用 file_extraction_agent 的 `/v1/file-extraction-agent/extract/stream`
-  -> backend 消费 NDJSON stream，把工具过程事件写入 task_events，并用 `result_completed` 作为抽取结果收口
-  -> file_extraction_agent stream 开始时先写入 `source_indexed` 事件，提前提供虚拟 path_id 到 document_processor 原始 DOM id 的内部映射；终态 ExtractionResult(result + trace) 里也保留 trace.source_selectors
-  -> backend 要求 agent 终态 `result.fields[]` 和 `trace.fields[]` 显式返回 `field_name`；缺失时按 contract error 终止任务，不做 `name` / `field_id` 兜底兼容
-  -> task_service 对照 task_spec.fields 补齐 agent 没返回的预期字段，写成 failed/None 占位
-  -> backend 直接提交 resolved 字段，failed/None 字段保持未提交
-  -> backend 保存抽取结果、trace 和 audit；GET /tasks/{task_id}/replay 会优先用 trace.source_selectors，处理中无 trace 时用 task_events 中最新 `source_indexed` 的 source_selectors，把 replay display_html 的可读 block id 改写成虚拟 path_id，再把 path_id -> path_id 的 source_selectors 透传给前端用于 evidence 跳转；replay.actions 优先由 trace.events 里的 model_message 和 tool_completed/tool_failed 转成同一条时间线，保留模型文字与工具折叠组的原始相对位置
+用户提问
+  -> backend 保存 user message
+  -> backend 把 documents + messages + memory 传给 agent completion
+  -> backend 保存 agent model_message / tool events / terminal events
+  -> backend 保存 assistant message，供下一轮上下文使用
 ```
 
 职责边界：
 
-- `backend` 管理任务、文档标准化结果、数据库记录、最终结果和 audit。
-- `agent service` 负责 `document_processor` 和 `file_extraction_agent`，返回标准化结果、字段结果和 trace。
-- `backend` 通过 HTTP 调用 `agent service`，不直接 import `agent/` 内部包。
-- `backend` 不持久化用户上传的原始文件；上传文件只在请求处理过程中用于调用 `document_processor`。
-- `agent service` 不直接访问 `backend` 的 SQLite 数据库。
-- `backend` 不内置业务 task spec，也不从默认目录兜底加载；字段 schema 必须由调用方在 `POST /tasks` 时传入。
-- 第一版不做登录、权限、多用户、批量任务、取消任务和重试任务。
+- `backend` 管理 QA task、documents、messages、turns、events 和 memory。
+- `agent service` 负责 PDF 标准化和单次 document QA completion。
+- `backend` 通过 HTTP 调用 `agent service`，不 import `agent/` 内部包。
+- `backend` 不持久化上传原始文件 bytes；只保存 document_processor 输出的 HTML/Markdown/blocks。
+- `backend` 不内置业务 schema，也不接收 `task_spec`。
+- `POST /qa/tasks` 和 `POST /qa/tasks/{task_id}/inputs` 都只写入任务/turn 状态后立刻返回；耗时的 document processing 和 agent completion 在 backend 后台线程里继续执行。
 
-## 2. FastAPI 项目结构
-
-当前实现结构如下：
+## 2. 项目结构
 
 ```text
 backend/
-  pyproject.toml
   main.py
   core/
     config.py
@@ -63,279 +43,207 @@ backend/
     capabilities.py
     errors.py
   crud/
-    agent_stage_runs.py
-    task_events.py
-    tasks.py
-    extraction.py
-    audit.py
+    qa_tasks.py
     json_utils.py
   services/
     task_service.py
     agent_client.py
-    audit_service.py
     errors.py
     time_utils.py
   models/
     schema.py
   tests/
-    test_task_flow.py
-    test_task_events.py
+    test_qa_task_flow.py
     test_config.py
     docs/
   docs/
     API.md
     DESIGN.md
+    DEVLOG.md
 ```
 
 模块边界：
 
-- `main.py` 创建 FastAPI app，通过 lifespan 初始化 SQLite 数据库、agent client 和服务对象，挂载 `routes/`，不写业务流程。
-- `pyproject.toml` 定义 backend 独立 Python 包、运行依赖和测试依赖；从零启动时应先执行 `pip install -e ".[dev]"`。
-- `core/config.py` 管理数据库路径、agent service 地址等配置，不管理业务 task spec。
-- `core/db.py` 初始化 SQLite 数据库，不直接写业务查询；初始化时会清理旧 route/review schema 残留，避免本地旧库继续保留 `tasks.route`、`field_routes` 或人工复核旧表。运行时通过 `ThreadLocalDatabase` 为 FastAPI worker thread 和后台任务 thread 分配各自的 SQLite connection，避免前端轮询 `GET /tasks`、`GET /tasks/{task_id}/events` 时和后台抽取写入共享同一个 connection 导致游标状态互相踩踏。
-- `core/storage.py` 只保留上传文件元信息所需的哈希工具，不落盘保存原始文件。
-- `routes/` 只做 HTTP 入参出参适配，把请求转交给 `services/`。
-- `models/schema.py` 定义 SQLite DDL。第一版没有引入 ORM，CRUD 直接使用 `sqlite3.Row` 和参数化 SQL。
-- `crud/` 封装基础数据库读写，不写业务编排。
-- `services/` 负责任务创建、agent 调用、状态流转和 audit。
+- `main.py` 初始化 SQLite、agent client 和 `QaTaskService`，挂载 routes。
+- `routes/tasks.py` 只做 HTTP 参数解析、SSE 序列化和错误映射。
+- `routes/capabilities.py` 提供 `/capabilities` 能力声明和 `/healthz` 轻量进程探活。
+- `services/task_service.py` 编排 QA task 创建、输入、agent completion、事件写入和取消。
+- `GET /qa/tasks/{task_id}` 是详情读模型：在 summary 之外返回 `qa_documents.display_html` 和最新 `source_indexed.source_selectors`，供前端 evidence link 打开右侧原文。
+- `services/agent_client.py` 封装 agent service HTTP 调用。
+- `crud/qa_tasks.py` 封装 QA 表读写，不做业务决策。
+- `models/schema.py` 定义 QA-only SQLite schema。
 
-## 3. 主处理链路
+## 3. 数据流
 
-任务创建后的处理流程如下：
-
-```text
-POST /tasks 上传一个或多个文件
-  -> routes.tasks 接收 files/file、task_type、task_spec、metadata
-  -> routes.tasks 在当前请求中读取每个上传文件 bytes
-  -> task_service 校验至少一个文件、逐个校验文件类型和外部传入的 task_spec
-  -> SQLite 写入 tasks，状态为 pending / uploaded
-  -> POST /tasks 先返回 task_id/status/stage/error_message
-  -> FastAPI BackgroundTasks 调用 task_service.run_created_task(...)
-  -> task_service 将任务置为 processing / document_processing
-  -> agent_client 逐个用上传文件 bytes 通过 HTTP 调用 agent service 的文档处理接口
-  -> document_processor 输出语义 HTML 时只需保留 heading 层级和 block 阅读顺序
-  -> SQLite 为每次 document_processor 调用写入 agent_stage_runs，不保存原始文件 bytes
-  -> task_service 为每个文件生成 document_id，并为 blocks 补 document_id / block_id
-  -> SQLite 为每个文件写入 documents(markdown / md_list_json / blocks_json / meta_info_json / warnings_json)
-  -> task_service 合并全部 html 作为字段抽取输入，同时保留 markdown、md_list 和 blocks
-  -> agent_client 再通过 HTTP 调用 agent service 的字段抽取 stream 接口，发送 documents(filename + html)、task_spec 和可选 run_options
-  -> task_service 把 stream 中的 source_indexed/tool/field 过程事件归一成 task_events，前端可以通过 GET /tasks/{task_id}/events 实时补拉
-  -> file_extraction_agent 按 heading stack 重建虚拟 section 树
-  -> SQLite 为 file_extraction_agent 调用写入 agent_stage_runs
-  -> SQLite 写入 agent_runs / extracted_fields / field_traces；task_spec 中存在但 agent 未返回的字段会补 failed/None 占位
-  -> backend 直接提交 resolved 字段
-  -> backend 保存抽取结果、trace 和 audit
-  -> 如果 agent 或流程失败，将任务置为 failed / done 并保存 error_message
-  -> GET /tasks/{task_id} 返回当前 status/stage/error_message，供前端轮询
-```
-
-工作台任务列表流程如下：
+创建 QA task：
 
 ```text
-GET /tasks?limit=20
-  -> routes.tasks 读取可选 limit 参数
-  -> task_service 把 limit 限制在 1..100
-  -> crud.tasks 按 updated_at DESC、created_at DESC、id DESC 读取最近任务
-  -> task_service 对每条任务复用单任务 summary 序列化
-  -> 查询 extracted_fields、field_traces
-  -> 补齐 has_result、has_trace 和错误信息
-  -> 返回 { "tasks": TaskSummary[] }
+POST /qa/tasks multipart(files/file, metadata)
+  -> routes.tasks 读取每个 UploadFile bytes
+  -> QaTaskService 校验至少一个 PDF
+  -> 先校验每个 filename 能推断为支持的 file_type
+  -> qa_tasks 插入 processing/document_processing
+  -> qa_events 写 task.created
+  -> 启动后台线程 _process_task_documents(task_id, files)
+  -> 立刻返回 processing/document_processing task snapshot
+
+后台文档线程
+  -> 逐个 AgentClient.process_document(...) 调 agent /v1/document-processor/process
+  -> qa_documents 保存 filename/html/display_html/markdown/md_list/blocks/meta/warnings
+  -> 每份文档写 document.processed
+  -> 如果已有 active turn，把 task 更新为 running/answering；否则更新为 ready/ready
+  -> 写 task.ready
+  -> 如果文档处理失败，写 task.failed；已有 active turn 时同时写 turn.failed
 ```
 
-第一版任务执行模型是“请求内创建、后台处理”：`POST /tasks` 只保证任务已经入库并返回 `pending/uploaded`，耗时的 document processing 和 extraction 在响应发出后继续执行。调用方需要轮询 `GET /tasks/{task_id}` 获取 `completed/done` 或 `failed/done`；失败原因统一从 summary 的 `error_message` 读取。
-
-## 4. 模块职责
-
-### `routes.tasks`
-
-暴露任务相关 API：
-
-- `POST /tasks`
-- `GET /tasks/{task_id}`
-- `GET /tasks/{task_id}/result`
-- `GET /tasks/{task_id}/trace`
-- `GET /tasks/{task_id}/audit`
-
-处理步骤：
+提交用户输入：
 
 ```text
-HTTP 请求
-  -> FastAPI 解析 files/file/Form 参数
-  -> task_spec 和 metadata 如果存在就按 JSON object 解析
-  -> 读取每个上传文件 bytes
-  -> 调用 task_service / audit_service
-  -> 返回服务层已组装的 API 响应
+POST /qa/tasks/{task_id}/inputs
+  -> 校验 task 存在
+  -> qa_turns 中不能已有 queued/in_progress/cancelling turn
+  -> qa_messages 写 role=user
+  -> qa_turns 写 queued
+  -> qa_tasks 写 running/answering 或 running/document_processing + active_turn_id
+  -> qa_events 写 message.created / turn.created
+  -> 启动后台线程 _run_turn_when_ready(task_id, turn_id)
+  -> 立刻返回 queued turn snapshot
+
+后台 QA 线程
+  -> 如果 task 仍是 document_processing，就轮询等待文档处理完成
+  -> 如果 turn 已 cancelling/cancelled/failed，则直接收口
+  -> qa_events 写 turn.started
+  -> 组装 documents: qa_documents(filename + html)
+  -> 组装 messages: qa_messages(role + content)
+  -> 组装 memory: qa_tasks.memory_json
+  -> AgentClient.create_document_qa_completion_stream(...)
+  -> 每条 agent SSE 写 qa_events(agent.event)
+  -> completion.completed 时，把最后一条非空 model_message 写成 role=assistant
+  -> qa_turns 写 completed
+  -> qa_tasks 写 ready/ready 并清空 active_turn_id
+  -> qa_events 写 turn.completed
 ```
 
-### `routes.capabilities`
-
-暴露 `GET /capabilities`，返回支持文件类型、空任务类型列表和 feature flags。因为 backend 不内置业务 schema，`task_types` 固定为空，调用方根据 `features.external_task_spec=true` 自行传入 `task_spec`。
-
-### `crud`
-
-`crud/` 只负责最基础的数据库读写，也就是创建、查询、更新和删除记录。它不决定业务流程，不调用 agent service，也不执行任何人工复核流程。
-
-数据库访问链路应当保持为：
+取消：
 
 ```text
-routes
-  -> services
-  -> crud
-  -> models / SQLite
+POST /qa/tasks/{task_id}/cancel
+  -> 查找 active turn
+  -> qa_turns 写 cancelling
+  -> 如果 turn.agent_completion_id 已有值，调用 agent cancel endpoint
+  -> qa_events 写 turn.cancel_requested
+  -> 如果 completion 还没开始，立即写 turn.cancelled 并清空 active_turn_id
+  -> 如果 completion 已开始，后台 QA 线程在事件边界观察 cancelling 并写 turn.cancelled
 ```
 
-不要让 `routes/` 直接操作 `models/`，也不要把复杂业务流程塞进 `crud/`。例如“什么时候调用 agent、什么时候提交字段、什么时候生成 audit”属于 `services/`。
-
-第一版不按每张表机械拆文件，而是按业务聚合拆：
+事件续传：
 
 ```text
-crud/tasks.py
-  -> tasks
-  -> documents
-
-crud/agent_stage_runs.py
-  -> agent_stage_runs
-
-crud/task_events.py
-  -> task_events
-
-crud/extraction.py
-  -> agent_runs
-  -> extracted_fields
-  -> field_traces
-
-crud/audit.py
-  -> field_commits
+GET /qa/tasks/{task_id}/events?after_seq=n
+  -> 读取 qa_events 中 sequence > n 的事件
+  -> 每条事件用 SSE 输出 event/id/data
+  -> 如果没有 active turn 且已发完当前事件，关闭 SSE
+  -> 如果还有 active turn，轮询等待新事件
 ```
 
-## 5. 后端序列化
-
-### `GET /tasks/{task_id}`
-
-返回任务当前快照：
-
-```json
-{
-  "task_id": "task_xxx",
-  "status": "completed",
-  "stage": "done",
-  "error_message": null,
-  "has_result": true,
-  "has_trace": true,
-  "stream": {
-    "state": "ended",
-    "last_event_seq": 8
-  }
-}
-```
-
-`has_result` 和 `has_trace` 都只根据数据库里是否有对应记录判断；这里不再返回额外的审核标记。
-
-### `GET /tasks/{task_id}/result`
-
-返回字段结果和是否已提交的标记：
-
-```json
-{
-  "task_id": "task_xxx",
-  "status": "completed",
-  "fields": [
-    {
-      "field_name": "room_numbers",
-      "display_name": "文明寝室房间号",
-      "agent_value": "1-101,1-102",
-      "final_value": "1-101,1-102",
-      "field_status": "resolved",
-      "source": "agent",
-      "committed": true
-    }
-  ]
-}
-```
-
-只有 `agent_status == "resolved"` 的字段才会写入 `final_value` 和 audit。`failed` 或缺失字段保留为 `final_value=null`、`source="none"`、`committed=false`。
-
-### `GET /tasks/{task_id}/trace`
-
-返回文档处理和字段抽取的 trace 视图：
+详情读取：
 
 ```text
-documents
-  -> agent_runs
-  -> agent_stage_runs
-  -> field_traces
-  -> trace.steps / trace.fields / metadata
+GET /qa/tasks/{task_id}
+  -> serialize_task(task)
+  -> qa_documents 取 document_id / filename / display_html
+  -> qa_events 里按顺序扫描 agent.event(source_indexed)
+  -> 取最新 source_selectors(path_id -> display_html DOM id)
+  -> 返回给前端用于 evidence review
 ```
 
-trace 只展示 document_processing 和 extraction 两段。
+## 4. 数据表
 
-### `GET /tasks/{task_id}/replay`
-
-返回前端回放工作台需要的整理视图：
+QA-only schema：
 
 ```text
-agent_run.trace_json
-  -> outline_tree / events / actions / field_states
-  -> events 优先生成 replay.actions 时间线：非空 model_message 变成文字段，tool_completed/tool_failed 变成工具行
-  -> 没有 events 的旧 trace 才回退到 actions，并剥掉旧 action 顶层 reason
-  -> source_selectors(path_id -> document_processor 原始 DOM id)
-agent_stage_runs(document_processor)
-  -> display_html
-  -> 过滤页码、页眉、页脚版本号等旧任务文档 chrome
+qa_tasks
+  -> id, status, stage, metadata_json, memory_json, active_turn_id, error_message, timestamps
+
+qa_documents
+  -> task_id, filename, file_type, html, display_html, markdown, md_list_json, blocks_json, processor_meta_json, warnings_json
+
+qa_messages
+  -> task_id, turn_id, role(user/assistant/system), content, metadata_json, created_at
+
+qa_turns
+  -> task_id, status(queued/in_progress/cancelling/completed/cancelled/failed), agent_completion_id, user_message_id, error_message, timestamps
+
+qa_events
+  -> task_id, turn_id, sequence, event_type, status, stage, payload_json, created_at
 ```
 
-`source_selectors` 不参与字段判定。file_extraction_agent trace 里的原始映射是 `path_id -> document_processor DOM id`；抽取运行中还会先通过 `source_indexed` task event 暂存同一张映射。backend 生成 replay 时优先使用终态 trace，终态还没写入时使用最新 live source index，把 `display_html` 里的可读 block `id/data-element-id` 改写成虚拟 path_id，并对前端返回 `path_id -> path_id`。这样前端点击 `evidence://0001.0000.0001` 时直接定位到 `id="0001.0000.0001"`，不需要知道 `p001_b001` 这类内部 DOM id，也不做文本或 DOM 猜测兜底。
+旧字段抽取表 `tasks/documents/agent_runs/agent_stage_runs/extracted_fields/field_traces/field_commits/task_events` 会在初始化时删除。当前分支不做旧库迁移兼容。
 
-### `GET /tasks/{task_id}/audit`
+## 5. 状态模型
 
-返回字段提交记录。每条 commit 只记录抽取结果和提交元数据。
-
-## 6. 状态模型
-
-任务业务状态 `status`：
+task status：
 
 ```text
-pending
 processing
-completed
+ready
+running
 failed
 ```
 
-任务处理阶段 `stage`：
+task stage：
 
 ```text
-uploaded
 document_processing
-extraction
+ready
+answering
 done
 ```
 
-没有额外的审核阶段。
-
-## 7. 事件模型
-
-任务事件必须持久化，不能只放在内存里。每个事件使用任务内递增的 `seq` 作为续传游标。
-
-推荐事件类型：
+turn status：
 
 ```text
-task.created
-task.stage_changed
-document.processed
-agent.event
-field.written
-task.completed
-task.failed
+queued
+in_progress
+cancelling
+completed
+cancelled
+failed
 ```
 
-`agent.event` 用于承载 agent service 的原始或归一化 stream 事件，例如 `tool_started`、`tool_completed`、`tool_failed`、`candidate_evidence_added`、`field_written` 和 `result_completed`。backend 转发时不生成或保留 tool 顶层 `reason`；模型可见文字由独立的 `model_message.content` 事件承载。
+stream state：
 
-## 8. 数据表
+```text
+idle
+running
+```
 
-任务表只保留 `pending / processing / completed / failed` 状态和 `uploaded / document_processing / extraction / done` 阶段。抽取结果表保留 `agent_value`、`final_value`、`source` 和 `committed`，不再有审核字段。
+`stream.state` 只说明当前是否还有 active turn；历史事件永远通过 `after_seq` 续传。
 
-字段过程和审计记录都从 `field_traces`、`extracted_fields` 和 `field_commits` 派生，不再依赖额外的审核表。
+## 6. Agent Client
 
-## 9. 已删除的部分
+`AgentClient` 只调用三个 agent service API：
 
-当前实现没有单独的人工审核接口、审核状态或审核表。
+```text
+process_document(...)
+  -> POST /v1/document-processor/process
+
+create_document_qa_completion_stream(...)
+  -> POST /v1/document-qa/chat/completions
+  -> 解析 text/event-stream 中的 data JSON
+
+cancel_document_qa_completion(completion_id)
+  -> POST /v1/document-qa/chat/completions/{completion_id}/cancel
+```
+
+backend 不读取 agent 内存状态，不保存 agent runtime，只保存 agent 通过 SSE 发出的事件。
+
+## 7. 已删除部分
+
+当前实现不再包含：
+
+- 旧 `/tasks` 字段抽取 API。
+- `task_spec` 输入。
+- `result/trace/replay/audit` 字段结果读模型。
+- 字段提交和人工审核。
+- route policy 相关流程。

@@ -20,11 +20,11 @@ import {
 import { toast } from "sonner";
 
 import {
+  createTaskInput as defaultCreateTaskInput,
   createTask as defaultCreateTask,
   getTaskSummary as defaultGetTaskSummary,
   listTasks as defaultListTasks
 } from "@/lib/api";
-import { parseJsonObject } from "@/lib/json";
 import {
   applyStoredTheme,
   getServerThemeSnapshot,
@@ -42,32 +42,34 @@ import {
   type RecentTask
 } from "@/lib/task-store";
 import type { TaskCreated, TaskSummary } from "@/lib/types";
+import {
+  DEFAULT_LEFT_PANEL_WIDTH,
+  LeftSidebarResizeHandle,
+  useLeftSidebarResize
+} from "@/components/sidebar-resize";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
 export interface UploadWorkbenchProps {
   createTask?: (formData: FormData) => Promise<TaskCreated>;
+  createTaskInput?: (taskId: string, content: string) => Promise<unknown>;
   getTaskSummary?: (taskId: string) => Promise<TaskSummary>;
   listTasks?: () => Promise<TaskSummary[]>;
   onCreated?: (task: TaskCreated) => void;
 }
 
-const DEFAULT_TASK_SPEC = {
-  task_name: "",
-  fields: []
-};
-
-const TERMINAL_STATUSES = new Set(["completed", "failed"]);
+const IDLE_STATUSES = new Set(["ready", "failed"]);
 const POLL_INTERVAL_MS = 1500;
 const MAX_POLL_ATTEMPTS = 120;
 
 export function UploadWorkbench({
   createTask = defaultCreateTask,
+  createTaskInput = defaultCreateTaskInput,
   getTaskSummary = defaultGetTaskSummary,
   listTasks = defaultListTasks,
   onCreated
 }: UploadWorkbenchProps) {
-  const [taskSpec, setTaskSpec] = React.useState(JSON.stringify(DEFAULT_TASK_SPEC, null, 2));
+  const [question, setQuestion] = React.useState("");
   const [files, setFiles] = React.useState<File[]>([]);
   const [error, setError] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
@@ -78,6 +80,7 @@ export function UploadWorkbench({
   );
   const theme = React.useSyncExternalStore(subscribeTheme, getThemeSnapshot, getServerThemeSnapshot);
   const [isLeftPanelOpen, setIsLeftPanelOpen] = React.useState(true);
+  const { leftPanelWidth, resizeLeftPanelByKeyboard, startLeftPanelResize } = useLeftSidebarResize();
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const pollTimeouts = React.useRef<ReturnType<typeof setTimeout>[]>([]);
   const mounted = React.useRef(true);
@@ -123,7 +126,7 @@ export function UploadWorkbench({
             return;
           }
           updateRecentTask(summary);
-          if (isTaskTerminal(summary)) {
+          if (isTaskIdle(summary)) {
             return;
           }
         } catch {
@@ -142,25 +145,24 @@ export function UploadWorkbench({
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    await submitQuestion();
+  }
+
+  async function submitQuestion() {
     setError(null);
 
     if (files.length === 0) {
-      setError("请选择 PDF 文件");
+      setError("Select at least one PDF file");
       return;
     }
     if (files.some((file) => !isPdfFile(file))) {
-      setError("第一版只支持 PDF 文件");
+      setError("Only PDF files are supported");
       return;
     }
 
-    const parsedTaskSpec = parseJsonObject(taskSpec, "task_spec");
-    if (!parsedTaskSpec.ok) {
-      setError(parsedTaskSpec.error);
-      return;
-    }
-    const taskName = parsedTaskSpec.value.task_name;
-    if (typeof taskName !== "string" || taskName.trim() === "") {
-      setError("task_spec.task_name 不能为空");
+    const trimmedQuestion = question.trim();
+    if (!trimmedQuestion) {
+      setError("Enter a question");
       return;
     }
 
@@ -168,25 +170,36 @@ export function UploadWorkbench({
     for (const file of files) {
       formData.append("files", file);
     }
-    formData.set("task_type", taskName.trim());
-    formData.set("task_spec", JSON.stringify(parsedTaskSpec.value));
 
     setIsSubmitting(true);
     try {
       const created = await createTask(formData);
       addRecentTask(created);
+      onCreated?.(created);
+      void createTaskInput(created.task_id, trimmedQuestion).catch((inputError) => {
+        const message = inputError instanceof Error ? inputError.message : "Failed to submit the first question";
+        updateRecentTask({ ...created, status: "failed", stage: "done", error_message: message });
+        toast.error("Failed to submit the first question", { description: message });
+      });
       void refreshTaskSummary(created.task_id);
-      toast.success("任务已创建", {
+      toast.success("Task created", {
         description: `${created.task_id} / ${created.status}`
       });
-      onCreated?.(created);
     } catch (submitError) {
-      const message = submitError instanceof Error ? submitError.message : "创建任务失败";
+      const message = submitError instanceof Error ? submitError.message : "Failed to create task";
       setError(message);
-      toast.error("创建任务失败", { description: message });
+      toast.error("Failed to create task", { description: message });
     } finally {
       setIsSubmitting(false);
     }
+  }
+
+  function handleQuestionKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (!shouldSubmitComposerOnKeyDown(event) || isSubmitting) {
+      return;
+    }
+    event.preventDefault();
+    void submitQuestion();
   }
 
   function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
@@ -204,17 +217,18 @@ export function UploadWorkbench({
 
   return (
     <section
-      aria-label="首页任务工作台"
+      aria-label="Home task workbench"
       className="home-task-workbench replay-review-root replay-review-root-fullscreen"
       data-left-panel-open={isLeftPanelOpen ? "true" : "false"}
+      style={{ "--replay-left-panel-width": `${leftPanelWidth || DEFAULT_LEFT_PANEL_WIDTH}px` } as React.CSSProperties}
     >
-      <div className="replay-topbar" aria-label="任务工作台顶部工具栏">
+      <div className="replay-topbar" aria-label="Task workbench top bar">
         <div className="replay-topbar-main">
           <button
             type="button"
             className="replay-topbar-back"
-            aria-label={isLeftPanelOpen ? "关闭任务栏" : "打开任务栏"}
-            title={isLeftPanelOpen ? "关闭任务栏" : "打开任务栏"}
+            aria-label={isLeftPanelOpen ? "Close sidebar" : "Open sidebar"}
+            title={isLeftPanelOpen ? "Close sidebar" : "Open sidebar"}
             onClick={() => setIsLeftPanelOpen((current) => !current)}
           >
             {isLeftPanelOpen ? (
@@ -232,33 +246,41 @@ export function UploadWorkbench({
 
       <div className="home-task-stage">
         {isLeftPanelOpen ? (
-          <aside className="replay-task-sidebar overflow-hidden bg-background" aria-label="任务栏">
+          <aside className="replay-task-sidebar overflow-hidden bg-background" aria-label="Tasks sidebar">
             <TaskSidebar tasks={recentTasks} />
           </aside>
         ) : null}
+        {isLeftPanelOpen ? (
+          <LeftSidebarResizeHandle
+            width={leftPanelWidth}
+            onPointerDown={startLeftPanelResize}
+            onKeyDown={resizeLeftPanelByKeyboard}
+          />
+        ) : null}
 
-        <main className="home-agent-panel-slot" aria-label="Agent 任务工作区">
+        <main className="home-agent-panel-slot" aria-label="Agent task workspace">
           <section className="home-new-task-center">
-            <h1>What task should we run in agent_gate?</h1>
-            <form className="home-task-composer" aria-label="创建任务对话框" onSubmit={handleSubmit}>
+            <h1>What should we ask these documents?</h1>
+            <form className="home-task-composer" aria-label="Create task composer" onSubmit={handleSubmit}>
               <input
                 ref={fileInputRef}
                 type="file"
                 multiple
                 accept=".pdf,application/pdf"
-                aria-label="PDF 文件输入"
+                aria-label="PDF file input"
                 className="sr-only"
                 onChange={handleFileChange}
               />
               <Textarea
-                aria-label="task_spec 输入框"
-                value={taskSpec}
+                aria-label="QA question input"
+                value={question}
                 onChange={(event) => {
-                  setTaskSpec(event.target.value);
+                  setQuestion(event.target.value);
                   setError(null);
                 }}
-                placeholder="Paste task_spec JSON"
-                spellCheck={false}
+                onKeyDown={handleQuestionKeyDown}
+                placeholder="Ask a question about the uploaded PDFs"
+                spellCheck={true}
                 className="home-task-spec-input"
               />
               {error ? (
@@ -268,7 +290,7 @@ export function UploadWorkbench({
                 </div>
               ) : null}
               {files.length > 0 ? (
-                <div className="home-task-file-strip" aria-label="已选择文件">
+                <div className="home-task-file-strip" aria-label="Selected files">
                   {files.map((file) => (
                     <span key={`${file.name}-${file.size}`} className="home-task-file-chip">
                       <FileText className="h-3.5 w-3.5" aria-hidden="true" />
@@ -276,8 +298,8 @@ export function UploadWorkbench({
                       <button
                         type="button"
                         className="home-task-file-remove"
-                        aria-label={`移除 ${file.name}`}
-                        title={`移除 ${file.name}`}
+                        aria-label={`Remove ${file.name}`}
+                        title={`Remove ${file.name}`}
                         onClick={() => removeFile(file)}
                       >
                         <X className="h-3 w-3" aria-hidden="true" />
@@ -292,15 +314,15 @@ export function UploadWorkbench({
                     type="button"
                     variant="ghost"
                     size="icon"
-                    aria-label="添加 PDF"
-                    title="添加 PDF"
+                    aria-label="Add PDF"
+                    title="Add PDF"
                     onClick={() => fileInputRef.current?.click()}
                   >
                     <Paperclip className="h-4 w-4" />
                   </Button>
                   <span>{files.length > 0 ? `${files.length} PDF` : "PDF"}</span>
                 </div>
-                <Button type="submit" size="icon" aria-label="发送 task_spec 创建任务" title="发送 task_spec 创建任务" disabled={isSubmitting}>
+                <Button type="submit" size="icon" aria-label="Upload documents and ask" title="Upload documents and ask" disabled={isSubmitting}>
                   {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizonal className="h-4 w-4" />}
                 </Button>
               </div>
@@ -313,36 +335,40 @@ export function UploadWorkbench({
   );
 }
 
+function shouldSubmitComposerOnKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>): boolean {
+  return event.key === "Enter" && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey && !event.nativeEvent.isComposing;
+}
+
 function TaskSidebar({ tasks }: { tasks: RecentTask[] }) {
   return (
     <div className="replay-task-sidebar-inner">
       <div className="replay-task-sidebar-header">
         <span className="replay-task-sidebar-label">Tasks</span>
-        <Link className="replay-new-task-link" href="/" aria-label="新任务">
+        <Link className="replay-new-task-link" href="/" aria-label="New task">
           <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-          新任务
+          New task
         </Link>
       </div>
       <div className="replay-task-list">
         {tasks.length === 0 ? (
-          <div className="replay-task-empty">暂无任务。</div>
+          <div className="replay-task-empty">No tasks yet.</div>
         ) : (
           tasks.map((task) => (
             <Link key={task.task_id} className="replay-task-item" href={`/tasks/${task.task_id}`}>
               <span className="replay-task-id">{task.task_id}</span>
               <span className="replay-task-meta">
-                {isTaskTerminal(task) ? (
+                {isTaskIdle(task) ? (
                   <CheckCircle2 className="home-task-inline-icon" aria-hidden="true" />
                 ) : (
                   <Clock3 className="home-task-inline-icon" aria-hidden="true" />
                 )}
-                {isTaskTerminal(task) ? "处理结果" : "处理中"}
+                {task.status} / {task.stage}
               </span>
               <span className="replay-task-status-detail">
-                {isTaskTerminal(task) ? getTaskResultLabel(task) : task.stage}
+                {isTaskIdle(task) ? getTaskResultLabel(task) : task.stage}
               </span>
               {task.error_message ? (
-                <span className="replay-task-error">失败原因：{task.error_message}</span>
+                <span className="replay-task-error">{task.error_message}</span>
               ) : null}
             </Link>
           ))
@@ -364,8 +390,8 @@ function ThemeModeButton({
     <button
       type="button"
       className="theme-mode-button"
-      aria-label="切换主题"
-      title={isDark ? "切换到 Light theme" : "切换到 Dark theme"}
+      aria-label="Toggle theme"
+      title={isDark ? "Switch to light theme" : "Switch to dark theme"}
       onClick={() => onThemeChange(isDark ? "light" : "dark")}
     >
       {isDark ? (
@@ -378,8 +404,8 @@ function ThemeModeButton({
   );
 }
 
-function isTaskTerminal(task: Pick<RecentTask, "status"> | TaskSummary): boolean {
-  return TERMINAL_STATUSES.has(task.status);
+function isTaskIdle(task: Pick<RecentTask, "status" | "stream" | "active_turn_id"> | TaskSummary): boolean {
+  return IDLE_STATUSES.has(task.status) && task.stream?.state !== "running" && !task.active_turn_id;
 }
 
 function getTaskResultLabel(task: RecentTask): string {

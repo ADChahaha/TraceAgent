@@ -1,22 +1,21 @@
 # test_input_adapter.py
 
-这份测试覆盖 `file_extraction_agent` 的新输入适配层。入口不再接收单个聚合 `html`，而是接收多个 `documents`，每个 document 必须包含 `filename` 和 `html`。
+这份测试覆盖 QA completion 输入适配层。入口不再接收 `task_spec`，而是接收 backend 持久化后的 `completion_id + documents + messages + memory`，并构建本轮 completion 使用的虚拟文档树。
 
 实现链路：
 
 ```text
-documents + task_spec + run_options
-  -> 校验 documents 非空
-  -> 校验每个 document 有 filename 和非空 html
-  -> 归一化 TaskSpec / RunOptions
-  -> build_html_document(documents)
-  -> HtmlExtractionInput(documents, task_spec, document, run_options)
+completion_id + documents + messages + memory
+  -> 校验 completion_id 非空
+  -> 校验至少一个 document 且每个 document 有 filename/html
+  -> 校验至少一个历史/当前 message
+  -> 构建 HtmlDocument virtual tree
+  -> 返回 DocumentQaCompletionInput
 ```
 
 ## 测试函数
 
-- `test_build_graph_input_accepts_documents_with_filename_and_html`：确认多文档输入会被解析成内部 document 对象和虚拟路径索引。
-- `test_build_graph_input_rejects_missing_documents`：确认空 documents 会被拒绝。
-- `test_build_graph_input_rejects_document_without_filename_or_html`：确认单个 document 缺少 filename 或 html 会返回清晰错误。
-- `test_build_graph_input_rejects_missing_task_spec`：确认 task spec 仍是必需输入。
-- `test_build_graph_input_rejects_empty_fields`：确认 task spec fields 不能为空。
+- `test_build_completion_input_accepts_documents_messages_and_memory`：验证输入适配层会保留 completion id、文档、消息和 memory，并构建可读 virtual tree。
+- `test_build_completion_input_rejects_missing_documents_or_messages`：验证缺少文档或消息时会拒绝。
+- `test_build_completion_input_rejects_document_without_filename_or_html`：验证 document 缺少文件名或 HTML 正文时会拒绝。
+- `test_build_completion_input_requires_completion_id`：验证 completion id 不能为空。
