@@ -25,6 +25,7 @@ def create_app(
         resolved_agent_client = agent_client or AgentClient(
             base_url=settings.agent_service_base_url,
             timeout_seconds=settings.agent_request_timeout_seconds,
+            cancel_timeout_seconds=settings.agent_cancel_timeout_seconds,
         )
         qa_task_service = QaTaskService(
             connection=database,

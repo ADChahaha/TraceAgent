@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import random
 from types import SimpleNamespace
 
+import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
+from service.file_extraction_agent.impl import resolution_new as resolution_module
 from service.file_extraction_agent.impl.html_state import build_graph_state
 from service.file_extraction_agent.impl.html_tools import build_tools
 from service.file_extraction_agent.impl.resolution_new import (
@@ -252,6 +255,76 @@ def test_resolution_falls_back_from_responses_stream_to_chat_stream_then_invoke(
     assert calls == ["responses.stream", "chat.stream", "responses.invoke"]
     assert message.content == "fallback invoke worked"
     assert message.tool_calls[0]["name"] == "tree"
+
+
+def test_resolution_uses_ethernet_backoff_between_failed_provider_attempts(monkeypatch):
+    calls = []
+    sleeps = []
+
+    class FailingStreamModel:
+        def __init__(self, name):
+            self.name = name
+
+        def stream(self, messages):
+            calls.append(f"{self.name}.stream")
+            raise TimeoutError(f"{self.name} timeout")
+
+    class SuccessfulInvokeModel:
+        def invoke(self, messages):
+            calls.append("invoke")
+            return AIMessage(
+                content="fallback invoke worked",
+                tool_calls=[
+                    {
+                        "id": "call-1",
+                        "name": "tree",
+                        "args": {"path_id": "", "depth": 1},
+                    }
+                ],
+            )
+
+    class FallbackModel:
+        def model_call_attempts(self):
+            return [
+                SimpleNamespace(name="responses_stream", model=FailingStreamModel("responses"), use_stream=True),
+                SimpleNamespace(name="chat_completions_stream", model=FailingStreamModel("chat"), use_stream=True),
+                SimpleNamespace(name="responses_invoke", model=SuccessfulInvokeModel(), use_stream=False),
+            ]
+
+    monkeypatch.setattr(resolution_module.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(random, "randint", lambda lower, upper: upper)
+    monkeypatch.setattr(resolution_module, "PROVIDER_BACKOFF_SLOT_SECONDS", 0.01)
+
+    message = _invoke_model_message(FallbackModel(), ["messages"])
+
+    assert calls == ["responses.stream", "chat.stream", "invoke"]
+    assert sleeps == [0.01, 0.03]
+    assert message.content == "fallback invoke worked"
+
+
+def test_resolution_stops_after_provider_attempt_limit(monkeypatch):
+    class FailingStreamModel:
+        def stream(self, messages):
+            del messages
+            raise TimeoutError("provider timeout")
+
+    class FallbackModel:
+        def model_call_attempts(self):
+            return [
+                SimpleNamespace(name=f"attempt_{index}", model=FailingStreamModel(), use_stream=True)
+                for index in range(7)
+            ]
+
+    monkeypatch.setattr(resolution_module.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(random, "randint", lambda lower, upper: lower)
+
+    with pytest.raises(RuntimeError) as exc:
+        _invoke_model_message(FallbackModel(), ["messages"])
+
+    message = str(exc.value)
+    assert "attempt_0" in message
+    assert "attempt_4" in message
+    assert "attempt_5" not in message
 
 
 def test_resolution_records_text_from_responses_api_content_blocks():

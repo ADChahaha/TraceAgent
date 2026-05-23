@@ -34,8 +34,10 @@ GET /qa/tasks/{task_id}
 
 POST /qa/tasks/{task_id}/cancel
   -> 标记 active turn cancelling
-  -> 如果已有 agent_completion_id，转发 agent cancel
   -> 写入 turn.cancel_requested 事件
+  -> 立即写入 turn.cancelled 并清空 active_turn_id
+  -> 如果已有 agent_completion_id，后台 best-effort 转发 agent cancel
+  -> 如果 agent completion 已经在同一个 turn runtime lock 内提交终态，cancel 只能在锁后观察到无 active turn 并失败
 ```
 
 ## 测试函数
@@ -46,4 +48,7 @@ POST /qa/tasks/{task_id}/cancel
 - `test_qa_second_input_sends_prior_messages_to_agent`：验证第二轮输入会把上一轮 user/assistant/tool 对话一起传给 agent，backend 是多轮状态事实来源。
   这里的历史不是压缩摘要，而是按 OpenAI chat 结构重建的 `assistant.tool_calls` 和 `role=tool` 消息。
 - `test_qa_task_rejects_new_input_while_turn_is_active`：验证同一个 QA task 同时只允许一个 active turn。
-- `test_qa_cancel_active_turn_calls_agent_cancel`：验证 cancel 会标记 active turn、转发 agent cancel，并写入 `turn.cancel_requested` 事件。
+- `test_qa_cancel_active_turn_calls_agent_cancel`：验证 cancel 会标记 active turn、写入 `turn.cancel_requested` 和 `turn.cancelled`，并后台转发 agent cancel。
+- `test_qa_cancel_does_not_wait_for_agent_cancel_when_provider_is_stuck`：验证 agent/provider cancel 卡住时，backend cancel 仍会立即本地收口并让 stream 回到 idle。
+- `test_qa_cancelled_turn_ignores_late_agent_completion`：验证旧 agent SSE 在 cancel 后迟到的 `model_message/completion.completed` 不会覆盖 cancelled 状态，也不会保存迟到 assistant message。
+- `test_qa_completed_terminal_event_wins_over_racing_cancel`：验证 agent terminal event 已经在 turn runtime lock 内提交时，cancel 不能插入并改成 cancelled；最终只能保留 `turn.completed`，cancel 侧看到无 active turn。

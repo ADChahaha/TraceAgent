@@ -214,7 +214,8 @@ completion_id
   -> processor.cancel_completion(completion_id)
   -> 在 _ACTIVE_COMPLETIONS 中查找 active runtime
   -> 找到则设置 cancel_requested=true、status=cancelling
-  -> create_completion_stream 在下一个 graph event 边界输出 completion.cancelled 并关闭 SSE
+  -> create_completion_stream 的 SSE consumer 立即输出 completion.cancelled 并关闭 SSE
+  -> producer 若稍后从 provider 返回事件，会在 runtime 已关闭时丢弃
   -> 找不到则返回 not_found
 ```
 

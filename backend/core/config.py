@@ -10,6 +10,7 @@ class BackendSettings:
     database_path: Path = Path("backend/backend.sqlite3")
     agent_service_base_url: str = "http://localhost:8001"
     agent_request_timeout_seconds: float = 1200.0
+    agent_cancel_timeout_seconds: float = 2.0
     supported_file_types: tuple[str, ...] = ("pdf",)
 
     def __post_init__(self) -> None:
@@ -28,5 +29,8 @@ class BackendSettings:
             ),
             agent_request_timeout_seconds=float(
                 os.getenv("AGENT_SERVICE_TIMEOUT_SECONDS", "1200")
+            ),
+            agent_cancel_timeout_seconds=float(
+                os.getenv("AGENT_SERVICE_CANCEL_TIMEOUT_SECONDS", "2")
             ),
         )

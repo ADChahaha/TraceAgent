@@ -13,6 +13,9 @@ from langchain_openai import ChatOpenAI
 from service.file_extraction_agent.schemas import ModelConfig
 
 
+DEFAULT_MODEL_REQUEST_TIMEOUT_SECONDS = 30.0
+
+
 def build_resolution_model(config: ModelConfig | dict | None) -> Any:
     normalized = normalize_model_config(config)
     return build_chat_model(normalized, normalized.resolution_model_name)
@@ -37,8 +40,7 @@ def build_chat_model(config: ModelConfig, model_name: str) -> Any:
         "temperature": config.temperature,
         "max_retries": config.max_retries,
     }
-    if config.request_timeout is not None:
-        kwargs["request_timeout"] = config.request_timeout
+    kwargs["request_timeout"] = config.request_timeout or DEFAULT_MODEL_REQUEST_TIMEOUT_SECONDS
     if config.base_url:
         kwargs["base_url"] = config.base_url
     if config.api_key:
@@ -174,8 +176,9 @@ def _model_config_from_env() -> ModelConfig:
         top_p=_optional_float_env(values.get("TOP_P")),
         top_k=_optional_int_env(values.get("TOP_K")),
         reasoning_effort=values.get("REASONING_EFFORT") or None,
-        max_retries=_int_env(values.get("MODEL_MAX_RETRIES"), 6),
-        request_timeout=_optional_float_env(values.get("MODEL_REQUEST_TIMEOUT")),
+        max_retries=_int_env(values.get("MODEL_MAX_RETRIES"), 0),
+        request_timeout=_optional_float_env(values.get("MODEL_REQUEST_TIMEOUT"))
+        or DEFAULT_MODEL_REQUEST_TIMEOUT_SECONDS,
     )
 
 

@@ -174,5 +174,5 @@ POST /v1/document-qa/chat/completions/{completion_id}/cancel
 - `file_extraction_agent` 接收的 `messages` 采用 OpenAI chat 结构；backend 会把上一轮 assistant 的 `tool_calls` 和对应 `tool` 结果一起重建回来。
 - QA completion 当前总是以 SSE 返回；非流式 chat completion 还没有实现。
 - `GET /v1/document-qa/chat/completions/{completion_id}` 当前是占位调试接口。
-- cancellation 是 cooperative cancellation：agent 在 graph event 边界检查 cancel flag，不强杀正在进行中的模型请求。
+- cancellation 是本地 completion 级取消：SSE consumer 检查 cancel flag 后立即输出 `completion.cancelled` 并关闭响应；producer 若仍阻塞在 provider stream，会依赖有限 request timeout 回收，迟到事件会被丢弃。
 - 第一版要求单进程/单 worker 部署；多 uvicorn worker 会让内存 `_ACTIVE_COMPLETIONS` 不共享，导致 cancel 可能找不到目标 completion。

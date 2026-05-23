@@ -246,9 +246,9 @@ SSE data 示例：
 task_id
   -> 查找 active turn
   -> turn.status=cancelling
-  -> 如果已有 agent_completion_id，调用 agent cancel
   -> 写入 turn.cancel_requested
-  -> 第一版同步 worker 立即写入 turn.cancelled 并清理 active_turn_id
+  -> 立即写入 turn.cancelled 并清理 active_turn_id
+  -> 如果已有 agent_completion_id，后台短超时 best-effort 调 agent cancel
 ```
 
 响应：
@@ -257,7 +257,7 @@ task_id
 {
   "task_id": "qa_task_xxx",
   "turn_id": "turn_xxx",
-  "status": "cancelling"
+  "status": "cancelled"
 }
 ```
 

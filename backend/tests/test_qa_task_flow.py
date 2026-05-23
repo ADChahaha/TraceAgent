@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from backend.core.config import BackendSettings
 from backend.main import create_app
+from backend.services.errors import ConflictError
 from backend.services.time_utils import utc_now
 
 
@@ -123,6 +125,95 @@ class FakeQaAgentClient:
         return {"id": completion_id, "status": "cancelling"}
 
 
+class BlockingCancelQaAgentClient(FakeQaAgentClient):
+    def __init__(self):
+        super().__init__()
+        self.cancel_started = threading.Event()
+        self.cancel_release = threading.Event()
+
+    def cancel_document_qa_completion(self, completion_id: str) -> dict[str, Any]:
+        self.cancel_calls.append(completion_id)
+        self.cancel_started.set()
+        self.cancel_release.wait(timeout=1.0)
+        return {"id": completion_id, "status": "cancelling"}
+
+
+class LateCompletionQaAgentClient(FakeQaAgentClient):
+    def __init__(self):
+        super().__init__()
+        self.stream_started = threading.Event()
+        self.release_stream = threading.Event()
+
+    def create_document_qa_completion_stream(
+        self,
+        *,
+        completion_id: str,
+        documents: list[dict[str, Any]],
+        messages: list[dict[str, str]],
+        memory: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
+        run_options: dict[str, Any] | None = None,
+    ):
+        self.completion_calls.append(
+            {
+                "completion_id": completion_id,
+                "documents": documents,
+                "messages": messages,
+                "memory": memory,
+                "metadata": metadata,
+                "run_options": run_options,
+            }
+        )
+        yield {
+            "id": completion_id,
+            "type": "completion.created",
+            "status": "in_progress",
+        }
+        self.stream_started.set()
+        self.release_stream.wait(timeout=1.0)
+        yield {
+            "type": "model_message",
+            "content": "迟到答案不应该入库。",
+        }
+        yield {
+            "id": completion_id,
+            "type": "completion.completed",
+            "status": "completed",
+        }
+
+
+class TerminalRaceQaAgentClient(FakeQaAgentClient):
+    def create_document_qa_completion_stream(
+        self,
+        *,
+        completion_id: str,
+        documents: list[dict[str, Any]],
+        messages: list[dict[str, str]],
+        memory: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
+        run_options: dict[str, Any] | None = None,
+    ):
+        self.completion_calls.append(
+            {
+                "completion_id": completion_id,
+                "documents": documents,
+                "messages": messages,
+                "memory": memory,
+                "metadata": metadata,
+                "run_options": run_options,
+            }
+        )
+        yield {
+            "type": "model_message",
+            "content": "最终答案已经提交。",
+        }
+        yield {
+            "id": completion_id,
+            "type": "completion.completed",
+            "status": "completed",
+        }
+
+
 def build_app(tmp_path: Path, agent_client: FakeQaAgentClient | None = None):
     fake_agent = agent_client or FakeQaAgentClient()
     app = create_app(
@@ -162,6 +253,15 @@ def wait_for_task_status(client: TestClient, task_id: str, status: str, *, timeo
             return last_summary
         time.sleep(0.02)
     raise AssertionError(f"task {task_id} did not reach {status}; last summary={last_summary}")
+
+
+def wait_until(condition, *, timeout_seconds: float = 1.0) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if condition():
+            return
+        time.sleep(0.02)
+    raise AssertionError("condition was not met before timeout")
 
 
 def test_create_qa_task_processes_documents_without_task_spec(tmp_path: Path):
@@ -343,9 +443,151 @@ def test_qa_cancel_active_turn_calls_agent_cancel(tmp_path: Path):
         service.connection.commit()
 
         response = client.post(f"/qa/tasks/{task['task_id']}/cancel")
+        wait_until(lambda: fake_agent.cancel_calls == ["cmp_cancel"])
         events = service.list_task_events(task["task_id"], after_sequence=0)
+        summary = client.get(f"/qa/tasks/{task['task_id']}").json()
 
     assert response.status_code == 200
-    assert response.json()["status"] == "cancelling"
+    assert response.json()["status"] == "cancelled"
     assert fake_agent.cancel_calls == ["cmp_cancel"]
     assert any(event["type"] == "turn.cancel_requested" for event in events)
+    assert any(event["type"] == "turn.cancelled" for event in events)
+    assert summary["stream"]["state"] == "idle"
+
+
+def test_qa_cancel_does_not_wait_for_agent_cancel_when_provider_is_stuck(tmp_path: Path):
+    fake_agent = BlockingCancelQaAgentClient()
+    app, _ = build_app(tmp_path, agent_client=fake_agent)
+
+    with TestClient(app) as client:
+        task = create_qa_task(client)
+        wait_for_task_status(client, task["task_id"], "ready")
+        service = client.app.state.qa_task_service
+        turn = service.create_input(
+            task_id=task["task_id"],
+            content="准备取消的问题",
+            run_agent=False,
+        )
+        now = utc_now()
+        service.connection.execute(
+            """
+            UPDATE qa_turns
+            SET status = ?, agent_completion_id = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            ("in_progress", "cmp_blocked_cancel", now, turn["turn_id"]),
+        )
+        service.connection.commit()
+
+        started_at = time.monotonic()
+        try:
+            response = client.post(f"/qa/tasks/{task['task_id']}/cancel")
+            elapsed = time.monotonic() - started_at
+            assert fake_agent.cancel_started.wait(timeout=0.5)
+        finally:
+            fake_agent.cancel_release.set()
+        events = service.list_task_events(task["task_id"], after_sequence=0)
+        summary = client.get(f"/qa/tasks/{task['task_id']}").json()
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "cancelled"
+    assert elapsed < 0.25
+    assert fake_agent.cancel_calls == ["cmp_blocked_cancel"]
+    assert any(event["type"] == "turn.cancel_requested" for event in events)
+    assert any(event["type"] == "turn.cancelled" for event in events)
+    assert summary["stream"]["state"] == "idle"
+
+
+def test_qa_cancelled_turn_ignores_late_agent_completion(tmp_path: Path):
+    fake_agent = LateCompletionQaAgentClient()
+    app, _ = build_app(tmp_path, agent_client=fake_agent)
+
+    with TestClient(app) as client:
+        task = create_qa_task(client)
+        wait_for_task_status(client, task["task_id"], "ready")
+        input_response = client.post(
+            f"/qa/tasks/{task['task_id']}/inputs",
+            json={"content": "准备取消的问题"},
+        )
+        assert input_response.status_code == 200
+        assert fake_agent.stream_started.wait(timeout=1.0)
+        service = client.app.state.qa_task_service
+
+        cancel_response = client.post(f"/qa/tasks/{task['task_id']}/cancel")
+        cancelled_summary = wait_for_task_status(client, task["task_id"], "ready")
+        fake_agent.release_stream.set()
+        time.sleep(0.1)
+        events = service.list_task_events(task["task_id"], after_sequence=0)
+        detail = client.get(f"/qa/tasks/{task['task_id']}").json()
+
+    event_types = [event["type"] for event in events]
+    assert cancel_response.status_code == 200
+    assert cancel_response.json()["status"] == "cancelled"
+    assert cancelled_summary["stream"]["state"] == "idle"
+    assert "turn.cancelled" in event_types
+    assert "turn.completed" not in event_types
+    assert all(
+        not (
+            event["type"] == "agent.event"
+            and event["payload"].get("type") == "model_message"
+            and event["payload"].get("content") == "迟到答案不应该入库。"
+        )
+        for event in events
+    )
+    assert detail["stream"]["state"] == "idle"
+
+
+def test_qa_completed_terminal_event_wins_over_racing_cancel(tmp_path: Path):
+    fake_agent = TerminalRaceQaAgentClient()
+    app, _ = build_app(tmp_path, agent_client=fake_agent)
+
+    with TestClient(app) as client:
+        task = create_qa_task(client)
+        wait_for_task_status(client, task["task_id"], "ready")
+        service = client.app.state.qa_task_service
+        original_emit_agent_event = service._emit_agent_event
+        terminal_event_committed = threading.Event()
+        release_terminal_commit = threading.Event()
+
+        def paused_emit_agent_event(*, task_id: str, turn_id: str, event: dict[str, Any]) -> None:
+            original_emit_agent_event(task_id=task_id, turn_id=turn_id, event=event)
+            if event.get("type") == "completion.completed":
+                terminal_event_committed.set()
+                release_terminal_commit.wait(timeout=1.0)
+
+        service._emit_agent_event = paused_emit_agent_event
+        input_response = client.post(
+            f"/qa/tasks/{task['task_id']}/inputs",
+            json={"content": "准备和完成竞争的问题"},
+        )
+        assert input_response.status_code == 200
+        assert terminal_event_committed.wait(timeout=1.0)
+
+        cancel_result: dict[str, Any] = {}
+        cancel_done = threading.Event()
+
+        def cancel_task() -> None:
+            try:
+                cancel_result["value"] = service.cancel_task(task["task_id"])
+            except Exception as exc:
+                cancel_result["error"] = exc
+            finally:
+                cancel_done.set()
+
+        cancel_thread = threading.Thread(target=cancel_task, daemon=True)
+        cancel_thread.start()
+        try:
+            time.sleep(0.05)
+            assert not cancel_done.is_set()
+        finally:
+            release_terminal_commit.set()
+            cancel_thread.join(timeout=1.0)
+
+        completed_summary = wait_for_task_status(client, task["task_id"], "ready")
+        events = service.list_task_events(task["task_id"], after_sequence=0)
+
+    event_types = [event["type"] for event in events]
+    assert completed_summary["stream"]["state"] == "idle"
+    assert isinstance(cancel_result.get("error"), ConflictError)
+    assert "turn.completed" in event_types
+    assert "turn.cancelled" not in event_types

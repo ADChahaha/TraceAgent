@@ -132,11 +132,70 @@ POST /qa/tasks/{task_id}/inputs
 POST /qa/tasks/{task_id}/cancel
   -> 查找 active turn
   -> qa_turns 写 cancelling
-  -> 如果 turn.agent_completion_id 已有值，调用 agent cancel endpoint
   -> qa_events 写 turn.cancel_requested
-  -> 如果 completion 还没开始，立即写 turn.cancelled 并清空 active_turn_id
-  -> 如果 completion 已开始，后台 QA 线程在事件边界观察 cancelling 并写 turn.cancelled
+  -> 立即写 turn.cancelled 并清空 active_turn_id，让 stream.state 变 idle
+  -> 如果 turn.agent_completion_id 已有值，后台 best-effort 调 agent cancel endpoint
+  -> agent cancel 成功、失败或被 provider 阻塞，都不影响 backend 已经完成的本地取消状态
 ```
+
+cancel 的事实来源是 backend 本地状态，不是 agent/provider 是否已经停止生成。这样即使 agent 正在等待上游 provider stream 的下一个 chunk，用户取消也不会卡住 `/qa/tasks/{task_id}/cancel`，前端可以立即恢复输入，后续 `/events` 会通过 `turn.cancel_requested` 和 `turn.cancelled` 收口。后台 QA 线程如果稍后从 agent SSE 收到更多事件，必须在观察到 turn 已 `cancelled` 后丢弃或停止处理，不得把已取消 turn 改回 completed/failed。
+
+backend 不能依赖 agent timeout 才完成取消；timeout 只用于降低后台残留资源占用。agent/provider 侧应使用有限 request timeout 和 Ethernet 式随机指数退避，避免旧 completion 的 producer 长时间卡在上游 stream 中，也避免多个 completion 同步重试冲击 provider。backend 自己的 agent cancel 通知也必须是短超时 best-effort，不能沿用长时间的 document/QA 请求超时。
+
+backend 的线程安全边界：
+
+```text
+cancel_task
+  -> 获取本 turn runtime lock
+  -> 在 backend 本地立即写 turn.cancel_requested + turn.cancelled
+  -> 清 task.active_turn_id
+  -> 写入前端可见的 turn.cancel_requested / turn.cancelled 事件
+  -> 释放 runtime lock
+  -> 锁外用短超时后台 worker best-effort 通知 agent cancel
+
+_run_turn 后台 QA worker
+  -> 从 agent SSE 读到任何 event 后，获取同一个 turn runtime lock
+  -> 如果 turn.status 已不是 in_progress，立即停止处理并丢弃迟到 event
+  -> 只有 turn.status 仍是 in_progress 时，才允许写 agent.event / assistant message / turn 终态
+  -> DB 写入和前端事件提交在同一个短临界区内完成
+
+finish completed / failed / cancelled
+  -> 必须按 turn_id 做状态条件更新
+  -> 只有 queued/in_progress/cancelling 这类允许状态能进入对应终态
+  -> 已 completed/cancelled/failed 的 turn 不能被后来的 worker 覆盖
+```
+
+SQLite 已按线程创建独立连接，但业务状态更新仍要避免“迟到 producer 覆盖 cancel”的竞争。实现时应把终态更新做成 compare-and-set 语义：例如 completed/failed 只允许从 `in_progress` 写入，cancelled 一旦写入后，旧 agent SSE worker 只能退出，不得再创建 assistant message、写 completed 或改 task 状态。
+
+backend 的 turn runtime 与 agent completion runtime 使用同一类线性化模型，只是提交目标从 agent 的内存 queue 换成 backend 的 DB 事实流和前端 SSE 事件：
+
+```text
+backend producer: _run_turn 从 agent SSE 收到 event
+  -> with turn_runtime.lock
+  -> 如果 turn 已 cancelling/cancelled/failed/completed，迟到 event 不写 DB、不转发
+  -> 否则短事务写 qa_events(agent.event)
+  -> 必要时写 qa_messages assistant 或 qa_turns 终态
+  -> 提交前端可见 event
+  -> release lock
+
+backend cancel: cancel_task / 前端断开触发本地取消
+  -> with turn_runtime.lock
+  -> 如果 turn 未 terminal，写 qa_turns cancelling/cancelled
+  -> 清 qa_tasks.active_turn_id
+  -> 写 qa_events(turn.cancel_requested / turn.cancelled)
+  -> 提交前端 cancel sentinel / terminal event
+  -> release lock
+  -> 锁外 best-effort 调 agent cancel endpoint
+
+frontend SSE consumer: GET /qa/tasks/{task_id}/events
+  -> 按 qa_events.sequence 或 runtime queue 的提交顺序输出普通事件
+  -> 不用 cancel flag 跳过已经提交的旧事件
+  -> 看到 turn.cancelled / turn.completed / turn.failed 这类终态后收口
+```
+
+DB 写入可以放在 `turn_runtime.lock` 内，因为它是本地短事务，用来保证 DB 状态和前端事件顺序一致；但锁内不得执行 agent HTTP cancel、agent completion stream、provider 请求、文件处理、长事务或重试等待。agent cancel 通知只能在锁外后台执行，否则上游卡住会反向卡住 backend 的本地取消。
+
+和 agent 一样，backend consumer 的结束也应由已提交事件决定，而不是直接读取 cancel flag。cancel flag/status 只用于 producer/cancel 决定后续事件还能不能写入；已经写进 `qa_events` 或 runtime queue 的旧事件必须按顺序发给前端，直到遇到 `turn.cancelled`、`turn.completed` 或 `turn.failed` 终态。
 
 事件续传：
 

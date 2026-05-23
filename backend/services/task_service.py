@@ -44,6 +44,8 @@ class QaTaskService:
         self._connection = connection
         self.settings = settings
         self.agent_client = agent_client
+        self._turn_locks: dict[str, Any] = {}
+        self._turn_locks_lock = threading.Lock()
 
     @property
     def connection(self) -> sqlite3.Connection:
@@ -51,6 +53,14 @@ class QaTaskService:
         if callable(connect):
             return connect()
         return self._connection
+
+    def _turn_lock(self, turn_id: str):
+        with self._turn_locks_lock:
+            lock = self._turn_locks.get(turn_id)
+            if lock is None:
+                lock = threading.RLock()
+                self._turn_locks[turn_id] = lock
+            return lock
 
     def upload_file_payload(
         self,
@@ -192,36 +202,41 @@ class QaTaskService:
         active_turn = qa_crud.get_active_turn(self.connection, task_id)
         if active_turn is None:
             raise ConflictError("task has no active turn")
-        now = utc_now()
-        qa_crud.update_turn(
-            self.connection,
-            turn_id=active_turn["id"],
-            status="cancelling",
-            now=now,
-        )
-        completion_id = active_turn.get("agent_completion_id")
-        agent_cancel = None
+        turn_id = active_turn["id"]
+        with self._turn_lock(turn_id):
+            active_turn = qa_crud.get_turn(self.connection, turn_id)
+            if active_turn is None or active_turn["status"] not in {"queued", "in_progress", "cancelling"}:
+                raise ConflictError("task has no active turn")
+            now = utc_now()
+            qa_crud.update_turn(
+                self.connection,
+                turn_id=turn_id,
+                status="cancelling",
+                now=now,
+            )
+            completion_id = active_turn.get("agent_completion_id")
+            task = qa_crud.update_task(
+                self.connection,
+                task_id=task_id,
+                status="running",
+                stage="answering",
+                now=now,
+            )
+            self._emit_event(
+                task,
+                turn_id=turn_id,
+                event_type="turn.cancel_requested",
+                payload={"turn_id": turn_id, "agent_cancel": "scheduled" if completion_id else None},
+                now=now,
+            )
+            self._finish_turn_cancelled(task_id=task_id, turn_id=turn_id)
         if completion_id:
-            cancel = getattr(self.agent_client, "cancel_document_qa_completion", None)
-            if callable(cancel):
-                agent_cancel = cancel(completion_id)
-        task = qa_crud.update_task(
-            self.connection,
-            task_id=task_id,
-            status="running",
-            stage="answering",
-            now=now,
-        )
-        self._emit_event(
-            task,
-            turn_id=active_turn["id"],
-            event_type="turn.cancel_requested",
-            payload={"turn_id": active_turn["id"], "agent_cancel": agent_cancel},
-            now=now,
-        )
-        if not completion_id:
-            self._finish_turn_cancelled(task_id=task_id, turn_id=active_turn["id"])
-        return {"task_id": task_id, "turn_id": active_turn["id"], "status": "cancelling"}
+            self._start_background_worker(
+                name=f"qa-cancel-{turn_id}",
+                target=self._notify_agent_cancel,
+                completion_id=completion_id,
+            )
+        return {"task_id": task_id, "turn_id": turn_id, "status": "cancelled"}
 
     def get_task_or_raise(self, task_id: str) -> dict[str, Any]:
         task = qa_crud.get_task(self.connection, task_id)
@@ -283,12 +298,13 @@ class QaTaskService:
 
     def _run_turn_when_ready(self, *, task_id: str, turn_id: str, run_options: dict[str, Any] | None) -> None:
         while True:
-            turn = qa_crud.get_turn(self.connection, turn_id)
-            if turn is None or turn["status"] in {"cancelled", "failed"}:
-                return
-            if turn["status"] == "cancelling":
-                self._finish_turn_cancelled(task_id=task_id, turn_id=turn_id)
-                return
+            with self._turn_lock(turn_id):
+                turn = qa_crud.get_turn(self.connection, turn_id)
+                if turn is None or turn["status"] in {"cancelled", "failed"}:
+                    return
+                if turn["status"] == "cancelling":
+                    self._finish_turn_cancelled(task_id=task_id, turn_id=turn_id)
+                    return
             task = self.get_task_or_raise(task_id)
             if task["status"] == "failed":
                 self._finish_turn_failed(task_id=task_id, turn_id=turn_id, error_message=task["error_message"] or "task failed")
@@ -300,29 +316,31 @@ class QaTaskService:
 
     def _run_turn(self, *, task_id: str, turn_id: str, run_options: dict[str, Any] | None) -> None:
         started_at = utc_now()
-        current_turn = qa_crud.get_turn(self.connection, turn_id)
-        if current_turn is None or current_turn["status"] in {"cancelled", "failed"}:
-            return
         completion_id = f"cmp_{uuid.uuid4().hex}"
-        qa_crud.update_turn(
-            self.connection,
-            turn_id=turn_id,
-            status="in_progress",
-            agent_completion_id=completion_id,
-            now=started_at,
-        )
-        task = qa_crud.update_task(
-            self.connection,
-            task_id=task_id,
-            status="running",
-            stage="answering",
-            active_turn_id=turn_id,
-            now=started_at,
-        )
-        self._emit_event(task, turn_id=turn_id, event_type="turn.started", payload={"turn_id": turn_id, "completion_id": completion_id}, now=started_at)
+        with self._turn_lock(turn_id):
+            current_turn = qa_crud.get_turn(self.connection, turn_id)
+            if current_turn is None or current_turn["status"] in {"cancelled", "failed"}:
+                return
+            if current_turn["status"] == "cancelling":
+                self._finish_turn_cancelled(task_id=task_id, turn_id=turn_id)
+                return
+            qa_crud.update_turn(
+                self.connection,
+                turn_id=turn_id,
+                status="in_progress",
+                agent_completion_id=completion_id,
+                now=started_at,
+            )
+            task = qa_crud.update_task(
+                self.connection,
+                task_id=task_id,
+                status="running",
+                stage="answering",
+                active_turn_id=turn_id,
+                now=started_at,
+            )
+            self._emit_event(task, turn_id=turn_id, event_type="turn.started", payload={"turn_id": turn_id, "completion_id": completion_id}, now=started_at)
 
-        terminal_type = "completion.completed"
-        terminal_status = "completed"
         last_model_message = ""
         try:
             for event in self.agent_client.create_document_qa_completion_stream(
@@ -335,89 +353,130 @@ class QaTaskService:
             ):
                 if not isinstance(event, dict):
                     continue
+                with self._turn_lock(turn_id):
+                    current_turn = qa_crud.get_turn(self.connection, turn_id)
+                    if current_turn is None or current_turn["status"] != "in_progress":
+                        return
+                    event_type = str(event.get("type") or "agent.event")
+                    if event_type == "model_message" and str(event.get("content") or "").strip():
+                        last_model_message = str(event["content"])
+                    self._emit_agent_event(task_id=task_id, turn_id=turn_id, event=event)
+                    if event_type == "completion.failed":
+                        terminal_status = str(event.get("status") or "failed")
+                        self._finish_turn_failed(task_id=task_id, turn_id=turn_id, error_message=terminal_status)
+                        return
+                    if event_type == "completion.cancelled":
+                        self._finish_turn_cancelled(task_id=task_id, turn_id=turn_id)
+                        return
+                    if event_type == "completion.completed":
+                        self._finish_turn_completed(task_id=task_id, turn_id=turn_id, assistant_content=last_model_message)
+                        return
+        except Exception as exc:
+            with self._turn_lock(turn_id):
                 current_turn = qa_crud.get_turn(self.connection, turn_id)
                 if current_turn is not None and current_turn["status"] in {"cancelling", "cancelled"}:
-                    terminal_type = "completion.cancelled"
-                    terminal_status = "cancelled"
-                    break
-                event_type = str(event.get("type") or "agent.event")
-                if event_type == "model_message" and str(event.get("content") or "").strip():
-                    last_model_message = str(event["content"])
-                if event_type in {"completion.completed", "completion.cancelled", "completion.failed"}:
-                    terminal_type = event_type
-                    terminal_status = str(event.get("status") or terminal_type.removeprefix("completion."))
-                self._emit_agent_event(task_id=task_id, turn_id=turn_id, event=event)
-        except Exception as exc:
-            current_turn = qa_crud.get_turn(self.connection, turn_id)
-            if current_turn is not None and current_turn["status"] in {"cancelling", "cancelled"}:
-                self._finish_turn_cancelled(task_id=task_id, turn_id=turn_id)
-                return
-            self._finish_turn_failed(task_id=task_id, turn_id=turn_id, error_message=str(exc))
+                    self._finish_turn_cancelled(task_id=task_id, turn_id=turn_id)
+                    return
+                self._finish_turn_failed(task_id=task_id, turn_id=turn_id, error_message=str(exc))
             return
 
-        if terminal_type == "completion.failed":
-            self._finish_turn_failed(task_id=task_id, turn_id=turn_id, error_message=terminal_status)
-            return
-        if terminal_type == "completion.cancelled":
-            self._finish_turn_cancelled(task_id=task_id, turn_id=turn_id)
-            return
-        self._finish_turn_completed(task_id=task_id, turn_id=turn_id, assistant_content=last_model_message)
+        with self._turn_lock(turn_id):
+            current_turn = qa_crud.get_turn(self.connection, turn_id)
+            if current_turn is None or current_turn["status"] != "in_progress":
+                return
+            self._finish_turn_completed(task_id=task_id, turn_id=turn_id, assistant_content=last_model_message)
 
     def _finish_turn_completed(self, *, task_id: str, turn_id: str, assistant_content: str) -> None:
-        now = utc_now()
-        current_turn = qa_crud.get_turn(self.connection, turn_id)
-        if current_turn is not None and current_turn["status"] in {"cancelling", "cancelled"}:
-            self._finish_turn_cancelled(task_id=task_id, turn_id=turn_id)
-            return
-        if assistant_content.strip():
-            qa_crud.create_message(
+        with self._turn_lock(turn_id):
+            now = utc_now()
+            updated_turn = qa_crud.update_turn_status_if_current(
                 self.connection,
-                message_id=f"msg_{uuid.uuid4().hex}",
-                task_id=task_id,
                 turn_id=turn_id,
-                role="assistant",
-                content=assistant_content.strip(),
-                metadata={},
+                current_statuses={"in_progress"},
+                status="completed",
+                completed_at=now,
                 now=now,
             )
-        qa_crud.update_turn(self.connection, turn_id=turn_id, status="completed", completed_at=now, now=now)
-        task = qa_crud.update_task(
-            self.connection,
-            task_id=task_id,
-            status="ready",
-            stage="ready",
-            clear_active_turn=True,
-            memory=self._updated_memory(task_id),
-            now=now,
-        )
-        self._emit_event(task, turn_id=turn_id, event_type="turn.completed", payload={"turn_id": turn_id}, now=now)
+            if updated_turn is None:
+                return
+            if assistant_content.strip():
+                qa_crud.create_message(
+                    self.connection,
+                    message_id=f"msg_{uuid.uuid4().hex}",
+                    task_id=task_id,
+                    turn_id=turn_id,
+                    role="assistant",
+                    content=assistant_content.strip(),
+                    metadata={},
+                    now=now,
+                )
+            task = qa_crud.update_task(
+                self.connection,
+                task_id=task_id,
+                status="ready",
+                stage="ready",
+                clear_active_turn=True,
+                memory=self._updated_memory(task_id),
+                now=now,
+            )
+            self._emit_event(task, turn_id=turn_id, event_type="turn.completed", payload={"turn_id": turn_id}, now=now)
 
     def _finish_turn_cancelled(self, *, task_id: str, turn_id: str) -> None:
-        now = utc_now()
-        qa_crud.update_turn(self.connection, turn_id=turn_id, status="cancelled", completed_at=now, now=now)
-        task = qa_crud.update_task(
-            self.connection,
-            task_id=task_id,
-            status="ready",
-            stage="ready",
-            clear_active_turn=True,
-            now=now,
-        )
-        self._emit_event(task, turn_id=turn_id, event_type="turn.cancelled", payload={"turn_id": turn_id}, now=now)
+        with self._turn_lock(turn_id):
+            now = utc_now()
+            updated_turn = qa_crud.update_turn_status_if_current(
+                self.connection,
+                turn_id=turn_id,
+                current_statuses={"queued", "in_progress", "cancelling"},
+                status="cancelled",
+                completed_at=now,
+                now=now,
+            )
+            if updated_turn is None:
+                return
+            task = qa_crud.update_task(
+                self.connection,
+                task_id=task_id,
+                status="ready",
+                stage="ready",
+                clear_active_turn=True,
+                now=now,
+            )
+            self._emit_event(task, turn_id=turn_id, event_type="turn.cancelled", payload={"turn_id": turn_id}, now=now)
 
     def _finish_turn_failed(self, *, task_id: str, turn_id: str, error_message: str) -> None:
-        now = utc_now()
-        qa_crud.update_turn(self.connection, turn_id=turn_id, status="failed", error_message=error_message, completed_at=now, now=now)
-        task = qa_crud.update_task(
-            self.connection,
-            task_id=task_id,
-            status="ready",
-            stage="ready",
-            clear_active_turn=True,
-            error_message=error_message,
-            now=now,
-        )
-        self._emit_event(task, turn_id=turn_id, event_type="turn.failed", payload={"turn_id": turn_id, "error_message": error_message}, now=now)
+        with self._turn_lock(turn_id):
+            now = utc_now()
+            updated_turn = qa_crud.update_turn_status_if_current(
+                self.connection,
+                turn_id=turn_id,
+                current_statuses={"queued", "in_progress", "cancelling"},
+                status="failed",
+                error_message=error_message,
+                completed_at=now,
+                now=now,
+            )
+            if updated_turn is None:
+                return
+            task = qa_crud.update_task(
+                self.connection,
+                task_id=task_id,
+                status="ready",
+                stage="ready",
+                clear_active_turn=True,
+                error_message=error_message,
+                now=now,
+            )
+            self._emit_event(task, turn_id=turn_id, event_type="turn.failed", payload={"turn_id": turn_id, "error_message": error_message}, now=now)
+
+    def _notify_agent_cancel(self, *, completion_id: str) -> None:
+        cancel = getattr(self.agent_client, "cancel_document_qa_completion", None)
+        if not callable(cancel):
+            return
+        try:
+            cancel(completion_id)
+        except Exception:
+            return
 
     def _process_document(self, *, task_id: str, upload_file: UploadedFilePayload) -> None:
         file_type = self._infer_file_type(upload_file.filename)

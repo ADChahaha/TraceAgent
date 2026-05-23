@@ -9,9 +9,16 @@ from backend.services.errors import AgentServiceError
 
 
 class AgentClient:
-    def __init__(self, *, base_url: str, timeout_seconds: float = 60.0):
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        timeout_seconds: float = 60.0,
+        cancel_timeout_seconds: float = 2.0,
+    ):
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self.cancel_timeout_seconds = cancel_timeout_seconds
 
     def process_document(
         self,
@@ -72,12 +79,15 @@ class AgentClient:
             raise AgentServiceError(f"agent service returned invalid SSE JSON: {exc}") from exc
 
     def cancel_document_qa_completion(self, completion_id: str) -> dict[str, Any]:
-        return self._post(f"/v1/document-qa/chat/completions/{completion_id}/cancel")
+        return self._post(
+            f"/v1/document-qa/chat/completions/{completion_id}/cancel",
+            timeout_seconds=self.cancel_timeout_seconds,
+        )
 
-    def _post(self, path: str, **kwargs) -> dict[str, Any]:
+    def _post(self, path: str, *, timeout_seconds: float | None = None, **kwargs) -> dict[str, Any]:
         url = f"{self.base_url}{path}"
         try:
-            with httpx.Client(timeout=self.timeout_seconds) as client:
+            with httpx.Client(timeout=timeout_seconds or self.timeout_seconds) as client:
                 response = client.post(url, **kwargs)
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:

@@ -87,7 +87,7 @@ class ModelConfig:
     top_p: float | None = None
     top_k: int | None = None
     reasoning_effort: str | None = None
-    max_retries: int = 6
+    max_retries: int = 0
     request_timeout: float | None = None
 
 

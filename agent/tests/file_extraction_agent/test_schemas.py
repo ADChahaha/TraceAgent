@@ -115,5 +115,11 @@ def test_model_config_keeps_resolution_model_and_sampling_options():
     assert config.request_timeout == 90.0
 
 
+def test_model_config_defaults_disable_sdk_retries_for_outer_backoff():
+    config = ModelConfig(resolution_model_name="resolution")
+
+    assert config.max_retries == 0
+
+
 def test_run_options_defaults_to_tool_budget_only():
     assert RunOptions().max_tool_calls == 200

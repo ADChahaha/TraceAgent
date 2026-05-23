@@ -151,7 +151,7 @@ cancel_completion("cmp_001")
 # {"id": "cmp_001", "status": "cancelling"} 或 {"id": "cmp_001", "status": "not_found"}
 ```
 
-取消是 cooperative cancellation：`processor` 在 graph event 边界检查 `cancel_requested`，不会强杀正在进行中的模型请求。第一版只支持单进程内存 runtime，不支持多 uvicorn worker 共享取消状态。
+取消是本地 completion 级取消：`processor` 的 SSE consumer 看到 `cancel_requested` 后立即输出 `completion.cancelled` 并关闭响应，不等待 provider 下一个 chunk。它不会强杀正在进行中的同步 provider 请求；残留 producer 依赖有限 request timeout 回收，迟到事件会被丢弃。第一版只支持单进程内存 runtime，不支持多 uvicorn worker 共享取消状态。
 
 ## 已删除旧语义
 

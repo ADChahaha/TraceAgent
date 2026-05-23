@@ -14,7 +14,17 @@ def test_backend_settings_keeps_agent_service_configuration(tmp_path: Path):
     settings = BackendSettings(database_path=tmp_path / "backend.sqlite3")
 
     assert settings.agent_service_base_url == "http://localhost:8001"
+    assert settings.agent_cancel_timeout_seconds == 2.0
     assert settings.supported_file_types == ("pdf",)
+
+
+def test_backend_settings_loads_agent_cancel_timeout_from_env(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("BACKEND_DATABASE_PATH", str(tmp_path / "backend.sqlite3"))
+    monkeypatch.setenv("AGENT_SERVICE_CANCEL_TIMEOUT_SECONDS", "0.5")
+
+    settings = BackendSettings.from_env()
+
+    assert settings.agent_cancel_timeout_seconds == 0.5
 
 
 def test_backend_registers_qa_routes_and_removes_old_task_routes(tmp_path: Path):

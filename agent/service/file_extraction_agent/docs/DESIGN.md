@@ -35,7 +35,7 @@ completion_id + documents + messages + memory + run_options + model_config
        -> html_index.build_html_document(documents) 构建只读语义虚拟树
   -> processor 创建 ActiveCompletion 并放入 _ACTIVE_COMPLETIONS[completion_id]
   -> model_factory.build_resolution_model(model_config) 构建 LangChain chat model
-  -> graph.run_completion_graph_stream(completion_input, resolution_model)
+  -> processor 启动 producer 线程运行 graph.run_completion_graph_stream(...)
        -> build_graph_state(...)
        -> 输出 completion.created
        -> 输出 source_indexed(document_tree + source_selectors)
@@ -46,8 +46,13 @@ completion_id + documents + messages + memory + run_options + model_config
             -> 有 tool_calls 时继续单工具循环；terminal stop signal 且无工具时自然结束
        -> resolution 正常结束输出 completion.completed
        -> resolution 异常输出 tool_failed(resolution) + completion.failed
-  -> processor 在每个 graph event 之间检查 cancel_requested
-       -> 若已取消，输出 completion.cancelled 并结束 stream
+       -> producer 把每条 SSE event 放入 runtime queue
+  -> processor 的 SSE consumer 从 runtime queue 取 event 并向 HTTP response yield
+       -> 无事件时阻塞等待 runtime queue
+       -> cancel endpoint 通过 runtime 往 queue 放入 cancel sentinel，主动唤醒 consumer
+       -> consumer 按 FIFO 先发出 cancel sentinel 之前已提交的普通 event
+       -> consumer 收到 cancel sentinel 后输出 completion.cancelled 并结束 stream，不等待 provider 下一个 chunk
+       -> producer 后续若从 provider 返回更多 event，看到 runtime 已结束后丢弃
   -> finally 从 _ACTIVE_COMPLETIONS 移除本轮 completion
 ```
 
@@ -64,7 +69,132 @@ data: {"seq":4,"type":"model_message","content":"..."}
 - 入参校验失败：`build_completion_input` 或 Pydantic schema 抛出 `ValueError`，HTTP route 映射为 422。
 - resolution 运行失败：`graph` 捕获异常，先输出 `tool_failed`，再用 `completion.failed` 收口。
 
-## 3. 虚拟文档仓库
+## 3. Cancel 和 Provider Stream 边界
+
+当前目标设计把 agent 的 SSE 输出拆成 producer / consumer 两层，避免 cancel 被上游 provider stream 卡住：
+
+```text
+HTTP SSE consumer
+  -> 阻塞等待 runtime.queue.get()
+  -> 有 event 就 yield 给 backend
+  -> 收到 cancel sentinel 时 close_once("cancelled")
+  -> close_once 成功则 yield completion.cancelled 并关闭本轮 SSE
+
+producer 线程
+  -> 运行 graph.run_completion_graph_stream(...)
+  -> graph 内部可能阻塞在 LangChain/OpenAI provider.stream()
+  -> 每次 provider 请求必须使用明确 request timeout，不能无限等待
+  -> provider 吐出 chunk 后继续生成 model/tool/completion event
+  -> 如果 runtime 已 cancelled/closed，丢弃后续 event
+```
+
+这里的 cancel 语义是“本地 run 立刻收口”，不是保证上游 provider 物理停止生成。同步 SDK 如果卡在阻塞 IO 中，Python 不能安全强杀该调用；agent 能保证的是 `/cancel` 通过 runtime 设置取消状态并向本轮 runtime queue 投递 cancel sentinel，主动唤醒原 SSE consumer。consumer 不需要 timeout 轮询，也不等待 provider 下一个 chunk，而是把 cancel sentinel 之前已经提交到 queue 的普通 event 按 FIFO flush 给 backend，然后输出 `completion.cancelled` 并释放响应链路。
+
+cancel 的精确边界由 runtime lock 上的提交顺序定义，而不是由用户点击取消的现实时间定义：
+
+```text
+producer commit_events([event_a, event_b]) 先拿到 runtime lock
+  -> event_a/event_b 都成功进入 runtime queue，成为已提交 event
+  -> cancel 后拿到 lock，只能把 cancel sentinel 排在 event_b 后面
+  -> consumer 必须依次 yield event_a、event_b、completion.cancelled
+
+cancel request_cancel() 先拿到 runtime lock
+  -> cancel sentinel 进入 runtime queue
+  -> runtime 进入 cancelling/closed 边界
+  -> producer 后续 commit_events([...]) 发现 runtime 已取消，整批不入队
+```
+
+因此 `request_cancel()` 只阻止 cancel sentinel 之后的新 event 入队，不能丢弃 sentinel 之前已经成功提交的旧 event。producer 可以单条提交，也可以小批量提交已经在锁外生成好的 event；但提交临界区只能做状态检查和 `queue.put`，不得包含 provider stream、tool 调用、graph 运行或其他慢 IO。小批量提交的代价是 cancel 粒度变成 batch 之间；只要 batch 是很短的内存提交，就不会造成锁长期占用。
+
+为了避免 producer/consumer 只是把卡死从前台链路挪到后台线程，provider 请求必须有有限 timeout。timeout 和重试等待采用 Ethernet binary exponential backoff 思路：同一个 completion 内最多重试五次，第 `k` 次失败后从 `[0, 2^k - 1]` 个离散 slot 中随机选择等待时长，再发起下一次 provider 调用；slot 基准时长和单次 request timeout 可由配置覆盖，但都必须是有限秒数，不能配置成无限等待。每次 provider 调用都使用明确 request timeout；如果因为 timeout 失败且还有剩余尝试，就按随机退避等待后切到下一 transport/attempt 或同 transport 重试；如果五次耗尽：
+
+```text
+runtime.cancel_requested=true
+  -> producer 安静退出，consumer 已经负责输出 completion.cancelled
+
+runtime.cancel_requested=false
+  -> producer 输出 tool_failed(resolution) + completion.failed
+```
+
+因此后台 producer 最多残留到当前 provider request timeout 结束，连续 cancel 不会无限堆积僵尸线程；随机退避还能避免多个 completion 在同一时间点同时重试上游 provider。后续如果把 provider transport 改成原生 async/httpx stream，cancel 时还应主动 close socket；但即使有主动 close，有限 request timeout 和随机指数退避仍然是最后的资源回收边界。
+
+线程安全约束：
+
+```text
+ActiveCompletion
+  -> 内部持有 threading.Lock
+  -> 持有本 completion 专属 runtime queue，queue 不与其他 completion 共享
+  -> cancel_requested/status/closed 只能通过方法读写
+  -> 状态检查、状态变更和 queue.put 必须在同一个 runtime lock 临界区里完成
+  -> request_cancel() 标记取消意图，并向 runtime queue 放入 cancel sentinel 唤醒 consumer
+  -> close_once(status) 原子决定唯一终态
+
+_ACTIVE_COMPLETIONS
+  -> 所有 get/set/pop 都必须持有 registry lock
+  -> create_completion_stream 注册 runtime 后才能返回 SSE iterator
+  -> registry 只保存 completion_id -> runtime 的索引；queue 是 runtime 私有字段，不存在全局共享 queue
+  -> runtime close 后从 registry 移除
+
+producer -> consumer event queue
+  -> 如果 consumer 是 async generator，producer 线程只能通过 loop.call_soon_threadsafe(...) 投递事件
+  -> 如果使用同步 StreamingResponse generator，则使用线程安全 queue.Queue
+  -> 禁止 producer 线程直接操作 asyncio.Queue
+  -> 已经 commit 到 queue 的普通 event 必须按 FIFO 发出，不因后续 cancel 被丢弃
+  -> cancel sentinel 之后的普通 event 不允许再 commit；producer 迟到 event 直接丢弃
+```
+
+`queue.Queue` 自己的内部锁只保证队列数据结构线程安全，不保证业务上的 cancel 顺序。业务顺序必须由 `runtime.lock` 统一线性化：
+
+```text
+runtime.commit_events(events)
+  -> with runtime.lock
+  -> 如果 runtime 已 cancelling/closed，整批 event 不入队
+  -> 否则把 events 逐个 queue.put，形成一个已提交 batch
+
+runtime.request_cancel()
+  -> with runtime.lock
+  -> 如果 runtime 已 closed/cancelling，直接返回当前状态
+  -> 否则设置 cancel_requested=true、status=cancelling
+  -> 在同一个临界区内 queue.put(cancel sentinel)
+```
+
+不能先改 `cancel_requested` 再在锁外放 sentinel，也不能先放 sentinel 再在锁外改状态；否则 producer、consumer 看到的 runtime 状态和 queue 顺序可能不一致。consumer 可以阻塞在 `runtime.queue.get()` 上，但阻塞等待时绝不能持有 `runtime.lock`。
+
+consumer 的结束条件来自 queue item，不直接读取 `cancel_requested`：
+
+```text
+consumer queue.get() -> 普通 event
+  -> 这个 event 已经在 producer/cancel 线性化点之前成功提交
+  -> consumer 直接按 FIFO yield 给 backend，不再用 cancel flag 二次裁决
+
+consumer queue.get() -> cancel sentinel
+  -> runtime.close_once("cancelled")
+  -> close_once 成功才 yield completion.cancelled
+  -> 结束本轮 SSE
+
+consumer queue.get() -> completion.completed / completion.failed
+  -> runtime.close_once("completed" / "failed")
+  -> close_once 成功才 yield 对应终态
+  -> 结束本轮 SSE
+```
+
+`cancel_requested` 只服务于入队侧：producer 用它判断后续 event 能不能 commit，cancel handler 用它避免重复塞 sentinel。consumer 如果用 `cancel_requested` 直接停流，会跳过 sentinel 前已经提交的旧 event，破坏 FIFO 语义。
+
+终态事件只能发一次。cancel consumer、producer 正常完成和 producer 失败都会竞争调用 `runtime.close_once(status)`：
+
+```text
+consumer 收到 cancel sentinel
+  -> close_once("cancelled") 成功：yield completion.cancelled 并结束 SSE
+  -> close_once(...) 失败：说明 producer 已经先完成，consumer 不再发第二个终态
+
+producer 生成 completion.completed / completion.failed / completion.cancelled
+  -> close_once(status) 成功：把该 terminal event 投递给 consumer
+  -> close_once(...) 失败：说明 cancel 或其他终态已经生效，丢弃该 event 并退出
+```
+
+同一个 `completion_id` 不能同时出现 `completion.cancelled`、`completion.completed` 或 `completion.failed` 中的多个终态；谁先原子关闭 runtime，谁就是唯一结果。
+
+## 4. 虚拟文档仓库
 
 多文档语料被映射成只读 virtual document repository，设计上模仿 code agent 看项目：
 
@@ -87,7 +217,7 @@ data: {"seq":4,"type":"model_message","content":"..."}
 - raw virtual path 只用于内部索引；模型看到和传入工具的 locator 一律是 `evidence://...`。
 - `source_selectors()` 为 document/section header 和 paragraph/list/table 生成 `path_id -> 原始 DOM id` 映射，供前端把 folder evidence 定位到 header、把 block evidence 定位到具体原文块。
 
-## 4. 工具设计
+## 5. 工具设计
 
 当前只暴露四个模型工具：
 
@@ -154,7 +284,7 @@ table     -> evidence://0001.0003.0001/R001
 
 第一版不做 cell 级 selector；表格行级 `Rxxx` 足够支撑大多数 QA 回答，后续需要时再扩展 cell selector。
 
-## 5. Evidence 和过程消息规则
+## 6. Evidence 和过程消息规则
 
 QA 的证据主容器是 `model_message`，不是最终提交工具。只要 `model_message` 对文档做事实陈述，就应该在首次陈述时携带 Markdown evidence link。
 
@@ -182,7 +312,7 @@ model_message: 这里说明任一方可以终止协议，但该句本身没有�
 
 多轮时，`memory.reading_history`、`memory.evidence_notes`、`memory.prior_answers` 和 `memory.open_threads` 可以帮助模型减少重复搜索；但上一轮总结不能替代原文 evidence。新一轮如果复用旧发现，仍应引用原始 `evidence://`。
 
-## 6. HTTP API
+## 7. HTTP API
 
 当前 route 暴露：
 
@@ -240,7 +370,9 @@ POST /v1/document-qa/chat/completions/{completion_id}/cancel
 POST /v1/document-qa/chat/completions/{completion_id}/cancel
   -> processor.cancel_completion(completion_id)
   -> 如果 completion 在 _ACTIVE_COMPLETIONS 中，设置 cancel_requested=true、status=cancelling
-  -> create_completion_stream 在下一个 graph event 边界输出 completion.cancelled 并关闭 SSE
+  -> create_completion_stream 的 SSE consumer 被 cancel sentinel 唤醒
+  -> consumer 先 flush sentinel 前已提交的普通 event，再输出 completion.cancelled 并关闭 SSE
+  -> producer 若稍后从 provider 返回事件，会在 runtime 已关闭时丢弃
   -> 如果找不到 active completion，返回 status=not_found
 ```
 
@@ -250,9 +382,9 @@ POST /v1/document-qa/chat/completions/{completion_id}/cancel
 {"id": "cmp_456", "status": "cancelling"}
 ```
 
-当前取消是 cooperative cancellation，不强杀进程、线程或正在进行中的模型请求。第一版必须按单进程/单 worker 部署；如果使用多个 uvicorn worker，`/cancel` 可能打到另一个进程而找不到 `_ACTIVE_COMPLETIONS` 中的 runtime。未来需要多进程或多实例时，应把 active runtime/cancel 信号移到 Redis、队列或其他外部共享运行时。
+当前取消是本地 completion 级取消：不强杀进程、线程或正在进行中的同步 provider 请求，但会让 SSE consumer 不等 provider 下一个 chunk；consumer 会先按 FIFO 发出 cancel sentinel 前已经提交的普通 event，再用 `completion.cancelled` 收口。残留 producer 依赖有限 request timeout 回收，迟到事件会被丢弃。第一版必须按单进程/单 worker 部署；如果使用多个 uvicorn worker，`/cancel` 可能打到另一个进程而找不到 `_ACTIVE_COMPLETIONS` 中的 runtime。未来需要多进程或多实例时，应把 active runtime/cancel 信号移到 Redis、队列或其他外部共享运行时。
 
-## 7. 事件模型
+## 8. 事件模型
 
 SSE 事件按 `seq` 递增，常见类型如下：
 
@@ -306,7 +438,7 @@ impl/graph.py
 
 processor.py
   -> 对外提供 create_completion_stream / cancel_completion / run_completion_graph_stream
-  -> 管理 _ACTIVE_COMPLETIONS 内存注册表和 cooperative cancellation
+  -> 管理 _ACTIVE_COMPLETIONS 内存注册表、producer/consumer 和本地 completion 级取消
 ```
 
 ## 9. 已删除的旧语义

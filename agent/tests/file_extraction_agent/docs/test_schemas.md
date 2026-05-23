@@ -19,4 +19,5 @@ backend 传入 completion_id + documents + messages + memory
 - `test_memory_defaults_to_empty_lists`：验证 memory 默认不会共享可变列表，缺省时四类记忆都是空列表。
 - `test_completion_status_values_match_public_events`：验证 completion 状态枚举和公开事件语义一致。
 - `test_model_config_keeps_resolution_model_and_sampling_options`：验证模型配置仍保留 base URL、key、模型名、采样参数、重试和超时。
+- `test_model_config_defaults_disable_sdk_retries_for_outer_backoff`：验证模型配置默认关闭 SDK 内部重试，由外层 provider attempt 和随机指数退避统一控制。
 - `test_run_options_defaults_to_tool_budget_only`：验证运行预算默认只保留工具调用上限。

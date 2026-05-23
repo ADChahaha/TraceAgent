@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import random
+import time
 from typing import Any, Iterable
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage, message_chunk_to_message
@@ -11,6 +13,10 @@ from langgraph.graph.message import MessagesState
 from langgraph.prebuilt import ToolNode
 
 from service.file_extraction_agent.impl.html_tools import build_tools
+
+
+PROVIDER_ATTEMPT_LIMIT = 5
+PROVIDER_BACKOFF_SLOT_SECONDS = 0.25
 
 
 def build_resolution_messages(state: Any) -> list[Any]:
@@ -204,7 +210,8 @@ def _supports_bind_tools(model: Any) -> bool:
 
 def _invoke_model_message(model: Any, messages: list[Any]) -> Any:
     errors: list[tuple[str, Exception]] = []
-    for attempt in _model_call_attempts(model):
+    attempts = _model_call_attempts(model)[:PROVIDER_ATTEMPT_LIMIT]
+    for attempt_index, attempt in enumerate(attempts):
         attempt_name = _read(attempt, "name", "model_call")
         attempt_model = _read(attempt, "model", model)
         use_stream = bool(_read(attempt, "use_stream", True))
@@ -217,6 +224,8 @@ def _invoke_model_message(model: Any, messages: list[Any]) -> Any:
             return message
         except Exception as exc:
             errors.append((str(attempt_name), exc))
+            if attempt_index < len(attempts) - 1:
+                _sleep_before_next_provider_attempt(attempt_index)
     details = "; ".join(f"{name}: {type(error).__name__}: {error}" for name, error in errors)
     raise RuntimeError(f"all model call attempts failed: {details}")
 
@@ -229,6 +238,16 @@ def _model_call_attempts(model: Any) -> list[Any]:
         {"name": "stream", "model": model, "use_stream": True},
         {"name": "invoke", "model": model, "use_stream": False},
     ]
+
+
+def _sleep_before_next_provider_attempt(attempt_index: int) -> None:
+    if attempt_index >= PROVIDER_ATTEMPT_LIMIT - 1:
+        return
+    upper_slot = (2 ** max(0, attempt_index + 1)) - 1
+    slot_count = random.randint(0, upper_slot)
+    delay = slot_count * PROVIDER_BACKOFF_SLOT_SECONDS
+    if delay > 0:
+        time.sleep(delay)
 
 
 def _stream_model_message(model: Any, messages: list[Any]) -> Any:

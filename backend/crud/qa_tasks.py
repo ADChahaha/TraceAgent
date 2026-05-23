@@ -255,6 +255,37 @@ def update_turn(
     return turn
 
 
+def update_turn_status_if_current(
+    connection: sqlite3.Connection,
+    *,
+    turn_id: str,
+    current_statuses: set[str],
+    status: str,
+    now: str,
+    error_message: str | None = None,
+    completed_at: str | None = None,
+) -> dict[str, Any] | None:
+    updates: dict[str, Any] = {"status": status, "updated_at": now}
+    if error_message is not None:
+        updates["error_message"] = error_message
+    if completed_at is not None:
+        updates["completed_at"] = completed_at
+    placeholders = ", ".join("?" for _ in current_statuses)
+    assignments = ", ".join(f"{name} = ?" for name in updates)
+    cursor = connection.execute(
+        f"""
+        UPDATE qa_turns
+        SET {assignments}
+        WHERE id = ? AND status IN ({placeholders})
+        """,
+        [*updates.values(), turn_id, *sorted(current_statuses)],
+    )
+    connection.commit()
+    if cursor.rowcount == 0:
+        return None
+    return get_turn(connection, turn_id)
+
+
 def create_event(
     connection: sqlite3.Connection,
     *,
