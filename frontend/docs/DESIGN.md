@@ -25,9 +25,9 @@
   -> EventSource 遇到 error 时不由前端主动 close，交给浏览器原生重连，只有组件卸载或主动换 after_seq 时才关闭旧连接
   -> SSE agent.event(model_message) 渲染模型过程回答，保留 [label](evidence://...) inline link
   -> 连续 tool_completed/tool_failed 默认折叠成 Codex 式轻量过程行，只显示聚合计数摘要，展开后显示每个 tool
-  -> turn.completed / turn.cancelled / turn.failed 结束本轮，composer 恢复可追问
+  -> turn.completed / turn.cancelled / turn.failed 结束本轮，composer handler 恢复允许提交下一轮
   -> 用户继续追问时 POST /qa/tasks/{task_id}/inputs，并按当前 seq 重新连接 SSE 续读新事件
-  -> 用户点击运行中的暂停按钮时 POST /qa/tasks/{task_id}/cancel
+  -> 用户在运行中点击 composer 的固定主操作按钮时 POST /qa/tasks/{task_id}/cancel
 ```
 
 职责边界：
@@ -95,7 +95,7 @@ frontend/
   -> addRecentTask(created)
   -> onCreated(created) 立刻跳转详情页
   -> 后台 createTaskInput(created.task_id, question) POST /api/backend/qa/tasks/{task_id}/inputs
-  -> refreshTaskSummary(task_id) 轮询 GET /api/backend/qa/tasks/{task_id}
+  -> 任务状态和回答事件交给详情页 EventSource 同步，首页不轮询 task summary
 ```
 
 任务详情多轮 QA：
@@ -123,9 +123,10 @@ TaskDetail(task_id)
   -> 用户提交追问 createTaskInput(task_id, content)
   -> 任务详情 composer 同样使用 Enter 提交、Shift+Enter 换行
   -> 立即清空 composer，把 content 作为右侧用户消息显示，并在 assistant 左侧显示上下跳动的 Thinking
+  -> composer textarea placeholder 固定为 `Ask a follow-up question`；右下角只有一个固定主操作按钮，running/ready 状态变化不能改写输入框或主按钮 DOM/class/尺寸，只在按钮内部切换 Send/Pause icon 可见性，避免 SSE 事件让输入区闪烁
   -> eventSubscriptionKey +1，用当前 last seq 重新打开 EventSource 续读；这个动作发生在 POST /inputs 之前，避免新 turn 事件已经写入但前端仍停在旧连接
   -> 左侧 Tasks sidebar 复用首页同一套 224px 默认宽度和 resize handle，打开时保持三列布局
-  -> 用户点击暂停 cancelTask(task_id)
+  -> 用户在运行中点击固定主操作按钮 cancelTask(task_id)
 ```
 
 事件渲染规则：
@@ -140,11 +141,13 @@ TaskDetail(task_id)
 
 ```text
 summary.active_turn_id 或 stream.state=running
-  -> composer textarea 禁用
-  -> 右下角按钮显示 Pause 图标和 aria-label="Pause answer"
-  -> 点击调用 POST /qa/tasks/{task_id}/cancel
+  -> composer textarea 保持可输入，用户可以先写下一轮草稿
+  -> composer 右下角保持一个固定主操作按钮，不用 running 状态切换 disabled/aria-disabled/class 或追加第二个按钮
+  -> 同一个按钮内同时挂载 Send 和 Pause icon；空闲时显示 Send，running 时显示 Pause，只切 data-visible，不改变按钮节点和尺寸
+  -> 空闲时同一个按钮走 submit handler；空内容时 no-op，问题非空时提交追问
+  -> running 时同一个按钮走 cancel handler，调用 POST /qa/tasks/{task_id}/cancel
   -> backend 写入 cancel 事件并关闭/结束当前 turn
-  -> SSE 收到 terminal turn event 后恢复发送按钮
+  -> SSE 收到 terminal turn event 后清理运行态，稳定主按钮重新允许提交
 ```
 
 ## 4. 测试策略
@@ -162,7 +165,7 @@ API 测试
   -> 注入 fake EventSource
   -> 验证用户消息、模型消息、tool 过程和 inline evidence 渲染
   -> 验证追问复用 task_id
-  -> 验证 running 时发送按钮切换为暂停并调用 cancel
+  -> 验证 running 时固定主操作按钮调用 cancel，composer 不追加第二个按钮，并只在同一按钮内切换 Send/Pause icon 可见性
 
 代理测试
   -> 验证 multipart 原样转发

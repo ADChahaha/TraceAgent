@@ -8,7 +8,6 @@ import type { QaInputCreated, TaskCreated, TaskSummary } from "@/lib/types";
 
 type CreateTaskFn = (formData: FormData) => Promise<TaskCreated>;
 type CreateTaskInputFn = (taskId: string, content: string) => Promise<QaInputCreated>;
-type GetTaskSummaryFn = (taskId: string) => Promise<TaskSummary>;
 type ListTasksFn = () => Promise<TaskSummary[]>;
 
 const defaultCreatedTask: TaskCreated = {
@@ -24,19 +23,6 @@ const defaultCreatedTask: TaskCreated = {
   }
 };
 
-const defaultReadySummary: TaskSummary = {
-  task_id: "task-created",
-  status: "ready",
-  stage: "ready",
-  error_message: null,
-  document_count: 1,
-  active_turn_id: null,
-  stream: {
-    state: "idle",
-    last_event_seq: 8
-  }
-};
-
 const defaultInputCreated: QaInputCreated = {
   task_id: "task-created",
   turn_id: "turn-created",
@@ -47,10 +33,6 @@ const defaultInputCreated: QaInputCreated = {
 function setup(
   createTask: CreateTaskFn = jest.fn(async () => defaultCreatedTask),
   createTaskInput: CreateTaskInputFn = jest.fn(async () => defaultInputCreated),
-  getTaskSummary: GetTaskSummaryFn = jest.fn(async (taskId) => ({
-    ...defaultReadySummary,
-    task_id: taskId
-  })),
   listTasks: ListTasksFn = jest.fn(async () => []),
   options: { strict?: boolean } = {}
 ) {
@@ -59,7 +41,6 @@ function setup(
     <UploadWorkbench
       createTask={createTask}
       createTaskInput={createTaskInput}
-      getTaskSummary={getTaskSummary}
       listTasks={listTasks}
       onCreated={onCreated}
     />
@@ -68,7 +49,6 @@ function setup(
   return {
     createTask: createTask as jest.MockedFunction<CreateTaskFn>,
     createTaskInput: createTaskInput as jest.MockedFunction<CreateTaskInputFn>,
-    getTaskSummary: getTaskSummary as jest.MockedFunction<GetTaskSummaryFn>,
     listTasks: listTasks as jest.MockedFunction<ListTasksFn>,
     onCreated
   };
@@ -181,7 +161,7 @@ it("启动时从 backend 任务列表加载左侧任务栏", async () => {
     }
   ] satisfies TaskSummary[]);
 
-  setup(undefined, undefined, undefined, listTasks, { strict: true });
+  setup(undefined, undefined, listTasks, { strict: true });
 
   await waitFor(() => expect(listTasks).toHaveBeenCalled());
   const sidebar = screen.getByRole("complementary", { name: "Tasks sidebar" });
@@ -370,7 +350,7 @@ it("再次选择 PDF 会追加到已选文件而不是覆盖", async () => {
   expect(await screen.findByText("task-multi-add")).toBeInTheDocument();
 });
 
-it("创建任务后左侧任务栏先显示可提问，首轮输入完成后刷新为最新摘要", async () => {
+it("创建任务后左侧任务栏立即显示新任务，不轮询刷新摘要", async () => {
   const user = userEvent.setup();
   window.localStorage.clear();
   const created: TaskCreated = {
@@ -382,7 +362,6 @@ it("创建任务后左侧任务栏先显示可提问，首轮输入完成后刷�
     active_turn_id: null,
     stream: { state: "idle", last_event_seq: 3 }
   };
-  let resolveSummary: (value: TaskSummary) => void = () => {};
   const createTask = jest.fn(async () => created);
   const createTaskInput = jest.fn(async () => ({
     task_id: "task-queue",
@@ -390,13 +369,7 @@ it("创建任务后左侧任务栏先显示可提问，首轮输入完成后刷�
     status: "completed",
     agent_completion_id: "cmp-queue"
   }));
-  const getTaskSummary = jest.fn(
-    () =>
-      new Promise<TaskSummary>((resolve) => {
-        resolveSummary = resolve;
-      })
-  );
-  setup(createTask, createTaskInput, getTaskSummary);
+  setup(createTask, createTaskInput, jest.fn(async () => []));
 
   await user.upload(
     screen.getByLabelText("PDF file input"),
@@ -410,19 +383,7 @@ it("创建任务后左侧任务栏先显示可提问，首轮输入完成后刷�
   expect(await screen.findByText("task-queue")).toBeInTheDocument();
   expect(screen.getByText("ready / ready")).toBeInTheDocument();
   await waitFor(() => expect(createTaskInput).toHaveBeenCalledWith("task-queue", "总结这份 PDF。"));
-  await waitFor(() => expect(getTaskSummary).toHaveBeenCalledWith("task-queue"));
 
-  resolveSummary({
-    task_id: "task-queue",
-    status: "ready",
-    stage: "ready",
-    error_message: null,
-    document_count: 1,
-    active_turn_id: null,
-    stream: { state: "idle", last_event_seq: 12 }
-  });
-
-  expect(await screen.findByText("ready / ready")).toBeInTheDocument();
   expect(document.querySelector(".replay-task-route")).not.toBeInTheDocument();
   expect(document.querySelector(".replay-task-status-detail")).toBeInTheDocument();
 });

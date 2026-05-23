@@ -1,6 +1,6 @@
 # `upload-workbench.test.tsx`
 
-这组测试覆盖首页 QA 新任务入口。测试用注入的 `createTask`、`createTaskInput`、`getTaskSummary` 和 `listTasks` 隔离真实 backend，只验证首页任务栏、任务栏 resize、PDF 上传、首轮问题提交、英文 UI 文案和主题切换这些用户可见行为。
+这组测试覆盖首页 QA 新任务入口。测试用注入的 `createTask`、`createTaskInput` 和 `listTasks` 隔离真实 backend，只验证首页任务栏、任务栏 resize、PDF 上传、首轮问题提交、英文 UI 文案和主题切换这些用户可见行为。
 
 ## 测试链路
 
@@ -19,7 +19,7 @@
   -> POST /qa/tasks 创建多文档 QA task
   -> 左侧任务栏立即显示新 task，状态以英文 status / stage 呈现，并跳转详情页
   -> 后台 POST /qa/tasks/{task_id}/inputs 提交首轮问题
-  -> 用 GET /qa/tasks/{task_id} 刷新摘要
+  -> 首页不轮询 task summary，后续状态和回答事件由详情页 EventSource 同步
 ```
 
 ## 测试函数
@@ -34,5 +34,5 @@
 - `QA composer 用 Enter 提交问题，Shift Enter 保留换行`：验证首页 composer 的键盘语义，Shift+Enter 只插入换行，Enter 才创建 task 并提交包含换行的首问。
 - `没有 PDF 或问题为空时不会创建任务`：验证缺少 PDF 或空问题会用英文错误提示在前端拦截，不调用 backend。
 - `已选择的 PDF 可以逐个移除`：验证每个文件 chip 都能通过英文 remove 按钮独立移除。
-- `创建任务后左侧任务栏先显示可提问，首轮输入完成后刷新为最新摘要`：验证新 task 进入 recent tasks 后以 `ready / ready` 这类英文状态显示，并继续刷新 summary。
+- `创建任务后左侧任务栏立即显示新任务并跳转详情页`：验证新 task 进入 recent tasks 后以英文 status / stage 显示；首页不再额外轮询刷新 summary。
 - `主题切换仍在任务工作台顶部生效`：验证顶部英文主题按钮仍同步 `html[data-theme]` 和 localStorage。

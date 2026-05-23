@@ -22,7 +22,6 @@ import { toast } from "sonner";
 import {
   createTaskInput as defaultCreateTaskInput,
   createTask as defaultCreateTask,
-  getTaskSummary as defaultGetTaskSummary,
   listTasks as defaultListTasks
 } from "@/lib/api";
 import {
@@ -53,19 +52,13 @@ import { Textarea } from "@/components/ui/textarea";
 export interface UploadWorkbenchProps {
   createTask?: (formData: FormData) => Promise<TaskCreated>;
   createTaskInput?: (taskId: string, content: string) => Promise<unknown>;
-  getTaskSummary?: (taskId: string) => Promise<TaskSummary>;
   listTasks?: () => Promise<TaskSummary[]>;
   onCreated?: (task: TaskCreated) => void;
 }
 
-const IDLE_STATUSES = new Set(["ready", "failed"]);
-const POLL_INTERVAL_MS = 1500;
-const MAX_POLL_ATTEMPTS = 120;
-
 export function UploadWorkbench({
   createTask = defaultCreateTask,
   createTaskInput = defaultCreateTaskInput,
-  getTaskSummary = defaultGetTaskSummary,
   listTasks = defaultListTasks,
   onCreated
 }: UploadWorkbenchProps) {
@@ -82,7 +75,6 @@ export function UploadWorkbench({
   const [isLeftPanelOpen, setIsLeftPanelOpen] = React.useState(true);
   const { leftPanelWidth, resizeLeftPanelByKeyboard, startLeftPanelResize } = useLeftSidebarResize();
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
-  const pollTimeouts = React.useRef<ReturnType<typeof setTimeout>[]>([]);
   const mounted = React.useRef(true);
 
   React.useEffect(() => {
@@ -91,13 +83,8 @@ export function UploadWorkbench({
 
   React.useEffect(() => {
     mounted.current = true;
-    const trackedTimeouts = pollTimeouts.current;
     return () => {
       mounted.current = false;
-      for (const timeout of trackedTimeouts) {
-        clearTimeout(timeout);
-      }
-      trackedTimeouts.length = 0;
     };
   }, []);
 
@@ -116,32 +103,6 @@ export function UploadWorkbench({
       cancelled = true;
     };
   }, [listTasks]);
-
-  const refreshTaskSummary = React.useCallback(
-    async (taskId: string) => {
-      for (let attempt = 0; attempt <= MAX_POLL_ATTEMPTS; attempt += 1) {
-        try {
-          const summary = await getTaskSummary(taskId);
-          if (!mounted.current) {
-            return;
-          }
-          updateRecentTask(summary);
-          if (isTaskIdle(summary)) {
-            return;
-          }
-        } catch {
-          if (!mounted.current) {
-            return;
-          }
-        }
-
-        if (attempt < MAX_POLL_ATTEMPTS) {
-          await waitForPollInterval(pollTimeouts);
-        }
-      }
-    },
-    [getTaskSummary]
-  );
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -181,7 +142,6 @@ export function UploadWorkbench({
         updateRecentTask({ ...created, status: "failed", stage: "done", error_message: message });
         toast.error("Failed to submit the first question", { description: message });
       });
-      void refreshTaskSummary(created.task_id);
       toast.success("Task created", {
         description: `${created.task_id} / ${created.status}`
       });
@@ -407,7 +367,7 @@ function ThemeModeButton({
 }
 
 function isTaskIdle(task: Pick<RecentTask, "status" | "stream" | "active_turn_id"> | TaskSummary): boolean {
-  return IDLE_STATUSES.has(task.status) && task.stream?.state !== "running" && !task.active_turn_id;
+  return (task.status === "ready" || task.status === "failed") && task.stream?.state !== "running" && !task.active_turn_id;
 }
 
 function getTaskResultLabel(task: RecentTask): string {
@@ -440,19 +400,4 @@ function mergeSelectedFiles(currentFiles: File[], selectedFiles: File[]): File[]
 
 function getFileSignature(file: File): string {
   return `${file.name}::${file.size}::${file.lastModified}::${file.type}`;
-}
-
-function waitForPollInterval(
-  pollTimeouts: React.MutableRefObject<ReturnType<typeof setTimeout>[]>
-): Promise<void> {
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      const index = pollTimeouts.current.indexOf(timeout);
-      if (index >= 0) {
-        pollTimeouts.current.splice(index, 1);
-      }
-      resolve();
-    }, POLL_INTERVAL_MS);
-    pollTimeouts.current.push(timeout);
-  });
 }

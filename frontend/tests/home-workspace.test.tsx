@@ -13,14 +13,12 @@ jest.mock("next/navigation", () => ({
 jest.mock("@/lib/api", () => ({
   createTask: jest.fn(),
   createTaskInput: jest.fn(),
-  getTaskSummary: jest.fn(),
   listTasks: jest.fn()
 }));
 
 const api = jest.requireMock("@/lib/api") as {
   createTask: jest.Mock<Promise<TaskCreated>, [FormData]>;
   createTaskInput: jest.Mock<Promise<QaInputCreated>, [string, string]>;
-  getTaskSummary: jest.Mock<Promise<TaskSummary>, [string]>;
   listTasks: jest.Mock<Promise<TaskSummary[]>, []>;
 };
 
@@ -29,7 +27,6 @@ beforeEach(() => {
   push.mockClear();
   api.createTask.mockReset();
   api.createTaskInput.mockReset();
-  api.getTaskSummary.mockReset();
   api.listTasks.mockReset();
   api.createTask.mockResolvedValue({
     task_id: "task_jump_target",
@@ -45,15 +42,6 @@ beforeEach(() => {
     turn_id: "turn_jump_target",
     status: "completed",
     agent_completion_id: "cmp_jump_target"
-  });
-  api.getTaskSummary.mockResolvedValue({
-    task_id: "task_jump_target",
-    status: "ready",
-    stage: "ready",
-    error_message: null,
-    document_count: 1,
-    active_turn_id: null,
-    stream: { state: "idle", last_event_seq: 8 }
   });
   api.listTasks.mockResolvedValue([]);
 });

@@ -11,7 +11,6 @@ import {
   X,
   Eye,
   FileSearch,
-  Loader2,
   Pause,
   Plus,
   Search,
@@ -46,7 +45,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MarkdownEvidence } from "@/components/markdown-evidence";
 
-const DETAIL_REFRESH_INTERVAL_MS = 1500;
 const TASK_EVENT_NAMES = [
   "message",
   "task.created",
@@ -146,6 +144,9 @@ export function TaskDetail({
   const [activeEvidenceSource, setActiveEvidenceSource] = React.useState<ActiveEvidenceSource | null>(null);
   const evidenceOpenKeyRef = React.useRef(0);
   const eventCursorRef = React.useRef({ taskId, seq: 0 });
+  const composerValueRef = React.useRef("");
+  const isRunningRef = React.useRef(false);
+  const isCancellingRef = React.useRef(false);
 
   const refresh = React.useCallback(async () => {
     setError(null);
@@ -195,6 +196,11 @@ export function TaskDetail({
   const summary = detail?.summary ?? initialSummary;
   const isRunning = isTaskRunning(summary) || isSubmittingInput || isCancelling;
 
+  React.useEffect(() => {
+    isRunningRef.current = isRunning;
+    isCancellingRef.current = isCancelling;
+  }, [isCancelling, isRunning]);
+
   const openEvidence = React.useCallback((uri: string, label: string) => {
     const source = findEvidenceSource(summary, uri, label);
     if (!source) {
@@ -226,6 +232,7 @@ export function TaskDetail({
       if (event.type === "message.created") {
         setOptimisticEvents((current) => current.filter((item) => !isSameMessageEvent(item, event)));
       }
+      isRunningRef.current = !(isTerminalTurnEvent(event) || event.status === "ready");
       setDetail((current) =>
         current
           ? {
@@ -235,6 +242,7 @@ export function TaskDetail({
           : current
       );
       if (isTerminalTurnEvent(event)) {
+        isCancellingRef.current = false;
         setIsSubmittingInput(false);
         setIsCancelling(false);
         void refresh();
@@ -251,21 +259,14 @@ export function TaskDetail({
     };
   }, [createTaskEventSource, eventSubscriptionKey, refresh, taskId]);
 
-  React.useEffect(() => {
-    if (!isRunning) {
-      return;
-    }
-    const interval = window.setInterval(() => {
-      void refresh();
-    }, DETAIL_REFRESH_INTERVAL_MS);
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [isRunning, refresh]);
+  const handleComposerChange = React.useCallback((value: string) => {
+    composerValueRef.current = value;
+    setComposerValue(value);
+  }, []);
 
-  async function handleSubmitQuestion() {
-    const content = composerValue.trim();
-    if (!content || isRunning) {
+  const handleSubmitQuestion = React.useCallback(async () => {
+    const content = composerValueRef.current.trim();
+    if (!content || isRunningRef.current) {
       return;
     }
     setError(null);
@@ -275,6 +276,8 @@ export function TaskDetail({
       afterSeq: eventCursorRef.current.seq,
     });
     setOptimisticEvents((current) => appendTaskEvent(current, optimisticEvent));
+    composerValueRef.current = "";
+    isRunningRef.current = true;
     setComposerValue("");
     setIsSubmittingInput(true);
     setEventSubscriptionKey((current) => current + 1);
@@ -283,23 +286,26 @@ export function TaskDetail({
       void refresh();
     } catch (inputError) {
       setError(inputError instanceof Error ? inputError.message : "Failed to submit question");
+      isRunningRef.current = false;
       setIsSubmittingInput(false);
     }
-  }
+  }, [createTaskInput, refresh, taskId]);
 
-  function handleComposerKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (!shouldSubmitComposerOnKeyDown(event) || isRunning) {
+  const handleComposerKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (!shouldSubmitComposerOnKeyDown(event)) {
       return;
     }
     event.preventDefault();
     void handleSubmitQuestion();
-  }
+  }, [handleSubmitQuestion]);
 
-  async function handleCancel() {
-    if (!isRunning) {
+  const handleCancel = React.useCallback(async () => {
+    if (!isRunningRef.current || isCancellingRef.current) {
       return;
     }
     setError(null);
+    isCancellingRef.current = true;
+    isRunningRef.current = true;
     setIsCancelling(true);
     try {
       await cancelTask(taskId);
@@ -307,9 +313,18 @@ export function TaskDetail({
       void refresh();
     } catch (cancelError) {
       setError(cancelError instanceof Error ? cancelError.message : "Failed to cancel");
+      isCancellingRef.current = false;
       setIsCancelling(false);
     }
-  }
+  }, [cancelTask, refresh, taskId]);
+
+  const handleComposerPrimaryAction = React.useCallback(() => {
+    if (isRunningRef.current) {
+      void handleCancel();
+      return;
+    }
+    void handleSubmitQuestion();
+  }, [handleCancel, handleSubmitQuestion]);
 
   const visibleEvents = React.useMemo(() => mergeVisibleEvents(events, optimisticEvents), [events, optimisticEvents]);
   const streamItems = React.useMemo(() => withPendingThinkingItem(buildQaStreamItems(visibleEvents), isRunning), [isRunning, visibleEvents]);
@@ -343,12 +358,11 @@ export function TaskDetail({
           activeEvidenceSource={activeEvidenceSource}
           composerValue={composerValue}
           isRunning={isRunning}
-          isCancelling={isCancelling}
           onOpenEvidence={openEvidence}
-          onComposerChange={setComposerValue}
+          onComposerChange={handleComposerChange}
           onComposerKeyDown={handleComposerKeyDown}
           onSubmitQuestion={handleSubmitQuestion}
-          onCancel={handleCancel}
+          onComposerPrimaryAction={handleComposerPrimaryAction}
         />
       ) : null}
     </main>
@@ -363,12 +377,11 @@ function QaWorkspace({
   activeEvidenceSource,
   composerValue,
   isRunning,
-  isCancelling,
   onOpenEvidence,
   onComposerChange,
   onComposerKeyDown,
   onSubmitQuestion,
-  onCancel,
+  onComposerPrimaryAction,
 }: {
   taskId: string;
   summary?: TaskSummary | null;
@@ -377,12 +390,11 @@ function QaWorkspace({
   activeEvidenceSource: ActiveEvidenceSource | null;
   composerValue: string;
   isRunning: boolean;
-  isCancelling: boolean;
   onOpenEvidence: (uri: string, label: string) => void;
   onComposerChange: (value: string) => void;
   onComposerKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   onSubmitQuestion: () => void;
-  onCancel: () => void;
+  onComposerPrimaryAction: () => void;
 }) {
   const [isLeftPanelOpen, setIsLeftPanelOpen] = React.useState(true);
   const [closedReviewOpenKey, setClosedReviewOpenKey] = React.useState<number | null>(null);
@@ -473,46 +485,14 @@ function QaWorkspace({
                 </div>
               </div>
             </div>
-            <form
-              className="replay-agent-composer"
-              aria-label="QA composer"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void onSubmitQuestion();
-              }}
-            >
-              <div className="replay-agent-composer-balance-row">
-                <div className="replay-agent-composer-frame">
-                  <span className="replay-agent-balance-spacer" data-agent-balance-spacer="left" data-active="true" aria-hidden="true" />
-                  <div className="replay-agent-composer-readable-column">
-                    <textarea
-                      aria-label="QA question input"
-                      value={composerValue}
-                      disabled={isRunning}
-                      onChange={(event) => onComposerChange(event.currentTarget.value)}
-                      onKeyDown={onComposerKeyDown}
-                      placeholder={isRunning ? "Agent is answering" : "Ask a follow-up question"}
-                      className="replay-agent-composer-input"
-                    />
-                    <div className="replay-agent-composer-actions">
-                      <Button type="button" variant="ghost" size="icon" aria-label="Add file" disabled>
-                        <Plus className="h-4 w-4" aria-hidden="true" />
-                      </Button>
-                      {isRunning ? (
-                        <Button type="button" size="icon" aria-label="Pause answer" title="Pause answer" onClick={onCancel} disabled={isCancelling}>
-                          {isCancelling ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Pause className="h-4 w-4" aria-hidden="true" />}
-                        </Button>
-                      ) : (
-                        <Button type="submit" size="icon" aria-label="Send question" title="Send question" disabled={!composerValue.trim()}>
-                          <SendHorizonal className="h-4 w-4" aria-hidden="true" />
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                  <span className="replay-agent-balance-spacer" data-agent-balance-spacer="right" data-active="true" aria-hidden="true" />
-                </div>
-              </div>
-            </form>
+            <QaComposer
+              composerValue={composerValue}
+              isRunning={isRunning}
+              onComposerChange={onComposerChange}
+              onComposerKeyDown={onComposerKeyDown}
+              onSubmitQuestion={onSubmitQuestion}
+              onComposerPrimaryAction={onComposerPrimaryAction}
+            />
           </div>
         </section>
         {isVisibleRightPanelOpen ? (
@@ -544,6 +524,67 @@ function QaWorkspace({
     </section>
   );
 }
+
+const QaComposer = React.memo(function QaComposer({
+  composerValue,
+  isRunning,
+  onComposerChange,
+  onComposerKeyDown,
+  onSubmitQuestion,
+  onComposerPrimaryAction,
+}: {
+  composerValue: string;
+  isRunning: boolean;
+  onComposerChange: (value: string) => void;
+  onComposerKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
+  onSubmitQuestion: () => void;
+  onComposerPrimaryAction: () => void;
+}) {
+  return (
+    <form
+      className="replay-agent-composer"
+      aria-label="QA composer"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void onSubmitQuestion();
+      }}
+    >
+      <div className="replay-agent-composer-balance-row">
+        <div className="replay-agent-composer-frame">
+          <span className="replay-agent-balance-spacer" data-agent-balance-spacer="left" data-active="true" aria-hidden="true" />
+          <div className="replay-agent-composer-readable-column">
+            <textarea
+              aria-label="QA question input"
+              value={composerValue}
+              onChange={(event) => onComposerChange(event.currentTarget.value)}
+              onKeyDown={onComposerKeyDown}
+              placeholder="Ask a follow-up question"
+              className="replay-agent-composer-input"
+            />
+            <div className="replay-agent-composer-actions">
+              <Button type="button" variant="ghost" size="icon" aria-label="Add file" disabled>
+                <Plus className="h-4 w-4" aria-hidden="true" />
+              </Button>
+              <Button
+                type="button"
+                size="icon"
+                aria-label="Submit or pause answer"
+                title="Submit or pause answer"
+                onClick={onComposerPrimaryAction}
+              >
+                <span className="replay-agent-composer-action-icon-shell" aria-hidden="true">
+                  <SendHorizonal className="replay-agent-composer-action-icon h-4 w-4" data-visible={isRunning ? "false" : "true"} aria-hidden="true" />
+                  <Pause className="replay-agent-composer-action-icon h-4 w-4" data-visible={isRunning ? "true" : "false"} aria-hidden="true" />
+                </span>
+              </Button>
+            </div>
+          </div>
+          <span className="replay-agent-balance-spacer" data-agent-balance-spacer="right" data-active="true" aria-hidden="true" />
+        </div>
+      </div>
+    </form>
+  );
+});
 
 function TaskSidebar({
   tasks,

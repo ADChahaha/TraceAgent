@@ -1364,6 +1364,26 @@ html[data-theme="dark"] .home-task-composer {
   pointer-events: auto;
 }
 
+.replay-agent-composer-action-icon-shell {
+  position: relative;
+  display: inline-grid;
+  width: 1rem;
+  height: 1rem;
+  place-items: center;
+}
+
+.replay-agent-composer-action-icon {
+  grid-area: 1 / 1;
+}
+
+.replay-agent-composer-action-icon[data-visible="false"] {
+  opacity: 0;
+}
+
+.replay-agent-composer-action-icon[data-visible="true"] {
+  opacity: 1;
+}
+
 .replay-evidence-link {
   display: inline;
   border-radius: 4px;

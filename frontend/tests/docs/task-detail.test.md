@@ -20,14 +20,15 @@
   -> 如果 display_html 自带 page-like 纸张框，前端会在 iframe 里把 page 背景、阴影和内边距压平，只保留正文排版
   -> 右侧 review panel 用独立 resize separator 调整宽度，Agent 对话列按当前 Agent slot 宽度计算中心列和左右 blank，不能用 viewport 或侧栏宽度额外偏移内容列
   -> agent.event(type=tool_completed/tool_failed) 变成 Codex 式轻量可折叠工具过程行，摘要按钮带开关箭头，展开明细和摘要左边缘对齐；tool 文案只显示动作和内容类型，不展示具体 evidence/path/locator
-  -> turn.completed / turn.cancelled / turn.failed 让 composer 从暂停按钮恢复成发送按钮
+  -> turn.completed / turn.cancelled / turn.failed 清理运行态，让稳定的 composer handler 重新允许提交下一轮
   -> 用户追问时 POST /qa/tasks/{task_id}/inputs
   -> 追问 composer Enter 直接提交，Shift+Enter 在问题里保留换行
   -> 追问提交后先插入 optimistic 用户消息、清空 composer，并在 assistant 侧追加 Codex 式上下跳动 Thinking
   -> 重复提交相同文本时，只有 optimistic 和对应 backend 确认会合并，不会吞掉历史里同内容的用户消息
   -> 追问提交后立刻按当前 seq 重新连接 SSE，不等待 `/inputs` 返回；EventSource error 不主动 close，交给浏览器自动重连
   -> 左侧任务栏默认宽度是 224px，可通过 resize separator 拖拽或键盘调整
-  -> 运行中按钮从 `Send question` 切换为 `Pause answer`，点击后 POST /qa/tasks/{task_id}/cancel
+  -> 运行中不启动定时轮询刷新 summary；状态变化由 SSE 事件驱动，终态事件后只做一次详情刷新
+  -> 运行中 textarea 保持可输入以保留下一轮草稿，placeholder 不随 running 状态改写；composer 右下角只有一个固定主操作按钮，running/ready 不会追加第二个按钮，也不会改写主按钮 DOM、属性、class 和尺寸；空闲时同一个按钮显示 Send 并提交，running 时同一个按钮显示 Pause 并 POST /qa/tasks/{task_id}/cancel
 ```
 
 ## 测试函数
@@ -45,13 +46,16 @@
 - `表格 row evidence 会定位到具体表格行而不是整张表`：验证 `evidence://.../R001` 会优先高亮 table 内对应数据行 `<tr>`，而不是只高亮 `source_selectors` 指向的父 table。
 - `任务详情不显示 Agent 面板内部标题栏`：验证中间 Agent 面板只保留对话流，不再显示 `Document QA` 和内部 `ready/running` 小状态。
 - `任务详情左侧任务栏默认宽度和首页一致，并支持键盘调整`：验证详情页任务栏和首页一样默认 224px，范围是 176-360px，并能通过键盘和拖拽调整。
-- `任务详情会显示工具阅读过程并在 turn 完成后恢复可追问状态`：验证工具事件显示为阅读过程，终态 turn 事件会让按钮回到 `Send question`。
+- `任务详情会显示工具阅读过程并在 turn 完成后恢复可追问状态`：验证工具事件显示为阅读过程，终态 turn 事件后稳定主按钮仍可作为下一轮入口。
+- `运行中任务详情不启动定时轮询刷新 summary`：验证 active turn 期间详情页不会启动 `setInterval` 反复 GET summary，避免刷新打断用户输入。
+- `运行中的 SSE 更新不会禁用正在输入的追问草稿`：验证 SSE 把 task 更新为 running 时，textarea 仍保持可编辑且保留当前草稿。
+- `运行状态变化不会改变 composer 单按钮结构和按钮外观`：验证 SSE 事件切到 running 时输入框 placeholder 保持稳定，composer 不出现 `Send question` / `Pause answer` 两个 sibling，只保留同一个固定主按钮，且不改写 `disabled`、`aria-disabled` 或 class；按钮内 Send/Pause icon 都常驻，只切 `data-visible`。
 - `追问会复用同一个 task 提交下一轮输入`：验证底部 composer 用同一个 `task_id` 调 `/inputs`，提交后立即清空英文输入框并把用户消息推到对话流上方。
 - `追问 composer 用 Enter 提交问题，Shift Enter 保留换行`：验证任务详情 composer 的键盘语义，Shift+Enter 只插入换行，Enter 才提交多行追问。
-- `追问提交后会立即显示重复用户消息并追加 Thinking 状态`：验证用户再次提交与历史相同的问题时，新用户消息不会被去重吞掉，并且 assistant 侧立即显示 `Thinking` 和暂停按钮。
+- `追问提交后会立即显示重复用户消息并追加 Thinking 状态`：验证用户再次提交与历史相同的问题时，新用户消息不会被去重吞掉，并且 assistant 侧立即显示 `Thinking`，主操作按钮保持稳定。
 - `追问提交后会立即按当前 seq 重新连接 SSE，不等待输入请求返回`：验证提交追问后前端马上用当前事件游标重建 EventSource，避免必须刷新页面才看到新 turn 事件。
 - `SSE error 不主动关闭事件源，避免空闲连接断开后只能刷新恢复`：验证 EventSource 报错时前端不调用 `close()`，保留浏览器原生自动重连能力。
 - `Thinking 使用 Codex 式跳动指示器，不渲染问号或 spinner`：验证运行中的 assistant 占位使用上下跳动点，不显示问号或旋转加载图标。
 - `QA 对话使用左右布局，用户消息在右侧，assistant 消息在左侧且不显示角色标签`：验证消息通过位置区分说话方，不在气泡里显示 `You` 或 `AI`。
 - `连续工具事件会用 Codex 式轻量过程行默认折叠，并允许展开查看每个 tool`：验证连续工具调用默认只显示聚合计数摘要，摘要不写失败状态，摘要按钮有开关箭头，展开后只显示 `Viewed outline`、`Read paragraph`、`Inspected table row` 这类动作和内容类型，不泄露具体 path/evidence；带 locator 的 read/inspect 行可点击打开右侧 review，`inspect` 使用独立图标，同一组追加新 tool 时保持已展开状态。
-- `运行中发送按钮会切换为暂停按钮并调用 cancel`：验证 active turn 时按钮显示 `Pause answer`，点击调用 cancel API。
+- `运行中点击稳定单按钮会调用 cancel`：验证 active turn 时固定主操作按钮点击会调用 cancel API。

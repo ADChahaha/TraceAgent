@@ -708,7 +708,7 @@ it("任务详情会显示工具阅读过程并在 turn 完成后恢复可追问�
   const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
   renderTaskDetail({ ...detailData, summary: runningSummary }, { createTaskEventSource });
 
-  expect(await screen.findByRole("button", { name: "Pause answer" })).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "Submit or pause answer" })).toBeInTheDocument();
   act(() => {
     fakeEventSource.emitEvent(
       "agent.event",
@@ -741,7 +741,118 @@ it("任务详情会显示工具阅读过程并在 turn 完成后恢复可追问�
   });
 
   expect(await screen.findByText("Searched termination")).toBeInTheDocument();
-  expect(await screen.findByRole("button", { name: "Send question" })).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "Submit or pause answer" })).toBeInTheDocument();
+});
+
+it("运行中任务详情不启动定时轮询刷新 summary", async () => {
+  const setIntervalSpy = jest.spyOn(window, "setInterval");
+
+  renderTaskDetail({ ...detailData, summary: runningSummary });
+
+  expect(await screen.findByRole("button", { name: "Submit or pause answer" })).toBeInTheDocument();
+  expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 1500);
+});
+
+it("运行中的 SSE 更新不会禁用正在输入的追问草稿", async () => {
+  const user = userEvent.setup();
+  const fakeEventSource = new FakeEventSource();
+  const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
+  renderTaskDetail(detailData, { createTaskEventSource });
+
+  await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledWith("qa_task_001", 0));
+  const input = await screen.findByLabelText("QA question input");
+  await user.type(input, "下一轮草稿");
+  expect(input).toHaveValue("下一轮草稿");
+  expect(input).not.toBeDisabled();
+
+  act(() => {
+    fakeEventSource.emitEvent(
+      "agent.event",
+      taskEvent({
+        seq: 9,
+        type: "agent.event",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_active",
+        payload: {
+          agent: "file_extraction_agent",
+          type: "tool_completed",
+          tool: "grep",
+          args: { query: "notice" },
+          result: { ok: true }
+        }
+      })
+    );
+  });
+
+  expect(await screen.findByRole("button", { name: "Submit or pause answer" })).toBeInTheDocument();
+  expect(input).toHaveValue("下一轮草稿");
+  expect(input).not.toBeDisabled();
+});
+
+it("运行状态变化不会改变 composer 单按钮结构和按钮外观", async () => {
+  const user = userEvent.setup();
+  const fakeEventSource = new FakeEventSource();
+  const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
+  const { injectedCancelTask, injectedCreateTaskInput } = renderTaskDetail(detailData, { createTaskEventSource });
+
+  await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledWith("qa_task_001", 0));
+  const input = await screen.findByLabelText("QA question input");
+  await user.type(input, "下一轮草稿");
+  const composer = screen.getByRole("form", { name: "QA composer" });
+  const actionButton = within(composer).getByRole("button", { name: "Submit or pause answer" });
+  expect(input).toHaveValue("下一轮草稿");
+  expect(input).toHaveAttribute("placeholder", "Ask a follow-up question");
+  expect(actionButton).not.toBeDisabled();
+  expect(actionButton).not.toHaveAttribute("aria-disabled");
+  expect(within(composer).queryByRole("button", { name: "Send question" })).not.toBeInTheDocument();
+  expect(within(composer).queryByRole("button", { name: "Pause answer" })).not.toBeInTheDocument();
+  expect(within(composer).getAllByRole("button").filter((button) => !button.hasAttribute("disabled"))).toEqual([actionButton]);
+  const sendIcon = actionButton.querySelector(".lucide-send-horizontal");
+  const pauseIcon = actionButton.querySelector(".lucide-pause");
+  expect(sendIcon).toHaveAttribute("data-visible", "true");
+  expect(pauseIcon).toHaveAttribute("data-visible", "false");
+  expect(injectedCancelTask).not.toHaveBeenCalled();
+  const actionClassName = actionButton.getAttribute("class");
+  const iconShellHtmlBefore = actionButton.querySelector(".replay-agent-composer-action-icon-shell")?.innerHTML ?? "";
+
+  act(() => {
+    fakeEventSource.emitEvent(
+      "agent.event",
+      taskEvent({
+        seq: 9,
+        type: "agent.event",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_active",
+        payload: {
+          agent: "file_extraction_agent",
+          type: "tool_completed",
+          tool: "grep",
+          args: { query: "notice" },
+          result: { ok: true }
+        }
+      })
+    );
+  });
+
+  expect(input).toHaveAttribute("placeholder", "Ask a follow-up question");
+  expect(input).toHaveValue("下一轮草稿");
+  expect(within(composer).getByRole("button", { name: "Submit or pause answer" })).toBe(actionButton);
+  expect(within(composer).queryByRole("button", { name: "Send question" })).not.toBeInTheDocument();
+  expect(within(composer).queryByRole("button", { name: "Pause answer" })).not.toBeInTheDocument();
+  expect(actionButton).not.toBeDisabled();
+  expect(actionButton).not.toHaveAttribute("aria-disabled");
+  expect(actionButton).toHaveAttribute("class", actionClassName);
+  expect(within(composer).getAllByRole("button").filter((button) => !button.hasAttribute("disabled"))).toEqual([actionButton]);
+  expect(sendIcon).toHaveAttribute("data-visible", "false");
+  expect(pauseIcon).toHaveAttribute("data-visible", "true");
+  expect(actionButton.querySelectorAll(".replay-agent-composer-action-icon")).toHaveLength(2);
+  expect(actionButton.querySelector(".replay-agent-composer-action-icon-shell")?.innerHTML).not.toBe(iconShellHtmlBefore);
+
+  await user.click(actionButton);
+  expect(injectedCreateTaskInput).not.toHaveBeenCalled();
+  expect(injectedCancelTask).toHaveBeenCalledWith("qa_task_001");
 });
 
 it("追问会复用同一个 task 提交下一轮输入", async () => {
@@ -756,7 +867,7 @@ it("追问会复用同一个 task 提交下一轮输入", async () => {
   const { injectedCreateTaskInput } = renderTaskDetail(detailData, { createTaskInput });
 
   await user.type(await screen.findByLabelText("QA question input"), "通知期限是多少？");
-  await user.click(screen.getByRole("button", { name: "Send question" }));
+  await user.click(screen.getByRole("button", { name: "Submit or pause answer" }));
 
   await waitFor(() =>
     expect(injectedCreateTaskInput).toHaveBeenCalledWith("qa_task_001", "通知期限是多少？")
@@ -822,13 +933,13 @@ it("追问提交后会立即显示重复用户消息并追加 Thinking 状态", 
   });
 
   await user.type(await screen.findByLabelText("QA question input"), "通知期限是多少？");
-  await user.click(screen.getByRole("button", { name: "Send question" }));
+  await user.click(screen.getByRole("button", { name: "Submit or pause answer" }));
 
   await waitFor(() => expect(createTaskInput).toHaveBeenCalledWith("qa_task_001", "通知期限是多少？"));
   const qaStream = await screen.findByLabelText("QA conversation and reading process");
   expect(within(qaStream).getAllByText("通知期限是多少？")).toHaveLength(2);
   expect(within(qaStream).getByText("Thinking")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Pause answer" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Submit or pause answer" })).toBeInTheDocument();
 });
 
 it("追问提交后会立即按当前 seq 重新连接 SSE，不等待输入请求返回", async () => {
@@ -863,7 +974,7 @@ it("追问提交后会立即按当前 seq 重新连接 SSE，不等待输入请�
   });
 
   await user.type(await screen.findByLabelText("QA question input"), "下一轮问题");
-  await user.click(screen.getByRole("button", { name: "Send question" }));
+  await user.click(screen.getByRole("button", { name: "Submit or pause answer" }));
 
   await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledTimes(2));
   expect(createTaskEventSource).toHaveBeenLastCalledWith("qa_task_001", 4);
@@ -893,7 +1004,7 @@ it("Thinking 使用 Codex 式跳动指示器，不渲染问号或 spinner", asyn
   renderTaskDetail(detailData, { createTaskInput });
 
   await user.type(await screen.findByLabelText("QA question input"), "请继续");
-  await user.click(screen.getByRole("button", { name: "Send question" }));
+  await user.click(screen.getByRole("button", { name: "Submit or pause answer" }));
 
   const thinking = await screen.findByLabelText("Assistant is thinking");
   expect(within(thinking).getByText("Thinking")).toBeInTheDocument();
@@ -1078,11 +1189,11 @@ it("连续工具事件会用 Codex 式轻量过程行默认折叠，并允许展
   expect(screen.getByLabelText("tool tree")).toBeInTheDocument();
 });
 
-it("运行中发送按钮会切换为暂停按钮并调用 cancel", async () => {
+it("运行中点击稳定单按钮会调用 cancel", async () => {
   const user = userEvent.setup();
   const { injectedCancelTask } = renderTaskDetail({ ...detailData, summary: runningSummary });
 
-  await user.click(await screen.findByRole("button", { name: "Pause answer" }));
+  await user.click(await screen.findByRole("button", { name: "Submit or pause answer" }));
 
   await waitFor(() => expect(injectedCancelTask).toHaveBeenCalledWith("qa_task_001"));
 });
