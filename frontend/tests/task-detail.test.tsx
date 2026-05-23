@@ -1145,7 +1145,12 @@ it("连续工具事件会用 Codex 式轻量过程行默认折叠，并允许展
   await user.click(groupToggle);
 
   expect(await screen.findByRole("button", { name: "Collapse tool activity" })).toHaveAttribute("aria-expanded", "true");
-  expect(await screen.findAllByLabelText("tool grep")).toHaveLength(2);
+  const grepTools = await screen.findAllByLabelText("tool grep");
+  expect(grepTools).toHaveLength(2);
+  expect(grepTools[0]).toHaveClass("replay-agent-tool-line");
+  expect(grepTools[1]).toHaveClass("replay-agent-tool-line");
+  expect(grepTools[0]).not.toHaveClass("is-failed");
+  expect(grepTools[1]).not.toHaveClass("is-failed");
   const readTool = screen.getByRole("button", { name: "tool read" });
   const inspectTool = screen.getByLabelText("tool inspect");
   expect(within(readTool).getByText("Read paragraph")).toBeInTheDocument();

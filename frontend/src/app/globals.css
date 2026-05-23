@@ -1174,10 +1174,6 @@ html[data-theme="dark"] .home-task-composer {
   outline: none;
 }
 
-.replay-agent-tool-line.is-failed {
-  color: color-mix(in oklch, var(--destructive) 70%, var(--muted-foreground));
-}
-
 .replay-agent-tool-line.is-read-tool .replay-agent-tool-icon {
   color: var(--replay-accent);
 }

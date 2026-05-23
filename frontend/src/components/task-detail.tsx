@@ -677,7 +677,7 @@ function QaStreamRow({ item, onOpenEvidence }: { item: QaStreamItem; onOpenEvide
   }
   if (item.kind === "tool") {
     return (
-      <div className={item.ok ? "replay-agent-turn qa-tool-turn" : "replay-agent-turn qa-tool-turn is-failed"}>
+      <div className="replay-agent-turn qa-tool-turn">
         <QaToolLine item={item} onOpenEvidence={onOpenEvidence} />
       </div>
     );
@@ -736,7 +736,7 @@ function QaToolLine({ item, onOpenEvidence }: { item: Extract<QaStreamItem, { ki
     return (
       <button
         type="button"
-        className={item.ok ? "replay-agent-tool-line" : "replay-agent-tool-line is-failed"}
+        className="replay-agent-tool-line"
         aria-label={`tool ${item.toolName}`}
         onClick={() => onOpenEvidence(item.evidenceUri ?? "", item.label)}
       >
@@ -746,7 +746,7 @@ function QaToolLine({ item, onOpenEvidence }: { item: Extract<QaStreamItem, { ki
     );
   }
   return (
-    <div className={item.ok ? "replay-agent-tool-line" : "replay-agent-tool-line is-failed"} aria-label={`tool ${item.toolName}`}>
+    <div className="replay-agent-tool-line" aria-label={`tool ${item.toolName}`}>
       <QaToolIcon toolName={item.toolName} />
       <span className="replay-agent-tool-summary">{item.label}</span>
     </div>

@@ -19,7 +19,7 @@
   -> 同一源文档内切换 evidence 时复用 iframe srcDoc，只在 iframe DOM 内移动 current marker 并 smooth scroll 到新目标
   -> 如果 display_html 自带 page-like 纸张框，前端会在 iframe 里把 page 背景、阴影和内边距压平，只保留正文排版
   -> 右侧 review panel 用独立 resize separator 调整宽度，Agent 对话列按当前 Agent slot 宽度计算中心列和左右 blank，不能用 viewport 或侧栏宽度额外偏移内容列
-  -> agent.event(type=tool_completed/tool_failed) 变成 Codex 式轻量可折叠工具过程行，摘要按钮带开关箭头，展开明细和摘要左边缘对齐；tool 文案只显示动作和内容类型，不展示具体 evidence/path/locator
+  -> agent.event(type=tool_completed/tool_failed) 变成 Codex 式轻量可折叠工具过程行，摘要按钮带开关箭头，展开明细和摘要左边缘对齐；tool 文案只显示动作和内容类型，不展示具体 evidence/path/locator，失败工具调用也使用普通工具行颜色
   -> turn.completed / turn.cancelled / turn.failed 清理运行态，让稳定的 composer handler 重新允许提交下一轮
   -> 用户追问时 POST /qa/tasks/{task_id}/inputs
   -> 追问 composer Enter 直接提交，Shift+Enter 在问题里保留换行
@@ -57,5 +57,5 @@
 - `SSE error 不主动关闭事件源，避免空闲连接断开后只能刷新恢复`：验证 EventSource 报错时前端不调用 `close()`，保留浏览器原生自动重连能力。
 - `Thinking 使用 Codex 式跳动指示器，不渲染问号或 spinner`：验证运行中的 assistant 占位使用上下跳动点，不显示问号或旋转加载图标。
 - `QA 对话使用左右布局，用户消息在右侧，assistant 消息在左侧且不显示角色标签`：验证消息通过位置区分说话方，不在气泡里显示 `You` 或 `AI`。
-- `连续工具事件会用 Codex 式轻量过程行默认折叠，并允许展开查看每个 tool`：验证连续工具调用默认只显示聚合计数摘要，摘要不写失败状态，摘要按钮有开关箭头，展开后只显示 `Viewed outline`、`Read paragraph`、`Inspected table row` 这类动作和内容类型，不泄露具体 path/evidence；带 locator 的 read/inspect 行可点击打开右侧 review，`inspect` 使用独立图标，同一组追加新 tool 时保持已展开状态。
+- `连续工具事件会用 Codex 式轻量过程行默认折叠，并允许展开查看每个 tool`：验证连续工具调用默认只显示聚合计数摘要，摘要不写失败状态，摘要按钮有开关箭头，展开后只显示 `Viewed outline`、`Read paragraph`、`Inspected table row` 这类动作和内容类型，不泄露具体 path/evidence；失败工具调用不加红色失败 class；带 locator 的 read/inspect 行可点击打开右侧 review，`inspect` 使用独立图标，同一组追加新 tool 时保持已展开状态。
 - `运行中点击稳定单按钮会调用 cancel`：验证 active turn 时固定主操作按钮点击会调用 cancel API。

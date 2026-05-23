@@ -133,7 +133,7 @@ TaskDetail(task_id)
 
 - `message.created` 且 `role=user|assistant`：渲染为无显式角色标签的对话消息；用户消息靠右，assistant 消息靠左。
 - `agent.event` 且 `payload.type=model_message`：渲染为左侧 assistant 过程回答，支持 evidence link。
-- `agent.event` 且 `payload.type=tool_completed|tool_failed`：渲染为工具过程行；连续工具事件会默认折叠成一行低权重摘要，例如 `Read 1 passage, inspected 1 evidence, 1 search`，默认摘要只统计动作数量，不写失败状态；展开后也只显示动作和内容类型，例如 `Viewed outline`、`Read paragraph`、`Inspected table row`，不展示具体 evidence/path/locator；read/inspect 行如果带 locator 可点击打开右侧 review；展开明细和摘要行左边缘对齐，展开后同一组继续追加新 tool 时保持展开。
+- `agent.event` 且 `payload.type=tool_completed|tool_failed`：渲染为工具过程行；连续工具事件会默认折叠成一行低权重摘要，例如 `Read 1 passage, inspected 1 evidence, 1 search`，默认摘要只统计动作数量，不写失败状态；展开后也只显示动作和内容类型，例如 `Viewed outline`、`Read paragraph`、`Inspected table row`，不展示具体 evidence/path/locator；`tool_failed` 使用普通工具行颜色，不做红色失败态；read/inspect 行如果带 locator 可点击打开右侧 review；展开明细和摘要行左边缘对齐，展开后同一组继续追加新 tool 时保持展开。
 - `turn.cancel_requested/cancelled/failed`：渲染简短状态行。
 - 空 `model_message` 和内部生命周期事件不进入可见对话流。
 
