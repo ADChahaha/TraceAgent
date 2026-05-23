@@ -114,9 +114,10 @@ TaskDetail(task_id)
   -> 为兼容旧任务，若虚拟路径 header id 也不存在，则只用 evidence 链接文本匹配同名 h1-h6 heading，不匹配正文 block
   -> 打开右侧大 review iframe；Sxxx 默认定位父 block，Ixxx 优先定位 `{block_id}_item_000` 这类列表项，Rxxx 优先定位 `{table_id}_tr_001` 这类表格数据行，range 会同时高亮多个范围节点并滚到第一个节点
   -> 右侧 review panel 默认 560px，范围 480-960px，通过左边缘 resize separator 拖拽；键盘 ArrowLeft 增宽、ArrowRight 缩窄
+  -> 如果 display_html 自带 page-like 纸张框（page 背景、阴影、内边距），前端会把这层外框压平，只保留正文排版和 evidence 高亮
   -> 同一文档内切换 evidence 时不重写 srcDoc，而是在 iframe.contentDocument 内移除旧 current evidence、给新 id/data-element-id 加 marker
   -> 对新 marker 调 scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" })，从当前滚动位置平滑跳到对应文本
-  -> Agent 内容列和输入框使用 `blank / text / blank` 三列：text = 520px 最小文字宽 + 200px 可选文字宽；左右面板打开时只调整两侧 blank 的 `fr` 比例来抵消 sidebar/review 造成的视觉偏移，窗口变窄时仍先扣空白，再扣可选文字宽，最后停在最小文字宽
+  -> Agent 对话流和输入框共用同一个水平 inset；content frame 和 composer frame 都使用 `0 / minmax(0, 1fr) / 0`，让正文、工具行和 composer 在当前 Agent slot 内同宽铺开，左右面板只改变外层 stage 的可用宽度，不再用 viewport 或侧栏宽度额外偏移内容列
   -> applyEventToSummary 用事件更新 running/ready 状态
   -> turn terminal event 后清理运行态并刷新 summary
   -> 用户提交追问 createTaskInput(task_id, content)

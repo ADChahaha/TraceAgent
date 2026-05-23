@@ -392,8 +392,6 @@ function QaWorkspace({
   const { leftPanelWidth, resizeLeftPanelByKeyboard, startLeftPanelResize } = useLeftSidebarResize();
   const { rightPanelWidth, resizeRightPanelByKeyboard, startRightPanelResize } = useRightSidebarResize();
   const agentBalanceSide = getAgentBalanceSide(isLeftPanelOpen, isVisibleRightPanelOpen);
-  const agentLeftBalanceGrow = isVisibleRightPanelOpen ? getAgentBalanceGrow(rightPanelWidth) : "1fr";
-  const agentRightBalanceGrow = isLeftPanelOpen ? getAgentBalanceGrow(leftPanelWidth) : "1fr";
   const streamRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useLayoutEffect(() => {
@@ -456,12 +454,6 @@ function QaWorkspace({
           data-agent-balance-side={agentBalanceSide}
           data-agent-content-mode="centered"
           data-agent-gutter="compact"
-          style={{
-            "--replay-agent-left-balance-width": isVisibleRightPanelOpen ? "calc(var(--replay-right-panel-width) + 10px)" : "0px",
-            "--replay-agent-right-balance-width": isLeftPanelOpen ? "calc(var(--replay-left-panel-width) + 10px)" : "0px",
-            "--replay-agent-left-balance-grow": agentLeftBalanceGrow,
-            "--replay-agent-right-balance-grow": agentRightBalanceGrow,
-          } as React.CSSProperties}
         >
           <div className="replay-agent-panel" aria-label="Document QA Agent">
             <div ref={streamRef} className="replay-agent-stream" aria-label="QA conversation and reading process">
@@ -1085,10 +1077,6 @@ function getAgentBalanceSide(isLeftPanelOpen: boolean, isRightPanelOpen: boolean
   return "none";
 }
 
-function getAgentBalanceGrow(panelWidth: number): string {
-  return `${Number((1 + panelWidth / 560).toFixed(3))}fr`;
-}
-
 function findEvidenceSource(summary: TaskSummary | null | undefined, uri: string, label: string): ActiveEvidenceSource | null {
   const documents = summary?.documents ?? [];
   if (documents.length === 0) {
@@ -1324,7 +1312,9 @@ function normalizeQaSourceSelector(sourceSelector: string): string {
 
 function wrapQaSourceHtml(displayHtml: string): string {
   const style = `<style>
-html, body { margin: 0; padding: 16px; background: #fff; color: #171717; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.55; }
+html, body { margin: 0; padding: 0; background: #fff; color: #171717; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.55; }
+main { max-width: 980px !important; margin: 0 auto !important; padding: 24px !important; }
+.page { background: transparent !important; margin: 0 0 20px !important; padding: 0 !important; box-shadow: none !important; }
 img, svg, canvas, video { max-width: 100% !important; height: auto !important; }
 p, li, td, th, pre, code { max-width: 100% !important; white-space: pre-wrap !important; overflow-wrap: anywhere !important; }
 .is-current-evidence, [data-current-evidence="true"] { border-radius: 6px !important; background: rgba(51, 156, 255, 0.18) !important; outline: 2px solid rgba(51, 156, 255, 0.55) !important; outline-offset: 2px !important; scroll-margin: 48px !important; }

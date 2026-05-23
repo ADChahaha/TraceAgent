@@ -329,11 +329,31 @@ it("点击 inline evidence 会用现有任务详情数据打开右侧 review 文
   );
 });
 
-it("右侧 review panel 支持拖拽调整宽度，并让对话列按左右面板补偿居中", async () => {
+it("右侧 review 会压平文档页面外框，只保留正文排版", async () => {
   const user = userEvent.setup();
   const fakeEventSource = new FakeEventSource();
   const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
-  renderTaskDetail(detailData, { createTaskEventSource });
+  const framedDetailData: TaskDetailData = {
+    summary: {
+      ...readyDetailSummary,
+      documents: [
+        {
+          document_id: "doc_001",
+          filename: "framed.pdf",
+          display_html:
+            '<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>Processed Document</title><style>body { margin: 0; background: #f3f4f6; color: #171717; font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif; } main { max-width: 980px; margin: 0 auto; padding: 24px; } .page { background: #fff; margin: 0 0 20px; padding: 44px 56px; box-shadow: 0 1px 4px rgba(0,0,0,.12); position: relative; }</style></head><body><main><section class="page" id="page_001"><p id="p1">Either party may terminate with 30 days notice.</p></section></main></body></html>'
+        }
+      ],
+      source_selectors: {
+        "0001.0001.0001": "p1"
+      }
+    },
+    result: null,
+    trace: null,
+    replay: null,
+    audit: null
+  };
+  renderTaskDetail(framedDetailData, { createTaskEventSource });
 
   await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledWith("qa_task_001", 0));
   act(() => {
@@ -356,19 +376,59 @@ it("右侧 review panel 支持拖拽调整宽度，并让对话列按左右面�
 
   await user.click(await screen.findByRole("link", { name: "30 天通知" }));
 
-  const stage = await screen.findByLabelText("QA stage");
+  const sourceFrame = await screen.findByTitle("Source document");
+  expect(sourceFrame).toHaveAttribute(
+    "srcdoc",
+    expect.stringContaining(".page { background: transparent !important; margin: 0 0 20px !important; padding: 0 !important; box-shadow: none !important; }")
+  );
+});
+
+it("右侧 review panel 支持拖拽调整宽度，并保持 Agent 对话列左右空白对称", async () => {
+  const user = userEvent.setup();
+  const fakeEventSource = new FakeEventSource();
+  const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
+  renderTaskDetail(detailData, { createTaskEventSource });
+
+  await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledWith("qa_task_001", 0));
   const agentWorkspace = screen.getByLabelText("Agent workspace");
+  const initialAgentStyle = agentWorkspace.getAttribute("style") ?? "";
+  expect(agentWorkspace).toHaveAttribute("data-agent-balance-side", "left");
+  expect(initialAgentStyle).not.toContain("--replay-agent-left-outer-width");
+  expect(initialAgentStyle).not.toContain("--replay-agent-right-outer-width");
+  expect(initialAgentStyle).not.toContain("--replay-agent-left-balance");
+  expect(initialAgentStyle).not.toContain("--replay-agent-right-balance");
+
+  act(() => {
+    fakeEventSource.emitEvent(
+      "agent.event",
+      taskEvent({
+        seq: 5,
+        type: "agent.event",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_001",
+        payload: {
+          agent: "file_extraction_agent",
+          type: "model_message",
+          content: "需要提前 30 天通知。[30 天通知](evidence://0001.0001.0001/S001)"
+        }
+      })
+    );
+  });
+
+  await user.click(await screen.findByRole("link", { name: "30 天通知" }));
+
+  const stage = await screen.findByLabelText("QA stage");
   expect(stage).toHaveStyle({
     "--replay-right-panel-width": "560px",
     "--replay-stage-columns": "var(--replay-left-panel-width) 10px minmax(0, 1fr) 10px var(--replay-right-panel-width)"
   });
   expect(agentWorkspace).toHaveAttribute("data-agent-balance-side", "both");
-  expect(agentWorkspace).toHaveStyle({
-    "--replay-agent-left-balance-width": "calc(var(--replay-right-panel-width) + 10px)",
-    "--replay-agent-right-balance-width": "calc(var(--replay-left-panel-width) + 10px)",
-    "--replay-agent-left-balance-grow": "2fr",
-    "--replay-agent-right-balance-grow": "1.4fr"
-  });
+  const openAgentStyle = agentWorkspace.getAttribute("style") ?? "";
+  expect(openAgentStyle).not.toContain("--replay-agent-left-outer-width");
+  expect(openAgentStyle).not.toContain("--replay-agent-right-outer-width");
+  expect(openAgentStyle).not.toContain("--replay-agent-left-balance");
+  expect(openAgentStyle).not.toContain("--replay-agent-right-balance");
 
   const resizeHandle = screen.getByRole("separator", { name: "Resize right review" });
   expect(resizeHandle).toHaveAttribute("aria-valuemin", "480");

@@ -100,11 +100,21 @@ PDF
 
 ## ⚡ 本地运行
 
-TraceAgent 由三个本地服务组成：
+当前本地开发按 QA-only 链路启动，由三个服务组成：
 
-- `agent`：负责 PDF 标准化、字段抽取和字段级 route 判断。
-- `backend`：负责任务状态、结果保存、人工复核和审计记录。
-- `frontend`：负责上传、replay 展示、字段复核和结果查看。
+- `agent`：负责 PDF 标准化，以及基于文档 HTML 的 QA completion。
+- `backend`：负责 QA task、documents、messages、events、memory 的持久化，并调用 `agent`。
+- `frontend`：负责上传 PDF、多轮提问、过程流展示和 evidence review。
+
+启动顺序固定为：
+
+```text
+agent:    127.0.0.1:8001
+backend:  127.0.0.1:8000
+frontend: 127.0.0.1:3000
+```
+
+### 1. 安装依赖
 
 ```bash
 conda create -n agent-gate python=3.11 -y
@@ -115,21 +125,31 @@ pip install -e "backend[dev]"
 pnpm --dir frontend install
 ```
 
-真实跑 PDF 和模型时，先在启动 `agent` 的终端里设置：
+### 2. 配置 agent 环境变量
+
+真实跑 PDF 和模型时，先在启动 `agent` 的终端里设置模型和 MinerU 配置：
 
 ```bash
 export BASE_URL="https://your-model-endpoint/v1"
 export OPENAI_API_KEY="your-api-key"
-export BROAD_MODEL="your-broad-model-name"
 export RESOLUTION_MODEL="your-resolution-model-name"
-export ROUTE_POLICY_MODEL="your-route-policy-model-name"
 export MINERU_BIN="mineru"
 export DOCUMENT_PROCESSOR_MINERU_LANG="japan"
 ```
 
 中文 PDF 可以把 `DOCUMENT_PROCESSOR_MINERU_LANG` 改成 `ch`。
 
-启动 `agent`：
+### 3. 确认端口空闲
+
+启动前可以先确认项目端口没有被旧进程占用：
+
+```bash
+lsof -nP -iTCP:3000 -iTCP:8000 -iTCP:8001 -sTCP:LISTEN
+```
+
+如果输出里还有旧的 `frontend`、`backend` 或 `agent` 进程，先停掉对应进程后再启动。
+
+### 4. 启动 agent
 
 ```bash
 conda activate agent-gate
@@ -137,7 +157,15 @@ cd /path/to/agent_gate
 python -m uvicorn --app-dir agent main:app --reload --host 127.0.0.1 --port 8001
 ```
 
-启动 `backend`：
+本地取消任务依赖 `agent` 进程内存中的 active completion 状态，所以开发时不要给 `uvicorn` 加多 worker。多 worker 会让取消请求找不到对应 completion。
+
+健康检查：
+
+```bash
+curl --noproxy '*' http://127.0.0.1:8001/healthz
+```
+
+### 5. 启动 backend
 
 ```bash
 conda activate agent-gate
@@ -147,7 +175,13 @@ AGENT_SERVICE_TIMEOUT_SECONDS=1200 \
 uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-启动 `frontend`：
+健康检查：
+
+```bash
+curl --noproxy '*' http://127.0.0.1:8000/healthz
+```
+
+### 6. 启动 frontend
 
 ```bash
 cd /path/to/agent_gate
@@ -155,18 +189,26 @@ BACKEND_BASE_URL=http://127.0.0.1:8000 \
 pnpm --dir frontend dev --port 3000
 ```
 
-打开：
+打开浏览器访问：
 
 ```text
 http://127.0.0.1:3000/
 ```
 
+如果本机代理导致浏览器或 `curl` 访问本地服务出现 502，可以临时设置：
+
+```bash
+export NO_PROXY=127.0.0.1,localhost
+```
+
+如果 `--reload` 在本机环境里反复重启或不稳定，去掉 `--reload` 后再启动对应 FastAPI 服务。
+
 ## 🗺️ 目录结构
 
 ```text
-frontend/  用户工作台：上传、replay、字段复核和审计查看
-backend/   任务治理：状态、结果、review、audit 和 SQLite
-agent/     AI 能力：PDF 标准化、字段抽取和 route policy
+frontend/  浏览器工作台：上传 PDF、多轮 QA、过程流和 evidence review
+backend/   QA 持久化：tasks、documents、messages、events、memory 和 agent 调用
+agent/     AI 能力：PDF 标准化和 document QA completion
 ```
 
 ## 📄 许可证

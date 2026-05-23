@@ -8,6 +8,14 @@ function cssRule(selector: string) {
   return globalsCss.match(new RegExp(`(?:^|\\n)${escapedSelector}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
 }
 
+function cssRuleContainingSelector(selector: string) {
+  return (
+    Array.from(globalsCss.matchAll(/(?:^|\n)([^{}]+)\{([^}]*)\}/g)).find((match) =>
+      match[1].split(",").some((item) => item.trim() === selector),
+    )?.[2] ?? ""
+  );
+}
+
 it("Codex 主题使用统一的 light/dark token", () => {
   expect(globalsCss).toContain("--foreground: #1a1c1f;");
   expect(globalsCss).toContain("--secondary: #f4f4f5;");
@@ -70,17 +78,46 @@ it("Replay stage 在窄视口也使用左右栏列布局，不把 Review 原文�
   expect(baseFullscreenBlock).toContain("column-gap: 0;");
 });
 
-it("Agent 阅读列按最小文字宽、可选文字宽、空白的顺序收缩", () => {
+it("Agent 对话流和 composer 使用同一套左右 inset 铺满中间 panel", () => {
+  expect(globalsCss).toContain("--replay-agent-horizontal-inset: 18px;");
   expect(globalsCss).toContain("--replay-agent-readable-min-width: 520px;");
   expect(globalsCss).toContain("--replay-agent-readable-optional-width: 200px;");
   expect(globalsCss).toContain(
     "--replay-agent-readable-max-width: calc(var(--replay-agent-readable-min-width) + var(--replay-agent-readable-optional-width));",
   );
-  expect(globalsCss).toMatch(
-    /\.replay-agent-panel-slot\[data-agent-content-mode="centered"\]\s+\.replay-agent-content-frame,\s*\.replay-agent-panel-slot\[data-agent-content-mode="centered"\]\s+\.replay-agent-composer-frame\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*minmax\(min\(100%,\s*var\(--replay-agent-readable-min-width\)\),\s*var\(--replay-agent-readable-max-width\)\)\s*minmax\(0,\s*1fr\);/,
-  );
+  const fullWidthColumnRule = /grid-template-columns:\s*0\s+minmax\(0,\s*1fr\)\s+0;/;
+  for (const selector of [
+    '.replay-agent-panel-slot[data-agent-content-mode="centered"] .replay-agent-content-frame',
+    '.replay-agent-panel-slot[data-agent-content-mode="centered"] .replay-agent-composer-frame',
+    '.replay-agent-panel-slot[data-agent-content-mode="full"] .replay-agent-content-frame',
+    '.replay-agent-panel-slot[data-agent-content-mode="full"] .replay-agent-composer-frame',
+  ]) {
+    expect(cssRuleContainingSelector(selector)).toMatch(fullWidthColumnRule);
+  }
+
+  const readableColumnRule = cssRule(".replay-agent-readable-column");
+  expect(readableColumnRule).toContain("width: 100%;");
+  expect(readableColumnRule).not.toContain("max-width: var(--replay-agent-readable-max-width);");
+  expect(readableColumnRule).not.toContain("justify-self: center;");
+
+  const composerReadableColumnRule = cssRule(".replay-agent-composer-readable-column");
+  expect(composerReadableColumnRule).toContain("width: 100%;");
+  expect(composerReadableColumnRule).not.toContain("max-width: var(--replay-agent-readable-max-width);");
+  expect(composerReadableColumnRule).not.toContain("justify-self: center;");
+
+  expect(globalsCss).not.toContain("--replay-agent-left-outer-width");
+  expect(globalsCss).not.toContain("--replay-agent-right-outer-width");
+  expect(globalsCss).not.toContain("--replay-agent-centered-column-width");
+  expect(globalsCss).not.toContain("--replay-agent-left-balance-width");
+  expect(globalsCss).not.toContain("--replay-agent-right-balance-width");
   expect(globalsCss).not.toContain("--replay-agent-compact-gutter-width");
   expect(globalsCss).not.toContain("@container (max-width: 820px)");
+
+  const streamRule = cssRule(".replay-agent-stream");
+  expect(streamRule).toContain("padding: 16px var(--replay-agent-horizontal-inset) 18px;");
+
+  const composerRule = cssRule(".replay-agent-composer");
+  expect(composerRule).toContain("padding: 12px var(--replay-agent-horizontal-inset);");
 });
 
 it("Contents 面板保留可读宽度、纵向滚动和多行文本", () => {

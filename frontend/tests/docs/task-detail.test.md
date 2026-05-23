@@ -17,7 +17,8 @@
   -> 旧任务缺少文件夹级 source_selector 时，可用 evidence 链接文本匹配同名 heading 作为兼容定位
   -> table row evidence 会把 `/R001` 解析成具体 `<tr>`，不只高亮整张 table
   -> 同一源文档内切换 evidence 时复用 iframe srcDoc，只在 iframe DOM 内移动 current marker 并 smooth scroll 到新目标
-  -> 右侧 review panel 用独立 resize separator 调整宽度，并让中间对话列按左右 panel 宽度补偿空白比例
+  -> 如果 display_html 自带 page-like 纸张框，前端会在 iframe 里把 page 背景、阴影和内边距压平，只保留正文排版
+  -> 右侧 review panel 用独立 resize separator 调整宽度，Agent 对话列按当前 Agent slot 宽度计算中心列和左右 blank，不能用 viewport 或侧栏宽度额外偏移内容列
   -> agent.event(type=tool_completed/tool_failed) 变成 Codex 式轻量可折叠工具过程行，摘要按钮带开关箭头，展开明细和摘要左边缘对齐；tool 文案只显示动作和内容类型，不展示具体 evidence/path/locator
   -> turn.completed / turn.cancelled / turn.failed 让 composer 从暂停按钮恢复成发送按钮
   -> 用户追问时 POST /qa/tasks/{task_id}/inputs
@@ -35,7 +36,8 @@
 - `QA API 会提交输入、取消 active turn，并生成可续传事件 URL`：验证输入、取消和 events URL 都指向 `/api/backend/qa/tasks/*`。
 - `任务详情会从 QA 事件流重建用户问题、模型回答和 inline evidence`：验证 SSE 中的 user message 和 model_message 会进入 Agent 流，且 evidence 链接保持可点击 href。
 - `点击 inline evidence 会用现有任务详情数据打开右侧 review 文档`：验证 evidence link 不请求旧 replay 或新 review 端点，而是使用现有 `GET /qa/tasks/{task_id}` 响应里的 `display_html/source_selectors` 打开右侧 review 文档并高亮证据，右侧 review 保持在主界面右栏。
-- `右侧 review panel 支持拖拽调整宽度，并让对话列按左右面板补偿居中`：验证 review panel 默认宽度、拖拽和键盘调宽逻辑，以及 Agent 对话列通过左右空白比例抵消 task sidebar 与 review panel 的视觉偏移。
+- `右侧 review 会压平文档页面外框，只保留正文排版`：验证前端会把 display_html 里自带的 page 式背景、阴影和内边距去掉，避免 review 里再出现一层纸张框。
+- `右侧 review panel 支持拖拽调整宽度，并保持 Agent 对话列左右空白对称`：验证 review panel 默认宽度、拖拽和键盘调宽逻辑，以及单开左侧任务栏或左右栏同时打开时，Agent 对话列都按当前 Agent slot 宽度计算中心列和左右 blank，不再注入 viewport 或侧栏宽度偏移变量。
 - `文件夹级 inline evidence 会定位到对应 header 而不是子节点`：验证 `evidence://0001.0001` 这类目录级链接即使没有直接 selector，也会定位到同名 header DOM id，并明确不高亮下面的正文子节点。
 - `旧 source_selectors 缺少文件夹映射时会用链接文本定位 header`：验证老任务没有 folder selector 时，前端只会用链接文本匹配同名 heading，不会退到正文子节点。
 - `切换同一文档内的 inline evidence 会在 iframe 内平滑跳转并移动高亮`：验证第二次点击同一文档的不同 evidence 时不会重写 iframe `srcdoc` 导致回到顶部，而是移除旧 marker、设置新 marker，并调用 smooth `scrollIntoView`。

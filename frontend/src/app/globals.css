@@ -334,6 +334,7 @@ html[data-theme="dark"] .home-task-composer {
 .replay-review-root {
   --replay-header-h: 4.5rem;
   --replay-topbar-h: 4rem;
+  --replay-agent-horizontal-inset: 18px;
   --replay-agent-readable-min-width: 520px;
   --replay-agent-readable-optional-width: 200px;
   --replay-agent-readable-max-width: calc(var(--replay-agent-readable-min-width) + var(--replay-agent-readable-optional-width));
@@ -928,6 +929,7 @@ html[data-theme="dark"] .home-task-composer {
   line-height: 1.58;
   overflow-wrap: anywhere;
   word-break: break-word;
+  text-align: justify;
 }
 
 .replay-agent-reason-text p,
@@ -976,11 +978,14 @@ html[data-theme="dark"] .home-task-composer {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding: 16px 18px 18px;
+  padding: 16px var(--replay-agent-horizontal-inset) 18px;
 }
 
 .replay-agent-centered-content,
 .replay-agent-composer-balance-row {
+  max-width: var(--replay-agent-readable-max-width);
+  margin-left: auto;
+  margin-right: auto;
   min-width: 0;
 }
 
@@ -992,14 +997,7 @@ html[data-theme="dark"] .home-task-composer {
 }
 
 .replay-agent-panel-slot[data-agent-content-mode="centered"] .replay-agent-content-frame,
-.replay-agent-panel-slot[data-agent-content-mode="centered"] .replay-agent-composer-frame {
-  grid-template-columns:
-    minmax(0, var(--replay-agent-left-balance-grow, 1fr))
-    minmax(min(100%, var(--replay-agent-readable-min-width)), var(--replay-agent-readable-max-width))
-    minmax(0, var(--replay-agent-right-balance-grow, 1fr));
-  justify-content: center;
-}
-
+.replay-agent-panel-slot[data-agent-content-mode="centered"] .replay-agent-composer-frame,
 .replay-agent-panel-slot[data-agent-content-mode="full"] .replay-agent-content-frame,
 .replay-agent-panel-slot[data-agent-content-mode="full"] .replay-agent-composer-frame {
   grid-template-columns: 0 minmax(0, 1fr) 0;
@@ -1012,6 +1010,7 @@ html[data-theme="dark"] .home-task-composer {
 
 .replay-agent-readable-column {
   display: grid;
+  width: 100%;
   min-width: 0;
   align-content: start;
   gap: 14px;
@@ -1101,8 +1100,9 @@ html[data-theme="dark"] .home-task-composer {
 }
 
 .qa-message-turn.is-assistant .qa-message-bubble {
-  max-width: min(92%, 680px);
+  max-width: 100%;
   padding-left: 0;
+  padding-right: 0;
   background: transparent;
 }
 
@@ -1319,11 +1319,12 @@ html[data-theme="dark"] .home-task-composer {
   position: relative;
   display: block;
   border-top: 1px solid var(--replay-border-soft);
-  padding: 12px;
+  padding: 12px var(--replay-agent-horizontal-inset);
 }
 
 .replay-agent-composer-readable-column {
   position: relative;
+  width: 100%;
   min-width: 0;
 }
 
