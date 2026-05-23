@@ -194,12 +194,24 @@ export function TaskDetail({
   }, [listTasks]);
 
   const summary = detail?.summary ?? initialSummary;
-  const isRunning = isTaskRunning(summary) || isSubmittingInput || isCancelling;
+  const summaryIsRunning = isTaskRunning(summary);
+  const isRunning = summaryIsRunning || isSubmittingInput || isCancelling;
+  const wasSummaryRunningRef = React.useRef(summaryIsRunning);
 
   React.useEffect(() => {
     isRunningRef.current = isRunning;
     isCancellingRef.current = isCancelling;
   }, [isCancelling, isRunning]);
+
+  React.useEffect(() => {
+    const wasSummaryRunning = wasSummaryRunningRef.current;
+    wasSummaryRunningRef.current = summaryIsRunning;
+    if (!wasSummaryRunning || summaryIsRunning) {
+      return;
+    }
+    setIsSubmittingInput(false);
+    setIsCancelling(false);
+  }, [summaryIsRunning]);
 
   const openEvidence = React.useCallback((uri: string, label: string) => {
     const source = findEvidenceSource(summary, uri, label);

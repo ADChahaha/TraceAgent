@@ -1255,3 +1255,40 @@ it("运行中点击稳定单按钮会调用 cancel", async () => {
 
   await waitFor(() => expect(injectedCancelTask).toHaveBeenCalledWith("qa_task_001"));
 });
+
+it("cancel 成功并刷新为 ready 后会解除 running 锁定", async () => {
+  const user = userEvent.setup();
+  const readyAfterCancelSummary: TaskSummary = {
+    ...readySummary,
+    active_turn_id: null,
+    stream: {
+      state: "idle",
+      last_event_seq: 9
+    }
+  };
+  const loadTaskDetail = jest
+    .fn()
+    .mockResolvedValueOnce({ ...detailData, summary: runningSummary })
+    .mockResolvedValueOnce({ ...detailData, summary: readyAfterCancelSummary });
+  const cancelTask = jest.fn(async () => ({
+    task_id: "qa_task_001",
+    turn_id: "turn_active",
+    status: "cancelling"
+  }));
+
+  renderTaskDetail({ ...detailData, summary: runningSummary }, { loadTaskDetail, cancelTask });
+
+  await waitFor(() => expect(loadTaskDetail).toHaveBeenCalledTimes(1));
+  const actionButton = await screen.findByRole("button", { name: "Submit or pause answer" });
+  expect(actionButton.querySelector(".lucide-send-horizontal")).toHaveAttribute("data-visible", "false");
+  expect(actionButton.querySelector(".lucide-pause")).toHaveAttribute("data-visible", "true");
+
+  await user.click(actionButton);
+
+  await waitFor(() => expect(cancelTask).toHaveBeenCalledWith("qa_task_001"));
+  await waitFor(() => expect(loadTaskDetail).toHaveBeenCalledTimes(2));
+
+  const updatedActionButton = screen.getByRole("button", { name: "Submit or pause answer" });
+  expect(updatedActionButton.querySelector(".lucide-send-horizontal")).toHaveAttribute("data-visible", "true");
+  expect(updatedActionButton.querySelector(".lucide-pause")).toHaveAttribute("data-visible", "false");
+});

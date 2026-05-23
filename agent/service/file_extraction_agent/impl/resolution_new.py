@@ -20,54 +20,31 @@ def build_resolution_messages(state: Any) -> list[Any]:
             "Navigate the document tree using the provided tools, then answer with evidence.\n\n"
 
             "## Narration Style\n"
-            "You are a colleague investigating documents in real time. Always start by "
-            "stating your plan — what you're looking for and how you'll approach it. "
-            "Then narrate your progress as you go.\n\n"
-            "A narration block should:\n"
-            "1. Summarize what you just explored.\n"
-            "2. State what you found — concrete facts with evidence links.\n"
-            "3. Assess: is it enough? What's still missing or unclear?\n"
-            "4. Declare your next direction and why.\n\n"
-            "Rhythm:\n"
-            "- FIRST turn: always narrate your approach before any tool call.\n"
-            "- After that: group related tool calls that form one logical search step "
-            "(e.g. grep + read the result, or tree + read a child). Narrate after each "
-            "logical step completes — when you have a finding to report or a direction "
-            "to change. Think of it like Codex showing 'Explored N files' then reporting "
-            "what it learned.\n"
-            "- After finishing with one document and moving to another: always narrate.\n"
-            "- When hitting a dead end or changing strategy: always narrate.\n"
-            "- When connecting information across documents or sections: always narrate.\n\n"
-            "Multi-document rule: when the repository contains multiple documents, "
-            "narrate at least once per document — what it is, what it contributes to "
-            "the answer, and how it relates to the other documents.\n\n"
-            "Example (multi-document investigation):\n\n"
+            "You are a colleague investigating documents in real time. Show your "
+            "thought process, but only speak when you have something complete to say.\n\n"
+            "- First turn: state your plan before any tool call.\n"
+            "- After that: do as many tool calls as needed to reach a conclusion, "
+            "then narrate once with the full finding. Do not narrate intermediate "
+            "steps like failed searches or partial reads that you will immediately "
+            "follow up on. Bundle the attempt + result into one narration.\n"
+            "- Per document: narrate at least once per document in multi-document repos.\n\n"
+            "A narration block should be 1-3 sentences:\n"
+            "1. What you explored and found (with evidence links).\n"
+            "2. What's still missing or what you'll do next.\n\n"
+            "Example:\n\n"
             "  'Looking for payment terms. Checking document structure first.'\n\n"
-            "  [tree]\n\n"
-            "  '2 documents: a contract and an appendix. Payment likely in contract.'\n\n"
-            "  [grep, read]\n\n"
+            "  [tree, grep, read]\n\n"
             "  'Contract Section 5: [monthly $8,500, due 15th](evidence://0001.0005.0002/S001). "
-            "References \"Appendix A\" for penalties — need to check.'\n\n"
-            "  [read]\n\n"
+            "References \"Appendix A\" for penalties — checking there.'\n\n"
+            "  [grep, read, inspect]\n\n"
             "  'Appendix A: [2% per week after 30 days](evidence://0002.0003.0001/R002). "
             "Full picture complete.'\n\n"
             "  → [final answer]\n\n"
             "Key principles:\n"
-            "- Keep each narration block short — 1-3 sentences max. One finding, one "
-            "assessment, one next step. If you have multiple findings, use multiple "
-            "narration blocks separated by tool calls.\n"
-            "- Think like a researcher: hypothesize, search, evaluate, iterate.\n"
-            "- Say what's missing or insufficient, not just what you found.\n"
-            "- When a result is partial, explain what's still unclear and where to look.\n"
-            "- Cite evidence inline as you discover it, not just in the final answer.\n"
-            "- Connect information across documents — show how pieces fit together.\n"
-            "- The journey IS the value — users want to see HOW you found the answer.\n"
-            "- Equal depth across sources: if the question covers multiple documents or "
-            "topics, give each one the same level of investigation and narration. Do not "
-            "rush through the second item just because the first took longer. If one "
-            "source gives dense information in a single read, break it down — analyze "
-            "the structure, highlight key distinctions, note exceptions, and assess "
-            "completeness — rather than dumping it all in one narration block.\n\n"
+            "- Cite evidence inline as you discover it.\n"
+            "- Connect information across documents.\n"
+            "- Equal depth across sources — don't rush the second document.\n"
+            "- The journey IS the value — show HOW you found the answer.\n\n"
 
             "## Evidence Rules\n"
             "Every factual statement about the document MUST include a Markdown evidence "
@@ -96,6 +73,10 @@ def build_resolution_messages(state: Any) -> list[Any]:
             "## Discipline\n"
             "- One tool per turn.\n"
             "- Do not repeat reads of the same block.\n"
+            "- Narrate only when you have a complete thought to share. If you need "
+            "multiple tool calls to form a conclusion, do them silently first, then "
+            "narrate once with the full picture. Do not narrate partial results that "
+            "you will immediately expand on in the next step.\n"
             "- Your final message must be text (the answer), not a tool call.\n"
             "- Do not add follow-up offers or pleasantries at the end."
         )
@@ -229,8 +210,11 @@ def _invoke_model_message(model: Any, messages: list[Any]) -> Any:
         use_stream = bool(_read(attempt, "use_stream", True))
         try:
             if use_stream:
-                return _stream_model_message(attempt_model, messages)
-            return attempt_model.invoke(messages)
+                message = _stream_model_message(attempt_model, messages)
+            else:
+                message = attempt_model.invoke(messages)
+            _validate_model_message(message)
+            return message
         except Exception as exc:
             errors.append((str(attempt_name), exc))
     details = "; ".join(f"{name}: {type(error).__name__}: {error}" for name, error in errors)
@@ -378,6 +362,58 @@ def _memory_text(memory: Any) -> str:
     if open_threads:
         sections.append("Open threads: " + "; ".join(str(t) for t in open_threads))
     return "\n\n".join(sections)
+
+
+def _validate_model_message(message: Any) -> None:
+    tool_calls = getattr(message, "tool_calls", None)
+    if isinstance(tool_calls, list) and tool_calls:
+        return
+    stop_signal = _message_stop_signal(message)
+    if stop_signal in _non_terminal_stop_signals():
+        raise RuntimeError(
+            "model response ended without tool calls despite a non-terminal stop signal"
+        )
+    if stop_signal not in _terminal_stop_signals():
+        raise RuntimeError("model response ended without tool calls or terminal stop signal")
+    return
+
+
+def _message_stop_signal(message: Any) -> str | None:
+    for container_name in ("response_metadata", "additional_kwargs"):
+        container = getattr(message, container_name, None)
+        if not isinstance(container, dict):
+            continue
+        for key in ("finish_reason", "stop_reason", "status"):
+            value = container.get(key)
+            if isinstance(value, str):
+                normalized = value.strip().lower()
+                if normalized:
+                    return normalized
+    return None
+
+
+def _non_terminal_stop_signals() -> set[str]:
+    return {
+        "tool_calls",
+        "tool_use",
+        "function_call",
+        "length",
+        "max_tokens",
+        "incomplete",
+    }
+
+
+def _terminal_stop_signals() -> set[str]:
+    return {
+        "stop",
+        "end_turn",
+        "stop_sequence",
+        "completed",
+        "complete",
+        "finished",
+        "content_filter",
+        "refusal",
+    }
 
 
 def _read(value: Any, key: str, default: Any = None) -> Any:

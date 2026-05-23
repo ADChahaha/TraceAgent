@@ -27,8 +27,10 @@ def build_tools(state: Any) -> list[Any]:
         """Expand the virtual document tree at a directory evidence link.
 
         Use this to see document structure. Leave path_id empty for the root.
-        Use evidence links like evidence://0001 from prior tree output for
-        document or section directories. Directory names show a trailing slash.
+        path_id MUST be a full evidence link starting with "evidence://" — e.g.
+        evidence://0001 or evidence://0001.0003. Never pass a bare number like
+        "0001" or "0001.0003" without the evidence:// prefix.
+        Directory names show a trailing slash in tree output.
         tree returns child directories and readable block links (.md/.list/.table);
         it does NOT return file text. To get content, call read on a child block link.
         Start every investigation here to understand document layout before reading.
@@ -54,6 +56,7 @@ def build_tools(state: Any) -> list[Any]:
     def read(locator: str) -> dict[str, Any]:
         """Read one block or a consecutive range of sibling blocks.
 
+        locator MUST start with "evidence://" — never pass a bare path ID.
         Single block: pass evidence://0001.0001.0002 from tree output.
         Range of siblings: pass evidence://range/<start>/<end>, e.g.
         evidence://range/0001.0001.0002/0001.0001.0005 reads blocks 0002–0005
@@ -71,6 +74,7 @@ def build_tools(state: Any) -> list[Any]:
     def inspect(locator: str) -> dict[str, Any]:
         """Expand one readable block into inline sentence/item/row evidence selectors.
 
+        locator MUST start with "evidence://" — never pass a bare path ID.
         Use when you need to cite a specific fact within a block.
         Returns inline links: evidence://path_id/S001 (sentence), /I001 (list item),
         /R001 (table row), along with evidence_texts showing the text of each.

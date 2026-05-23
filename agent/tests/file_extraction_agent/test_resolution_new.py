@@ -113,7 +113,10 @@ def test_resolution_graph_keeps_only_first_parallel_tool_call():
             del messages
             self.calls += 1
             if self.calls > 1:
-                yield AIMessageChunk(content="我已经看过结构。")
+                yield AIMessageChunk(
+                    content="我已经看过结构。",
+                    response_metadata={"finish_reason": "stop"},
+                )
                 return
             yield AIMessageChunk(
                 content="我先看结构。",
@@ -272,6 +275,85 @@ def test_resolution_records_text_from_responses_api_content_blocks():
 
     assert state.current_model_content == "I will inspect root. "
     assert state.events[-1]["content"] == "I will inspect root. "
+
+
+
+
+def test_resolution_retries_transport_when_provider_stop_signal_requires_missing_tool_calls():
+    calls = []
+
+    class IncompleteToolCallStreamModel:
+        def stream(self, messages):
+            calls.append("responses.stream")
+            assert messages == ["messages"]
+            yield AIMessageChunk(
+                content="我会先看文档结构，再决定下一步。",
+                response_metadata={"finish_reason": "tool_calls"},
+            )
+
+    class CompleteToolCallInvokeModel:
+        def invoke(self, messages):
+            calls.append("responses.invoke")
+            assert messages == ["messages"]
+            return AIMessage(
+                content="我先看结构。",
+                tool_calls=[
+                    {
+                        "id": "call-1",
+                        "name": "tree",
+                        "args": {"path_id": "", "depth": 3},
+                    }
+                ],
+                response_metadata={"finish_reason": "tool_calls"},
+            )
+
+    class FallbackModel:
+        def model_call_attempts(self):
+            return [
+                SimpleNamespace(name="responses_stream", model=IncompleteToolCallStreamModel(), use_stream=True),
+                SimpleNamespace(name="responses_invoke", model=CompleteToolCallInvokeModel(), use_stream=False),
+            ]
+
+    message = _invoke_model_message(FallbackModel(), ["messages"])
+
+    assert calls == ["responses.stream", "responses.invoke"]
+    assert message.content == "我先看结构。"
+    assert message.tool_calls[0]["name"] == "tree"
+
+
+def test_resolution_accepts_terminal_stop_message_without_tool_calls():
+    class FinalAnswerModel:
+        def stream(self, messages):
+            del messages
+            yield AIMessageChunk(
+                content="最终答案。",
+                response_metadata={"finish_reason": "stop"},
+            )
+
+    message = _invoke_model_message(FinalAnswerModel(), ["messages"])
+
+    assert message.content == "最终答案。"
+    assert message.tool_calls == []
+
+
+def test_resolution_rejects_plan_only_message_without_terminal_stop_signal():
+    class PlanOnlyModel:
+        def stream(self, messages):
+            del messages
+            yield AIMessageChunk(content="我会先在同一份入试要项里查相关依据。")
+
+    class FallbackModel:
+        def model_call_attempts(self):
+            return [
+                SimpleNamespace(name="responses_stream", model=PlanOnlyModel(), use_stream=True),
+            ]
+
+    try:
+        _invoke_model_message(FallbackModel(), ["messages"])
+    except RuntimeError as exc:
+        assert "terminal stop signal" in str(exc)
+    else:
+        raise AssertionError("plan-only message without terminal stop signal should fail")
 
 
 def test_resolution_records_model_message_content_and_tool_calls_without_reasoning():

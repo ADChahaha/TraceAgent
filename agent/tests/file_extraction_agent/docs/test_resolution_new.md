@@ -9,10 +9,11 @@ GraphState(messages + memory + HtmlDocument)
   -> build_resolution_messages 生成 QA system/human prompt
   -> build_resolution_messages 把 OpenAI 风格 messages 转成 LangChain chat/tool messages
   -> model.stream / model.invoke 产生 assistant content 和 tool call
+  -> _invoke_model_message 校验 provider stop signal 与 tool_calls 是否一致
   -> 同轮多 tool call 被截断为第一个
   -> _record_model_message 记录用户可见 content 和工具调用摘要
   -> ToolNode 执行 tree/grep/read/inspect
-  -> 没有 tool call 时结束本轮 completion
+  -> terminal stop signal 且没有 tool call 时结束本轮 completion
 ```
 
 ## 测试函数
@@ -23,4 +24,7 @@ GraphState(messages + memory + HtmlDocument)
 - `test_resolution_uses_responses_api_stream_and_merges_content_with_tool_calls`：确认 stream 调用能把 text chunk 和 tool call chunk 合并成带 content 和 tool_calls 的 `AIMessage`。
 - `test_resolution_falls_back_from_responses_stream_to_chat_stream_then_invoke`：确认 Responses stream 失败后按顺序降级到 chat/completions stream 和非流 invoke。
 - `test_resolution_records_text_from_responses_api_content_blocks`：确认 Responses API content block 列表会抽取 `type=text` 文本并写入 `model_message.content`。
+- `test_resolution_retries_transport_when_provider_stop_signal_requires_missing_tool_calls`：验证 provider 给出 `finish_reason=tool_calls` 但 LangChain 消息里没有实际 `tool_calls` 时，会把该响应视为不完整并切换到下一个 transport，避免把计划性文本误判为最终回答。
+- `test_resolution_accepts_terminal_stop_message_without_tool_calls`：验证 `finish_reason=stop` 这类 terminal stop signal 仍会作为自然文本终态处理。
+- `test_resolution_rejects_plan_only_message_without_terminal_stop_signal`：验证只有计划性文本、没有工具调用、也没有 terminal stop signal 的模型响应不能被当成完成结果。
 - `test_resolution_records_model_message_content_and_tool_calls_without_reasoning`：确认 trace 只记录普通 assistant content 和工具摘要，不保存隐藏 reasoning content。

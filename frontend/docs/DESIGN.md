@@ -26,6 +26,7 @@
   -> SSE agent.event(model_message) 渲染模型过程回答，保留 [label](evidence://...) inline link
   -> 连续 tool_completed/tool_failed 默认折叠成 Codex 式轻量过程行，只显示聚合计数摘要，展开后显示每个 tool
   -> turn.completed / turn.cancelled / turn.failed 结束本轮，composer handler 恢复允许提交下一轮
+  -> 如果 cancel 后 backend 先把 summary 切回 ready/idle，再由后续 SSE 终态事件或 refresh 回填，前端会以最新 summary 为准解除本地 running/cancelling 锁定，避免按钮一直停在 Pause 态
   -> 用户继续追问时 POST /qa/tasks/{task_id}/inputs，并按当前 seq 重新连接 SSE 续读新事件
   -> 用户在运行中点击 composer 的固定主操作按钮时 POST /qa/tasks/{task_id}/cancel
 ```
@@ -148,7 +149,7 @@ summary.active_turn_id 或 stream.state=running
   -> 空闲时同一个按钮走 submit handler；空内容时 no-op，问题非空时提交追问
   -> running 时同一个按钮走 cancel handler，调用 POST /qa/tasks/{task_id}/cancel
   -> backend 写入 cancel 事件并关闭/结束当前 turn
-  -> SSE 收到 terminal turn event 后清理运行态，稳定主按钮重新允许提交
+  -> SSE 收到 terminal turn event 后清理运行态；如果 cancel 期间任务快照已经恢复为 ready/idle，前端也会同步释放本地 running/cancelling 锁定，稳定主按钮重新允许提交
 ```
 
 ## 4. 测试策略

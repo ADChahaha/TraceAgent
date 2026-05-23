@@ -42,7 +42,8 @@ completion_id + documents + messages + memory + run_options + model_config
        -> resolution_new.run_resolution_stream(...)
             -> build_resolution_messages，把历史 OpenAI messages 和 memory 放入本轮上下文
             -> build_tools(state) 暴露 tree / grep / read / inspect
-            -> 模型产生 model_message，可继续单工具循环，也可无工具结束
+            -> 模型产生 model_message，先校验 provider stop signal 与 tool_calls 是否一致
+            -> 有 tool_calls 时继续单工具循环；terminal stop signal 且无工具时自然结束
        -> resolution 正常结束输出 completion.completed
        -> resolution 异常输出 tool_failed(resolution) + completion.failed
   -> processor 在每个 graph event 之间检查 cancel_requested
@@ -97,7 +98,7 @@ read(locator="evidence://...")
 inspect(locator="evidence://...")
 ```
 
-已删除旧字段抽取工具：`add_candidate_evidence`、`review_evidences`、`write_field`、`submit_result`。QA 模式不设置 `answer` 或 `finish` 工具；最后一条 assistant `model_message` 就是本轮自然结束，SSE 用 `completion.completed` 收口。
+已删除旧字段抽取工具：`add_candidate_evidence`、`review_evidences`、`write_field`、`submit_result`。QA 模式不设置 `answer` 或 `finish` 工具；模型消息只有在 provider 给出 terminal stop signal（例如 `finish_reason=stop` 或 `stop_reason=end_turn`）且没有工具调用时才被视为本轮自然结束，SSE 用 `completion.completed` 收口。如果 provider 给出 `finish_reason=tool_calls`、`stop_reason=tool_use`、`length/max_tokens` 等非终态信号但 LangChain 消息没有实际 `tool_calls`，agent 会把该 transport 视为不完整并继续 fallback，避免把“我先去查”这类计划性文本误判为最终回答。
 
 ### `tree`
 
