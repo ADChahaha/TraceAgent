@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Iterable
 
-from langchain_core.messages import HumanMessage, SystemMessage, message_chunk_to_message
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage, message_chunk_to_message
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import MessagesState
 from langgraph.prebuilt import ToolNode
@@ -79,7 +80,11 @@ def build_resolution_messages(state: Any) -> list[Any]:
             "- Inline table row: [label](evidence://0001.0002.0003/R001)\n\n"
             "Use block links for section-level observations. Use inline links for "
             "concrete facts: dates, amounts, conditions, names, exceptions.\n"
-            "Never use bare evidence:// URIs — always wrap in [label](...).\n\n"
+            "Never use bare evidence:// URIs — always wrap in [label](...).\n"
+            "The [label] part is what the user sees — it must be a human-readable "
+            "description (section title, fact summary, etc.), never a raw path ID like "
+            "0001.0011.0013. The evidence:// URI inside (...) is metadata the user never "
+            "reads directly.\n\n"
 
             "## Final Answer\n"
             "- Answer in the same language as the user's question.\n"
@@ -95,9 +100,9 @@ def build_resolution_messages(state: Any) -> list[Any]:
             "- Do not add follow-up offers or pleasantries at the end."
         )
     )
-    parts = [
-        "Conversation:\n" + _messages_text(state.messages),
-    ]
+    messages = [system]
+    messages.extend(_conversation_messages(state.messages))
+    parts = []
     memory_text = _memory_text(state.memory)
     if memory_text.strip():
         parts.append("Context from prior turns:\n" + memory_text)
@@ -105,7 +110,8 @@ def build_resolution_messages(state: Any) -> list[Any]:
         "Investigate the documents using the tools, then end with a concise "
         "final answer as your last assistant message."
     )
-    return [system, HumanMessage(content="\n\n".join(parts))]
+    messages.append(HumanMessage(content="\n\n".join(parts)))
+    return messages
 
 
 def run_resolution_stream(state: Any, resolution_model: Any) -> Iterable[dict[str, Any]]:
@@ -301,13 +307,66 @@ def _message_content_text(content: Any) -> str:
     return "".join(parts)
 
 
-def _messages_text(messages: list[Any]) -> str:
-    lines = []
+def _conversation_messages(messages: list[Any]) -> list[Any]:
+    converted = []
     for message in messages:
         role = getattr(message, "role", "")
         content = getattr(message, "content", "")
-        lines.append(f"{role}: {content}")
-    return "\n".join(lines)
+        if role == "system":
+            converted.append(SystemMessage(content=content))
+        elif role == "user":
+            converted.append(HumanMessage(content=content))
+        elif role == "assistant":
+            converted.append(AIMessage(content=content, tool_calls=_langchain_tool_calls(getattr(message, "tool_calls", None))))
+        elif role == "tool":
+            converted.append(
+                ToolMessage(
+                    content=content,
+                    tool_call_id=getattr(message, "tool_call_id", "") or "",
+                    name=getattr(message, "name", None),
+                )
+            )
+    return converted
+
+
+def _langchain_tool_calls(tool_calls: Any) -> list[dict[str, Any]]:
+    if not isinstance(tool_calls, list):
+        return []
+    converted = []
+    for call in tool_calls:
+        if not isinstance(call, dict):
+            continue
+        function = call.get("function")
+        if isinstance(function, dict):
+            converted.append(
+                {
+                    "id": str(call.get("id") or ""),
+                    "name": str(function.get("name") or ""),
+                    "args": _tool_arguments(function.get("arguments")),
+                }
+            )
+        else:
+            converted.append(
+                {
+                    "id": str(call.get("id") or ""),
+                    "name": str(call.get("name") or ""),
+                    "args": _plain_json(call.get("args") or {}),
+                }
+            )
+    return converted
+
+
+def _tool_arguments(arguments: Any) -> dict[str, Any]:
+    if isinstance(arguments, dict):
+        return _plain_json(arguments)
+    if isinstance(arguments, str) and arguments.strip():
+        try:
+            decoded = json.loads(arguments)
+        except json.JSONDecodeError:
+            return {}
+        if isinstance(decoded, dict):
+            return _plain_json(decoded)
+    return {}
 
 
 def _memory_text(memory: Any) -> str:

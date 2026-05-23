@@ -75,6 +75,9 @@ def normalize_messages(messages: Any) -> list[DocumentQaMessage]:
                 DocumentQaMessage(
                     role=getattr(item, "role", "user"),
                     content=getattr(item, "content", ""),
+                    tool_calls=getattr(item, "tool_calls", None),
+                    tool_call_id=getattr(item, "tool_call_id", None),
+                    name=getattr(item, "name", None),
                 )
             )
     return normalized

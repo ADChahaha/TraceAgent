@@ -40,6 +40,41 @@ def test_completion_request_accepts_documents_messages_and_memory():
     assert request.memory.evidence_notes[0]["note"] == "终止权"
 
 
+def test_completion_request_accepts_openai_tool_messages():
+    request = DocumentQaCompletionRequest(
+        completion_id="cmp_123",
+        documents=[{"filename": "contract.html", "html": "<p>正文</p>"}],
+        messages=[
+            {"role": "user", "content": "看通知期限"},
+            {
+                "role": "assistant",
+                "content": "我先读通知条款。",
+                "tool_calls": [
+                    {
+                        "id": "call_read_notice",
+                        "type": "function",
+                        "function": {
+                            "name": "read",
+                            "arguments": "{\"locator\":\"evidence://0001.0001.0001\"}",
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_read_notice",
+                "name": "read",
+                "content": "{\"ok\":true}",
+            },
+            {"role": "user", "content": "所以是多少天？"},
+        ],
+    )
+
+    assert request.messages[1].tool_calls[0]["id"] == "call_read_notice"
+    assert request.messages[2].role == "tool"
+    assert request.messages[2].tool_call_id == "call_read_notice"
+
+
 def test_memory_defaults_to_empty_lists():
     memory = DocumentQaMemory()
 

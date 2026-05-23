@@ -118,6 +118,7 @@ TaskDetail(task_id)
   -> 同一文档内切换 evidence 时不重写 srcDoc，而是在 iframe.contentDocument 内移除旧 current evidence、给新 id/data-element-id 加 marker
   -> 对新 marker 调 scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" })，从当前滚动位置平滑跳到对应文本
   -> Agent 对话流和输入框共用同一个水平 inset；content frame 和 composer frame 都使用 `0 / minmax(0, 1fr) / 0`，让正文、工具行和 composer 在当前 Agent slot 内同宽铺开，左右面板只改变外层 stage 的可用宽度，不再用 viewport 或侧栏宽度额外偏移内容列
+  -> Agent 对话流只在用户已经接近底部时跟随 SSE 新消息；用户向上滚动阅读历史后，新消息不能强制把滚动位置拉回最底部
   -> applyEventToSummary 用事件更新 running/ready 状态
   -> turn terminal event 后清理运行态并刷新 summary
   -> 用户提交追问 createTaskInput(task_id, content)

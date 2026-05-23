@@ -405,14 +405,22 @@ function QaWorkspace({
   const { rightPanelWidth, resizeRightPanelByKeyboard, startRightPanelResize } = useRightSidebarResize();
   const agentBalanceSide = getAgentBalanceSide(isLeftPanelOpen, isVisibleRightPanelOpen);
   const streamRef = React.useRef<HTMLDivElement | null>(null);
+  const shouldFollowStreamRef = React.useRef(true);
 
   React.useLayoutEffect(() => {
     const stream = streamRef.current;
     if (!stream) {
       return;
     }
+    if (!shouldFollowStreamRef.current) {
+      return;
+    }
     stream.scrollTop = stream.scrollHeight;
   }, [streamItems.length]);
+
+  const handleStreamScroll = React.useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    shouldFollowStreamRef.current = isElementNearBottom(event.currentTarget);
+  }, []);
 
   return (
     <section
@@ -468,7 +476,12 @@ function QaWorkspace({
           data-agent-gutter="compact"
         >
           <div className="replay-agent-panel" aria-label="Document QA Agent">
-            <div ref={streamRef} className="replay-agent-stream" aria-label="QA conversation and reading process">
+            <div
+              ref={streamRef}
+              className="replay-agent-stream"
+              aria-label="QA conversation and reading process"
+              onScroll={handleStreamScroll}
+            >
               <div className="replay-agent-centered-content">
                 <div className="replay-agent-content-frame">
                   <span className="replay-agent-balance-spacer" data-agent-balance-spacer="left" data-active="true" aria-hidden="true" />
@@ -957,6 +970,12 @@ function isTerminalTurnEvent(event: TaskEvent): boolean {
 
 function isTaskRunning(summary?: Pick<TaskSummary, "status" | "stream" | "active_turn_id"> | null): boolean {
   return Boolean(summary?.active_turn_id || summary?.status === "running" || summary?.stream?.state === "running");
+}
+
+const QA_STREAM_BOTTOM_THRESHOLD_PX = 80;
+
+function isElementNearBottom(element: HTMLElement): boolean {
+  return element.scrollHeight - element.scrollTop - element.clientHeight <= QA_STREAM_BOTTOM_THRESHOLD_PX;
 }
 
 function formatToolLabel(toolName: string, payload: Record<string, unknown>): string {

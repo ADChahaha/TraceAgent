@@ -7,7 +7,7 @@
 ```text
 backend 传入 completion_id + documents + messages + memory
   -> DocumentQaCompletionRequest 校验每个 document 的 filename/html
-  -> DocumentQaMessage 保留 user/assistant/system 消息
+  -> DocumentQaMessage 保留 user/assistant/system/tool 消息和 assistant tool_calls
   -> DocumentQaMemory 为 reading_history/evidence_notes/prior_answers/open_threads 提供空列表默认值
   -> processor 用 RunOptions 和 ModelConfig 继续控制模型与工具预算
 ```
@@ -15,6 +15,7 @@ backend 传入 completion_id + documents + messages + memory
 ## 测试函数
 
 - `test_completion_request_accepts_documents_messages_and_memory`：验证 completion request 可以接收多文档、历史消息和压缩记忆，并归一成公开 schema 对象。
+- `test_completion_request_accepts_openai_tool_messages`：验证 completion request 可以直接接收 assistant tool_calls 和 tool role 消息。
 - `test_memory_defaults_to_empty_lists`：验证 memory 默认不会共享可变列表，缺省时四类记忆都是空列表。
 - `test_completion_status_values_match_public_events`：验证 completion 状态枚举和公开事件语义一致。
 - `test_model_config_keeps_resolution_model_and_sampling_options`：验证模型配置仍保留 base URL、key、模型名、采样参数、重试和超时。

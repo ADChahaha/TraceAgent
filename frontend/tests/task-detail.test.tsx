@@ -790,6 +790,59 @@ it("运行中的 SSE 更新不会禁用正在输入的追问草稿", async () =>
   expect(input).not.toBeDisabled();
 });
 
+it("用户不在底部时 SSE 新消息不会强制滚到最底部", async () => {
+  const fakeEventSource = new FakeEventSource();
+  const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
+  renderTaskDetail(detailData, { createTaskEventSource });
+
+  await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledWith("qa_task_001", 0));
+  const qaStream = await screen.findByLabelText("QA conversation and reading process");
+  Object.defineProperty(qaStream, "clientHeight", { configurable: true, value: 300 });
+  Object.defineProperty(qaStream, "scrollHeight", { configurable: true, value: 1200 });
+
+  act(() => {
+    fakeEventSource.emitEvent(
+      "agent.event",
+      taskEvent({
+        seq: 9,
+        type: "agent.event",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_active",
+        payload: {
+          agent: "file_extraction_agent",
+          type: "model_message",
+          content: "第一条过程消息。"
+        }
+      })
+    );
+  });
+  expect(await screen.findByText("第一条过程消息。")).toBeInTheDocument();
+  qaStream.scrollTop = 320;
+  fireEvent.scroll(qaStream);
+
+  act(() => {
+    fakeEventSource.emitEvent(
+      "agent.event",
+      taskEvent({
+        seq: 10,
+        type: "agent.event",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_active",
+        payload: {
+          agent: "file_extraction_agent",
+          type: "model_message",
+          content: "我继续核对受验注意。"
+        }
+      })
+    );
+  });
+
+  expect(await screen.findByText("我继续核对受验注意。")).toBeInTheDocument();
+  expect(qaStream.scrollTop).toBe(320);
+});
+
 it("运行状态变化不会改变 composer 单按钮结构和按钮外观", async () => {
   const user = userEvent.setup();
   const fakeEventSource = new FakeEventSource();

@@ -18,6 +18,7 @@ POST /qa/tasks/{task_id}/inputs
   -> 保存 user message 和 turn.created
   -> 立刻返回 queued turn snapshot
   -> 后台调用 agent POST /v1/document-qa/chat/completions
+  -> backend 从 qa_messages + qa_events 重建 OpenAI 风格 messages；同 turn 的 assistant tool_calls 和 tool 结果会一起传给 agent
   -> 持久化 agent.event
   -> completion.completed/cancelled/failed 映射成 turn.completed/cancelled/failed
   -> 把最后一条非空 model_message 保存为 assistant message，供下一轮传给 agent
@@ -42,6 +43,7 @@ POST /qa/tasks/{task_id}/cancel
 - `test_create_qa_task_processes_documents_without_task_spec`：验证创建 QA task 不再需要 `task_spec`，接口先返回 `processing/document_processing`，后台会调用 document_processor 保存文档，并且旧 `/tasks` route 已下线。
 - `test_qa_input_runs_agent_completion_and_persists_events`：验证用户输入接口先返回 `queued`，后台会调用 document QA completion，持久化 user message、turn、agent model message 和 terminal event，且 evidence link 保留在 `model_message` 内容中。
 - `test_qa_input_runs_agent_completion_and_persists_events`：同时验证现有 task detail 端点会返回 `documents[].display_html` 和 `source_selectors`，前端无需调用旧 replay 或新 review 端点即可打开 evidence 原文。
-- `test_qa_second_input_sends_prior_messages_to_agent`：验证第二轮输入会把上一轮 user/assistant 消息一起传给 agent，backend 是多轮状态事实来源。
+- `test_qa_second_input_sends_prior_messages_to_agent`：验证第二轮输入会把上一轮 user/assistant/tool 对话一起传给 agent，backend 是多轮状态事实来源。
+  这里的历史不是压缩摘要，而是按 OpenAI chat 结构重建的 `assistant.tool_calls` 和 `role=tool` 消息。
 - `test_qa_task_rejects_new_input_while_turn_is_active`：验证同一个 QA task 同时只允许一个 active turn。
 - `test_qa_cancel_active_turn_calls_agent_cancel`：验证 cancel 会标记 active turn、转发 agent cancel，并写入 `turn.cancel_requested` 事件。

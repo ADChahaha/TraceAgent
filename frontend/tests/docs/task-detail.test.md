@@ -20,6 +20,7 @@
   -> 如果 display_html 自带 page-like 纸张框，前端会在 iframe 里把 page 背景、阴影和内边距压平，只保留正文排版
   -> 右侧 review panel 用独立 resize separator 调整宽度，Agent 对话列按当前 Agent slot 宽度计算中心列和左右 blank，不能用 viewport 或侧栏宽度额外偏移内容列
   -> agent.event(type=tool_completed/tool_failed) 变成 Codex 式轻量可折叠工具过程行，摘要按钮带开关箭头，展开明细和摘要左边缘对齐；tool 文案只显示动作和内容类型，不展示具体 evidence/path/locator，失败工具调用也使用普通工具行颜色
+  -> Agent 对话流在用户接近底部时跟随 SSE 新消息；用户滚到历史位置阅读时，后续新消息不改写当前滚动位置
   -> turn.completed / turn.cancelled / turn.failed 清理运行态，让稳定的 composer handler 重新允许提交下一轮
   -> 用户追问时 POST /qa/tasks/{task_id}/inputs
   -> 追问 composer Enter 直接提交，Shift+Enter 在问题里保留换行
@@ -49,6 +50,7 @@
 - `任务详情会显示工具阅读过程并在 turn 完成后恢复可追问状态`：验证工具事件显示为阅读过程，终态 turn 事件后稳定主按钮仍可作为下一轮入口。
 - `运行中任务详情不启动定时轮询刷新 summary`：验证 active turn 期间详情页不会启动 `setInterval` 反复 GET summary，避免刷新打断用户输入。
 - `运行中的 SSE 更新不会禁用正在输入的追问草稿`：验证 SSE 把 task 更新为 running 时，textarea 仍保持可编辑且保留当前草稿。
+- `用户不在底部时 SSE 新消息不会强制滚到最底部`：验证用户已把 Agent 对话流滚到历史位置时，后续 SSE 新消息只追加内容，不覆盖当前 `scrollTop`。
 - `运行状态变化不会改变 composer 单按钮结构和按钮外观`：验证 SSE 事件切到 running 时输入框 placeholder 保持稳定，composer 不出现 `Send question` / `Pause answer` 两个 sibling，只保留同一个固定主按钮，且不改写 `disabled`、`aria-disabled` 或 class；按钮内 Send/Pause icon 都常驻，只切 `data-visible`。
 - `追问会复用同一个 task 提交下一轮输入`：验证底部 composer 用同一个 `task_id` 调 `/inputs`，提交后立即清空英文输入框并把用户消息推到对话流上方。
 - `追问 composer 用 Enter 提交问题，Shift Enter 保留换行`：验证任务详情 composer 的键盘语义，Shift+Enter 只插入换行，Enter 才提交多行追问。

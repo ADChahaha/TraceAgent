@@ -2,7 +2,7 @@
 
 这份文档描述 `agent service` 当前保留的两个能力：`document_processor` 和 `file_extraction_agent`。其中 `document_processor` 负责把上传 PDF 标准化成语义 HTML；`file_extraction_agent` 在 `dev-qa` 分支上已经重构为多文档 QA chat completion agent，负责对 backend 提供的一组 HTML 文档进行可追溯问答。
 
-`agent service` 不访问 backend SQLite，不持久化多轮会话，也不决定前端任务状态。backend 是 task、messages、memory、events 和 replay 的持久化事实来源；agent 只执行一次 completion，并通过 SSE 返回过程事件。
+`agent service` 不访问 backend SQLite，不持久化多轮会话，也不决定前端任务状态。backend 是 task、messages、memory、events 和 replay 的持久化事实来源；agent 只执行一次 completion，并通过 SSE 返回过程事件。跨轮上下文由 backend 组装成 OpenAI 风格 chat messages，包含 `user`、`assistant` 的 `tool_calls` 和 `tool` 消息。
 
 ## 1. 目标
 
@@ -29,7 +29,7 @@ backend 读取上传 PDF bytes
   -> backend 保存 task documents、messages、memory 和事件游标
   -> 用户每次提问时，backend 生成 completion_id
   -> 调用 POST /v1/document-qa/chat/completions
-       body = documents(filename + html) + messages + memory + run_options
+       body = documents(filename + html) + OpenAI 风格 messages + memory + run_options
   -> agent 返回 text/event-stream
        completion.created
        source_indexed
@@ -171,6 +171,7 @@ POST /v1/document-qa/chat/completions/{completion_id}/cancel
 
 - `document_processor` 只处理 PDF。
 - `file_extraction_agent` 只处理 backend 预先整理好的 `documents(filename + html)`，不负责读取上传文件。
+- `file_extraction_agent` 接收的 `messages` 采用 OpenAI chat 结构；backend 会把上一轮 assistant 的 `tool_calls` 和对应 `tool` 结果一起重建回来。
 - QA completion 当前总是以 SSE 返回；非流式 chat completion 还没有实现。
 - `GET /v1/document-qa/chat/completions/{completion_id}` 当前是占位调试接口。
 - cancellation 是 cooperative cancellation：agent 在 graph event 边界检查 cancel flag，不强杀正在进行中的模型请求。

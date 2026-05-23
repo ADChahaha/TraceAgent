@@ -87,7 +87,30 @@ class FakeQaAgentClient:
         }
         yield {
             "type": "model_message",
+            "tool_call_count": 1,
+            "tool_calls": [
+                {
+                    "id": "call_read_notice",
+                    "name": "read",
+                    "args": {"locator": "evidence://0001.0001.0001"},
+                }
+            ],
             "content": "可以提前终止，但需要提前 30 天通知。[30 天通知](evidence://0001.0001.0001/S001)",
+        }
+        yield {
+            "type": "tool_completed",
+            "tool": "read",
+            "args": {"locator": "evidence://0001.0001.0001"},
+            "result": {
+                "ok": True,
+                "locator": "evidence://0001.0001.0001",
+                "kind": "paragraph",
+                "text": "Either party may terminate with 30 days notice.",
+            },
+        }
+        yield {
+            "type": "model_message",
+            "content": "最终答案：可以提前终止，但要提前 30 天通知。[30 天通知](evidence://0001.0001.0001/S001)",
         }
         yield {
             "id": completion_id,
@@ -241,6 +264,34 @@ def test_qa_second_input_sends_prior_messages_to_agent(tmp_path: Path):
         {
             "role": "assistant",
             "content": "可以提前终止，但需要提前 30 天通知。[30 天通知](evidence://0001.0001.0001/S001)",
+            "tool_calls": [
+                {
+                    "id": "call_read_notice",
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "arguments": json.dumps({"locator": "evidence://0001.0001.0001"}, ensure_ascii=False),
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_read_notice",
+            "name": "read",
+            "content": json.dumps(
+                {
+                    "ok": True,
+                    "locator": "evidence://0001.0001.0001",
+                    "kind": "paragraph",
+                    "text": "Either party may terminate with 30 days notice.",
+                },
+                ensure_ascii=False,
+            ),
+        },
+        {
+            "role": "assistant",
+            "content": "最终答案：可以提前终止，但要提前 30 天通知。[30 天通知](evidence://0001.0001.0001/S001)",
         },
         {"role": "user", "content": "通知期限是多少？"},
     ]

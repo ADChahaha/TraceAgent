@@ -15,7 +15,9 @@ backend 是多轮 QA 的持久化事实来源：
 
 用户提问
   -> backend 保存 user message
-  -> backend 把 documents + messages + memory 传给 agent completion
+  -> backend 从 qa_messages + qa_events 重建 OpenAI 风格 messages：
+       user / assistant / tool
+     并把 documents + messages + memory 传给 agent completion
   -> backend 保存 agent model_message / tool events / terminal events
   -> backend 保存 assistant message，供下一轮上下文使用
 ```
@@ -114,8 +116,8 @@ POST /qa/tasks/{task_id}/inputs
   -> 如果 turn 已 cancelling/cancelled/failed，则直接收口
   -> qa_events 写 turn.started
   -> 组装 documents: qa_documents(filename + html)
-  -> 组装 messages: qa_messages(role + content)
-  -> 组装 memory: qa_tasks.memory_json
+  -> 组装 messages: qa_messages(role + content) + 同 turn 的 agent.event tool_calls / tool results
+  -> 组装 memory: qa_tasks.memory_json（只保留轻量状态，不重复塞上一轮答案摘要）
   -> AgentClient.create_document_qa_completion_stream(...)
   -> 每条 agent SSE 写 qa_events(agent.event)
   -> completion.completed 时，把最后一条非空 model_message 写成 role=assistant

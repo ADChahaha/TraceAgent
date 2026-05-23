@@ -16,7 +16,7 @@ CompletionStatus = Literal[
     "completed",
     "failed",
 ]
-MessageRole = Literal["system", "user", "assistant"]
+MessageRole = Literal["system", "user", "assistant", "tool"]
 
 
 class InputDocument(BaseModel):
@@ -31,11 +31,18 @@ class DocumentQaMessage(BaseModel):
 
     role: MessageRole
     content: str
+    tool_calls: list[dict[str, Any]] | None = None
+    tool_call_id: str | None = None
+    name: str | None = None
 
     @model_validator(mode="after")
     def validate_content(self) -> "DocumentQaMessage":
+        if self.role == "assistant" and self.tool_calls:
+            return self
         if not self.content.strip():
             raise ValueError("message content must be non-empty")
+        if self.role == "tool" and not (self.tool_call_id or "").strip():
+            raise ValueError("tool message requires tool_call_id")
         return self
 
 

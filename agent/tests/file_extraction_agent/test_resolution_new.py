@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
 from service.file_extraction_agent.impl.html_state import build_graph_state
 from service.file_extraction_agent.impl.html_tools import build_tools
@@ -49,6 +49,52 @@ def test_resolution_messages_describe_qa_investigation_not_field_extraction():
     assert "submit_result" not in system_content
     assert "公司什么时候成立？" in human_content
     assert "prior_answers" not in human_content or "Previous answers" in human_content
+
+
+def test_resolution_messages_preserve_openai_tool_history():
+    completion_input = build_completion_input(
+        completion_id="cmp_123",
+        documents=[
+            {
+                "filename": "company.html",
+                "html": '<h1 id="title">公司资料</h1><p id="p1">公司成立于2020年。</p>',
+            }
+        ],
+        messages=[
+            {"role": "user", "content": "查成立时间"},
+            {
+                "role": "assistant",
+                "content": "我先读公司概况。",
+                "tool_calls": [
+                    {
+                        "id": "call_read_company",
+                        "type": "function",
+                        "function": {
+                            "name": "read",
+                            "arguments": "{\"locator\":\"evidence://0001.0001.0001\"}",
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_read_company",
+                "name": "read",
+                "content": "{\"ok\":true,\"text\":\"公司成立于2020年。\"}",
+            },
+            {"role": "user", "content": "所以是哪一年？"},
+        ],
+    )
+    messages = build_resolution_messages(build_graph_state(completion_input))
+
+    assert messages[1].type == "human"
+    assert messages[2].type == "ai"
+    assert messages[2].tool_calls[0]["id"] == "call_read_company"
+    assert isinstance(messages[3], ToolMessage)
+    assert messages[3].tool_call_id == "call_read_company"
+    assert messages[4].type == "human"
+    assert messages[-1].type == "human"
+    assert "Investigate the documents" in messages[-1].content
 
 
 def test_resolution_graph_keeps_only_first_parallel_tool_call():

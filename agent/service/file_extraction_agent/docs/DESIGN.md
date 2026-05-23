@@ -29,7 +29,7 @@ completion_id + documents + messages + memory + run_options + model_config
   -> input_adapter.build_completion_input(...)
        -> 校验 completion_id 非空
        -> 校验 documents 是非空 list，且每个 InputDocument 有 filename/html
-       -> 校验 messages 是非空 list，且每条 DocumentQaMessage.content 非空
+       -> 校验 messages 是非空 list，支持 OpenAI 风格 user/assistant/tool 消息
        -> memory 缺省补成 DocumentQaMemory(reading_history/evidence_notes/prior_answers/open_threads)
        -> run_options 缺省补成 RunOptions(max_tool_calls=200)，并要求 max_tool_calls > 0
        -> html_index.build_html_document(documents) 构建只读语义虚拟树
@@ -40,7 +40,7 @@ completion_id + documents + messages + memory + run_options + model_config
        -> 输出 completion.created
        -> 输出 source_indexed(document_tree + source_selectors)
        -> resolution_new.run_resolution_stream(...)
-            -> build_resolution_messages，把历史 messages 和 memory 放入本轮上下文
+            -> build_resolution_messages，把历史 OpenAI messages 和 memory 放入本轮上下文
             -> build_tools(state) 暴露 tree / grep / read / inspect
             -> 模型产生 model_message，可继续单工具循环，也可无工具结束
        -> resolution 正常结束输出 completion.completed

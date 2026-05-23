@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import hashlib
 import sqlite3
 import threading
 import time
@@ -489,22 +491,88 @@ class QaTaskService:
                 source_selectors = {str(key): str(value) for key, value in selectors.items()}
         return source_selectors
 
-    def _completion_messages(self, task_id: str) -> list[dict[str, str]]:
-        return [
-            {"role": message["role"], "content": message["content"]}
-            for message in qa_crud.list_messages(self.connection, task_id)
-        ]
+    def _completion_messages(self, task_id: str) -> list[dict[str, Any]]:
+        events_by_turn = self._agent_context_events_by_turn(task_id)
+        messages: list[dict[str, Any]] = []
+        for message in qa_crud.list_messages(self.connection, task_id):
+            if message["role"] == "user":
+                messages.append({"role": "user", "content": message["content"]})
+                messages.extend(events_by_turn.get(message["turn_id"], []))
+            elif message["role"] in {"assistant", "system"} and message["turn_id"] not in events_by_turn:
+                messages.append({"role": message["role"], "content": message["content"]})
+        return messages
+
+    def _agent_context_events_by_turn(self, task_id: str) -> dict[str, list[dict[str, Any]]]:
+        events_by_turn: dict[str, list[dict[str, Any]]] = {}
+        pending_tool_calls_by_turn: dict[str, list[dict[str, Any]]] = {}
+        for event in qa_crud.list_events(self.connection, task_id, after_sequence=0):
+            if event["event_type"] != "agent.event" or not event["turn_id"]:
+                continue
+            payload = loads_json(event["payload_json"], {})
+            if not isinstance(payload, dict):
+                continue
+            turn_id = str(event["turn_id"])
+            event_type = str(payload.get("type") or "")
+            if event_type == "model_message":
+                content = str(payload.get("content") or "")
+                tool_calls = self._openai_tool_calls(payload.get("tool_calls"))
+                message: dict[str, Any] = {"role": "assistant", "content": content}
+                if tool_calls:
+                    message["tool_calls"] = tool_calls
+                    pending_tool_calls_by_turn[turn_id] = tool_calls.copy()
+                events_by_turn.setdefault(turn_id, []).append(message)
+            elif event_type in {"tool_completed", "tool_failed"}:
+                tool_call = self._pop_pending_tool_call(pending_tool_calls_by_turn.setdefault(turn_id, []), payload)
+                events_by_turn.setdefault(turn_id, []).append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.get("id") or self._fallback_tool_call_id(payload),
+                        "name": str(payload.get("tool") or tool_call.get("name") or "tool"),
+                        "content": json.dumps(payload.get("result") or {}, ensure_ascii=False),
+                    }
+                )
+        return events_by_turn
+
+    def _openai_tool_calls(self, tool_calls: Any) -> list[dict[str, Any]]:
+        if not isinstance(tool_calls, list):
+            return []
+        normalized = []
+        for call in tool_calls:
+            if not isinstance(call, dict):
+                continue
+            name = str(call.get("name") or "")
+            if not name:
+                continue
+            normalized.append(
+                {
+                    "id": str(call.get("id") or self._fallback_tool_call_id(call)),
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": json.dumps(call.get("args") or {}, ensure_ascii=False),
+                    },
+                }
+            )
+        return normalized
+
+    def _pop_pending_tool_call(self, pending_tool_calls: list[dict[str, Any]], payload: dict[str, Any]) -> dict[str, Any]:
+        tool_name = str(payload.get("tool") or "")
+        if not pending_tool_calls:
+            return {}
+        for index, call in enumerate(pending_tool_calls):
+            function = call.get("function")
+            call_name = function.get("name") if isinstance(function, dict) else None
+            if call_name == tool_name:
+                return pending_tool_calls.pop(index)
+        return pending_tool_calls.pop(0)
+
+    def _fallback_tool_call_id(self, payload: dict[str, Any]) -> str:
+        source = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        return f"call_replayed_{hashlib.sha256(source.encode('utf-8')).hexdigest()[:16]}"
 
     def _updated_memory(self, task_id: str) -> dict[str, Any]:
-        messages = qa_crud.list_messages(self.connection, task_id)
-        prior_answers = [
-            message["content"]
-            for message in messages
-            if message["role"] == "assistant"
-        ][-10:]
-        memory = dict(DEFAULT_MEMORY)
-        memory["prior_answers"] = prior_answers
-        return memory
+        del task_id
+        return dict(DEFAULT_MEMORY)
 
     def _emit_agent_event(self, *, task_id: str, turn_id: str, event: dict[str, Any]) -> None:
         payload = {"agent": "file_extraction_agent", **event}

@@ -8,7 +8,7 @@
 completion_id + documents + messages + memory
   -> 校验 completion_id 非空
   -> 校验至少一个 document 且每个 document 有 filename/html
-  -> 校验至少一个历史/当前 message
+  -> 校验至少一个历史/当前 message，支持 OpenAI 风格 tool history
   -> 构建 HtmlDocument virtual tree
   -> 返回 DocumentQaCompletionInput
 ```
