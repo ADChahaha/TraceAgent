@@ -300,7 +300,7 @@ def test_build_chat_model_builds_responses_stream_then_chat_fallbacks(monkeypatc
     assert [attempt.use_stream for attempt in attempts] == [True, True, False, False]
     assert [kwargs["use_responses_api"] for kwargs in captured] == [True, False, True, False]
     assert [kwargs["streaming"] for kwargs in captured] == [True, True, False, False]
-    assert [kwargs["request_timeout"] for kwargs in captured] == [30.0, 30.0, 30.0, 30.0]
+    assert [kwargs["request_timeout"] for kwargs in captured] == [8.0, 8.0, 8.0, 8.0]
 
 
 def test_normalize_model_config_rejects_unknown_model_fields():

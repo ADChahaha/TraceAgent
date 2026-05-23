@@ -27,5 +27,5 @@ create_completion_stream(...)
 - `test_create_completion_stream_flushes_committed_events_before_cancel`：确认 cancel 前已经成功 commit 到 runtime queue 的普通 event 会先按 FIFO 发出，然后才输出 `completion.cancelled`；consumer 不能用 cancel flag 跳过旧 event。
 - `test_create_completion_stream_emits_only_one_terminal_event_when_cancel_races_completed`：确认 cancel 与 producer 完成竞争时，同一个 completion 只会输出一个 terminal event。
 - `test_normalize_model_config_loads_default_env_file`：确认模型配置能从 `.env` 中读取 base URL、key、模型名、采样参数、推理强度、重试次数和超时。
-- `test_build_chat_model_builds_responses_stream_then_chat_fallbacks`：确认 resolution chat model 会按 `responses_stream -> chat_completions_stream -> responses_invoke -> chat_completions_invoke` 构造四级 fallback，默认优先 Responses API 和 stream，失败后再退到 chat/completions 与非流调用。
+- `test_build_chat_model_builds_responses_stream_then_chat_fallbacks`：确认 resolution chat model 会按 `responses_stream -> chat_completions_stream -> responses_invoke -> chat_completions_invoke` 构造四级 fallback，默认优先 Responses API 和 stream，失败后再退到 chat/completions 与非流调用；未显式配置 `MODEL_REQUEST_TIMEOUT` 时默认 request timeout 为 8 秒。
 - `test_normalize_model_config_rejects_unknown_model_fields`：确认模型配置拒绝未知字段，避免旧 broad/resolution 多阶段配置重新进入 QA completion 入口。

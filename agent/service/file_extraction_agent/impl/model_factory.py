@@ -13,7 +13,7 @@ from langchain_openai import ChatOpenAI
 from service.file_extraction_agent.schemas import ModelConfig
 
 
-DEFAULT_MODEL_REQUEST_TIMEOUT_SECONDS = 30.0
+DEFAULT_MODEL_REQUEST_TIMEOUT_SECONDS = 8.0
 
 
 def build_resolution_model(config: ModelConfig | dict | None) -> Any:
