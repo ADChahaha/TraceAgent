@@ -26,7 +26,6 @@ last updated: 2026-05-04 02:20:00 CST
   - 调整 RapidOCR 字典路径传参逻辑：只有 `impl/pdf/models/rapidocr/ppocr_keys_v1.txt` 真实存在时才传给运行时，避免无效路径 warning。
   - 保留 Marker/marker-pdf 作为可选 PDF 引擎入口，用于高精度但较慢的对照实验，不替代默认 RapidOCR 路径。
   - 前端上传代理增加 `proxyClientMaxBodySize=10mb`，修复 2MB 级 PDF 通过 Next proxy 上传时后端不可达的问题。
-  - 使用论文替代 PDF 走前端上传 -> backend -> agent 端到端验证，任务 `task_443c3d1a79674da59beb5f34b5b51369` 完成并被 route policy 自动接受，确认 `111` 人、首位 `王运达`、末位学号 `22270227`、末位姓名 `沈邵杰` 可提交。
 - current progress:
   - 默认 PDF 实现继续走 `docling + RapidOCR`，启动时可用环境变量切换后端和精度/速度参数；对该论文替代 PDF，设置 `DOCUMENT_PROCESSOR_RAPIDOCR_FORCE_FULL_PAGE_OCR=1` 后末页表格质量明显改善。
   - 当前完整文档处理结果能产出 111 行表格和约 2.8 万字符 markdown，足够支撑字段抽取端到端提交。

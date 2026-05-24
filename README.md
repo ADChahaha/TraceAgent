@@ -1,259 +1,97 @@
-# TraceAgent
+<p align="center">
+  <h1 align="center">TraceAgent</h1>
+  <p align="center">
+    <strong>Evidence-grounded document QA — 让每个回答都能追溯到原文。</strong>
+  </p>
+  <p align="center">
+    <a href="README.ja.md">日本語</a> · <a href="#demo">Demo</a> · <a href="#quickstart">Quick Start</a> · <a href="LICENSE">MIT License</a>
+  </p>
+</p>
 
-> 🔎 面向可信 AI 文档处理的字段级 trace、document QA 与 human review 工作台。
+---
 
-[日本語版](README.ja.md) · `field trace` · `document QA` · `replay` · `human review`
+普通文档 QA 只给答案，TraceAgent 给答案 + 证据。
 
-TraceAgent 把 AI 文档处理从一次性黑盒输出，变成可追踪、可回放、可治理、可审计的工作流。它提供两种核心能力：
+模型回答文档事实时附带 evidence link，点击即可跳转原文高亮——你不需要相信模型，你可以自己核对。
 
-1. **字段抽取 + 治理**：追踪模型看了哪里、为什么写入、证据是否足够，以及这个字段能不能进入最终结果。
-2. **文档 QA**：基于文档结构化 HTML 的多轮对话问答，支持 evidence 定位和过程流展示。
+<h2 id="demo">🎬 Demo</h2>
 
-```text
-PDF / DOCX
-  -> 文档标准化（MinerU / python-docx -> 带稳定 id 的 HTML）
-  -> 字段抽取 + 证据链  |  多轮 QA + evidence 定位
-  -> route 决策 / 人工复核
-  -> 可审计结果
-```
+<img src="docs/assets/demo-qa-evidence-review.png" alt="TraceAgent：左侧多轮 QA 对话，右侧原文 evidence 高亮" width="100%">
+<p align="center"><em>左：多轮 QA 对话（过程流 + evidence link） · 右：原文高亮定位</em></p>
 
-| Trace | QA | Replay | Govern | Review | Stack |
-| --- | --- | --- | --- | --- | --- |
-| 字段级证据 | 多轮文档问答 | 工具调用时间线 | accept / review / reject | 人工复核 | FastAPI · Next.js · SQLite |
+<table>
+<tr>
+<td width="50%">
+<img src="docs/assets/demo-qa-exam-time.png" alt="文档 QA 查询考试时间" width="100%">
+<p align="center"><em>查询考试时间</em></p>
+</td>
+<td width="50%">
+<img src="docs/assets/demo-qa-exam-content.png" alt="文档 QA 查找考试内容" width="100%">
+<p align="center"><em>查找考试内容</em></p>
+</td>
+</tr>
+</table>
 
-## 🎬 演示
+## ✨ 核心亮点
 
+| | 功能 | 说明 |
+|---|---|---|
+| 💬 | **多轮文档 QA** | 上传 PDF / DOCX，围绕同一批文档连续追问 |
+| 🔗 | **Evidence Link** | 回答中的事实用 `[label](evidence://...)` 绑定原文位置 |
+| 📖 | **原文 Review** | 点击 evidence 打开右侧原文 HTML，高亮段落 / 列表项 / 表格行 |
+| 🧭 | **过程可见** | 展示模型浏览目录、搜索、阅读片段的完整过程 |
+| 🛑 | **可取消生成** | 随时取消当前回答，输入框保持可编辑 |
+| 📄 | **多格式** | PDF（MinerU OCR）和 DOCX（python-docx） |
 
-## ✨ 为什么做 TraceAgent
-
-传统文档处理系统通常只展示最终输出——无论是抽取的 JSON 还是 QA 的回答。字段值对不对、证据在哪里、模型为什么这么填、哪些字段需要人工介入，都容易变成黑盒。
-
-TraceAgent 的核心判断是：AI 处理结果不应该直接写入业务系统。每个输出都应该先成为一个可追踪、可复核、可治理的对象。
-
-```text
-PDF / DOCX + task_spec
-  -> 文档标准化为带稳定 id 的 HTML
-  -> AI 按字段抽取 / 多轮 QA
-  -> 每个输出绑定证据、过程和风险判断
-  -> route policy 决定 accept / review / reject
-  -> 可信结果自动通过，不确定结果进入人工复核
-  -> 最终结果带着证据和审计记录进入后续系统
-```
-
-TraceAgent 关注的不是”模型答了什么”，而是”这个答案凭什么可以被相信”。
-
-## 🚀 核心亮点
-
-- 🔎 字段级追踪：每个字段都能回到原文 evidence、工具动作和写入理由。
-- 💬 文档 QA：上传 PDF/DOCX 后可多轮提问，回答基于文档结构化 HTML，支持 evidence 高亮。
-- 🎬 可回放过程：前端可以按 `plan -> read -> table query -> set_field -> finish` 回放抽取过程。
-- 🛡️ 写库前治理：AI 输出必须先经过字段级 `accept / review / reject`，不会直接进入最终结果。
-- 🧑‍⚖️ 人工只处理不确定项：可信字段自动通过，复核精力集中在有疑点的字段。
-- 🧾 可审计结果：最终结果保留 evidence、route 决策和人工复核记录。
-- 📄 多格式支持：支持 PDF（MinerU OCR）和 DOCX 文档处理。
-
-## 🧠 核心思路
-
-TraceAgent 的核心不是”自动填表”或”自动回答”，而是”字段级可追踪的 AI 文档处理治理”。
-
-### 字段抽取
-
-用户定义要抽取的字段后，TraceAgent 会把每个字段都变成一个可治理对象：
-
-- 字段值：AI 最终填了什么。
-- 原文证据：这个字段来自文档哪里。
-- 抽取过程：AI 查找、读取、查询表格和写入字段的过程。
-- route 判断：这个字段是可以自动通过、需要人工复核，还是应该拒绝写入。
-- 审计记录：最终是谁确认了这个字段，以及依据是什么。
-
-字段只有在自动判断可信，或人工复核确认后，才会进入最终结果。
-
-### 文档 QA
-
-用户上传文档后，可以基于文档内容进行多轮对话问答：
-
-- 文档先被标准化为带稳定 element id 的 HTML。
-- QA agent 基于文档 HTML 上下文生成回答。
-- 每次回答都支持 evidence 定位，可追溯到原文位置。
-- 支持多轮对话记忆和取消进行中的请求。
+## 🧠 工作原理
 
 ```mermaid
-flowchart TD
-    Upload["用户提交 PDF 和想抽取的字段"]
-    Extract["AI 抽取字段\n同时保留证据"]
-    Gate{"写库前治理"}
-    Auto["可信字段\n自动通过"]
-    Review["不确定字段\n交给人工复核"]
-    Reject["明显不可信\n拒绝写入"]
-    Record["最终结果\n带证据和审计记录"]
-
-    Upload --> Extract --> Gate
-    Gate --> Auto --> Record
-    Gate --> Review --> Record
-    Gate --> Reject
+flowchart LR
+    Upload["📄 上传文档"] --> Normalize["🔧 标准化为带 id 的 HTML"]
+    Normalize --> Ask["💬 用户提问"]
+    Ask --> Agent["🤖 QA Agent 调用工具浏览文档"]
+    Agent --> Answer["✅ 回答 + evidence link"]
+    Answer --> Review["📖 右侧原文高亮"]
 ```
 
-## 🧰 细粒度 Trace 工具
+TraceAgent 不把整篇文档塞进 prompt，而是把文档映射为只读虚拟仓库。模型通过 `tree` / `grep` / `read` / `inspect` 四个工具按需浏览，像人翻阅资料一样逐步定位答案。
 
-TraceAgent 的字段级 replay 不是事后编出来的日志，而是抽取 agent 每一步工具调用留下的 `actions`。
+> 详细架构设计见 [`agent/docs/DESIGN.md`](agent/docs/DESIGN.md)
 
-```text
-PDF
-  -> document_processor 生成带稳定 id 的 HTML / blocks
-  -> file_extraction_agent 用可追踪工具逐步抽取字段
-  -> backend 保存 actions、evidence_ids、field_states 和 route 决策
-  -> frontend replay 按工具动作回放
-```
-
-| Tool | 追踪粒度 | 用户能追踪到什么 |
-| --- | --- | --- |
-| `return_broad_plan` | 任务级计划 | broad 阶段给出的抽取计划、风险和后续阅读顺序。 |
-| `update_plan` | 计划步骤级 | resolution 执行到哪一步计划，什么时候开始、什么时候完成，以及推进原因。 |
-| `read_element` | 单个 HTML 元素级 | 模型读取的标题、段落、列表项或表格结构摘要。 |
-| `read_section` | 文件树递归章节级 | 从标题出发读取到的章节范围和证据 ids。 |
-| `table_extraction` | 表格查询级 | 表格 id、SQL、命中行证据、`table_audit` 和 `query_audit`。 |
-| `paragraph_extraction` | 文本匹配级 | 元素 id、pattern、匹配文本、span 和 evidence ids。 |
-| `set_field` | 字段写入级 | 字段值、证据 id、写入理由、状态或失败原因。 |
-| `finish` | 运行校验级 | 抽取是否完成，是否还有缺失字段或证据错误。 |
-
-## ⚡ 本地运行
-
-当前本地开发由三个服务组成：
-
-- `agent`：负责文档标准化（PDF via MinerU / DOCX via python-docx），以及基于文档 HTML 的 QA completion。
-- `backend`：负责 QA task、documents、messages、events、memory 的持久化，并调用 `agent`。
-- `frontend`：负责上传文档、多轮提问、过程流展示和 evidence review。
-
-启动顺序固定为：
-
-```text
-agent:    127.0.0.1:8001
-backend:  127.0.0.1:8000
-frontend: 127.0.0.1:3000
-```
-
-### 1. 安装依赖
+<h2 id="quickstart">⚡ Quick Start</h2>
 
 ```bash
-conda create -n agent-gate python=3.11 -y
-conda activate agent-gate
-cd /path/to/agent_gate
+# 环境
+conda create -n agent-gate python=3.11 -y && conda activate agent-gate
+
+# 安装
 pip install -e "agent[dev]"
 pip install -e "backend[dev]"
 pnpm --dir frontend install
-```
 
-### 2. 配置 agent 环境变量
-
-真实跑 PDF 和模型时，先在启动 `agent` 的终端里设置模型和 MinerU 配置：
-
-```bash
+# 配置模型（启动 agent 前）
 export BASE_URL="https://your-model-endpoint/v1"
 export OPENAI_API_KEY="your-api-key"
-export RESOLUTION_MODEL="your-resolution-model-name"
-export MINERU_BIN="mineru"
-export DOCUMENT_PROCESSOR_MINERU_LANG="japan"
+export MODEL="your-model-name"
+
+# 启动（三个终端）
+uvicorn --app-dir agent main:app --reload --host 127.0.0.1 --port 8001
+AGENT_SERVICE_BASE_URL=http://127.0.0.1:8001 uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+BACKEND_BASE_URL=http://127.0.0.1:8000 pnpm --dir frontend dev --port 3000
 ```
 
-中文 PDF 可以把 `DOCUMENT_PROCESSOR_MINERU_LANG` 改成 `ch`。
+打开 http://127.0.0.1:3000 即可使用。
 
-### 3. 确认端口空闲
+> 详细配置和故障排查见各子包 README：[`agent/`](agent/README.md) · [`backend/`](backend/README.md) · [`frontend/`](frontend/docs/)
 
-启动前可以先确认项目端口没有被旧进程占用：
+## 🗺️ 项目结构
 
-```bash
-lsof -nP -iTCP:3000 -iTCP:8000 -iTCP:8001 -sTCP:LISTEN
+```
+agent/        AI 能力层：文档标准化 + QA Agent
+backend/      持久化与编排：tasks / documents / messages / events
+frontend/     浏览器工作台：上传、QA、过程流、evidence review
 ```
 
-如果输出里还有旧的 `frontend`、`backend` 或 `agent` 进程，先停掉对应进程后再启动。
+## 📄 License
 
-### 4. 启动 agent
-
-```bash
-conda activate agent-gate
-cd /path/to/agent_gate
-python -m uvicorn --app-dir agent main:app --reload --host 127.0.0.1 --port 8001
-```
-
-本地取消任务依赖 `agent` 进程内存中的 active completion 状态，所以开发时不要给 `uvicorn` 加多 worker。多 worker 会让取消请求找不到对应 completion。
-
-健康检查：
-
-```bash
-curl --noproxy '*' http://127.0.0.1:8001/healthz
-```
-
-### 5. 启动 backend
-
-```bash
-conda activate agent-gate
-cd /path/to/agent_gate
-AGENT_SERVICE_BASE_URL=http://127.0.0.1:8001 \
-AGENT_SERVICE_TIMEOUT_SECONDS=1200 \
-uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-健康检查：
-
-```bash
-curl --noproxy '*' http://127.0.0.1:8000/healthz
-```
-
-### 6. 启动 frontend
-
-```bash
-cd /path/to/agent_gate
-BACKEND_BASE_URL=http://127.0.0.1:8000 \
-pnpm --dir frontend dev --port 3000
-```
-
-打开浏览器访问：
-
-```text
-http://127.0.0.1:3000/
-```
-
-如果本机代理导致浏览器或 `curl` 访问本地服务出现 502，可以临时设置：
-
-```bash
-export NO_PROXY=127.0.0.1,localhost
-```
-
-如果 `--reload` 在本机环境里反复重启或不稳定，去掉 `--reload` 后再启动对应 FastAPI 服务。
-
-## 🗺️ 目录结构
-
-```text
-frontend/     浏览器工作台：上传文档、多轮 QA、过程流回放和 evidence review
-backend/      持久化层：tasks、documents、messages、events、memory 和 agent 调用
-agent/        AI 能力层：
-  ├── document_processor/   文档标准化（PDF MinerU / DOCX python-docx -> HTML）
-  ├── file_extraction_agent/  字段抽取 agent（trace 工具链）
-  └── route_policy_agent/     字段级 route 决策（accept / review / reject）
-experiments/  评测实验：agent 架构 vs direct prompting 的对比基准
-```
-
-## 📊 实验评测
-
-`experiments/` 目录记录了 agent 架构与 direct prompting 在同一底座模型、同一数据集、同一 zero-shot 设置下的对比实验。
-
-### ContractNLI（主实验）
-
-在 61 个合同文档上做文档级 NLI 判断 + evidence 定位：
-
-| Method | Acc. | F1(C) | F1(E) | Evidence F1 |
-| --- | ---: | ---: | ---: | ---: |
-| direct | 0.789 | 0.547 | 0.863 | 0.418 |
-| agent | **0.803** | **0.580** | **0.869** | **0.501** |
-
-Agent 架构在 NLI 分类上小幅领先（Acc. +1.45pt），在 evidence grounding 上明显更好（Evidence F1 +8.31pt），同时 `trace.actions` 提供了人类可审计的搜索和推理轨迹。
-
-### 其他评测集
-
-- **CUAD**：合同条款抽取（`cuad_10`、`cuad_hard_40`），测试长文档字段定位。
-- **Kleister NDA**：NDA 关键信息抽取。
-- **ZeroScrolls**：长文档理解基准。
-
-## 📄 许可证
-
-本项目使用 [MIT License](LICENSE)。
+[MIT](LICENSE)

@@ -1,172 +1,97 @@
-# TraceAgent
+<p align="center">
+  <h1 align="center">TraceAgent</h1>
+  <p align="center">
+    <strong>Evidence-grounded document QA — すべての回答を原文まで追跡できる。</strong>
+  </p>
+  <p align="center">
+    <a href="README.md">中文</a> · <a href="#demo">Demo</a> · <a href="#quickstart">Quick Start</a> · <a href="LICENSE">MIT License</a>
+  </p>
+</p>
 
-> 🔎 信頼できる AI 文書抽出のための、フィールド単位の trace / review ワークベンチ。
+---
 
-[中文](README.md) · `field trace` · `replay` · `human-in-the-loop`
+一般的な文書 QA は答えだけを返します。TraceAgent は答え + 証拠を返します。
 
-TraceAgent は、AI による文書抽出をブラックボックスな JSON 出力で終わらせず、各フィールドごとに根拠・処理過程・判断・監査記録を追跡できるワークフローとして扱います。
+モデルが文書の事実を回答するとき evidence link を付与し、クリックすると原文が開いて該当箇所がハイライトされます。モデルを信じる必要はありません——自分の目で原文を確認できます。
 
-単にモデルに「フィールドを埋めさせる」のではなく、モデルがどこを読んだのか、なぜその値を書いたのか、根拠が十分か、そのフィールドを最終結果に入れてよいかを確認します。
+<h2 id="demo">🎬 デモ</h2>
 
-```text
-black-box JSON  ->  フィールド単位の根拠  ->  再生可能な処理過程  ->  route decision  ->  監査可能な結果
-```
+<img src="docs/assets/demo-qa-evidence-review.png" alt="TraceAgent：左側にマルチターン QA、右側に原文 evidence ハイライト" width="100%">
+<p align="center"><em>左：マルチターン QA（過程表示 + evidence link） · 右：原文ハイライト</em></p>
 
-| 追跡 | 再生 | 判断 | 確認 | 技術構成 |
-| --- | --- | --- | --- | --- |
-| フィールド単位の根拠 | tool-call timeline | accept / review / reject | human-in-the-loop | FastAPI · React · SQLite |
+<table>
+<tr>
+<td width="50%">
+<img src="docs/assets/demo-qa-exam-time.png" alt="文書 QA で試験時間を確認" width="100%">
+<p align="center"><em>試験時間を確認</em></p>
+</td>
+<td width="50%">
+<img src="docs/assets/demo-qa-exam-content.png" alt="文書 QA で試験内容を検索" width="100%">
+<p align="center"><em>試験内容を検索</em></p>
+</td>
+</tr>
+</table>
 
-## 🎬 デモ
+## ✨ 主な特徴
 
-https://github.com/user-attachments/assets/54dc78da-bd68-4edf-8500-9dbf55f8239d
+| | 機能 | 説明 |
+|---|---|---|
+| 💬 | **マルチターン文書 QA** | PDF / DOCX をアップロードして同じ文書群に継続して質問 |
+| 🔗 | **Evidence Link** | 回答中の事実を `[label](evidence://...)` で原文に紐づけ |
+| 📖 | **原文 Review** | evidence クリックで右側に原文 HTML を表示、段落 / リスト項目 / 表行をハイライト |
+| 🧭 | **過程表示** | モデルが目次を見て、検索し、片段を読む過程を可視化 |
+| 🛑 | **生成キャンセル** | いつでも回答生成を中断、入力欄は編集可能なまま |
+| 📄 | **複数形式** | PDF（MinerU OCR）と DOCX（python-docx）に対応 |
 
-## ✨ なぜ TraceAgent なのか
-
-一般的な文書抽出システムは、最終的な JSON だけを表示しがちです。その場合、フィールド値が正しいのか、根拠がどこにあるのか、なぜモデルがその値を選んだのか、どのフィールドを人間が確認すべきかが見えにくくなります。
-
-TraceAgent の考え方は、AI の抽出結果をそのまま業務システムに入れないことです。各フィールドを、追跡・確認・統制できる単位として扱います。
-
-```text
-PDF + task_spec
-  -> フィールド単位の AI 抽出
-  -> 各フィールドに根拠・処理過程・リスク判断を紐づける
-  -> route policy が accept / review / reject を判断
-  -> 信頼できるフィールドは自動通過、不確実なフィールドは人間が確認
-  -> 最終結果には根拠と監査記録を残す
-```
-
-TraceAgent が重視するのは「モデルが何を答えたか」だけではなく、「その答えをなぜ信頼できるのか」です。
-
-## 🚀 主な特徴
-
-- 🔎 フィールド単位の trace: 各フィールドを原文 evidence、tool action、書き込み理由まで追跡できます。
-- 🎬 抽出過程の replay: UI で `plan -> read -> table query -> set_field -> finish` の流れを再生できます。
-- 🛡️ 最終結果に入れる前の判断: AI 出力は最終結果になる前に `accept / review / reject` の route を通ります。
-- 🧑‍⚖️ 必要な箇所だけ human-in-the-loop: 信頼できるフィールドは自動通過し、不確実なフィールドだけを人間が確認します。
-- 🧾 監査可能な出力: 最終結果には evidence、route decision、review record が残ります。
-
-## 🧠 基本的な考え方
-
-TraceAgent は単なる自動入力ツールではありません。AI 文書抽出のための、フィールド単位の governance layer です。
-
-ユーザーが抽出したいフィールドを定義すると、TraceAgent は各フィールドを追跡可能な単位として扱います。
-
-- 値: AI が最終的に書いた内容。
-- 根拠: その値が文書のどこに由来するか。
-- 処理過程: AI がどのように計画し、読み、表を検索し、フィールドを書いたか。
-- route decision: そのフィールドを accept / review / reject のどれにするか。
-- 監査記録: 誰が、どの根拠で確認したか。
-
-フィールドは、自動的に accept されるか、人間の review を通った後にだけ最終結果へ入ります。
+## 🧠 仕組み
 
 ```mermaid
-flowchart TD
-    Upload["PDF + fields"]
-    Extract["AI extraction\nwith evidence"]
-    Gate{"Pre-write governance"}
-    Auto["Trusted field\nauto accept"]
-    Review["Uncertain field\nhuman review"]
-    Reject["Unreliable field\nreject"]
-    Record["Final result\nwith evidence and audit"]
-
-    Upload --> Extract --> Gate
-    Gate --> Auto --> Record
-    Gate --> Review --> Record
-    Gate --> Reject
+flowchart LR
+    Upload["📄 文書アップロード"] --> Normalize["🔧 安定 id 付き HTML に標準化"]
+    Normalize --> Ask["💬 ユーザーが質問"]
+    Ask --> Agent["🤖 QA Agent がツールで文書を閲覧"]
+    Agent --> Answer["✅ 回答 + evidence link"]
+    Answer --> Review["📖 右側原文ハイライト"]
 ```
 
-## 🧰 細粒度の Trace Tools
+TraceAgent は文書全体を prompt に詰め込まず、文書を読み取り専用の仮想リポジトリとして扱います。モデルは `tree` / `grep` / `read` / `inspect` の 4 つのツールで必要に応じて資料をたどり、人が資料を調べるように段階的に答えを見つけます。
 
-TraceAgent の replay は後から作ったログではありません。抽出 agent の tool action そのものから構成されます。
+> 詳細なアーキテクチャは [`agent/docs/DESIGN.md`](agent/docs/DESIGN.md) を参照
 
-```text
-PDF
-  -> document_processor が安定した id を持つ HTML / blocks を生成
-  -> file_extraction_agent が trace 可能な tool でフィールドを抽出
-  -> backend が actions、evidence_ids、field_states、route decisions を保存
-  -> frontend が actions を replay
-```
-
-| Tool | 粒度 | ユーザーが追跡できる内容 |
-| --- | --- | --- |
-| `return_broad_plan` | タスク単位の計画 | broad 段階の抽出計画、リスク、読む順序。 |
-| `update_plan` | 計画ステップ | どの計画ステップが実行中または完了したか、その理由。 |
-| `read_element` | 単一 HTML 要素 | モデルが読んだ見出し、段落、リスト項目、表の概要。 |
-| `read_section` | 章単位の再帰読み取り | 見出しから読まれた章範囲と evidence ids。 |
-| `table_extraction` | 表クエリ | table id、SQL、該当行 evidence、`table_audit`、`query_audit`。 |
-| `paragraph_extraction` | テキスト一致 | element id、pattern、matched text、span、evidence ids。 |
-| `set_field` | フィールド書き込み | field value、evidence ids、書き込み理由、status、failure reason。 |
-| `finish` | 実行結果の検証 | 抽出が完了したか、欠落フィールドや evidence エラーがあるか。 |
-
-## ⚡ ローカルでの実行
-
-TraceAgent は 3 つのローカルサービスで構成されます。
-
-- `agent`: PDF 標準化、フィールド抽出、route policy 評価。
-- `backend`: タスク状態、結果保存、review、audit、SQLite。
-- `frontend`: アップロード、replay、field review、結果確認。
+<h2 id="quickstart">⚡ Quick Start</h2>
 
 ```bash
-conda create -n agent-gate python=3.11 -y
-conda activate agent-gate
-cd /path/to/agent_gate
+# 環境
+conda create -n agent-gate python=3.11 -y && conda activate agent-gate
+
+# インストール
 pip install -e "agent[dev]"
 pip install -e "backend[dev]"
 pnpm --dir frontend install
-```
 
-PDF とモデルを実行する場合は、`agent` を起動するターミナルで次の環境変数を設定します。
-
-```bash
+# モデル設定（agent 起動前）
 export BASE_URL="https://your-model-endpoint/v1"
 export OPENAI_API_KEY="your-api-key"
-export BROAD_MODEL="your-broad-model-name"
-export RESOLUTION_MODEL="your-resolution-model-name"
-export ROUTE_POLICY_MODEL="your-route-policy-model-name"
-export MINERU_BIN="mineru"
-export DOCUMENT_PROCESSOR_MINERU_LANG="japan"
+export MODEL="your-model-name"
+
+# 起動（3 つのターミナル）
+uvicorn --app-dir agent main:app --reload --host 127.0.0.1 --port 8001
+AGENT_SERVICE_BASE_URL=http://127.0.0.1:8001 uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+BACKEND_BASE_URL=http://127.0.0.1:8000 pnpm --dir frontend dev --port 3000
 ```
 
-`agent`:
+ブラウザで http://127.0.0.1:3000 を開けば使えます。
 
-```bash
-conda activate agent-gate
-cd /path/to/agent_gate
-python -m uvicorn --app-dir agent main:app --reload --host 127.0.0.1 --port 8001
+> 詳細な設定とトラブルシューティングは各パッケージの README を参照：[`agent/`](agent/README.md) · [`backend/`](backend/README.md) · [`frontend/`](frontend/docs/)
+
+## 🗺️ プロジェクト構成
+
 ```
-
-`backend`:
-
-```bash
-conda activate agent-gate
-cd /path/to/agent_gate
-AGENT_SERVICE_BASE_URL=http://127.0.0.1:8001 \
-AGENT_SERVICE_TIMEOUT_SECONDS=1200 \
-uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-`frontend`:
-
-```bash
-cd /path/to/agent_gate
-BACKEND_BASE_URL=http://127.0.0.1:8000 \
-pnpm --dir frontend dev --port 3000
-```
-
-ブラウザで開きます。
-
-```text
-http://127.0.0.1:3000/
-```
-
-## 🗺️ ディレクトリ構成
-
-```text
-frontend/  ユーザー画面：upload、replay、field review、audit view
-backend/   管理サービス：task state、result、review、audit、SQLite
-agent/     AI レイヤー：PDF standardization、field extraction、route policy
+agent/        AI 層：文書標準化 + QA Agent
+backend/      永続化と編成：tasks / documents / messages / events
+frontend/     ブラウザ工作台：アップロード、QA、過程表示、evidence review
 ```
 
 ## 📄 ライセンス
 
-このプロジェクトは [MIT License](LICENSE) のもとで公開されています。
+[MIT](LICENSE)

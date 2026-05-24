@@ -78,11 +78,9 @@ last updated: 2026-05-23 00:00:00
 
 - 移除字段定义里的宽泛 `type=list`，列表字段必须显式声明为 `list[string]` 或 `list[number]`。
 - `file_extraction_agent` 的 `set_field` 在写入 `resolved` 字段前立即校验值类型；类型不匹配时返回 `ok=false` 的工具结果，并且不写入 `field_states`。
-- 同步 route policy 和 backend 测试 fixture 的列表字段类型，避免下游继续依赖裸 `list`。
 
 ### 验证
 
-- `python -m pytest tests/file_extraction_agent/test_schemas.py tests/file_extraction_agent/test_html_tools_new.py tests/route_policy_agent -q`，结果 `62 passed`。
 - `python -m pytest`，在 `agent/` 下结果 `120 passed`。
 - `python -m pytest backend/tests`，结果 `16 passed`。
 
@@ -99,7 +97,6 @@ last updated: 2026-05-23 00:00:00
 
 ### 当前进展
 
-- 用立命馆真实 PDF 走 backend 全链路时，document_processor 和 file_extraction_agent 均完成；route_policy 因 API key 配置不匹配失败，但抽取结果和完整 actions trace 已保存，可被前端 replay。
 - 当前抽取 trace 已能驱动前端显示：outline 定位、文档滚动、高亮、表格行 evidence、字段写入和 plan 进度。
 
 ### 验证
@@ -122,20 +119,16 @@ last updated: 2026-05-23 00:00:00
 
 - 将 agent 抽取链路收口到统一 `search_grep`：一次工具调用同时检索正文 paragraph 和表格 row，查询词固定使用 `term1 OR term2 OR term3`。
 - 为 broad / resolution prompt 注入明确 `tool_contract`，让模型按工具描述理解 `search_grep`、候选写入、候选复制、候选计数和最终定案语义。
-- route policy 输入扩展为 `field_outputs + refs_with_text + field_processes`，并让派生字段通过 `related_field_processes` 看到来源字段前序 agent 查过什么、写入过多少候选和如何定案。
-- 将字段抽取和 route policy 的结构化输出策略都收口为 `tool_call`，不再保留 `json_schema/auto`。
 - 候选写入工具收到未知 ref 时不再直接终止整单，runner 记录 `tool_error` 并把错误作为下一轮工具结果返回给模型修正。
 
 ### 验证
 
-- `conda run -n agent-gate python -m pytest tests/file_extraction_agent tests/route_policy_agent tests/routes/test_route_policy_agent_route.py -q`，结果 `90 passed`。
 - `conda run -n agent-gate python -m pytest backend/tests/test_task_flow.py -q`，结果 `10 passed`。
 - `pnpm test -- task-detail.test.tsx --runInBand`，结果 `7 passed`。
 - 真实前端全流程任务 `task_ff50dfeab89a4923bdc4cbbd257c0a25` 完成 `completed / done / accept`，抽取 `academic_paper_count=9` 和 9 个 `academic_paper_names`。
 
 ### 遇到的问题
 
-- route policy 之前只看当前字段过程，导致 `academic_paper_count` 这类派生字段看不到 `academic_paper_names` broad 阶段实际查询词。
 - 真实 E2E 中模型曾把不存在的表格行 ref 传给候选写入工具，旧逻辑会把整个 extraction 标记为 failed。
 
 ### 下一步
@@ -149,7 +142,6 @@ last updated: 2026-05-23 00:00:00
 - 更新 `agent/docs/DESIGN.md`，记录 `file_extraction_agent` 下一版受约束 agentic workflow 设计：`Broad Agent Loop` 通过 `search_text`、`search_table_rows`、`add_candidate`、`finish_broad` 做候选证据召回。
 - 明确 `resolution agent` 可以读取 broad 候选，并在候选不足时继续用文本/表格检索工具补查，最终定案必须引用候选或 block/row id。
 - 明确表格检索是通用结构化检索能力，不硬编码具体业务词；当前内容类型先收敛为 heading/text/table，不处理 image。
-- 明确 OCR/表格质量提示只用于 backend review handoff 的人工审核辅助，不影响 broad、resolution 或 route policy 自动判断。
 
 ### 验证
 
@@ -159,9 +151,6 @@ last updated: 2026-05-23 00:00:00
 
 ### 已完成工作
 
-- 同步 `agent/README.md` 和 `agent/docs/DESIGN.md`，把 agent service 明确为 `document_processor -> file_extraction_agent -> route_policy_agent` 三阶段服务。
-- 修正 agent 与 backend 的交互描述：当前由 backend 通过 HTTP 传入文件 bytes、聚合 blocks、调用字段抽取和 route policy，agent 不直接拉取 backend 文件或访问 SQLite。
-- 明确 `route_policy_agent` 已实现 `accept / review / reject` 字段级判断，不再描述为后续规划。
 
 ### 验证
 
@@ -174,18 +163,15 @@ last updated: 2026-05-23 00:00:00
 - 按 review 修正 `file_extraction_agent` 抽取端结构化输出策略：`auto` 只在 `json_schema` 明确不支持时切到 `tool_call`，已经进入 invoke 阶段的超时、鉴权、服务端错误或输出校验失败不再换协议重试。
 - 收紧 resolution 证据绑定：模型返回 `status=resolved` 时必须声明非空 `used_block_ids`，避免最终 trace 沿用未被模型声明使用的 broad evidence。
 - 清理 document processor route 边界：HTTP 层改为从公开 `service.document_processor.processor` 导入 `InvalidFileObjectError`，不再依赖 `impl.base`。
-- 按你的决策保留 route policy 的 `json_schema -> tool_call` 结构化重试语义，但仍不解析裸 `model.invoke(...)` 响应。
 - 同步更新相关设计/API 和测试说明文档。
 
 ### 当前进展
 
-- review 中除 route policy 保留结构化 tool call 重试外，其余仍成立的设计偏差已修正。
 - 在 `agent-gate` 环境中验证完整测试：`126 passed, 2 warnings`。
 
 ### 遇到的问题
 
 - 抽取端之前把结构化 runnable 构造失败和 invoke 失败放在同一个 broad except 中，会把业务调用失败误判成协议不支持并重复请求模型。
-- resolution 之前允许 resolved 字段缺少 `used_block_ids`，会削弱后续 route policy 基于 refs 做放行判断的审计语义。
 
 ### 下一步
 
@@ -197,19 +183,16 @@ last updated: 2026-05-23 00:00:00
 
 - 修复 `/v1/ocr/capabilities` 依赖不存在 `docling_adapter` 的问题，改为从现有 PDF processor 读取 docling 模型目录。
 - 将 `file_extraction_agent` 的 `RunOptions` 收敛为 `schemas.py` 中的公开全局契约，供 HTTP 入口、Python 入口和内部 graph 共用。
-- 移除 `file_extraction_agent` 和 `route_policy_agent` 模型客户端中的裸 `model.invoke(...)` JSON / tool call 回退，只保留设计中的结构化输出策略回退。
 - 同步更新相关设计/API/README 和测试说明文档，补齐 capabilities、run options 边界和结构化调用失败语义。
 
 ### 当前进展
 
 - agent service 的 HTTP 能力查询、字段抽取公开参数边界和模型结构化调用行为已与当前设计一致。
-- 使用真实文明寝室 PDF 完成三段业务端到端验证：`document_processor -> file_extraction_agent -> route_policy_agent`，结果为 `18栋`、12 个文明寝室房间号、数量 `12`，route policy 三个字段均 `accept`。
 - 在 `agent-gate` 环境中验证完整测试：`122 passed, 2 warnings`。
 
 ### 遇到的问题
 
 - review 发现 capabilities 路由、HTTP `run_options` 暴露内部对象、模型客户端裸 JSON 回退三处与设计或文档不一致。
-- 当前 shell 未提供 `BASE_URL` / `OPENAI_API_KEY`，端到端验证使用确定性结构化 fake client 替代外部 LLM，但真实 PDF 解析、字段 graph、validation_rules 和 route policy 输入校验均走当前代码。
 - 完整测试仍有 docling / RapidOCR 依赖自身的 deprecation warning，本次未改动第三方依赖行为。
 
 ### 下一步
@@ -220,17 +203,12 @@ last updated: 2026-05-23 00:00:00
 
 ### 已完成工作
 
-- 新增 `agent/docs/API.md`，记录 agent service 的健康检查、文档标准化、字段抽取和 route policy 三类 HTTP API。
-- 文档中补齐三段式全流程 pipeline：`document_processor -> file_extraction_agent -> route_policy_agent`。
 - 记录 backend 在两段接口之间需要完成的组装职责：为 blocks 补齐 `document_id/block_id`，并从抽取 trace 组装 `refs_with_text`。
-- 实现并挂载 `route_policy_agent` HTTP 出口 `POST /v1/route-policy-agent/evaluate`，与 `agent/docs/DESIGN.md` 中的三阶段链路保持一致。
 - 使用真实 PDF `18【本科生】2025-2026学年第一学期 文明模范寝室.pdf` 走 HTTP 全流程并验证三段接口均返回 200。
 
 ### 当前进展
 
-- agent service 当前具备三段 HTTP 出口：文档标准化、字段抽取、route policy 判断。
 - 真实 HTTP 全流程结果可用：模范寝室为 `106、218、413、521、603`，文明寝室为 `212、214、302、324、401、518、519、523、614、618、620、621`，楼宇平均分为 `85.1`。
-- route policy 对本次样例的 4 个字段均返回 `accept`。
 
 ### 遇到的问题
 
@@ -239,24 +217,18 @@ last updated: 2026-05-23 00:00:00
 
 ### 下一步
 
-- 后续可把 route policy 的真实 HTTP 样例沉淀为集成测试或脚本，避免只依赖手工 curl 验证。
 
 ## 2026-04-28 10:56:45
 
 ### 已完成工作
 
-- 新增 `route_policy_agent` 的设计文档，明确它作为 agent service 下第三个独立阶段，负责小 LLM + rules 的字段级 route 判断。
-- 同步更新 `agent/docs/DESIGN.md`，把 agent service 从两个阶段扩展为 `document_processor`、`file_extraction_agent`、`route_policy_agent` 三个阶段。
 - 明确 `file_extraction_agent` 只产出 `ExtractionResult(result + trace)`，不内置 `accept / review / reject` 判断。
 
 ### 当前进展
 
-- agent service 的职责边界调整为：文档标准化、字段抽取与 trace、route policy 三阶段分离。
-- backend 不做 LLM route 判断，只调用 agent 的 route policy 能力并保存输出。
 
 ### 下一步
 
-- 后续实现 `route_policy_agent` 时，按 TDD 补 schemas、rules、policy client、processor 和 HTTP route。
 - 为新增测试文件同步维护 `tests/docs/` 下的一一对应说明文档。
 
 ## 2026-04-27 14:46:39
