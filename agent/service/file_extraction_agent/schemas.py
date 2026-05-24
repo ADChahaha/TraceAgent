@@ -17,6 +17,7 @@ CompletionStatus = Literal[
     "failed",
 ]
 MessageRole = Literal["system", "user", "assistant", "tool"]
+ModelApiTransport = Literal["responses", "chat_completions"]
 
 
 class InputDocument(BaseModel):
@@ -72,7 +73,8 @@ class ModelConfig:
     provider: str = "openai"
     base_url: str | None = None
     api_key: str | None = None
-    resolution_model_name: str = ""
+    model_name: str = ""
+    api_transport: ModelApiTransport | str = "responses"
     temperature: float = 0.0
     top_p: float | None = None
     top_k: int | None = None
@@ -93,5 +95,6 @@ __all__ = [
     "DocumentQaMessage",
     "DocumentQaCompletionRequest",
     "ModelConfig",
+    "ModelApiTransport",
     "RunOptions",
 ]

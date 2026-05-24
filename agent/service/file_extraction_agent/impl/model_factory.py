@@ -18,7 +18,7 @@ DEFAULT_MODEL_REQUEST_TIMEOUT_SECONDS = 8.0
 
 def build_resolution_model(config: ModelConfig | dict | None) -> Any:
     normalized = normalize_model_config(config)
-    return build_chat_model(normalized, normalized.resolution_model_name)
+    return build_chat_model(normalized, normalized.model_name)
 
 
 def normalize_model_config(config: ModelConfig | dict | None) -> ModelConfig:
@@ -26,7 +26,16 @@ def normalize_model_config(config: ModelConfig | dict | None) -> ModelConfig:
         return _model_config_from_env()
     if isinstance(config, ModelConfig):
         return config
-    return ModelConfig(**config)
+    return ModelConfig(**_normalize_model_config_dict(config))
+
+
+def _normalize_model_config_dict(config: dict) -> dict[str, Any]:
+    normalized = dict(config)
+    if "model" in normalized:
+        if "model_name" in normalized and normalized["model_name"] != normalized["model"]:
+            raise ValueError("model and model_name must match when both are provided")
+        normalized["model_name"] = normalized.pop("model")
+    return normalized
 
 
 def build_chat_model(config: ModelConfig, model_name: str) -> Any:
@@ -34,6 +43,7 @@ def build_chat_model(config: ModelConfig, model_name: str) -> Any:
         raise ValueError(f"unsupported provider: {config.provider}")
     if not model_name:
         raise ValueError("model_name is required")
+    transport = _normalize_api_transport(config.api_transport)
 
     kwargs: dict[str, Any] = {
         "model": model_name,
@@ -71,7 +81,7 @@ def build_chat_model(config: ModelConfig, model_name: str) -> Any:
                 model=model_cls(**{**kwargs, "use_responses_api": use_responses_api, "streaming": streaming}),
                 use_stream=streaming,
             )
-            for name, use_responses_api, streaming in _transport_attempt_specs()
+            for name, use_responses_api, streaming in _transport_attempt_specs(transport)
         ]
     )
 
@@ -113,13 +123,25 @@ class ChatModelFallbackChain:
         return self.attempts
 
 
-def _transport_attempt_specs() -> list[tuple[str, bool, bool]]:
-    return [
-        ("responses_stream", True, True),
-        ("chat_completions_stream", False, True),
-        ("responses_invoke", True, False),
-        ("chat_completions_invoke", False, False),
-    ]
+def _transport_attempt_specs(transport: str) -> list[tuple[str, bool, bool]]:
+    if transport == "responses":
+        return [
+            ("responses_stream", True, True),
+            ("responses_invoke", True, False),
+        ]
+    if transport == "chat_completions":
+        return [
+            ("chat_completions_stream", False, True),
+            ("chat_completions_invoke", False, False),
+        ]
+    raise ValueError("MODEL_API_TRANSPORT must be responses or chat_completions")
+
+
+def _normalize_api_transport(value: str | None) -> str:
+    normalized = (value or "responses").strip().lower()
+    if normalized in {"responses", "chat_completions"}:
+        return normalized
+    raise ValueError("MODEL_API_TRANSPORT must be responses or chat_completions")
 
 
 class DeepSeekReasoningChatOpenAI(ChatOpenAI):
@@ -171,7 +193,8 @@ def _model_config_from_env() -> ModelConfig:
         provider=values.get("PROVIDER", "openai"),
         base_url=values.get("BASE_URL") or None,
         api_key=values.get("OPENAI_API_KEY") or None,
-        resolution_model_name=values.get("RESOLUTION_MODEL") or model,
+        model_name=model,
+        api_transport=_normalize_api_transport(values.get("MODEL_API_TRANSPORT")),
         temperature=_float_env(values.get("TEMPERATURE"), 0.0),
         top_p=_optional_float_env(values.get("TOP_P")),
         top_k=_optional_int_env(values.get("TOP_K")),

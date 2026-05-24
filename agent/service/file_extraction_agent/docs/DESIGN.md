@@ -343,12 +343,13 @@ POST /v1/document-qa/chat/completions/{completion_id}/cancel
   "model_config": {
     "base_url": "https://example.com/v1",
     "api_key": "...",
-    "resolution_model_name": "..."
+    "model": "...",
+    "api_transport": "responses"
   }
 }
 ```
 
-当前实现总是以 `text/event-stream` 返回流；`stream=false` 暂未实现为非流式响应。
+`api_transport` 只支持 `responses` 或 `chat_completions`。每个 transport 内部仍按 stream -> invoke 做 fallback；不会在 Responses API 失败后自动切到 chat/completions。当前实现总是以 `text/event-stream` 返回流；`stream=false` 暂未实现为非流式响应。
 
 ### 查询 completion
 

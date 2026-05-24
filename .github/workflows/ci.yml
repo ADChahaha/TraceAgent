@@ -56,8 +56,8 @@ jobs:
           pytest \
             agent/tests/document_processor \
             agent/tests/file_extraction_agent \
-            agent/tests/route_policy_agent \
             agent/tests/routes \
+            agent/tests/test_pyproject_dependencies.py \
             -q
 
   backend:

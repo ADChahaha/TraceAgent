@@ -34,7 +34,7 @@ def test_create_completion_stream_builds_completion_input_and_runs_graph(monkeyp
             completion_id="cmp_123",
             documents=[{"filename": "notice.html", "html": '<p id="p1">通知</p>'}],
             messages=[{"role": "user", "content": "问题"}],
-            model_config=ModelConfig(resolution_model_name="resolution"),
+            model_config=ModelConfig(model_name="resolution"),
         )
     )
 
@@ -60,7 +60,7 @@ def test_create_completion_stream_validates_input_before_iteration(monkeypatch):
             completion_id="cmp_123",
             documents=[],
             messages=[{"role": "user", "content": "问题"}],
-            model_config=ModelConfig(resolution_model_name="resolution"),
+            model_config=ModelConfig(model_name="resolution"),
         )
 
     assert called is False
@@ -84,7 +84,7 @@ def test_create_completion_stream_registers_active_completion_before_iteration(m
         completion_id="cmp_early_cancel",
         documents=[{"filename": "notice.html", "html": '<p id="p1">通知</p>'}],
         messages=[{"role": "user", "content": "问题"}],
-        model_config=ModelConfig(resolution_model_name="resolution"),
+        model_config=ModelConfig(model_name="resolution"),
     )
 
     assert cancel_completion("cmp_early_cancel") == {"id": "cmp_early_cancel", "status": "cancelling"}
@@ -117,7 +117,7 @@ def test_create_completion_stream_cancel_does_not_wait_for_blocked_graph(monkeyp
         completion_id="cmp_blocked",
         documents=[{"filename": "notice.html", "html": '<p id="p1">通知</p>'}],
         messages=[{"role": "user", "content": "问题"}],
-        model_config=ModelConfig(resolution_model_name="resolution"),
+        model_config=ModelConfig(model_name="resolution"),
     )
     events: list[str] = []
     stream_done = threading.Event()
@@ -169,7 +169,7 @@ def test_create_completion_stream_flushes_committed_events_before_cancel(monkeyp
             completion_id="cmp_flush",
             documents=[{"filename": "notice.html", "html": '<p id="p1">通知</p>'}],
             messages=[{"role": "user", "content": "问题"}],
-            model_config=ModelConfig(resolution_model_name="resolution"),
+            model_config=ModelConfig(model_name="resolution"),
         )
     )
 
@@ -209,7 +209,7 @@ def test_create_completion_stream_emits_only_one_terminal_event_when_cancel_race
         completion_id="cmp_race",
         documents=[{"filename": "notice.html", "html": '<p id="p1">通知</p>'}],
         messages=[{"role": "user", "content": "问题"}],
-        model_config=ModelConfig(resolution_model_name="resolution"),
+        model_config=ModelConfig(model_name="resolution"),
     )
 
     assert cancel_completion("cmp_race") == {"id": "cmp_race", "status": "cancelling"}
@@ -229,7 +229,8 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
             [
                 'BASE_URL="https://example.com/v1"',
                 'OPENAI_API_KEY="key"',
-                'RESOLUTION_MODEL="resolution"',
+                'MODEL="resolution"',
+                'MODEL_API_TRANSPORT="chat_completions"',
                 'TEMPERATURE="0.1"',
                 'TOP_P="0.9"',
                 'TOP_K="40"',
@@ -248,8 +249,8 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
         "BASE_URL",
         "API_KEY",
         "OPENAI_API_KEY",
-        "RESOLUTION_MODEL",
         "MODEL",
+        "MODEL_API_TRANSPORT",
         "TEMPERATURE",
         "TOP_P",
         "TOP_K",
@@ -263,7 +264,8 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
 
     assert config.base_url == "https://example.com/v1"
     assert config.api_key == "key"
-    assert config.resolution_model_name == "resolution"
+    assert config.model_name == "resolution"
+    assert config.api_transport == "chat_completions"
     assert config.temperature == 0.1
     assert config.top_p == 0.9
     assert config.top_k == 40
@@ -272,7 +274,7 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
     assert config.request_timeout == 120.0
 
 
-def test_build_chat_model_builds_responses_stream_then_chat_fallbacks(monkeypatch):
+def test_build_chat_model_builds_responses_transport_by_default(monkeypatch):
     captured = []
 
     class FakeChatOpenAI:
@@ -285,7 +287,7 @@ def test_build_chat_model_builds_responses_stream_then_chat_fallbacks(monkeypatc
         ModelConfig(
             base_url="https://example.com/v1",
             api_key="key",
-            resolution_model_name="resolution",
+            model_name="resolution",
         ),
         "resolution",
     )
@@ -293,16 +295,51 @@ def test_build_chat_model_builds_responses_stream_then_chat_fallbacks(monkeypatc
     attempts = model.model_call_attempts()
     assert [attempt.name for attempt in attempts] == [
         "responses_stream",
-        "chat_completions_stream",
         "responses_invoke",
+    ]
+    assert [attempt.use_stream for attempt in attempts] == [True, False]
+    assert [kwargs["use_responses_api"] for kwargs in captured] == [True, True]
+    assert [kwargs["streaming"] for kwargs in captured] == [True, False]
+    assert [kwargs["request_timeout"] for kwargs in captured] == [8.0, 8.0]
+
+
+def test_build_chat_model_builds_chat_completions_transport_when_configured(monkeypatch):
+    captured = []
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            captured.append(kwargs)
+
+    monkeypatch.setattr(model_factory_module, "ChatOpenAI", FakeChatOpenAI)
+
+    model = build_chat_model(
+        ModelConfig(
+            base_url="https://example.com/v1",
+            api_key="key",
+            model_name="resolution",
+            api_transport="chat_completions",
+        ),
+        "resolution",
+    )
+
+    attempts = model.model_call_attempts()
+    assert [attempt.name for attempt in attempts] == [
+        "chat_completions_stream",
         "chat_completions_invoke",
     ]
-    assert [attempt.use_stream for attempt in attempts] == [True, True, False, False]
-    assert [kwargs["use_responses_api"] for kwargs in captured] == [True, False, True, False]
-    assert [kwargs["streaming"] for kwargs in captured] == [True, True, False, False]
-    assert [kwargs["request_timeout"] for kwargs in captured] == [8.0, 8.0, 8.0, 8.0]
+    assert [attempt.use_stream for attempt in attempts] == [True, False]
+    assert [kwargs["use_responses_api"] for kwargs in captured] == [False, False]
+    assert [kwargs["streaming"] for kwargs in captured] == [True, False]
+
+
+def test_build_chat_model_rejects_unknown_transport():
+    with pytest.raises(ValueError, match="MODEL_API_TRANSPORT"):
+        build_chat_model(
+            ModelConfig(model_name="resolution", api_transport="auto"),
+            "resolution",
+        )
 
 
 def test_normalize_model_config_rejects_unknown_model_fields():
     with pytest.raises(TypeError, match="unexpected keyword argument 'broad_model_name'"):
-        normalize_model_config({"broad_model_name": "broad", "resolution_model_name": "resolution"})
+        normalize_model_config({"broad_model_name": "broad", "model": "resolution"})

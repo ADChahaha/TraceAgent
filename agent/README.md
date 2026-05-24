@@ -38,8 +38,8 @@ pip install -e ".[dev]"
 ```bash
 export BASE_URL="https://your-model-endpoint/v1"
 export OPENAI_API_KEY="your-api-key"
-export RESOLUTION_MODEL="your-resolution-model"
-export MINERU_BIN="mineru"
+export MODEL="your-model"
+export MODEL_API_TRANSPORT="responses"  # responses or chat_completions
 export DOCUMENT_PROCESSOR_MINERU_LANG="japan"
 ```
 

@@ -36,8 +36,8 @@ class ChatCompletionRequest(BaseModel):
     base_url: str | None = None
     api_key: str | None = None
     openai_api_key: str | None = None
-    resolution_model_name: str | None = None
     model: str | None = None
+    api_transport: str | None = None
     temperature: float | None = None
     top_p: float | None = None
     top_k: int | None = None
@@ -88,8 +88,8 @@ def _model_config(request: ChatCompletionRequest) -> ModelConfig | dict[str, Any
             request.base_url,
             request.api_key,
             request.openai_api_key,
-            request.resolution_model_name,
             request.model,
+            request.api_transport,
             request.temperature,
             request.top_p,
             request.top_k,
@@ -97,11 +97,11 @@ def _model_config(request: ChatCompletionRequest) -> ModelConfig | dict[str, Any
     ):
         return None
 
-    default_model = request.model or ""
     return {
         "base_url": request.base_url,
         "api_key": request.api_key or request.openai_api_key,
-        "resolution_model_name": request.resolution_model_name or default_model,
+        "model_name": request.model or "",
+        "api_transport": request.api_transport or "responses",
         "temperature": request.temperature if request.temperature is not None else 0.0,
         "top_p": request.top_p,
         "top_k": request.top_k,

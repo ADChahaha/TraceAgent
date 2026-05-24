@@ -18,6 +18,6 @@ backend 传入 completion_id + documents + messages
 - `test_completion_request_rejects_memory_field`：验证 completion request 会拒绝 `memory` 字段。
 - `test_completion_request_accepts_openai_tool_messages`：验证 completion request 可以直接接收 assistant tool_calls 和 tool role 消息。
 - `test_completion_status_values_match_public_events`：验证 completion 状态枚举和公开事件语义一致。
-- `test_model_config_keeps_resolution_model_and_sampling_options`：验证模型配置仍保留 base URL、key、模型名、采样参数、重试和超时。
-- `test_model_config_defaults_disable_sdk_retries_for_outer_backoff`：验证模型配置默认关闭 SDK 内部重试，由外层 provider attempt 和随机指数退避统一控制。
+- `test_model_config_keeps_model_transport_and_sampling_options`：验证模型配置保留 base URL、key、模型名、API transport、采样参数、重试和超时。
+- `test_model_config_defaults_disable_sdk_retries_for_outer_backoff`：验证模型配置默认关闭 SDK 内部重试，默认使用 Responses API transport，并由外层 provider attempt 和随机指数退避统一控制。
 - `test_run_options_defaults_to_tool_budget_only`：验证运行预算默认只保留工具调用上限。

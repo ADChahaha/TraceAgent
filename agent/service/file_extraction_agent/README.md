@@ -130,7 +130,8 @@ stream = create_completion_stream(
     model_config={
         "base_url": "https://example.com/v1",
         "api_key": "...",
-        "resolution_model_name": "...",
+        "model": "...",
+        "api_transport": "responses",
     },
     run_options={"max_tool_calls": 40},
 )

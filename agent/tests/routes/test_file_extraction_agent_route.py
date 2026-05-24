@@ -104,7 +104,8 @@ def test_document_qa_chat_completion_route_passes_model_overrides(monkeypatch):
             "messages": [{"role": "user", "content": "问题"}],
             "base_url": "https://example.com/v1",
             "openai_api_key": "key",
-            "resolution_model_name": "resolution",
+            "model": "resolution",
+            "api_transport": "chat_completions",
             "temperature": 0.2,
             "top_p": 0.9,
             "top_k": 40,
@@ -115,7 +116,8 @@ def test_document_qa_chat_completion_route_passes_model_overrides(monkeypatch):
     config = seen_call["model_config"]
     assert config["base_url"] == "https://example.com/v1"
     assert config["api_key"] == "key"
-    assert config["resolution_model_name"] == "resolution"
+    assert config["model_name"] == "resolution"
+    assert config["api_transport"] == "chat_completions"
     assert config["temperature"] == 0.2
     assert config["top_p"] == 0.9
     assert config["top_k"] == 40

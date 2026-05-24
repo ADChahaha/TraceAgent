@@ -168,7 +168,8 @@ POST /v1/document-qa/chat/completions/{completion_id}/cancel
 
 - `BASE_URL`
 - `OPENAI_API_KEY`
-- `RESOLUTION_MODEL` 或 `MODEL`
+- `MODEL`
+- `MODEL_API_TRANSPORT`：只支持 `responses` 或 `chat_completions`，默认 `responses`
 - `TEMPERATURE`
 - `TOP_P`
 - `TOP_K`

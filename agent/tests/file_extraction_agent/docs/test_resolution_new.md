@@ -25,7 +25,7 @@ GraphState(messages + HtmlDocument)
 - `test_resolution_messages_preserve_openai_tool_history`：验证历史 assistant tool_calls 和 tool 结果会保留为真实 chat/tool message，而不是压成单一文本摘要；最新用户消息仍是模型看到的最后一条 human 消息。
 - `test_resolution_graph_preserves_parallel_tool_calls`：验证 provider 同轮返回多个 tool call 时，resolution graph 会保留完整 tool_calls 摘要，并按顺序执行这些工具。
 - `test_resolution_uses_responses_api_stream_and_merges_content_with_tool_calls`：确认 stream 调用能把 text chunk 和 tool call chunk 合并成带 content 和 tool_calls 的 `AIMessage`。
-- `test_resolution_falls_back_from_responses_stream_to_chat_stream_then_invoke`：确认 Responses stream 失败后按顺序降级到 chat/completions stream 和非流 invoke。
+- `test_resolution_falls_back_from_stream_to_invoke_within_configured_transport`：确认一个已配置 transport 内 stream 失败后会降级到同 transport 的非流 invoke，不承担跨 Responses/chat-completions 自动切换。
 - `test_resolution_uses_ethernet_backoff_between_failed_provider_attempts`：确认 provider attempt 失败后，会按 `[0, 2^k - 1]` slot 的随机指数退避等待，再进入下一 attempt。
 - `test_resolution_stops_after_provider_attempt_limit`：确认同一轮 provider 调用最多尝试五次，避免无限重试或长期占用 producer。
 - `test_resolution_records_text_from_responses_api_content_blocks`：确认 Responses API content block 列表会抽取 `type=text` 文本并写入 `model_message.content`。

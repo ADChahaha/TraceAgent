@@ -34,10 +34,11 @@ python -m uvicorn main:app --host 127.0.0.1 --port 8001
 ```text
 BASE_URL
 OPENAI_API_KEY
-RESOLUTION_MODEL
+MODEL
+MODEL_API_TRANSPORT
 ```
 
-`MODEL` 可作为 `RESOLUTION_MODEL` 的兜底；可选参数包括 `TEMPERATURE`、`TOP_P`、`TOP_K`、`REASONING_EFFORT`、`MODEL_MAX_RETRIES` 和 `MODEL_REQUEST_TIMEOUT`。
+`MODEL_API_TRANSPORT` 只支持 `responses` 或 `chat_completions`，默认 `responses`；它决定同一轮 provider attempt 只走 Responses API 还是只走 chat/completions，不做跨 API 自动 fallback。可选参数包括 `TEMPERATURE`、`TOP_P`、`TOP_K`、`REASONING_EFFORT`、`MODEL_MAX_RETRIES` 和 `MODEL_REQUEST_TIMEOUT`。
 
 ## 3. 健康检查
 
@@ -123,7 +124,7 @@ POST /v1/document-qa/chat/completions
 - `metadata`：可选，agent 目前不持久化；backend 可用于调试或未来扩展。
 - `run_options`：可选，目前支持 `max_tool_calls`，必须大于 0。
 - `model_config`：可选，覆盖模型连接配置。
-- 兼容扁平模型字段：`base_url`、`api_key` / `openai_api_key`、`resolution_model_name` / `model`、`temperature`、`top_p`、`top_k`。
+- 扁平模型字段：`base_url`、`api_key` / `openai_api_key`、`model`、`api_transport`、`temperature`、`top_p`、`top_k`。
 
 示例：
 

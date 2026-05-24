@@ -228,7 +228,7 @@ def test_resolution_uses_responses_api_stream_and_merges_content_with_tool_calls
     ]
 
 
-def test_resolution_falls_back_from_responses_stream_to_chat_stream_then_invoke():
+def test_resolution_falls_back_from_stream_to_invoke_within_configured_transport():
     calls = []
 
     class FailingStreamModel:
@@ -264,14 +264,13 @@ def test_resolution_falls_back_from_responses_stream_to_chat_stream_then_invoke(
         def model_call_attempts(self):
             return [
                 SimpleNamespace(name="responses_stream", model=FailingStreamModel("responses"), use_stream=True),
-                SimpleNamespace(name="chat_completions_stream", model=FailingStreamModel("chat"), use_stream=True),
                 SimpleNamespace(name="responses_invoke", model=InvokeModel("responses"), use_stream=False),
                 SimpleNamespace(name="chat_completions_invoke", model=NeverCalledModel(), use_stream=False),
             ]
 
     message = _invoke_model_message(FallbackModel(), ["messages"])
 
-    assert calls == ["responses.stream", "chat.stream", "responses.invoke"]
+    assert calls == ["responses.stream", "responses.invoke"]
     assert message.content == "fallback invoke worked"
     assert message.tool_calls[0]["name"] == "tree"
 
