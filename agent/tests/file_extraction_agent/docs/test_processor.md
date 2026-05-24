@@ -1,6 +1,6 @@
 # test_processor.py
 
-这份测试覆盖 `file_extraction_agent.processor` 的 QA completion 入口和模型配置读取。入口负责把 `completion_id`、`documents`、`messages`、`memory` 和模型配置组装成图输入，然后把图执行器产出的 SSE 原样向外迭代。
+这份测试覆盖 `file_extraction_agent.processor` 的 QA completion 入口和模型配置读取。入口负责把 `completion_id`、`documents`、`messages` 和模型配置组装成图输入，然后把图执行器产出的 SSE 原样向外迭代。
 
 实现链路：
 

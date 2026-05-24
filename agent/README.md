@@ -5,7 +5,7 @@
 - `document_processor`：把 PDF/DOCX 标准化成 QA 友好的语义 HTML、展示用 HTML、markdown、blocks 和处理元信息。
 - `file_extraction_agent`：对 backend 传入的多份语义 HTML 做多轮文档 QA chat completion，像 code agent 浏览代码仓库一样用 `tree / grep / read / inspect` 查文档，并通过 SSE 返回带 evidence link 的过程消息和终态事件。
 
-它不访问 backend SQLite，不保存多轮 conversation，也不直接连接前端。任务、messages、memory、事件续传、replay 和最终展示都由 `backend` 负责。
+它不访问 backend SQLite，不保存多轮 conversation，也不直接连接前端。任务、append-only messages、事件续传、replay 和最终展示都由 `backend` 负责。
 
 ## 基本链路
 
@@ -14,12 +14,12 @@ backend 上传 PDF/DOCX bytes
   -> PDF POST /v1/document-processor/process
   -> DOCX POST /v1/document-processor/docx/process
   -> document_processor 返回 html / display_html / markdown / md_list / blocks
-  -> backend 保存文档、对话 messages、memory 和事件游标
+  -> backend 保存文档、对话 messages 和事件游标
   -> 用户提问时 backend 生成 completion_id
   -> POST /v1/document-qa/chat/completions
   -> file_extraction_agent 流式返回 completion.created / source_indexed / model_message / tool_* / completion.*
   -> backend 持久化事件并转发给前端
-  -> 下一轮问题由 backend 再次携带 documents + messages + memory 调用 agent
+  -> 下一轮问题由 backend 再次携带 documents + append-only messages 调用 agent
 ```
 
 ## 本地启动
@@ -98,10 +98,10 @@ GET  /v1/document-qa/chat/completions/{completion_id}
 POST /v1/document-qa/chat/completions/{completion_id}/cancel
 ```
 
-`POST /chat/completions` 接收 backend 准备好的 `documents(filename + html)`、多轮 `messages`、可选 `memory`、可选 `run_options` 和可选模型配置，返回 `text/event-stream`。
+`POST /chat/completions` 接收 backend 准备好的 `documents(filename + html)`、多轮 append-only `messages`、可选 `run_options` 和可选模型配置，返回 `text/event-stream`。
 
 ```text
-completion_id + documents + messages + memory
+completion_id + documents + messages
   -> input_adapter 校验 completion_id、documents、messages 和 max_tool_calls
   -> html_index 构建只读 semantic virtual tree
   -> graph 输出 completion.created + source_indexed
@@ -121,7 +121,7 @@ completion_id + documents + messages + memory
 | `grep(query, scope, kind, max_results)` | 候选搜索 | 命中文档、section、block locator、preview、match_spans | 像 `rg` 一样定位候选 block；不作为最终证据。 |
 | `read(locator)` | 上下文读取 | 单个 block 或连续 range 的 Markdown 阅读视图 | 追踪模型实际读了哪些 paragraph/list/table。 |
 | `inspect(locator)` | 精确证据展开 | `Sxxx` / `Ixxx` / `Rxxx` inline link 和反查文本 | 支撑具体事实、条件、金额、日期、冲突和最终结论。 |
-| `model_message` | 用户可见过程 | 自然语言说明 + Markdown evidence link | 让用户边看边验证模型阅读过程，而不是只看最终答案。 |
+| `model_message` | 用户可见过程 | 自然语言说明、Markdown evidence link、`is_final`/`stop_signal` | 让用户边看边验证模型阅读过程；backend 用 `is_final=true` 保存最终 assistant 消息。 |
 | `completion.completed` | 正常终态 | completion id、status | 本轮 QA 完成并关闭 SSE。 |
 | `completion.cancelled` | 取消终态 | completion id、status | backend 调 cancel 后收口本轮流。 |
 | `completion.failed` | 失败终态 | completion id、status、error | resolution 失败后收口本轮流。 |

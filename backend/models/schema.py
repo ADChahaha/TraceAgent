@@ -8,7 +8,6 @@ SCHEMA_SQL = [
         status TEXT NOT NULL,
         stage TEXT NOT NULL,
         metadata_json TEXT NOT NULL,
-        memory_json TEXT NOT NULL,
         active_turn_id TEXT,
         error_message TEXT,
         created_at TEXT NOT NULL,

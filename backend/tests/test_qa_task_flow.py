@@ -60,18 +60,18 @@ class FakeQaAgentClient:
         completion_id: str,
         documents: list[dict[str, Any]],
         messages: list[dict[str, str]],
-        memory: dict[str, Any],
         metadata: dict[str, Any] | None = None,
         run_options: dict[str, Any] | None = None,
+        **unexpected: Any,
     ):
         self.completion_calls.append(
             {
                 "completion_id": completion_id,
                 "documents": documents,
                 "messages": messages,
-                "memory": memory,
                 "metadata": metadata,
                 "run_options": run_options,
+                "unexpected": unexpected,
             }
         )
         yield {
@@ -113,6 +113,8 @@ class FakeQaAgentClient:
         yield {
             "type": "model_message",
             "content": "最终答案：可以提前终止，但要提前 30 天通知。[30 天通知](evidence://0001.0001.0001/S001)",
+            "is_final": True,
+            "stop_signal": "stop",
         }
         yield {
             "id": completion_id,
@@ -150,18 +152,18 @@ class LateCompletionQaAgentClient(FakeQaAgentClient):
         completion_id: str,
         documents: list[dict[str, Any]],
         messages: list[dict[str, str]],
-        memory: dict[str, Any],
         metadata: dict[str, Any] | None = None,
         run_options: dict[str, Any] | None = None,
+        **unexpected: Any,
     ):
         self.completion_calls.append(
             {
                 "completion_id": completion_id,
                 "documents": documents,
                 "messages": messages,
-                "memory": memory,
                 "metadata": metadata,
                 "run_options": run_options,
+                "unexpected": unexpected,
             }
         )
         yield {
@@ -189,23 +191,64 @@ class TerminalRaceQaAgentClient(FakeQaAgentClient):
         completion_id: str,
         documents: list[dict[str, Any]],
         messages: list[dict[str, str]],
-        memory: dict[str, Any],
         metadata: dict[str, Any] | None = None,
         run_options: dict[str, Any] | None = None,
+        **unexpected: Any,
     ):
         self.completion_calls.append(
             {
                 "completion_id": completion_id,
                 "documents": documents,
                 "messages": messages,
-                "memory": memory,
                 "metadata": metadata,
                 "run_options": run_options,
+                "unexpected": unexpected,
             }
         )
         yield {
             "type": "model_message",
             "content": "最终答案已经提交。",
+            "is_final": True,
+            "stop_signal": "stop",
+        }
+        yield {
+            "id": completion_id,
+            "type": "completion.completed",
+            "status": "completed",
+        }
+
+
+class FinalThenNonFinalQaAgentClient(FakeQaAgentClient):
+    def create_document_qa_completion_stream(
+        self,
+        *,
+        completion_id: str,
+        documents: list[dict[str, Any]],
+        messages: list[dict[str, str]],
+        metadata: dict[str, Any] | None = None,
+        run_options: dict[str, Any] | None = None,
+        **unexpected: Any,
+    ):
+        self.completion_calls.append(
+            {
+                "completion_id": completion_id,
+                "documents": documents,
+                "messages": messages,
+                "metadata": metadata,
+                "run_options": run_options,
+                "unexpected": unexpected,
+            }
+        )
+        yield {
+            "type": "model_message",
+            "content": "最终答案：可以提前终止。[终止权](evidence://0001.0001.0001/S001)",
+            "is_final": True,
+            "stop_signal": "stop",
+        }
+        yield {
+            "type": "model_message",
+            "content": "这条不是最终答案，不能写成 assistant message。",
+            "is_final": False,
         }
         yield {
             "id": completion_id,
@@ -358,6 +401,7 @@ def test_qa_input_runs_agent_completion_and_persists_events(tmp_path: Path):
     assert fake_agent.completion_calls[0]["messages"] == [
         {"role": "user", "content": "这份合同可以提前终止吗？"}
     ]
+    assert fake_agent.completion_calls[0]["unexpected"] == {}
 
     events = sse_events(events_response.text)
     event_types = [event["type"] for event in events]
@@ -429,6 +473,36 @@ def test_qa_second_input_sends_prior_messages_to_agent(tmp_path: Path):
             "content": "最终答案：可以提前终止，但要提前 30 天通知。[30 天通知](evidence://0001.0001.0001/S001)",
         },
         {"role": "user", "content": "通知期限是多少？"},
+    ]
+
+
+def test_qa_completed_turn_saves_only_final_model_message(tmp_path: Path):
+    fake_agent = FinalThenNonFinalQaAgentClient()
+    app, fake_agent = build_app(tmp_path, fake_agent)
+
+    with TestClient(app) as client:
+        task = create_qa_task(client)
+        wait_for_task_status(client, task["task_id"], "ready")
+        first = client.post(
+            f"/qa/tasks/{task['task_id']}/inputs",
+            json={"content": "可以提前终止吗？"},
+        )
+        wait_for_task_status(client, task["task_id"], "ready")
+        second = client.post(
+            f"/qa/tasks/{task['task_id']}/inputs",
+            json={"content": "上一轮结论是什么？"},
+        )
+        wait_for_task_status(client, task["task_id"], "ready")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert fake_agent.completion_calls[1]["messages"] == [
+        {"role": "user", "content": "可以提前终止吗？"},
+        {
+            "role": "assistant",
+            "content": "最终答案：可以提前终止。[终止权](evidence://0001.0001.0001/S001)",
+        },
+        {"role": "user", "content": "上一轮结论是什么？"},
     ]
 
 

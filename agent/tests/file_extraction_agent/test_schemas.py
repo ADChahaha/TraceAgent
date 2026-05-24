@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import pytest
+
 from service.file_extraction_agent.schemas import (
     CompletionStatus,
     DocumentQaCompletionRequest,
-    DocumentQaMemory,
     DocumentQaMessage,
     InputDocument,
     ModelConfig,
@@ -11,7 +12,7 @@ from service.file_extraction_agent.schemas import (
 )
 
 
-def test_completion_request_accepts_documents_messages_and_memory():
+def test_completion_request_accepts_documents_and_append_only_messages():
     request = DocumentQaCompletionRequest(
         completion_id="cmp_123",
         documents=[{"filename": "contract.html", "html": "<p>正文</p>"}],
@@ -20,24 +21,22 @@ def test_completion_request_accepts_documents_messages_and_memory():
             {"role": "assistant", "content": "上一轮回答摘要"},
             {"role": "user", "content": "可以提前终止吗？"},
         ],
-        memory={
-            "reading_history": ["evidence://0001"],
-            "evidence_notes": [
-                {
-                    "locator": "evidence://0001.0001.0001/S001",
-                    "note": "终止权",
-                }
-            ],
-            "prior_answers": ["上一轮回答摘要"],
-            "open_threads": ["通知期限待确认"],
-        },
     )
 
     assert request.completion_id == "cmp_123"
     assert request.documents[0] == InputDocument(filename="contract.html", html="<p>正文</p>")
     assert request.messages[-1] == DocumentQaMessage(role="user", content="可以提前终止吗？")
-    assert request.memory.reading_history == ["evidence://0001"]
-    assert request.memory.evidence_notes[0]["note"] == "终止权"
+    assert not hasattr(request, "memory")
+
+
+def test_completion_request_rejects_memory_field():
+    with pytest.raises(ValueError, match="memory"):
+        DocumentQaCompletionRequest(
+            completion_id="cmp_123",
+            documents=[{"filename": "contract.html", "html": "<p>正文</p>"}],
+            messages=[{"role": "user", "content": "问题"}],
+            memory={"prior_answers": ["会破坏 append-only prompt cache"]},
+        )
 
 
 def test_completion_request_accepts_openai_tool_messages():
@@ -73,15 +72,6 @@ def test_completion_request_accepts_openai_tool_messages():
     assert request.messages[1].tool_calls[0]["id"] == "call_read_notice"
     assert request.messages[2].role == "tool"
     assert request.messages[2].tool_call_id == "call_read_notice"
-
-
-def test_memory_defaults_to_empty_lists():
-    memory = DocumentQaMemory()
-
-    assert memory.reading_history == []
-    assert memory.evidence_notes == []
-    assert memory.prior_answers == []
-    assert memory.open_threads == []
 
 
 def test_completion_status_values_match_public_events():

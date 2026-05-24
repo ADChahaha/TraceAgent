@@ -18,14 +18,6 @@ from backend.services.errors import AgentServiceError, ConflictError, NotFoundEr
 from backend.services.time_utils import utc_now
 
 
-DEFAULT_MEMORY = {
-    "reading_history": [],
-    "evidence_notes": [],
-    "prior_answers": [],
-    "open_threads": [],
-}
-
-
 @dataclass(frozen=True)
 class UploadedFilePayload:
     file_bytes: bytes
@@ -88,7 +80,6 @@ class QaTaskService:
             self.connection,
             task_id=task_id,
             metadata=metadata,
-            memory=dict(DEFAULT_MEMORY),
             now=now,
         )
         self._emit_event(task, event_type="task.created", payload={"metadata": metadata}, now=now)
@@ -341,13 +332,12 @@ class QaTaskService:
             )
             self._emit_event(task, turn_id=turn_id, event_type="turn.started", payload={"turn_id": turn_id, "completion_id": completion_id}, now=started_at)
 
-        last_model_message = ""
+        final_model_message = ""
         try:
             for event in self.agent_client.create_document_qa_completion_stream(
                 completion_id=completion_id,
                 documents=self._completion_documents(task_id),
                 messages=self._completion_messages(task_id),
-                memory=loads_json(task["memory_json"], dict(DEFAULT_MEMORY)),
                 metadata={"task_id": task_id, "turn_id": turn_id},
                 run_options=run_options,
             ):
@@ -358,8 +348,12 @@ class QaTaskService:
                     if current_turn is None or current_turn["status"] != "in_progress":
                         return
                     event_type = str(event.get("type") or "agent.event")
-                    if event_type == "model_message" and str(event.get("content") or "").strip():
-                        last_model_message = str(event["content"])
+                    if (
+                        event_type == "model_message"
+                        and event.get("is_final") is True
+                        and str(event.get("content") or "").strip()
+                    ):
+                        final_model_message = str(event["content"])
                     self._emit_agent_event(task_id=task_id, turn_id=turn_id, event=event)
                     if event_type == "completion.failed":
                         terminal_status = str(event.get("status") or "failed")
@@ -369,7 +363,7 @@ class QaTaskService:
                         self._finish_turn_cancelled(task_id=task_id, turn_id=turn_id)
                         return
                     if event_type == "completion.completed":
-                        self._finish_turn_completed(task_id=task_id, turn_id=turn_id, assistant_content=last_model_message)
+                        self._finish_turn_completed(task_id=task_id, turn_id=turn_id, assistant_content=final_model_message)
                         return
         except Exception as exc:
             with self._turn_lock(turn_id):
@@ -384,7 +378,7 @@ class QaTaskService:
             current_turn = qa_crud.get_turn(self.connection, turn_id)
             if current_turn is None or current_turn["status"] != "in_progress":
                 return
-            self._finish_turn_completed(task_id=task_id, turn_id=turn_id, assistant_content=last_model_message)
+            self._finish_turn_completed(task_id=task_id, turn_id=turn_id, assistant_content=final_model_message)
 
     def _finish_turn_completed(self, *, task_id: str, turn_id: str, assistant_content: str) -> None:
         with self._turn_lock(turn_id):
@@ -416,7 +410,6 @@ class QaTaskService:
                 status="ready",
                 stage="ready",
                 clear_active_turn=True,
-                memory=self._updated_memory(task_id),
                 now=now,
             )
             self._emit_event(task, turn_id=turn_id, event_type="turn.completed", payload={"turn_id": turn_id}, now=now)
@@ -575,6 +568,8 @@ class QaTaskService:
             if event_type == "model_message":
                 content = str(payload.get("content") or "")
                 tool_calls = self._openai_tool_calls(payload.get("tool_calls"))
+                if not tool_calls and payload.get("is_final") is not True:
+                    continue
                 message: dict[str, Any] = {"role": "assistant", "content": content}
                 if tool_calls:
                     message["tool_calls"] = tool_calls
@@ -628,10 +623,6 @@ class QaTaskService:
     def _fallback_tool_call_id(self, payload: dict[str, Any]) -> str:
         source = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         return f"call_replayed_{hashlib.sha256(source.encode('utf-8')).hexdigest()[:16]}"
-
-    def _updated_memory(self, task_id: str) -> dict[str, Any]:
-        del task_id
-        return dict(DEFAULT_MEMORY)
 
     def _emit_agent_event(self, *, task_id: str, turn_id: str, event: dict[str, Any]) -> None:
         payload = {"agent": "file_extraction_agent", **event}

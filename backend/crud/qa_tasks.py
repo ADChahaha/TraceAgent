@@ -12,22 +12,20 @@ def create_task(
     *,
     task_id: str,
     metadata: dict[str, Any],
-    memory: dict[str, Any],
     now: str,
 ) -> dict[str, Any]:
     connection.execute(
         """
         INSERT INTO qa_tasks (
-            id, status, stage, metadata_json, memory_json, created_at, updated_at
+            id, status, stage, metadata_json, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
         (
             task_id,
             "processing",
             "document_processing",
             dumps_json(metadata),
-            dumps_json(memory),
             now,
             now,
         ),
@@ -63,7 +61,6 @@ def update_task(
     now: str,
     status: str | None = None,
     stage: str | None = None,
-    memory: dict[str, Any] | None = None,
     active_turn_id: str | None = None,
     clear_active_turn: bool = False,
     error_message: str | None = None,
@@ -73,8 +70,6 @@ def update_task(
         updates["status"] = status
     if stage is not None:
         updates["stage"] = stage
-    if memory is not None:
-        updates["memory_json"] = dumps_json(memory)
     if active_turn_id is not None:
         updates["active_turn_id"] = active_turn_id
     if clear_active_turn:

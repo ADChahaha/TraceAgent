@@ -1,6 +1,6 @@
 # File Extraction Agent Design
 
-本文记录 `file_extraction_agent` 在 `dev-qa` 分支上的当前设计：它已经从“按 `task_spec` 抽取字段”的 agent 重构为“多文档 QA chat completion agent”。模块仍沿用历史包名，但语义已经变成 document QA：backend 每轮把 `documents + messages + memory` 传入，agent 像 code agent 浏览代码仓库一样浏览虚拟文档仓库，并通过 SSE 持续输出 `model_message`、工具事件和终态事件。
+本文记录 `file_extraction_agent` 在 `dev-qa` 分支上的当前设计：它已经从“按 `task_spec` 抽取字段”的 agent 重构为“多文档 QA chat completion agent”。模块仍沿用历史包名，但语义已经变成 document QA：backend 每轮把 `documents + append-only messages` 传入，agent 像 code agent 浏览代码仓库一样浏览虚拟文档仓库，并通过 SSE 持续输出 `model_message`、工具事件和终态事件。
 
 核心目标是**过程可追溯**：模型不是最后一次性给出答案和引用，而是在阅读过程中就用 Markdown evidence link 解释每个文档事实、阶段性判断和最终结论。用户可以看到模型看了哪些文档、搜了什么、读了哪些 block、什么时候把 block 展开成句子/列表项/表格行级证据，以及哪一步可能出错。
 
@@ -9,12 +9,12 @@
 `file_extraction_agent` 只负责一次 QA completion 的执行，不负责上传文件、会话持久化、前端 SSE 续传或数据库写入。
 
 ```text
-backend 持久化 task / messages / memory / documents / events
+backend 持久化 task / messages / documents / events
   -> 每轮用户输入生成 completion_id
   -> 调用 agent POST /v1/document-qa/chat/completions
   -> agent 构建本轮 HtmlDocument virtual tree
   -> agent 运行 model/tool loop 并返回 text/event-stream
-  -> backend 消费 SSE、入库、转发给前端、更新 messages/memory
+  -> backend 消费 SSE、入库、转发给前端、追加 messages
   -> agent completion 结束后释放运行时热状态
 ```
 
@@ -25,12 +25,11 @@ backend 持久化 task / messages / memory / documents / events
 Python 入口是 `processor.create_completion_stream(...)`：
 
 ```text
-completion_id + documents + messages + memory + run_options + model_config
+completion_id + documents + messages + run_options + model_config
   -> input_adapter.build_completion_input(...)
        -> 校验 completion_id 非空
        -> 校验 documents 是非空 list，且每个 InputDocument 有 filename/html
        -> 校验 messages 是非空 list，支持 OpenAI 风格 user/assistant/tool 消息
-       -> memory 缺省补成 DocumentQaMemory(reading_history/evidence_notes/prior_answers/open_threads)
        -> run_options 缺省补成 RunOptions(max_tool_calls=200)，并要求 max_tool_calls > 0
        -> html_index.build_html_document(documents) 构建只读语义虚拟树
   -> processor 创建 ActiveCompletion 并放入 _ACTIVE_COMPLETIONS[completion_id]
@@ -40,7 +39,8 @@ completion_id + documents + messages + memory + run_options + model_config
        -> 输出 completion.created
        -> 输出 source_indexed(document_tree + source_selectors)
        -> resolution_new.run_resolution_stream(...)
-            -> build_resolution_messages，把历史 OpenAI messages 和 memory 放入本轮上下文
+            -> build_resolution_messages，把历史 OpenAI messages 原样转成 chat/tool messages
+               并保持最新真实用户消息为最后一条 human message
             -> build_tools(state) 暴露 tree / grep / read / inspect
             -> 模型产生 model_message，先校验 provider stop signal 与 tool_calls 是否一致
             -> 有 tool_calls 时继续单工具循环；terminal stop signal 且无工具时自然结束
@@ -228,7 +228,7 @@ read(locator="evidence://...")
 inspect(locator="evidence://...")
 ```
 
-已删除旧字段抽取工具：`add_candidate_evidence`、`review_evidences`、`write_field`、`submit_result`。QA 模式不设置 `answer` 或 `finish` 工具；模型消息只有在 provider 给出 terminal stop signal（例如 `finish_reason=stop` 或 `stop_reason=end_turn`）且没有工具调用时才被视为本轮自然结束，SSE 用 `completion.completed` 收口。如果 provider 给出 `finish_reason=tool_calls`、`stop_reason=tool_use`、`length/max_tokens` 等非终态信号但 LangChain 消息没有实际 `tool_calls`，agent 会把该 transport 视为不完整并继续 fallback，避免把“我先去查”这类计划性文本误判为最终回答。
+已删除旧字段抽取工具：`add_candidate_evidence`、`review_evidences`、`write_field`、`submit_result`。QA 模式不设置 `answer` 或 `finish` 工具；模型消息只有在 provider 给出 terminal stop signal（例如 `finish_reason=stop` 或 `stop_reason=end_turn`）且没有工具调用时才被视为本轮自然结束，SSE 用 `completion.completed` 收口。对应的 `model_message` 会带 `is_final=true` 和归一化后的 `stop_signal`，backend 只用这个标记决定哪条 assistant 文本进入下一轮历史。如果 provider 给出 `finish_reason=tool_calls`、`stop_reason=tool_use`、`length/max_tokens` 等非终态信号但 LangChain 消息没有实际 `tool_calls`，agent 会把该 transport 视为不完整并继续 fallback，避免把“我先去查”这类计划性文本误判为最终回答。
 
 ### `tree`
 
@@ -310,7 +310,7 @@ model_message: 命中集中在 Termination 章节，我先读该章节。[Termin
 model_message: 这里说明任一方可以终止协议，但该句本身没有写提前通知天数。[任一方可以终止](evidence://0001.0012.0003/S001)
 ```
 
-多轮时，`memory.reading_history`、`memory.evidence_notes`、`memory.prior_answers` 和 `memory.open_threads` 可以帮助模型减少重复搜索；但上一轮总结不能替代原文 evidence。新一轮如果复用旧发现，仍应引用原始 `evidence://`。
+多轮上下文只来自 backend 传入的 append-only `messages`：上一轮 user/assistant/tool 历史会原样保留并追加新问题。agent 不接收 memory、摘要或自动裁剪结果，避免每轮重写上下文导致 provider prompt cache 失效。新一轮如果复用旧发现，仍应引用原始 `evidence://`。
 
 ## 7. HTTP API
 
@@ -335,12 +335,6 @@ POST /v1/document-qa/chat/completions/{completion_id}/cancel
   "messages": [
     {"role": "user", "content": "这份合同可以提前终止吗？"}
   ],
-  "memory": {
-    "reading_history": [],
-    "evidence_notes": [],
-    "prior_answers": [],
-    "open_threads": []
-  },
   "stream": true,
   "metadata": {"task_id": "task_001", "turn_id": "turn_003"},
   "run_options": {"max_tool_calls": 80},
@@ -392,7 +386,7 @@ SSE 事件按 `seq` 递增，常见类型如下：
 | --- | --- | --- |
 | `completion.created` | graph | 标记本轮 completion 开始。 |
 | `source_indexed` | graph | 暴露 `document_tree` 和 `source_selectors`，backend 可提前准备 replay 高亮。 |
-| `model_message` | resolution | 模型面向用户的过程说明或最终回答，事实性内容应内嵌 evidence link。 |
+| `model_message` | resolution | 模型面向用户的过程说明或最终回答，事实性内容应内嵌 evidence link；最终回答带 `is_final=true` 和 `stop_signal`。 |
 | `tool_started` | html_tools | 记录工具开始及参数。 |
 | `tool_completed` | html_tools | 记录工具成功结果。 |
 | `tool_failed` | html_tools / graph | 记录工具或 resolution 失败。 |
@@ -406,7 +400,7 @@ backend 应把这些事件作为事实流持久化；前端断线续传和历史
 
 ```text
 schemas.py
-  -> 定义 InputDocument / DocumentQaMessage / DocumentQaMemory / DocumentQaCompletionRequest / ModelConfig / RunOptions
+  -> 定义 InputDocument / DocumentQaMessage / DocumentQaCompletionRequest / ModelConfig / RunOptions
 
 input_adapter.py
   -> 归一化 public input
@@ -419,7 +413,7 @@ impl/html_index.py
 
 impl/html_state.py
   -> 定义 DocumentQaCompletionInput 和 GraphState
-  -> 保存本轮 completion_id、HtmlDocument、messages、memory、events、actions、next_seq
+  -> 保存本轮 completion_id、HtmlDocument、messages、events、actions、next_seq
 
 impl/html_tools.py
   -> 构建 tree / grep / read / inspect
@@ -427,7 +421,7 @@ impl/html_tools.py
   -> 把内部 path_id 暴露成 evidence:// link
 
 impl/resolution_new.py
-  -> 构建 QA system prompt 和本轮 HumanMessage
+  -> 构建 QA system prompt，并保留 backend 传入的真实 chat/tool messages
   -> 用 LangGraph 运行 model/tool loop
   -> 记录 model_message
   -> 请求 provider 禁用 parallel tool calls；如果仍返回多个 tool call，只保留第一个

@@ -95,7 +95,6 @@ def create_completion_stream(
     completion_id: str,
     documents: list[Any],
     messages: list[Any],
-    memory: Any = None,
     model_config: ModelConfig | dict | None = None,
     run_options: RunOptions | dict | None = None,
 ) -> Iterable[str]:
@@ -103,7 +102,6 @@ def create_completion_stream(
         completion_id=completion_id,
         documents=documents,
         messages=messages,
-        memory=memory,
         run_options=run_options,
     )
     resolution_model = build_resolution_model(model_config)

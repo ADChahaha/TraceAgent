@@ -21,7 +21,7 @@ POST /qa/tasks/{task_id}/inputs
   -> backend 从 qa_messages + qa_events 重建 OpenAI 风格 messages；同 turn 的 assistant tool_calls 和 tool 结果会一起传给 agent
   -> 持久化 agent.event
   -> completion.completed/cancelled/failed 映射成 turn.completed/cancelled/failed
-  -> 把最后一条非空 model_message 保存为 assistant message，供下一轮传给 agent
+  -> 只把 is_final=true 的 model_message 保存为 assistant message，供下一轮传给 agent
 
 GET /qa/tasks/{task_id}/events?after_seq=n
   -> 从 qa_events 读取 seq > n 的事件并以 SSE 返回
@@ -44,10 +44,11 @@ POST /qa/tasks/{task_id}/cancel
 
 - `test_create_qa_task_processes_documents_without_task_spec`：验证创建 QA task 不再需要 `task_spec`，接口先返回 `processing/document_processing`，后台会调用 document_processor 保存文档，并且旧 `/tasks` route 已下线。
 - `test_create_qa_task_accepts_docx_and_forwards_docx_type`：验证 `.docx` 上传会被 backend 接受，并以 `file_type=docx` 和原始 content type 转发给 agent document_processor。
-- `test_qa_input_runs_agent_completion_and_persists_events`：验证用户输入接口先返回 `queued`，后台会调用 document QA completion，持久化 user message、turn、agent model message 和 terminal event，且 evidence link 保留在 `model_message` 内容中。
+- `test_qa_input_runs_agent_completion_and_persists_events`：验证用户输入接口先返回 `queued`，后台会调用 document QA completion，持久化 user message、turn、agent model message 和 terminal event，且 evidence link 保留在 `model_message` 内容中；同时确认 backend 不再向 agent completion 传 `memory`。
 - `test_qa_input_runs_agent_completion_and_persists_events`：同时验证现有 task detail 端点会返回 `documents[].display_html` 和 `source_selectors`，前端无需调用旧 replay 或新 review 端点即可打开 evidence 原文。
 - `test_qa_second_input_sends_prior_messages_to_agent`：验证第二轮输入会把上一轮 user/assistant/tool 对话一起传给 agent，backend 是多轮状态事实来源。
   这里的历史不是压缩摘要，而是按 OpenAI chat 结构重建的 `assistant.tool_calls` 和 `role=tool` 消息。
+- `test_qa_completed_turn_saves_only_final_model_message`：验证 backend 只把 `is_final=true` 的 `model_message` 作为最终 assistant message；普通无工具过程消息不会写入下一轮历史。
 - `test_qa_task_rejects_new_input_while_turn_is_active`：验证同一个 QA task 同时只允许一个 active turn。
 - `test_qa_cancel_active_turn_calls_agent_cancel`：验证 cancel 会标记 active turn、写入 `turn.cancel_requested` 和 `turn.cancelled`，并后台转发 agent cancel。
 - `test_qa_cancel_does_not_wait_for_agent_cancel_when_provider_is_stuck`：验证 agent/provider cancel 卡住时，backend cancel 仍会立即本地收口并让 stream 回到 idle。

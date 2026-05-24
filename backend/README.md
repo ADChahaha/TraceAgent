@@ -1,6 +1,6 @@
 # Backend
 
-`backend` 是多文档 QA 的会话和事件服务。它接收前端上传的 PDF/DOCX，调用 `agent service` 的 `document_processor` 做文档标准化；用户每次提问时，backend 把已保存的 `documents + messages + memory` 交给 agent 的 document QA chat completion，并把模型过程事件持久化为可续传 SSE。
+`backend` 是多文档 QA 的会话和事件服务。它接收前端上传的 PDF/DOCX，调用 `agent service` 的 `document_processor` 做文档标准化；用户每次提问时，backend 把已保存的 `documents + append-only messages` 交给 agent 的 document QA chat completion，并把模型过程事件持久化为可续传 SSE。
 
 它不再维护旧的 `task_spec` 字段抽取、字段提交、result/trace/replay/audit API。backend 是多轮 QA 状态事实来源；agent 只执行单次 completion。
 
@@ -19,7 +19,6 @@
   -> 保存 user message 和 turn.created
   -> 读取 qa_documents 组装 documents(filename + html)
   -> 读取 qa_messages 组装多轮 messages
-  -> 读取 qa_tasks.memory_json 组装 memory
   -> 调 agent POST /v1/document-qa/chat/completions
   -> 持久化 agent.event，包括 model_message、tool_* 和 completion.*
   -> completion.completed 时保存 assistant message，清理 active_turn_id

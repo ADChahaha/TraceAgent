@@ -34,7 +34,6 @@ def _state():
         messages=[
             {"role": "user", "content": "公司什么时候成立？"},
         ],
-        memory={"prior_answers": ["之前确认这是公司资料。"]},
     )
     return build_graph_state(completion_input)
 
@@ -44,6 +43,7 @@ def test_resolution_messages_describe_qa_investigation_not_field_extraction():
     system_content = messages[0].content
     human_content = messages[1].content
 
+    assert len(messages) == 2
     assert "document" in system_content.lower()
     assert "answer" in system_content.lower()
     assert "evidence" in system_content.lower()
@@ -51,7 +51,8 @@ def test_resolution_messages_describe_qa_investigation_not_field_extraction():
     assert "write_field" not in system_content
     assert "submit_result" not in system_content
     assert "公司什么时候成立？" in human_content
-    assert "prior_answers" not in human_content or "Previous answers" in human_content
+    assert "Context from prior turns" not in system_content
+    assert "Investigate the documents" not in human_content
 
 
 def test_resolution_messages_preserve_openai_tool_history():
@@ -96,8 +97,9 @@ def test_resolution_messages_preserve_openai_tool_history():
     assert isinstance(messages[3], ToolMessage)
     assert messages[3].tool_call_id == "call_read_company"
     assert messages[4].type == "human"
-    assert messages[-1].type == "human"
-    assert "Investigate the documents" in messages[-1].content
+    assert len(messages) == 5
+    assert messages[-1].content == "所以是哪一年？"
+    assert "Investigate the documents" not in messages[-1].content
 
 
 def test_resolution_graph_keeps_only_first_parallel_tool_call():
@@ -409,6 +411,20 @@ def test_resolution_accepts_terminal_stop_message_without_tool_calls():
     assert message.tool_calls == []
 
 
+def test_resolution_records_terminal_stop_message_as_final_answer():
+    state = _state()
+    message = AIMessage(
+        content="最终答案。",
+        response_metadata={"finish_reason": "stop"},
+    )
+
+    _record_model_message(state, message)
+
+    assert state.events[-1]["content"] == "最终答案。"
+    assert state.events[-1]["is_final"] is True
+    assert state.events[-1]["stop_signal"] == "stop"
+
+
 def test_resolution_rejects_plan_only_message_without_terminal_stop_signal():
     class PlanOnlyModel:
         def stream(self, messages):
@@ -451,4 +467,5 @@ def test_resolution_records_model_message_content_and_tool_calls_without_reasoni
         "content": "I will inspect the root tree while calling a tool.",
         "tool_call_count": 1,
         "tool_calls": [{"id": "call-1", "name": "tree", "args": {"path_id": "", "depth": 3}}],
+        "is_final": False,
     }

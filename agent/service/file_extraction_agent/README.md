@@ -1,17 +1,17 @@
 # file_extraction_agent
 
-`file_extraction_agent` 当前是多文档 QA chat completion agent。它接收 backend 每轮传入的 `completion_id + documents(filename + html) + messages + memory`，把多份语义 HTML 虚拟成只读文档仓库，再让模型用 `tree / grep / read / inspect` 像 code agent 看项目一样浏览材料，并通过 SSE 持续输出带 evidence link 的过程消息。
+`file_extraction_agent` 当前是多文档 QA chat completion agent。它接收 backend 每轮传入的 `completion_id + documents(filename + html) + append-only messages`，把多份语义 HTML 虚拟成只读文档仓库，再让模型用 `tree / grep / read / inspect` 像 code agent 看项目一样浏览材料，并通过 SSE 持续输出带 evidence link 的过程消息。
 
 包名仍沿用历史 `file_extraction_agent`，但本分支不再做 `task_spec` 字段抽取。
 
 ## 工作链路
 
 ```text
-completion_id + documents + messages + memory + run_options
+completion_id + documents + messages + run_options
   -> input_adapter 校验 completion_id 非空
   -> input_adapter 校验 documents 非空、每个 document 有 filename/html
   -> input_adapter 校验 messages 非空、每条 message.content 非空
-  -> input_adapter 归一化 memory 和 run_options(max_tool_calls > 0)
+  -> input_adapter 归一化 run_options(max_tool_calls > 0)
   -> html_index 解析 HTML，生成 HtmlDocument、path_id 索引和 source_selectors
   -> processor 创建 ActiveCompletion，写入 _ACTIVE_COMPLETIONS
   -> graph 输出 completion.created 和 source_indexed
@@ -127,7 +127,6 @@ stream = create_completion_stream(
         }
     ],
     messages=[{"role": "user", "content": "公司什么时候成立？"}],
-    memory={"reading_history": [], "evidence_notes": [], "prior_answers": [], "open_threads": []},
     model_config={
         "base_url": "https://example.com/v1",
         "api_key": "...",

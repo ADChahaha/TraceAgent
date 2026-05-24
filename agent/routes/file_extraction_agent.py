@@ -10,7 +10,6 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from service.file_extraction_agent.schemas import (
-    DocumentQaMemory,
     DocumentQaMessage,
     InputDocument,
     ModelConfig,
@@ -27,7 +26,6 @@ class ChatCompletionRequest(BaseModel):
     completion_id: str
     documents: list[InputDocument]
     messages: list[DocumentQaMessage]
-    memory: DocumentQaMemory = Field(default_factory=DocumentQaMemory)
     stream: bool = True
     metadata: dict[str, Any] = Field(default_factory=dict)
     run_options: RunOptions | dict[str, Any] | None = None
@@ -75,7 +73,6 @@ def _create_chat_completion_stream(request: ChatCompletionRequest):
         completion_id=request.completion_id,
         documents=request.documents,
         messages=request.messages,
-        memory=request.memory,
         run_options=request.run_options,
         model_config=_model_config(request),
     )

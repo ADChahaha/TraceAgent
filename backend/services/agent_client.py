@@ -57,7 +57,6 @@ class AgentClient:
         completion_id: str,
         documents: list[dict[str, Any]],
         messages: list[dict[str, str]],
-        memory: dict[str, Any],
         metadata: dict[str, Any] | None = None,
         run_options: dict[str, Any] | None = None,
     ):
@@ -65,7 +64,6 @@ class AgentClient:
             "completion_id": completion_id,
             "documents": documents,
             "messages": messages,
-            "memory": memory,
             "stream": True,
             "metadata": metadata or {},
         }

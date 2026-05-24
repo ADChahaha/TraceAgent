@@ -7,7 +7,6 @@ from typing import Any
 
 from service.file_extraction_agent.impl.html_index import HtmlDocument
 from service.file_extraction_agent.schemas import (
-    DocumentQaMemory,
     DocumentQaMessage,
     InputDocument,
     RunOptions,
@@ -19,7 +18,6 @@ class DocumentQaCompletionInput:
     completion_id: str
     documents: list[InputDocument]
     messages: list[DocumentQaMessage]
-    memory: DocumentQaMemory
     document: HtmlDocument
     run_options: RunOptions = field(default_factory=RunOptions)
 
@@ -30,7 +28,6 @@ class GraphState:
     completion_id: str
     document: HtmlDocument
     messages: list[DocumentQaMessage]
-    memory: DocumentQaMemory
     run_options: RunOptions
     actions: list[dict[str, Any]] = field(default_factory=list)
     events: list[dict[str, Any]] = field(default_factory=list)
@@ -45,7 +42,6 @@ def build_graph_state(completion_input: DocumentQaCompletionInput) -> GraphState
         completion_id=completion_input.completion_id,
         document=completion_input.document,
         messages=completion_input.messages,
-        memory=completion_input.memory,
         run_options=completion_input.run_options,
     )
 

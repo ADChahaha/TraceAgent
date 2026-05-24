@@ -7,7 +7,6 @@ from typing import Any
 from service.file_extraction_agent.impl.html_index import build_html_document
 from service.file_extraction_agent.impl.html_state import DocumentQaCompletionInput
 from service.file_extraction_agent.schemas import (
-    DocumentQaMemory,
     DocumentQaMessage,
     InputDocument,
     RunOptions,
@@ -19,21 +18,18 @@ def build_completion_input(
     completion_id: str,
     documents: Any,
     messages: Any,
-    memory: Any = None,
     run_options: Any = None,
 ) -> DocumentQaCompletionInput:
     if not isinstance(completion_id, str) or not completion_id.strip():
         raise ValueError("completion_id is required")
     normalized_documents = normalize_documents(documents)
     normalized_messages = normalize_messages(messages)
-    normalized_memory = normalize_memory(memory)
     normalized_run_options = normalize_run_options(run_options)
     document = build_html_document([item.model_dump() for item in normalized_documents])
     return DocumentQaCompletionInput(
         completion_id=completion_id,
         documents=normalized_documents,
         messages=normalized_messages,
-        memory=normalized_memory,
         document=document,
         run_options=normalized_run_options,
     )
@@ -83,21 +79,6 @@ def normalize_messages(messages: Any) -> list[DocumentQaMessage]:
     return normalized
 
 
-def normalize_memory(memory: Any) -> DocumentQaMemory:
-    if memory is None:
-        return DocumentQaMemory()
-    if isinstance(memory, DocumentQaMemory):
-        return memory
-    if isinstance(memory, dict):
-        return DocumentQaMemory(**memory)
-    return DocumentQaMemory(
-        reading_history=list(getattr(memory, "reading_history", []) or []),
-        evidence_notes=list(getattr(memory, "evidence_notes", []) or []),
-        prior_answers=list(getattr(memory, "prior_answers", []) or []),
-        open_threads=list(getattr(memory, "open_threads", []) or []),
-    )
-
-
 def normalize_run_options(run_options: Any) -> RunOptions:
     if run_options is None:
         options = RunOptions()
@@ -116,6 +97,5 @@ __all__ = [
     "build_completion_input",
     "normalize_documents",
     "normalize_messages",
-    "normalize_memory",
     "normalize_run_options",
 ]

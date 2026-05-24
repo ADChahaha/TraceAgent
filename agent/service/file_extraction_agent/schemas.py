@@ -46,22 +46,12 @@ class DocumentQaMessage(BaseModel):
         return self
 
 
-class DocumentQaMemory(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    reading_history: list[str] = Field(default_factory=list)
-    evidence_notes: list[dict[str, Any]] = Field(default_factory=list)
-    prior_answers: list[str] = Field(default_factory=list)
-    open_threads: list[str] = Field(default_factory=list)
-
-
 class DocumentQaCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     completion_id: str
     documents: list[InputDocument]
     messages: list[DocumentQaMessage]
-    memory: DocumentQaMemory = Field(default_factory=DocumentQaMemory)
     stream: bool = True
     metadata: dict[str, Any] = Field(default_factory=dict)
     run_options: "RunOptions | dict[str, Any] | None" = None
@@ -101,7 +91,6 @@ __all__ = [
     "MessageRole",
     "InputDocument",
     "DocumentQaMessage",
-    "DocumentQaMemory",
     "DocumentQaCompletionRequest",
     "ModelConfig",
     "RunOptions",

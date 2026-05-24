@@ -26,7 +26,6 @@ def test_document_qa_chat_completion_route_calls_completion_stream(monkeypatch):
             "completion_id": "cmp_123",
             "documents": [{"filename": "notice.html", "html": '<p id="p1">通知</p>'}],
             "messages": [{"role": "user", "content": "这份文件说了什么？"}],
-            "memory": {"prior_answers": ["上一轮摘要"]},
             "stream": True,
         },
     ) as response:
@@ -37,11 +36,26 @@ def test_document_qa_chat_completion_route_calls_completion_stream(monkeypatch):
     assert seen_call["completion_id"] == "cmp_123"
     assert seen_call["documents"][0].filename == "notice.html"
     assert seen_call["messages"][0].content == "这份文件说了什么？"
-    assert seen_call["memory"].prior_answers == ["上一轮摘要"]
+    assert "memory" not in seen_call
     assert body == (
         'event: completion.created\ndata: {"id":"cmp_123"}\n\n'
         'event: completion.completed\ndata: {"id":"cmp_123"}\n\n'
     )
+
+
+def test_document_qa_chat_completion_route_rejects_memory_field():
+    client = TestClient(create_app())
+    response = client.post(
+        "/v1/document-qa/chat/completions",
+        json={
+            "completion_id": "cmp_123",
+            "documents": [{"filename": "notice.html", "html": '<p id="p1">通知</p>'}],
+            "messages": [{"role": "user", "content": "问题"}],
+            "memory": {"prior_answers": ["会破坏 append-only prompt cache"]},
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_document_qa_chat_completion_route_passes_run_options(monkeypatch):

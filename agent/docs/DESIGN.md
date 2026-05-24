@@ -2,7 +2,7 @@
 
 这份文档描述 `agent service` 当前保留的两个能力：`document_processor` 和 `file_extraction_agent`。其中 `document_processor` 负责把上传 PDF/DOCX 标准化成语义 HTML；`file_extraction_agent` 在 `dev-qa` 分支上已经重构为多文档 QA chat completion agent，负责对 backend 提供的一组 HTML 文档进行可追溯问答。
 
-`agent service` 不访问 backend SQLite，不持久化多轮会话，也不决定前端任务状态。backend 是 task、messages、memory、events 和 replay 的持久化事实来源；agent 只执行一次 completion，并通过 SSE 返回过程事件。跨轮上下文由 backend 组装成 OpenAI 风格 chat messages，包含 `user`、`assistant` 的 `tool_calls` 和 `tool` 消息。
+`agent service` 不访问 backend SQLite，不持久化多轮会话，也不决定前端任务状态。backend 是 task、append-only messages、events 和 replay 的持久化事实来源；agent 只执行一次 completion，并通过 SSE 返回过程事件。跨轮上下文由 backend 组装成 OpenAI 风格 chat messages，包含 `user`、`assistant` 的 `tool_calls` 和 `tool` 消息。
 
 ## 1. 目标
 
@@ -12,7 +12,7 @@
 原始 PDF/DOCX
   -> document_processor 标准化为 html / display_html / markdown / blocks
   -> backend 保存文档和对话状态
-  -> file_extraction_agent 接收 documents + messages + memory
+  -> file_extraction_agent 接收 documents + append-only messages
   -> agent 像 code agent 浏览代码仓库一样 tree/grep/read/inspect 文档
   -> agent 用 model_message + evidence link 流式回答
   -> backend 持久化事件并转发给前端
@@ -27,16 +27,16 @@ backend 读取上传 PDF/DOCX bytes
   -> PDF 调用 POST /v1/document-processor/process
   -> DOCX 调用 POST /v1/document-processor/docx/process
   -> 拿到 filename + html + display_html + markdown + blocks
-  -> backend 保存 task documents、messages、memory 和事件游标
+  -> backend 保存 task documents、messages 和事件游标
   -> 用户每次提问时，backend 生成 completion_id
   -> 调用 POST /v1/document-qa/chat/completions
-       body = documents(filename + html) + OpenAI 风格 messages + memory + run_options
+       body = documents(filename + html) + OpenAI 风格 append-only messages + run_options
   -> agent 返回 text/event-stream
        completion.created
        source_indexed
        model_message / tool_started / tool_completed / tool_failed
        completion.completed / completion.cancelled / completion.failed
-  -> backend 入库、转发给前端，并更新下一轮 messages/memory
+  -> backend 入库、转发给前端，并更新下一轮 append-only messages
 ```
 
 `agent service` 不负责：
@@ -116,7 +116,7 @@ DOCX UploadFile / file-like object
 
 ### `file_extraction_agent`
 
-输入是 backend 每轮提供的 `completion_id + documents + messages + memory + run_options`。
+输入是 backend 每轮提供的 `completion_id + documents + messages + run_options`。
 
 ```text
 POST /v1/document-qa/chat/completions
@@ -142,8 +142,8 @@ raw PDF/DOCX
   -> 用户提问
   -> backend 调用 document QA chat completion
   -> agent stream 输出阅读过程、工具调用和 evidence-linked answer
-  -> backend 保存 events/messages/memory
-  -> 下一轮用户提问时 backend 再传入更新后的 messages/memory
+  -> backend 保存 events/messages
+  -> 下一轮用户提问时 backend 再传入更新后的 append-only messages
 ```
 
 ## 6. HTTP 入口

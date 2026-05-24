@@ -1,6 +1,6 @@
 # Backend API 设计
 
-这份文档定义 backend 当前 QA-only API。backend 负责创建多文档 QA task、保存标准化文档、持久化多轮 messages/memory、消费 agent completion SSE，并向前端提供可续传事件流。
+这份文档定义 backend 当前 QA-only API。backend 负责创建多文档 QA task、保存标准化文档、持久化多轮 append-only messages、消费 agent completion SSE，并向前端提供可续传事件流。
 
 旧 `/tasks`、`/tasks/{id}/result`、`/tasks/{id}/trace`、`/tasks/{id}/replay` 和 `/tasks/{id}/audit` 已下线。
 
@@ -23,6 +23,8 @@ GET /qa/tasks/{task_id}/events?after_seq=n
   -> 返回 seq > n 的持久化事件
   -> 当前没有 active turn 且事件已发完时关闭 SSE
 ```
+
+backend 不生成或传递 memory/summary。多轮上下文按 OpenAI chat messages 结构 append-only 重建，避免每轮重写摘要破坏 provider prompt cache。
 
 ## API 列表
 
@@ -182,10 +184,10 @@ content
   -> 写入 message.created / turn.created / turn.started
   -> 组装 documents(filename + html)
   -> 组装 messages(user/assistant 历史 + 当前问题)
-  -> 读取 memory_json
   -> 调 agent document QA completion stream
   -> 每条 agent SSE 写成 agent.event
-  -> completion.completed 时保存最后一条非空 model_message 为 assistant message
+  -> model_message.is_final=true 时暂存 final assistant 内容
+  -> completion.completed 时保存 final assistant message
   -> turn.completed，task 回到 ready/ready
 ```
 

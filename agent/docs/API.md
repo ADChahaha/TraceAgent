@@ -11,13 +11,13 @@ backend 持有原始 PDF/DOCX
   -> 得到 filename + html + display_html + markdown + blocks
   -> backend 保存文档和对话状态
 
-backend 持有 documents(filename + html) + messages + memory
+backend 持有 documents(filename + html) + append-only messages
   -> POST /v1/document-qa/chat/completions
   -> 持续得到 completion.created / source_indexed / model_message / tool_* / completion.*
   -> backend 入库并转发给前端
 ```
 
-agent 不保存多轮 conversation；每一轮 QA 都由 backend 把必要上下文重新传入。
+agent 不保存多轮 conversation；每一轮 QA 都由 backend 把 documents 和 append-only messages 重新传入。这里没有 memory/summary 通路，避免每轮重写上下文破坏 provider prompt cache。
 
 ## 2. 运行前提
 
@@ -118,8 +118,7 @@ POST /v1/document-qa/chat/completions
 
 - `completion_id`：必填，由 backend 生成的本轮 completion id。
 - `documents[]`：必填，每个元素包含 `filename` 和 `html`。
-- `messages[]`：必填，多轮对话消息，role 支持 `system` / `user` / `assistant`，`content` 必须非空。
-- `memory`：可选，包含 `reading_history`、`evidence_notes`、`prior_answers`、`open_threads`。
+- `messages[]`：必填，多轮对话消息，role 支持 `system` / `user` / `assistant` / `tool`，`content` 必须非空；backend 只追加新消息和工具结果，不自动裁剪或摘要。
 - `stream`：当前可传，但第一版总是返回 SSE。
 - `metadata`：可选，agent 目前不持久化；backend 可用于调试或未来扩展。
 - `run_options`：可选，目前支持 `max_tool_calls`，必须大于 0。
@@ -140,12 +139,6 @@ POST /v1/document-qa/chat/completions
   "messages": [
     {"role": "user", "content": "这份合同可以提前终止吗？"}
   ],
-  "memory": {
-    "reading_history": [],
-    "evidence_notes": [],
-    "prior_answers": [],
-    "open_threads": []
-  },
   "stream": true,
   "metadata": {"task_id": "task_001", "turn_id": "turn_003"},
   "run_options": {"max_tool_calls": 80}
@@ -163,6 +156,7 @@ ChatCompletionRequest
   -> graph 先输出 completion.created 和 source_indexed
   -> resolution_new 构建 QA prompt，暴露 tree / grep / read / inspect
   -> 模型边回答边调用工具，过程消息用 evidence:// Markdown link 引用证据
+  -> 无 tool_calls 且 provider terminal stop signal 的 model_message 带 is_final=true
   -> graph 输出 completion.completed / completion.failed
   -> processor 若收到 cancel flag，则输出 completion.cancelled
 ```
@@ -191,7 +185,10 @@ event: source_indexed
 data: {"seq":2,"type":"source_indexed","tool":"source_index","result":{"ok":true,"document_tree":"...","source_selectors":{}}}
 
 event: model_message
-data: {"seq":4,"type":"model_message","content":"我先查看 Termination 章节。[Termination](evidence://0001.0012)","tool_call_count":1,"tool_calls":[{"name":"read","args":{"locator":"evidence://0001.0012.0003"}}]}
+data: {"seq":4,"type":"model_message","content":"我先查看 Termination 章节。[Termination](evidence://0001.0012)","tool_call_count":1,"tool_calls":[{"name":"read","args":{"locator":"evidence://0001.0012.0003"}}],"is_final":false}
+
+event: model_message
+data: {"seq":11,"type":"model_message","content":"可以提前终止。[任一方可以终止](evidence://0001.0012.0003/S001)","tool_call_count":0,"tool_calls":[],"is_final":true,"stop_signal":"stop"}
 
 event: completion.completed
 data: {"seq":12,"id":"cmp_456","type":"completion.completed","status":"completed"}
