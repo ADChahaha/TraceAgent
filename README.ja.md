@@ -63,11 +63,12 @@ TraceAgent は文書全体を prompt に詰め込まず、文書を読み取り�
 ```bash
 # 環境
 conda create -n agent-gate python=3.11 -y && conda activate agent-gate
+```
 
-# インストール
-pip install -e "agent[dev]"
-pip install -e "backend[dev]"
-pnpm --dir frontend install
+依存関係をインストールし、frontend をビルド：
+
+```bash
+./scripts/install.sh
 ```
 
 リポジトリルートに `.env` を作成します。起動スクリプトが自動的に読み込みます。
@@ -85,11 +86,13 @@ BACKEND_PORT=8000
 FRONTEND_PORT=3000
 ```
 
-起動：
+本番起動：
 
 ```bash
-./scripts/dev.sh
+./scripts/start.sh
 ```
+
+`install.sh` は Python / frontend 依存関係をインストールして `frontend` を本番ビルドするだけで、`.env` は読み込みません。`start.sh` は `.env` を読み込んで `agent`、`backend`、`frontend` を起動するだけで、`--reload` は使いません。
 
 ブラウザで http://127.0.0.1:3000 を開けば使えます。
 

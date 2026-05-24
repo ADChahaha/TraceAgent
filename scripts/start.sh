@@ -6,7 +6,7 @@ ENV_FILE="${ENV_FILE:-"$ROOT_DIR/.env"}"
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "Missing env file: $ENV_FILE"
-  echo "Create .env in the repository root, then run ./scripts/dev.sh again."
+  echo "Create .env in the repository root, then run ./scripts/start.sh again."
   exit 1
 fi
 
@@ -16,7 +16,7 @@ if ! command -v python >/dev/null 2>&1; then
 fi
 
 if ! command -v pnpm >/dev/null 2>&1; then
-  echo "Missing pnpm. Install frontend dependencies first."
+  echo "Missing pnpm. Run ./scripts/install.sh first."
   exit 1
 fi
 
@@ -35,13 +35,19 @@ FRONTEND_PORT="${FRONTEND_PORT:-3000}"
 AGENT_SERVICE_BASE_URL="${AGENT_SERVICE_BASE_URL:-http://${AGENT_HOST}:${AGENT_PORT}}"
 BACKEND_BASE_URL="${BACKEND_BASE_URL:-http://${BACKEND_HOST}:${BACKEND_PORT}}"
 
+if [[ ! -f "$ROOT_DIR/frontend/.next/BUILD_ID" ]]; then
+  echo "Missing frontend production build: frontend/.next/BUILD_ID"
+  echo "Run ./scripts/install.sh first."
+  exit 1
+fi
+
 pids=()
 
 cleanup() {
   local status=$?
   if [[ ${#pids[@]} -gt 0 ]]; then
     echo
-    echo "Stopping TraceAgent dev services..."
+    echo "Stopping TraceAgent services..."
     kill "${pids[@]}" >/dev/null 2>&1 || true
     wait "${pids[@]}" >/dev/null 2>&1 || true
   fi
@@ -74,15 +80,15 @@ start_service() {
 }
 
 start_service "agent    http://${AGENT_HOST}:${AGENT_PORT}" \
-  python -m uvicorn --app-dir agent main:app --reload --host "$AGENT_HOST" --port "$AGENT_PORT"
+  python -m uvicorn --app-dir agent main:app --host "$AGENT_HOST" --port "$AGENT_PORT"
 
 start_service "backend  http://${BACKEND_HOST}:${BACKEND_PORT}" \
   env AGENT_SERVICE_BASE_URL="$AGENT_SERVICE_BASE_URL" \
-  python -m uvicorn backend.main:app --reload --host "$BACKEND_HOST" --port "$BACKEND_PORT"
+  python -m uvicorn backend.main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT"
 
 start_service "frontend http://${FRONTEND_HOST}:${FRONTEND_PORT}" \
   env BACKEND_BASE_URL="$BACKEND_BASE_URL" \
-  pnpm --dir frontend dev --hostname "$FRONTEND_HOST" --port "$FRONTEND_PORT"
+  pnpm --dir frontend start --hostname "$FRONTEND_HOST" --port "$FRONTEND_PORT"
 
 echo
 echo "TraceAgent is running:"

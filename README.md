@@ -63,14 +63,15 @@ TraceAgent 不把整篇文档塞进 prompt，而是把文档映射为只读虚�
 ```bash
 # 环境
 conda create -n agent-gate python=3.11 -y && conda activate agent-gate
-
-# 安装
-pip install -e "agent[dev]"
-pip install -e "backend[dev]"
-pnpm --dir frontend install
 ```
 
-在仓库根目录创建 `.env`，脚本会自动读取它：
+安装依赖并构建前端：
+
+```bash
+./scripts/install.sh
+```
+
+在仓库根目录创建 `.env`，启动脚本会自动读取它：
 
 ```bash
 BASE_URL="https://your-model-endpoint/v1"
@@ -85,11 +86,13 @@ BACKEND_PORT=8000
 FRONTEND_PORT=3000
 ```
 
-启动：
+生产启动：
 
 ```bash
-./scripts/dev.sh
+./scripts/start.sh
 ```
+
+`install.sh` 只安装 Python / frontend 依赖并执行 `frontend` 生产构建，不读取 `.env`。`start.sh` 负责读取 `.env` 并启动 `agent`、`backend` 和 `frontend`，不会使用 `--reload`。
 
 打开 http://127.0.0.1:3000 即可使用。
 

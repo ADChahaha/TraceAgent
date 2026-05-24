@@ -109,3 +109,77 @@ jobs:
 
       - name: Run frontend tests
         run: pnpm --dir frontend test --runInBand
+
+  deployment-smoke:
+    name: Production startup smoke test
+    runs-on: ubuntu-latest
+    needs: [agent-ocr-install, backend, frontend]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install production dependencies and build
+        run: ./scripts/install.sh
+
+      - name: Write CI runtime env
+        run: |
+          cat > .env <<'ENV'
+          BASE_URL=http://127.0.0.1:9/v1
+          OPENAI_API_KEY=ci-placeholder
+          MODEL=ci-placeholder-model
+          MODEL_API_TRANSPORT=responses
+          BACKEND_DATABASE_PATH=:memory:
+          AGENT_HOST=127.0.0.1
+          AGENT_PORT=8001
+          BACKEND_HOST=127.0.0.1
+          BACKEND_PORT=8000
+          FRONTEND_HOST=127.0.0.1
+          FRONTEND_PORT=3000
+          ENV
+
+      - name: Start production services
+        run: |
+          set -Eeuo pipefail
+          ./scripts/start.sh > /tmp/traceagent-start.log 2>&1 &
+          start_pid=$!
+
+          cleanup() {
+            kill "$start_pid" >/dev/null 2>&1 || true
+            wait "$start_pid" >/dev/null 2>&1 || true
+            cat /tmp/traceagent-start.log
+          }
+          trap cleanup EXIT
+
+          wait_for_url() {
+            local url="$1"
+            for _ in {1..90}; do
+              if curl --fail --silent --show-error "$url" >/dev/null; then
+                return 0
+              fi
+              sleep 1
+            done
+            echo "Timed out waiting for $url"
+            return 1
+          }
+
+          wait_for_url http://127.0.0.1:8001/healthz
+          wait_for_url http://127.0.0.1:8000/healthz
+          wait_for_url http://127.0.0.1:3000/
