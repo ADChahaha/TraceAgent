@@ -12,6 +12,7 @@ __pycache__/
 # Local runtime artifacts
 tmp/
 backend/tmp/
+experiments/
 *.sqlite3
 *.sqlite3-*
 
