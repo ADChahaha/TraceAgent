@@ -92,8 +92,6 @@ FRONTEND_PORT=3000
 ./scripts/start.sh
 ```
 
-`install.sh` は Python / frontend 依存関係をインストールして `frontend` を本番ビルドするだけで、`.env` は読み込みません。`start.sh` は `.env` を読み込んで `agent`、`backend`、`frontend` を起動するだけで、`--reload` は使いません。
-
 ブラウザで http://127.0.0.1:3000 を開けば使えます。
 
 > 詳細な設定とトラブルシューティングは各パッケージの README を参照：[`agent/`](agent/README.md) · [`backend/`](backend/README.md) · [`frontend/`](frontend/docs/)

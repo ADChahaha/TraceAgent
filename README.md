@@ -92,8 +92,6 @@ FRONTEND_PORT=3000
 ./scripts/start.sh
 ```
 
-`install.sh` 只安装 Python / frontend 依赖并执行 `frontend` 生产构建，不读取 `.env`。`start.sh` 负责读取 `.env` 并启动 `agent`、`backend` 和 `frontend`，不会使用 `--reload`。
-
 打开 http://127.0.0.1:3000 即可使用。
 
 > 详细配置和故障排查见各子包 README：[`agent/`](agent/README.md) · [`backend/`](backend/README.md) · [`frontend/`](frontend/docs/)
