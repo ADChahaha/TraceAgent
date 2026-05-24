@@ -20,6 +20,7 @@
   -> 后台提交 POST /qa/tasks/{task_id}/inputs，把首轮问题写入同一个 task
   -> TaskDetail GET /qa/tasks/{task_id} 读取 task summary
   -> 同一个 task detail 响应携带 documents[].display_html 和 source_selectors，供 evidence 点击打开右侧 review 文档
+  -> 如果后续补详情返回的 stream seq 旧于当前 SSE，前端只保留当前运行态/seq，并继续合并补回来的 documents/display_html/source_selectors
   -> TaskDetail 打开 GET /qa/tasks/{task_id}/events?after_seq=0
   -> 提交追问时先插入 optimistic message，并在其后追加 assistant 侧 Codex 式上下跳动 Thinking；同时立刻用当前 last seq 重新连接 SSE，不等待 POST /inputs 返回
   -> EventSource 遇到 error 时不由前端主动 close，交给浏览器原生重连，只有组件卸载或主动换 after_seq 时才关闭旧连接
@@ -108,6 +109,7 @@ TaskDetail(task_id)
   -> createTaskEventSource(task_id, 0)
   -> appendTaskEvent 按 seq 去重合并事件
   -> SSE agent.event(source_indexed) 立即把 payload.result.source_selectors 合并进当前 summary；如果当前详情缺少 documents/display_html，则补一次 GET /qa/tasks/{task_id}
+  -> 补详情如果比当前 SSE seq 旧，不覆盖当前 status/stage/stream/active_turn_id，但仍合并它带回的 documents/display_html 和 source_selectors
   -> optimisticEvents 保存本地刚提交但还没被 SSE 确认的 user message
   -> eventToStreamItem 把 message.created / agent.event 转成可见流
   -> 点击 Markdown evidence link 时，从 evidence:// path 去掉 S/I/R inline selector，查 source_selectors 得到 display_html DOM id

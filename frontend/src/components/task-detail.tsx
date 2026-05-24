@@ -161,8 +161,12 @@ export function TaskDetail({
         const currentSeq = current.summary.stream?.last_event_seq ?? 0;
         const loadedSeq = loaded.summary.stream?.last_event_seq ?? 0;
         if (currentSeq > loadedSeq) {
-          summaryRef.current = current.summary;
-          return current;
+          const mergedSummary = mergeLoadedSummaryIntoCurrent(current.summary, loaded.summary);
+          summaryRef.current = mergedSummary;
+          return {
+            ...current,
+            summary: mergedSummary,
+          };
         }
         summaryRef.current = loaded.summary;
         return loaded;
@@ -250,7 +254,7 @@ export function TaskDetail({
         setOptimisticEvents((current) => current.filter((item) => !isSameMessageEvent(item, event)));
       }
       isRunningRef.current = !(isTerminalTurnEvent(event) || event.status === "ready");
-      const hadReviewDocuments = (summaryRef.current?.documents?.length ?? 0) > 0;
+      const hadReviewDocuments = hasReviewSourceDocuments(summaryRef.current);
       setDetail((current) => {
         if (!current) {
           return current;
@@ -990,6 +994,25 @@ function applyEventToSummary(summary: TaskSummary, event: TaskEvent): TaskSummar
     next.stage = "ready";
   }
   return next;
+}
+
+function mergeLoadedSummaryIntoCurrent(current: TaskSummary, loaded: TaskSummary): TaskSummary {
+  const sourceSelectors = {
+    ...(loaded.source_selectors ?? {}),
+    ...(current.source_selectors ?? {}),
+  };
+  const hasSourceSelectors = Object.keys(sourceSelectors).length > 0;
+  return {
+    ...loaded,
+    ...current,
+    document_count: loaded.document_count ?? current.document_count,
+    documents: hasReviewSourceDocuments(loaded) ? loaded.documents : current.documents,
+    source_selectors: hasSourceSelectors ? sourceSelectors : undefined,
+  };
+}
+
+function hasReviewSourceDocuments(summary?: Pick<TaskSummary, "documents"> | null): boolean {
+  return (summary?.documents ?? []).some((document) => document.display_html.trim().length > 0);
 }
 
 function shouldSubmitComposerOnKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>): boolean {

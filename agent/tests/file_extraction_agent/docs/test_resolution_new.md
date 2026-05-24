@@ -12,7 +12,7 @@ GraphState(messages + HtmlDocument)
   -> model.stream / model.invoke 产生 assistant content 和 tool call
   -> _invoke_model_message 校验 provider stop signal 与 tool_calls 是否一致
   -> provider attempt 失败时按 Ethernet 式随机指数退避后进入下一 attempt
-  -> 同轮多 tool call 被截断为第一个
+  -> 同轮多个 tool call 保留在同一条 AIMessage 中并交给 ToolNode 执行
   -> _record_model_message 记录用户可见 content、工具调用摘要和 is_final/stop_signal
   -> ToolNode 执行 tree/grep/read/inspect
   -> terminal stop signal 且没有 tool call 时结束本轮 completion
@@ -21,8 +21,9 @@ GraphState(messages + HtmlDocument)
 ## 测试函数
 
 - `test_resolution_messages_describe_qa_investigation_not_field_extraction`：验证 prompt 说明 QA 调查流程和 evidence 规则，不再出现 `task_spec/write_field/submit_result` 字段抽取语义；同时验证 system prompt 不再接收 memory context，真实用户消息后面不会再追加强制调查文档的 `HumanMessage`。
+- `test_resolution_prompt_allows_direct_answers_without_forced_document_search`：验证 prompt 明确允许身份、能力和已有上下文可回答的问题直接回答，只有用户询问文档内容、要求证据或上下文不清楚时才使用文档工具；同时避免用 `Show your thought process` 这类说法诱导模型输出隐藏推理。
 - `test_resolution_messages_preserve_openai_tool_history`：验证历史 assistant tool_calls 和 tool 结果会保留为真实 chat/tool message，而不是压成单一文本摘要；最新用户消息仍是模型看到的最后一条 human 消息。
-- `test_resolution_graph_keeps_only_first_parallel_tool_call`：验证同轮多个 tool call 只执行第一个，保持可追溯的单步节奏。
+- `test_resolution_graph_preserves_parallel_tool_calls`：验证 provider 同轮返回多个 tool call 时，resolution graph 会保留完整 tool_calls 摘要，并按顺序执行这些工具。
 - `test_resolution_uses_responses_api_stream_and_merges_content_with_tool_calls`：确认 stream 调用能把 text chunk 和 tool call chunk 合并成带 content 和 tool_calls 的 `AIMessage`。
 - `test_resolution_falls_back_from_responses_stream_to_chat_stream_then_invoke`：确认 Responses stream 失败后按顺序降级到 chat/completions stream 和非流 invoke。
 - `test_resolution_uses_ethernet_backoff_between_failed_provider_attempts`：确认 provider attempt 失败后，会按 `[0, 2^k - 1]` slot 的随机指数退避等待，再进入下一 attempt。

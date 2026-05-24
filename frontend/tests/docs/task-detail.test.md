@@ -10,6 +10,7 @@
   -> 详情响应中的 documents/source_selectors 作为右侧 review 文档数据
   -> TaskDetail 打开 GET /qa/tasks/{task_id}/events?after_seq=0
   -> agent.event(type=source_indexed) 会把 SSE 里的 source_selectors 立即合并到当前 summary；如果详情还缺 documents/display_html，再补一次 task detail
+  -> 如果补详情返回的 stream seq 旧于当前 SSE，也只保留当前运行态/seq，不丢掉补回来的 documents/display_html
   -> message.created 变成右侧用户消息
   -> agent.event(type=model_message) 变成左侧 assistant 消息，并保留 Markdown evidence link
   -> 点击 evidence link 后打开右侧 review 文档并高亮 source_selector 对应 DOM
@@ -41,6 +42,7 @@
 - `任务详情会从 QA 事件流重建用户问题、模型回答和 inline evidence`：验证 SSE 中的 user message 和 model_message 会进入 Agent 流，且 evidence 链接保持可点击 href。
 - `点击 inline evidence 会用现有任务详情数据打开右侧 review 文档`：验证 evidence link 不请求旧 replay 或新 review 端点，而是使用现有 `GET /qa/tasks/{task_id}` 响应里的 `display_html/source_selectors` 打开右侧 review 文档并高亮证据，右侧 review 保持在主界面右栏。
 - `首轮生成中收到 source_indexed 后可以立刻打开右侧 review 文档`：验证第一轮回答还在生成时，前端会直接消费 SSE 中的 `source_selectors`，不必等 turn 终态刷新就能点击 model message 的 evidence link 打开右侧 review。
+- `首轮 source_indexed 触发的旧 seq 详情刷新仍会补齐 review 文档`：验证首轮 SSE 已经推进到更新 seq 时，后续 GET task detail 即使带着较旧的 `stream.last_event_seq`，前端也会合并其中的 `documents/display_html`，让刚出现的 evidence link 可以打开右侧 review。
 - `右侧 review 会压平文档页面外框，只保留正文排版`：验证前端会把 display_html 里自带的 page 式背景、阴影和内边距去掉，避免 review 里再出现一层纸张框。
 - `右侧 review panel 支持拖拽调整宽度，并保持 Agent 对话列左右空白对称`：验证 review panel 默认宽度、拖拽和键盘调宽逻辑，以及单开左侧任务栏或左右栏同时打开时，Agent 对话列都按当前 Agent slot 宽度计算中心列和左右 blank，不再注入 viewport 或侧栏宽度偏移变量。
 - `文件夹级 inline evidence 会定位到对应 header 而不是子节点`：验证 `evidence://0001.0001` 这类目录级链接即使没有直接 selector，也会定位到同名 header DOM id，并明确不高亮下面的正文子节点。

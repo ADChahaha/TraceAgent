@@ -55,6 +55,19 @@ def test_resolution_messages_describe_qa_investigation_not_field_extraction():
     assert "Investigate the documents" not in human_content
 
 
+def test_resolution_prompt_allows_direct_answers_without_forced_document_search():
+    messages = build_resolution_messages(_state())
+    system_content = messages[0].content
+
+    assert "Answer directly when the question can be answered from conversation context" in system_content
+    assert "general assistant identity/capability" in system_content
+    assert "Use document tools when the user asks about document content" in system_content
+    assert "When using document tools, show a brief investigation trace" in system_content
+    assert "Do not inspect unrelated documents just to satisfy symmetry" in system_content
+    assert "Show your thought process" not in system_content
+    assert "One tool per turn" not in system_content
+
+
 def test_resolution_messages_preserve_openai_tool_history():
     completion_input = build_completion_input(
         completion_id="cmp_123",
@@ -102,16 +115,18 @@ def test_resolution_messages_preserve_openai_tool_history():
     assert "Investigate the documents" not in messages[-1].content
 
 
-def test_resolution_graph_keeps_only_first_parallel_tool_call():
+def test_resolution_graph_preserves_parallel_tool_calls():
     state = _state()
     paragraph_path_id = "0001.0001.0001"
 
     class MultiToolModel:
         def __init__(self):
             self.calls = 0
+            self.bind_kwargs = None
 
         def bind_tools(self, tools, **kwargs):
-            del tools, kwargs
+            del tools
+            self.bind_kwargs = kwargs
             return self
 
         def stream(self, messages):
@@ -143,14 +158,16 @@ def test_resolution_graph_keeps_only_first_parallel_tool_call():
                 ],
             )
 
-    graph = build_resolution_graph(MultiToolModel(), build_tools(state), state)
+    model = MultiToolModel()
+    graph = build_resolution_graph(model, build_tools(state), state)
 
     list(graph.stream({"messages": build_resolution_messages(state)}, config={"recursion_limit": 4}))
 
     model_events = [event for event in state.events if event.get("type") == "model_message"]
-    assert [action["tool_name"] for action in state.actions] == ["tree"]
-    assert model_events[0]["tool_call_count"] == 1
-    assert [call["name"] for call in model_events[0]["tool_calls"]] == ["tree"]
+    assert model.bind_kwargs == {}
+    assert [action["tool_name"] for action in state.actions] == ["tree", "read"]
+    assert model_events[0]["tool_call_count"] == 2
+    assert [call["name"] for call in model_events[0]["tool_calls"]] == ["tree", "read"]
 
 
 def test_resolution_uses_responses_api_stream_and_merges_content_with_tool_calls():

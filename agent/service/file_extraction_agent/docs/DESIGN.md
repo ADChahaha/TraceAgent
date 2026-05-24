@@ -43,7 +43,7 @@ completion_id + documents + messages + run_options + model_config
                并保持最新真实用户消息为最后一条 human message
             -> build_tools(state) 暴露 tree / grep / read / inspect
             -> 模型产生 model_message，先校验 provider stop signal 与 tool_calls 是否一致
-            -> 有 tool_calls 时继续单工具循环；terminal stop signal 且无工具时自然结束
+            -> 有 tool_calls 时保留同轮一个或多个工具调用并交给 ToolNode 执行；terminal stop signal 且无工具时自然结束
        -> resolution 正常结束输出 completion.completed
        -> resolution 异常输出 tool_failed(resolution) + completion.failed
        -> producer 把每条 SSE event 放入 runtime queue
@@ -312,6 +312,8 @@ model_message: 这里说明任一方可以终止协议，但该句本身没有�
 
 多轮上下文只来自 backend 传入的 append-only `messages`：上一轮 user/assistant/tool 历史会原样保留并追加新问题。agent 不接收 memory、摘要或自动裁剪结果，避免每轮重写上下文导致 provider prompt cache 失效。新一轮如果复用旧发现，仍应引用原始 `evidence://`。
 
+QA prompt 的默认行为不是强制查文档。模型如果能从当前对话上下文、助手身份或能力说明直接回答，就直接回答；只有用户询问文档内容、要求证据，或当前对话不足以回答时，才使用 `tree/grep/read/inspect`。一旦使用文档工具，模型需要给出简短可见的 investigation trace，说明查了什么、发现了什么、还缺什么；但不能输出隐藏推理。evidence link 只约束来自文档的事实，非文档回答不需要硬贴 evidence。
+
 ## 7. HTTP API
 
 当前 route 暴露：
@@ -424,7 +426,7 @@ impl/resolution_new.py
   -> 构建 QA system prompt，并保留 backend 传入的真实 chat/tool messages
   -> 用 LangGraph 运行 model/tool loop
   -> 记录 model_message
-  -> 请求 provider 禁用 parallel tool calls；如果仍返回多个 tool call，只保留第一个
+  -> 保留 provider 返回的一个或多个 tool call，并由 ToolNode 执行
 
 impl/graph.py
   -> 组装 completion.created/source_indexed/resolution/terminal event
