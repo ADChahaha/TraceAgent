@@ -68,16 +68,27 @@ conda create -n agent-gate python=3.11 -y && conda activate agent-gate
 pip install -e "agent[dev]"
 pip install -e "backend[dev]"
 pnpm --dir frontend install
+```
 
-# 配置模型（启动 agent 前）
-export BASE_URL="https://your-model-endpoint/v1"
-export OPENAI_API_KEY="your-api-key"
-export MODEL="your-model-name"
+在仓库根目录创建 `.env`，脚本会自动读取它：
 
-# 启动（三个终端）
-uvicorn --app-dir agent main:app --reload --host 127.0.0.1 --port 8001
-AGENT_SERVICE_BASE_URL=http://127.0.0.1:8001 uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
-BACKEND_BASE_URL=http://127.0.0.1:8000 pnpm --dir frontend dev --port 3000
+```bash
+BASE_URL="https://your-model-endpoint/v1"
+OPENAI_API_KEY="your-api-key"
+MODEL="your-model-name"
+MODEL_API_TRANSPORT="responses"
+
+DOCUMENT_PROCESSOR_MINERU_LANG="japan"
+
+AGENT_PORT=8001
+BACKEND_PORT=8000
+FRONTEND_PORT=3000
+```
+
+启动：
+
+```bash
+./scripts/dev.sh
 ```
 
 打开 http://127.0.0.1:3000 即可使用。
