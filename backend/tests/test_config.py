@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from backend.core.config import BackendSettings
 from backend.core.db import initialize_database
+from backend.crud.qa_tasks import create_task
 from backend.main import create_app
 
 
@@ -122,4 +123,51 @@ def test_database_initialization_creates_qa_schema_and_drops_old_field_schema():
     assert "reviews" not in table_names
     assert "review_fields" not in table_names
     assert "field_commits" not in table_names
-    assert {"id", "status", "stage", "memory_json", "active_turn_id"} <= qa_task_columns
+    assert {"id", "status", "stage", "active_turn_id"} <= qa_task_columns
+    assert "memory_json" not in qa_task_columns
+
+
+def test_database_initialization_migrates_existing_qa_tasks_without_memory_json():
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    connection.executescript(
+        """
+        CREATE TABLE qa_tasks (
+            id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            metadata_json TEXT NOT NULL,
+            memory_json TEXT NOT NULL,
+            active_turn_id TEXT,
+            error_message TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        INSERT INTO qa_tasks (
+            id, status, stage, metadata_json, memory_json, active_turn_id,
+            error_message, created_at, updated_at
+        )
+        VALUES (
+            'qa_task_old', 'ready', 'ready', '{"source":"old"}', '{}', NULL,
+            NULL, '2026-05-24T00:00:00Z', '2026-05-24T00:00:00Z'
+        );
+        """
+    )
+
+    initialize_database(connection)
+    created_task = create_task(
+        connection,
+        task_id="qa_task_new",
+        metadata={"source": "new"},
+        now="2026-05-24T00:01:00Z",
+    )
+
+    qa_task_columns = {row["name"] for row in connection.execute("PRAGMA table_info(qa_tasks)").fetchall()}
+    old_task = connection.execute("SELECT * FROM qa_tasks WHERE id = ?", ("qa_task_old",)).fetchone()
+
+    assert "memory_json" not in qa_task_columns
+    assert old_task is not None
+    assert old_task["metadata_json"] == '{"source":"old"}'
+    assert old_task["status"] == "ready"
+    assert old_task["stage"] == "ready"
+    assert created_task["id"] == "qa_task_new"

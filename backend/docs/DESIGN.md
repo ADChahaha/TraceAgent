@@ -17,14 +17,16 @@ backend 是多轮 QA 的持久化事实来源：
   -> backend 保存 user message
   -> backend 从 qa_messages + qa_events 重建 OpenAI 风格 messages：
        user / assistant / tool
-     并把 documents + messages + memory 传给 agent completion
+     并把 documents + append-only messages 传给 agent completion
   -> backend 保存 agent model_message / tool events / terminal events
   -> backend 保存 assistant message，供下一轮上下文使用
 ```
 
+为了保持 provider prompt cache 友好，backend 不维护 memory/summary 字段，也不自动裁剪或重写历史上下文。每一轮只在原有 `messages` 后追加新的 user/assistant/tool 消息；如果上下文过长，应该显式开启新 task 或在后续引入用户可见的会话切分，而不是静默摘要。
+
 职责边界：
 
-- `backend` 管理 QA task、documents、messages、turns、events 和 memory。
+- `backend` 管理 QA task、documents、append-only messages、turns 和 events。
 - `agent service` 负责 PDF/DOCX 标准化和单次 document QA completion。
 - `backend` 通过 HTTP 调用 `agent service`，不 import `agent/` 内部包。
 - `backend` 不持久化上传原始文件 bytes；只保存 document_processor 输出的 HTML/Markdown/blocks。
@@ -75,6 +77,8 @@ backend/
 - `crud/qa_tasks.py` 封装 QA 表读写，不做业务决策。
 - `models/schema.py` 定义 QA-only SQLite schema。
 
+数据库初始化会先清理旧字段抽取表，再处理 QA schema 的轻量升级。已有本地库如果仍保留 `qa_tasks.memory_json`，`initialize_database(...)` 会在创建缺失 QA 表之前删除该旧列并保留原有 task 行，保证 memory-free 的 `create_task(...)` 可以继续插入新任务。
+
 ## 3. 数据流
 
 创建 QA task：
@@ -119,10 +123,10 @@ POST /qa/tasks/{task_id}/inputs
   -> qa_events 写 turn.started
   -> 组装 documents: qa_documents(filename + html)
   -> 组装 messages: qa_messages(role + content) + 同 turn 的 agent.event tool_calls / tool results
-  -> 组装 memory: qa_tasks.memory_json（只保留轻量状态，不重复塞上一轮答案摘要）
   -> AgentClient.create_document_qa_completion_stream(...)
   -> 每条 agent SSE 写 qa_events(agent.event)
-  -> completion.completed 时，把最后一条非空 model_message 写成 role=assistant
+  -> model_message.is_final=true 时暂存 final assistant 内容
+  -> completion.completed 时，把 final assistant 内容写成 role=assistant
   -> qa_turns 写 completed
   -> qa_tasks 写 ready/ready 并清空 active_turn_id
   -> qa_events 写 turn.completed
@@ -226,7 +230,7 @@ QA-only schema：
 
 ```text
 qa_tasks
-  -> id, status, stage, metadata_json, memory_json, active_turn_id, error_message, timestamps
+  -> id, status, stage, metadata_json, active_turn_id, error_message, timestamps
 
 qa_documents
   -> task_id, filename, file_type, html, display_html, markdown, md_list_json, blocks_json, processor_meta_json, warnings_json

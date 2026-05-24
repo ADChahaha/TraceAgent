@@ -22,6 +22,8 @@
     "next": "latest",
     "react": "latest",
     "react-dom": "latest",
+    "react-markdown": "^6.0.3",
+    "remark-gfm": "^1.0.0",
     "sonner": "latest",
     "tailwind-merge": "latest"
   },
@@ -39,7 +41,7 @@
     "jest": "latest",
     "jest-environment-jsdom": "latest",
     "tailwindcss": "latest",
-    "typescript": "^5.9.3",
-    "ts-node": "latest"
+    "ts-node": "latest",
+    "typescript": "^5.9.3"
   }
 }

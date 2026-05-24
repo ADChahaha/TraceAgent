@@ -50,6 +50,7 @@ class ThreadLocalDatabase:
 def initialize_database(connection: sqlite3.Connection) -> None:
     connection.execute("PRAGMA journal_mode = WAL")
     _remove_legacy_field_schema(connection)
+    _migrate_qa_tasks_drop_memory_json(connection)
     for statement in SCHEMA_SQL:
         connection.execute(statement)
     connection.commit()
@@ -79,3 +80,62 @@ def _remove_legacy_field_schema(connection: sqlite3.Connection) -> None:
     ):
         connection.execute(f"DROP TABLE IF EXISTS {table_name}")
     connection.execute(f"PRAGMA foreign_keys = {'ON' if foreign_keys_enabled else 'OFF'}")
+
+
+def _migrate_qa_tasks_drop_memory_json(connection: sqlite3.Connection) -> None:
+    if not _table_exists(connection, "qa_tasks"):
+        return
+    if "memory_json" not in _table_columns(connection, "qa_tasks"):
+        return
+
+    try:
+        connection.execute("ALTER TABLE qa_tasks DROP COLUMN memory_json")
+    except sqlite3.OperationalError:
+        _rebuild_qa_tasks_without_memory_json(connection)
+
+
+def _rebuild_qa_tasks_without_memory_json(connection: sqlite3.Connection) -> None:
+    foreign_keys_enabled = bool(connection.execute("PRAGMA foreign_keys").fetchone()[0])
+    connection.commit()
+    connection.execute("PRAGMA foreign_keys = OFF")
+    try:
+        connection.execute("DROP TABLE IF EXISTS _qa_tasks_without_memory_json")
+        connection.execute(
+            SCHEMA_SQL[0].replace(
+                "CREATE TABLE IF NOT EXISTS qa_tasks",
+                "CREATE TABLE _qa_tasks_without_memory_json",
+                1,
+            )
+        )
+        connection.execute(
+            """
+            INSERT INTO _qa_tasks_without_memory_json (
+                id, status, stage, metadata_json, active_turn_id,
+                error_message, created_at, updated_at
+            )
+            SELECT
+                id, status, stage, metadata_json, active_turn_id,
+                error_message, created_at, updated_at
+            FROM qa_tasks
+            """
+        )
+        connection.execute("DROP TABLE qa_tasks")
+        connection.execute("ALTER TABLE _qa_tasks_without_memory_json RENAME TO qa_tasks")
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.execute(f"PRAGMA foreign_keys = {'ON' if foreign_keys_enabled else 'OFF'}")
+
+
+def _table_exists(connection: sqlite3.Connection, table_name: str) -> bool:
+    row = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def _table_columns(connection: sqlite3.Connection, table_name: str) -> set[str]:
+    return {row[1] for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()}

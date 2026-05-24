@@ -78,7 +78,7 @@ frontend/
 - `src/app/` 只组织 Next.js 路由、布局和 backend proxy route。
 - `src/components/upload-workbench.tsx` 负责首页 QA task 创建、首问提交、recent task 任务栏和主题按钮。
 - `src/components/task-detail.tsx` 负责 QA task 详情、SSE 事件流、追问 composer 和取消按钮。
-- `src/components/markdown-evidence.tsx` 渲染受控 Markdown 子集，并保留 `evidence://` link。
+- `src/components/markdown-evidence.tsx` 用 `react-markdown + remark-gfm` 渲染模型回答，支持 GFM 表格、连续编号列表和嵌套列表，并保留 `evidence://` link 的点击接管。
 - `src/lib/api.ts` 封装 `/api/backend/qa/*` 调用、SSE URL、EventSource 创建和错误语义。
 - `src/lib/task-store.ts` 只缓存 task 摘要，包括 status、stage、document_count、active_turn_id 和 stream。
 - `src/lib/backend-proxy.ts` 透明转发 multipart、JSON 和 text/event-stream。
