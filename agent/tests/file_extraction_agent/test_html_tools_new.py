@@ -135,16 +135,16 @@ def test_grep_returns_candidate_blocks_but_not_inline_evidence():
 
 def test_grep_can_scope_to_section_locator():
     state = _state()
-    term_section = state.document.path_id("/001-contract-服务合同/001-Term")
-    notice_section = state.document.path_id("/001-contract-服务合同/002-Notice")
+    term_section = state.document.path_id("/001-contract-服务合同/001-服务合同/001-Term")
+    notice_section = state.document.path_id("/001-contract-服务合同/001-服务合同/002-Notice")
 
     term_result = _grep(state, query="notice", scope=f"evidence://{term_section}", max_results=5)
     notice_result = _grep(state, query="notice", scope=f"evidence://{notice_section}", max_results=5)
 
     assert term_result["ok"] is True
-    assert [item["locator"] for item in term_result["results"]] == ["evidence://0001.0001.0001"]
+    assert [item["locator"] for item in term_result["results"]] == ["evidence://0001.0001.0001.0001"]
     assert notice_result["ok"] is True
-    assert [item["locator"] for item in notice_result["results"]] == ["evidence://0001.0002.0001"]
+    assert [item["locator"] for item in notice_result["results"]] == ["evidence://0001.0001.0002.0001"]
 
 
 def test_read_accepts_consecutive_sibling_range_locator():
@@ -195,7 +195,7 @@ def test_inspect_expands_paragraph_list_and_table_to_inline_links():
 
 def test_inspect_rejects_section_and_inline_locators():
     state = _state()
-    section = state.document.path_id("/001-contract-服务合同/001-Term")
+    section = state.document.path_id("/001-contract-服务合同/001-服务合同/001-Term")
     paragraph = _paragraph_path_id_containing(state, "Either party")
 
     section_result = _inspect(state, f"evidence://{section}")

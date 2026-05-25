@@ -196,22 +196,27 @@ producer 生成 completion.completed / completion.failed / completion.cancelled
 
 ## 4. 虚拟文档仓库
 
-多文档语料被映射成只读 virtual document repository，设计上模仿 code agent 看项目：
+多文档语料被映射成只读 virtual document repository，设计上模仿 code agent 看项目。每个输入 HTML 先变成一个文档目录；文档目录名会优先使用第一个 `h1` 或 `title` 作为标题后缀，但正文里的所有 `h1` 到 `h6` 都仍然会按层级生成 section 目录，不会因为第一个 `h1` 已经参与文档命名就被跳过：
 
 ```text
 /
 └── evidence://0001 contract-a/
-    ├── evidence://0001.0001 Termination/
-    │   ├── evidence://0001.0001.0001 Either party may terminate.md
-    │   └── evidence://0001.0001.0002 Notice period.table
-    └── evidence://0001.0002 Notices/
-        └── evidence://0001.0002.0001 Written notice must be sent.md
+    ├── evidence://0001.0001 Agreement/
+    │   ├── evidence://0001.0001.0001 Termination/
+    │   │   ├── evidence://0001.0001.0001.0001 Either party may terminate.md
+    │   │   └── evidence://0001.0001.0001.0002 Notice period.table
+    │   └── evidence://0001.0001.0002 Notices/
+    │       └── evidence://0001.0001.0002.0001 Written notice must be sent.md
+    └── evidence://0001.0002 Appendix/
+        └── evidence://0001.0002.0001 Additional terms.md
 ```
 
 建模规则：
 
 - 根目录固定为 `/`；工具里可用 `tree(path_id="")` 或 `tree(path_id="/")` 打开。
 - 每个输入 HTML 是根目录下的文档目录，文档目录的可见 locator 是 `evidence://0001`、`evidence://0002`。
+- 文档标题只决定文档目录显示名；同一个 `h1` 仍会作为正文 section 目录进入树，多个 `h1` 会成为文档目录下的多个一级 section。
+- `h2` 到 `h6` 按 HTML heading 层级挂到最近的更高层 section 下面。
 - section header 是目录；paragraph/list/table 是可读 block 文件。
 - paragraph/list/table 的可见 locator 使用稳定 `path_id`，例如 `evidence://0001.0001.0003`。
 - raw virtual path 只用于内部索引；模型看到和传入工具的 locator 一律是 `evidence://...`。

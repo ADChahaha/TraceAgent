@@ -19,6 +19,8 @@ def _documents():
               <li id="li1">第一项</li>
               <li id="li2">第二项<ul id="l2"><li id="li3">子项</li></ul></li>
             </ul>
+            <h1 id="t1b">补充说明</h1>
+            <p id="p1b">补充说明正文。</p>
             <table id="tbl1">
               <caption id="cap1">费用明细</caption>
               <tr id="tr0"><th>项目</th><th>金额</th></tr>
@@ -49,18 +51,21 @@ def test_build_html_document_builds_virtual_tree_for_multiple_documents():
         "002-contract-项目设计说明",
     ]
     assert [child.path_id for child in root.children] == ["0001", "0002"]
-    assert "/001-contract-项目设计说明/001-背景" in document.nodes_by_path
-    assert "/001-contract-项目设计说明/002-背景" in document.nodes_by_path
+    assert "/001-contract-项目设计说明/001-项目设计说明" in document.nodes_by_path
+    assert "/001-contract-项目设计说明/001-项目设计说明/001-背景" in document.nodes_by_path
+    assert "/001-contract-项目设计说明/001-项目设计说明/002-背景" in document.nodes_by_path
+    assert "/001-contract-项目设计说明/002-补充说明" in document.nodes_by_path
     assert (
-        "/001-contract-项目设计说明/001-背景/001-这个项目最初是为了抽取字段.md"
+        "/001-contract-项目设计说明/001-项目设计说明/001-背景/001-这个项目最初是为了抽取字段.md"
         in document.nodes_by_path
     )
     assert (
-        "/001-contract-项目设计说明/001-背景/002-这个项目最初是为了验证重名段落.md"
+        "/001-contract-项目设计说明/001-项目设计说明/001-背景/002-这个项目最初是为了验证重名段落.md"
         in document.nodes_by_path
     )
-    assert "/001-contract-项目设计说明/002-背景/001-第一项.list" in document.nodes_by_path
-    assert "/001-contract-项目设计说明/002-背景/002-费用明细.table" in document.nodes_by_path
+    assert "/001-contract-项目设计说明/001-项目设计说明/002-背景/001-第一项.list" in document.nodes_by_path
+    assert "/001-contract-项目设计说明/002-补充说明/001-补充说明正文.md" in document.nodes_by_path
+    assert "/001-contract-项目设计说明/002-补充说明/002-费用明细.table" in document.nodes_by_path
 
 
 def test_tree_view_respects_depth_and_file_kinds():
@@ -76,20 +81,21 @@ def test_tree_view_respects_depth_and_file_kinds():
     depth_three = document.tree_text("/001-contract-项目设计说明", depth=3)
     assert "0001" in depth_three
     assert "/001-contract-项目设计说明/001-背景" not in depth_three
+    assert "项目设计说明/" in depth_three
     assert "背景/" in depth_three
     assert "这个项目最初是为了抽取字段.md" in depth_three
     assert "第一项.list" in depth_three
-    assert "费用明细.table" in depth_three
+    assert "补充说明/" in depth_three
     assert "001-这个项目最初是为了抽取字段.md" not in depth_three
 
 
 def test_path_ids_are_stable_model_visible_locators_for_raw_paths():
     document = build_html_document(_documents())
-    path = "/001-contract-项目设计说明/001-背景/001-这个项目最初是为了抽取字段.md"
+    path = "/001-contract-项目设计说明/001-项目设计说明/001-背景/001-这个项目最初是为了抽取字段.md"
 
     path_id = document.path_id(path)
 
-    assert path_id == "0001.0001.0001"
+    assert path_id == "0001.0001.0001.0001"
     assert document.resolve_path_id(path_id) == path
     assert document.resolve_path(path_id) == path
     assert document.read_markdown(path_id)["path_id"] == path_id
@@ -102,15 +108,18 @@ def test_source_selectors_map_readable_path_ids_to_original_dom_ids():
     source_selectors = document.source_selectors()
 
     assert source_selectors["0001"] == "t1"
-    assert source_selectors["0001.0001"] == "h1"
-    assert source_selectors["0001.0002"] == "h2"
-    assert source_selectors["0001.0001.0001"] == "p1"
-    assert source_selectors["0001.0001.0002"] == "p2"
-    assert source_selectors["0001.0002.0001"] == "l1"
+    assert source_selectors["0001.0001"] == "t1"
+    assert source_selectors["0001.0001.0001"] == "h1"
+    assert source_selectors["0001.0001.0002"] == "h2"
+    assert source_selectors["0001.0002"] == "t1b"
+    assert source_selectors["0001.0001.0001.0001"] == "p1"
+    assert source_selectors["0001.0001.0001.0002"] == "p2"
+    assert source_selectors["0001.0001.0002.0001"] == "l1"
+    assert source_selectors["0001.0002.0001"] == "p1b"
     assert source_selectors["0001.0002.0002"] == "tbl1"
 
 
-def test_document_direct_blocks_use_document_root_namespace():
+def test_h1_sections_wrap_following_blocks_and_subsections():
     document = build_html_document(
         [
             {
@@ -126,12 +135,33 @@ def test_document_direct_blocks_use_document_root_namespace():
         ]
     )
 
-    assert document.path_id("/001-cover-封面/001-封面第一行.md") == "0001.0000.0001"
-    assert document.path_id("/001-cover-封面/002-封面第二行.md") == "0001.0000.0002"
-    assert document.path_id("/001-cover-封面/003-第一章") == "0001.0001"
-    assert document.path_id("/001-cover-封面/003-第一章/001-章节正文.md") == "0001.0001.0001"
-    assert document.source_selectors()["0001.0000.0001"] == "cover-p1"
+    assert document.path_id("/001-cover-封面/001-封面/001-封面第一行.md") == "0001.0001.0001"
+    assert document.path_id("/001-cover-封面/001-封面/002-封面第二行.md") == "0001.0001.0002"
+    assert document.path_id("/001-cover-封面/001-封面/003-第一章") == "0001.0001.0003"
+    assert document.path_id("/001-cover-封面/001-封面/003-第一章/001-章节正文.md") == "0001.0001.0003.0001"
+    assert document.source_selectors()["0001.0001.0001"] == "cover-p1"
     assert "0001.0000" not in document.nodes_by_path_id
+
+
+def test_pre_heading_direct_blocks_use_document_root_namespace():
+    document = build_html_document(
+        [
+            {
+                "filename": "mixed.html",
+                "html": """
+                <p id="intro">标题前说明。</p>
+                <h1 id="title">正文标题</h1>
+                <p id="body">正文内容。</p>
+                """,
+            }
+        ]
+    )
+
+    assert document.path_id("/001-mixed-正文标题/001-标题前说明.md") == "0001.0000.0001"
+    assert document.path_id("/001-mixed-正文标题/002-正文标题") == "0001.0001"
+    assert document.path_id("/001-mixed-正文标题/002-正文标题/001-正文内容.md") == "0001.0001.0001"
+    assert document.source_selectors()["0001.0000.0001"] == "intro"
+    assert document.source_selectors()["0001.0001"] == "title"
 
 
 def test_bracketed_path_ids_are_rejected_instead_of_canonicalized():
@@ -167,7 +197,7 @@ def test_tree_display_names_decode_percent_encoded_filenames_without_changing_ra
 
 def test_paragraph_anchors_use_sentence_ids_without_polluting_read():
     document = build_html_document(_documents())
-    path = "/001-contract-项目设计说明/001-背景/001-这个项目最初是为了抽取字段.md"
+    path = "/001-contract-项目设计说明/001-项目设计说明/001-背景/001-这个项目最初是为了抽取字段.md"
 
     assert document.read_markdown(path)["text"] == "这个项目最初是为了抽取字段。"
     anchors = document.paragraph_anchors(path)
@@ -178,7 +208,7 @@ def test_paragraph_anchors_use_sentence_ids_without_polluting_read():
 def test_list_markdown_uses_item_numbers_and_nested_numbers():
     document = build_html_document(_documents())
 
-    result = document.read_markdown("/001-contract-项目设计说明/002-背景/001-第一项.list")
+    result = document.read_markdown("/001-contract-项目设计说明/001-项目设计说明/002-背景/001-第一项.list")
 
     assert result["kind"] == "list"
     assert "kind: list" in result["text"]
@@ -206,7 +236,7 @@ def test_list_markdown_reports_has_more_against_top_level_items():
             }
         ]
     )
-    path = "/001-items-列表/001-第一项.list"
+    path = "/001-items-列表/001-列表/001-第一项.list"
 
     first_page = document.read_markdown(path, offset=0, limit=1)
     second_page = document.read_markdown(path, offset=1, limit=1)
@@ -219,7 +249,7 @@ def test_list_markdown_reports_has_more_against_top_level_items():
 
 def test_table_markdown_uses_row_numbers_and_supports_pagination():
     document = build_html_document(_documents())
-    path = "/001-contract-项目设计说明/002-背景/002-费用明细.table"
+    path = "/001-contract-项目设计说明/002-补充说明/002-费用明细.table"
 
     first_row = document.read_markdown(path, offset=0, limit=1)
 
@@ -233,7 +263,7 @@ def test_table_markdown_uses_row_numbers_and_supports_pagination():
 
 def test_query_table_only_accepts_table_paths_and_keeps_original_row_numbers():
     document = build_html_document(_documents())
-    path = "/001-contract-项目设计说明/002-背景/002-费用明细.table"
+    path = "/001-contract-项目设计说明/002-补充说明/002-费用明细.table"
 
     result = document.query_table(
         path,
@@ -249,6 +279,6 @@ def test_query_table_only_accepts_table_paths_and_keeps_original_row_numbers():
 
     with pytest.raises(ValueError, match=".table"):
         document.query_table(
-            "/001-contract-项目设计说明/001-背景/001-这个项目最初是为了抽取字段.md",
+            "/001-contract-项目设计说明/001-项目设计说明/001-背景/001-这个项目最初是为了抽取字段.md",
             'SELECT "项目" FROM data',
         )

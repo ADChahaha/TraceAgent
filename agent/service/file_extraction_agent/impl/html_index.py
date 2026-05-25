@@ -514,8 +514,6 @@ def add_document_children(
     sibling_counters: dict[str, dict[str, int]] = {doc_node.path: {}}
 
     for node in block_nodes(parsed_root):
-        if node.tag == "h1":
-            continue
         if node.tag in HEADING_TAGS:
             level = int(node.tag[1])
             while section_stack and section_stack[-1][0] >= level:

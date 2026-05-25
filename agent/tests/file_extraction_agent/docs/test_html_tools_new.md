@@ -8,8 +8,8 @@
 DocumentQaCompletionInput
   -> GraphState 持有 HtmlDocument
   -> build_tools(state) 暴露 tree/grep/read/inspect
-  -> tree 展开 document/section 结构
-  -> grep 返回候选 block locator 和 preview
+  -> tree 展开 document/section 结构，其中 h1 也会作为 section 目录出现
+  -> grep 可限定到 h1/h2/... section，返回候选 block locator 和 preview
   -> read 打开 block 或同 section 下连续 range
   -> inspect 把 block 展开成 Sxxx/Ixxx/Rxxx inline evidence
 ```
@@ -21,7 +21,7 @@ DocumentQaCompletionInput
 - `test_internal_tool_helpers_do_not_accept_reason_parameter`：验证工具 helper 不接收旧 `reason` 参数。
 - `test_tree_and_read_use_evidence_locators`：验证 tree/read 使用 `evidence://` locator，并拒绝裸 path id。
 - `test_grep_returns_candidate_blocks_but_not_inline_evidence`：验证 grep 只返回候选 block，不返回 inline selector。
-- `test_grep_can_scope_to_section_locator`：验证 grep 可以限定在某个 section 范围内搜索。
+- `test_grep_can_scope_to_section_locator`：验证 grep 可以限定在某个 section 范围内搜索；当 `h2` 位于 `h1` 下时，scope locator 会包含 `h1 -> h2` 的层级。
 - `test_read_accepts_consecutive_sibling_range_locator`：验证 read 支持同一 section 内相邻 block 的 range locator。
 - `test_inspect_expands_paragraph_list_and_table_to_inline_links`：验证 inspect 会把 paragraph/list/table 展开成句子、列表项和表格行级 evidence link。
 - `test_inspect_rejects_section_and_inline_locators`：验证 inspect 只接受 readable block locator，拒绝 section 和已 inline 的 locator。

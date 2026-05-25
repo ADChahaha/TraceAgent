@@ -22,15 +22,15 @@ class FakeStreamingModel:
             {
                 "tool_name": "read",
                 "content": "我读取命中的终止条款。",
-                "arguments": {"locator": "evidence://0001.0001.0001"},
+                "arguments": {"locator": "evidence://0001.0001.0001.0001"},
             },
             {
                 "tool_name": "inspect",
-                "content": "这段说明任一方可提前 30 天书面通知终止。[终止条款](evidence://0001.0001.0001)",
-                "arguments": {"locator": "evidence://0001.0001.0001"},
+                "content": "这段说明任一方可提前 30 天书面通知终止。[终止条款](evidence://0001.0001.0001.0001)",
+                "arguments": {"locator": "evidence://0001.0001.0001.0001"},
             },
             {
-                "content": "答案：可以提前终止，但需要提前 30 天书面通知。[30 天书面通知](evidence://0001.0001.0001/S001)",
+                "content": "答案：可以提前终止，但需要提前 30 天书面通知。[30 天书面通知](evidence://0001.0001.0001.0001/S001)",
             },
         ]
 
@@ -75,8 +75,9 @@ def test_run_completion_graph_stream_yields_sse_events_and_terminal_completion()
     assert payloads[1]["type"] == "source_indexed"
     assert payloads[1]["result"]["source_selectors"] == {
         "0001": "title",
-        "0001.0001": "term",
-        "0001.0001.0001": "p1",
+        "0001.0001": "title",
+        "0001.0001.0001": "term",
+        "0001.0001.0001.0001": "p1",
     }
     assert payloads[2]["type"] == "model_message"
     assert payloads[3]["type"] == "tool_started"
