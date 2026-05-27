@@ -55,17 +55,14 @@ def test_resolution_messages_describe_qa_investigation_not_field_extraction():
     assert "Investigate the documents" not in human_content
 
 
-def test_resolution_prompt_allows_direct_answers_without_forced_document_search():
+def test_resolution_messages_do_not_inject_forced_document_search_instruction():
     messages = build_resolution_messages(_state())
-    system_content = messages[0].content
+    human_messages = [message for message in messages if getattr(message, "type", "") == "human"]
 
-    assert "Answer directly when the question can be answered from conversation context" in system_content
-    assert "general assistant identity/capability" in system_content
-    assert "Use document tools when the user asks about document content" in system_content
-    assert "When using document tools, show a brief investigation trace" in system_content
-    assert "Do not inspect unrelated documents just to satisfy symmetry" in system_content
-    assert "Show your thought process" not in system_content
-    assert "One tool per turn" not in system_content
+    assert len(human_messages) == 1
+    assert messages[-1] is human_messages[0]
+    assert human_messages[0].content == "公司什么时候成立？"
+    assert "Investigate the documents" not in human_messages[0].content
 
 
 def test_resolution_messages_preserve_openai_tool_history():

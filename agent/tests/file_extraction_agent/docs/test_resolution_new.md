@@ -21,7 +21,7 @@ GraphState(messages + HtmlDocument)
 ## 测试函数
 
 - `test_resolution_messages_describe_qa_investigation_not_field_extraction`：验证 prompt 说明 QA 调查流程和 evidence 规则，不再出现 `task_spec/write_field/submit_result` 字段抽取语义；同时验证 system prompt 不再接收 memory context，真实用户消息后面不会再追加强制调查文档的 `HumanMessage`。
-- `test_resolution_prompt_allows_direct_answers_without_forced_document_search`：验证 prompt 明确允许身份、能力和已有上下文可回答的问题直接回答，只有用户询问文档内容、要求证据或上下文不清楚时才使用文档工具；同时避免用 `Show your thought process` 这类说法诱导模型输出隐藏推理。
+- `test_resolution_messages_do_not_inject_forced_document_search_instruction`：验证 `build_resolution_messages` 只把真实用户消息转换成最后一条 `HumanMessage`，不会额外追加强制调查文档的运行指令；这个测试只约束消息构造行为，不约束 system prompt 的固定措辞。
 - `test_resolution_messages_preserve_openai_tool_history`：验证历史 assistant tool_calls 和 tool 结果会保留为真实 chat/tool message，而不是压成单一文本摘要；最新用户消息仍是模型看到的最后一条 human 消息。
 - `test_resolution_graph_preserves_parallel_tool_calls`：验证 provider 同轮返回多个 tool call 时，resolution graph 会保留完整 tool_calls 摘要，并按顺序执行这些工具。
 - `test_resolution_uses_responses_api_stream_and_merges_content_with_tool_calls`：确认 stream 调用能把 text chunk 和 tool call chunk 合并成带 content 和 tool_calls 的 `AIMessage`。
