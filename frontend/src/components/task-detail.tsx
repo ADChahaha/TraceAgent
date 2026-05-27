@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   ChevronRight,
   Clock3,
+  ExternalLink,
   X,
   Eye,
   FileSearch,
@@ -65,6 +66,7 @@ type ActiveEvidenceSource = {
   document: TaskSourceDocument;
   evidenceUri: string;
   label: string;
+  scopeLabels: string[];
   openKey: number;
   sourceSelector: string;
   sourceSelectors: string[];
@@ -79,6 +81,7 @@ type QaStreamItem =
       turnId: string | null;
       role: "user" | "assistant";
       content: string;
+      isFinal: boolean;
     }
   | {
       kind: "tool";
@@ -88,6 +91,7 @@ type QaStreamItem =
       label: string;
       evidenceUri: string | null;
       ok: boolean;
+      payload: Record<string, unknown>;
     }
   | {
       kind: "tool-group";
@@ -95,6 +99,13 @@ type QaStreamItem =
       seq: number;
       turnId: string | null;
       items: Extract<QaStreamItem, { kind: "tool" }>[];
+    }
+  | {
+      kind: "process-group";
+      groupId: string;
+      seq: number;
+      turnId: string | null;
+      items: QaStreamItem[];
     }
   | {
       kind: "status";
@@ -357,7 +368,7 @@ export function TaskDetail({
   }, [handleCancel, handleSubmitQuestion]);
 
   const visibleEvents = React.useMemo(() => mergeVisibleEvents(events, optimisticEvents), [events, optimisticEvents]);
-  const streamItems = React.useMemo(() => withPendingThinkingItem(buildQaStreamItems(visibleEvents), isRunning), [isRunning, visibleEvents]);
+  const streamItems = React.useMemo(() => groupCompletedQaProcessItems(withPendingThinkingItem(buildQaStreamItems(visibleEvents), isRunning)), [isRunning, visibleEvents]);
 
   return (
     <main aria-label="Task detail workspace" className="task-detail-fullscreen-shell">
@@ -517,7 +528,7 @@ function QaWorkspace({
                   <span className="replay-agent-balance-spacer" data-agent-balance-spacer="left" data-active="true" aria-hidden="true" />
                   <div className="replay-agent-readable-column">
                     {streamItems.length > 0 ? (
-                      streamItems.map((item) => <QaStreamRow key={streamItemKey(item)} item={item} onOpenEvidence={onOpenEvidence} />)
+                      streamItems.map((item) => <QaStreamRow key={streamItemKey(item)} item={item} summary={summary} onOpenEvidence={onOpenEvidence} />)
                     ) : (
                       <div className="replay-agent-turn is-current">
                         <div className="replay-agent-empty">{isRunning ? "Thinking" : "Ask a question to start multi-turn QA."}</div>
@@ -547,12 +558,7 @@ function QaWorkspace({
             />
             <aside className="replay-review-side-panel-slot" aria-label="Right review workspace">
               <div className="replay-source-header">
-                <div className="replay-source-title" title={activeEvidenceSource.document.filename}>
-                  {activeEvidenceSource.document.filename}
-                </div>
-                <div className="replay-source-subtitle" title={activeEvidenceSource.evidenceUri}>
-                  {activeEvidenceSource.label}
-                </div>
+                <QaSourceBreadcrumb source={activeEvidenceSource} />
                 <Button type="button" variant="ghost" size="icon" aria-label="Close document review" title="Close document review" onClick={() => setClosedReviewOpenKey(activeEvidenceSource.openKey)}>
                   <X className="h-4 w-4" aria-hidden="true" />
                 </Button>
@@ -669,6 +675,35 @@ function TaskSidebar({
   );
 }
 
+function QaSourceBreadcrumb({ source }: { source: ActiveEvidenceSource }) {
+  const labels = getActiveEvidenceBreadcrumbLabels(source);
+  return (
+    <nav className="replay-source-breadcrumb" aria-label="Source breadcrumb" title={labels.join(" / ")}>
+      {labels.map((label, index) => (
+        <React.Fragment key={`${label}-${index}`}>
+          <span className="replay-source-breadcrumb-item">
+            {label}
+          </span>
+          {index < labels.length - 1 ? <ChevronRight className="replay-source-breadcrumb-separator" aria-hidden="true" /> : null}
+        </React.Fragment>
+      ))}
+    </nav>
+  );
+}
+
+function getActiveEvidenceBreadcrumbLabels(source: ActiveEvidenceSource): string[] {
+  if (source.scopeLabels.length > 0) {
+    return uniqueCleanLabels(source.scopeLabels);
+  }
+  return uniqueCleanLabels([getEvidenceScopeLabelFallback(source.label)]);
+}
+
+function getEvidenceScopeLabelFallback(label: string): string {
+  const cleanedLabel = cleanToolContextValue(label);
+  const readScopeMatch = /^read\s+.+?\s+in\s+(.+)$/i.exec(cleanedLabel);
+  return readScopeMatch?.[1] ?? cleanedLabel;
+}
+
 function QaEvidenceSourceFrame({ source }: { source: ActiveEvidenceSource }) {
   const sourceFrameRef = React.useRef<HTMLIFrameElement | null>(null);
   const sourceHtml = React.useMemo(
@@ -705,7 +740,7 @@ function QaEvidenceSourceFrame({ source }: { source: ActiveEvidenceSource }) {
   );
 }
 
-function QaStreamRow({ item, onOpenEvidence }: { item: QaStreamItem; onOpenEvidence: (uri: string, label: string) => void }) {
+function QaStreamRow({ item, summary, onOpenEvidence }: { item: QaStreamItem; summary?: TaskSummary | null; onOpenEvidence: (uri: string, label: string) => void }) {
   if (item.kind === "message") {
     return (
       <div className={`replay-agent-turn qa-message-turn is-${item.role}`}>
@@ -716,12 +751,15 @@ function QaStreamRow({ item, onOpenEvidence }: { item: QaStreamItem; onOpenEvide
     );
   }
   if (item.kind === "tool-group") {
-    return <QaToolGroup item={item} onOpenEvidence={onOpenEvidence} />;
+    return <QaToolGroup item={item} summary={summary} onOpenEvidence={onOpenEvidence} />;
+  }
+  if (item.kind === "process-group") {
+    return <QaProcessGroup item={item} summary={summary} onOpenEvidence={onOpenEvidence} />;
   }
   if (item.kind === "tool") {
     return (
       <div className="replay-agent-turn qa-tool-turn">
-        <QaToolLine item={item} onOpenEvidence={onOpenEvidence} />
+        <QaSingleTool item={item} summary={summary} onOpenEvidence={onOpenEvidence} />
       </div>
     );
   }
@@ -746,7 +784,35 @@ function QaStreamRow({ item, onOpenEvidence }: { item: QaStreamItem; onOpenEvide
   );
 }
 
-function QaToolGroup({ item, onOpenEvidence }: { item: Extract<QaStreamItem, { kind: "tool-group" }>; onOpenEvidence: (uri: string, label: string) => void }) {
+function QaProcessGroup({ item, summary, onOpenEvidence }: { item: Extract<QaStreamItem, { kind: "process-group" }>; summary?: TaskSummary | null; onOpenEvidence: (uri: string, label: string) => void }) {
+  const [isExpanded, setIsExpanded] = React.useState(false);
+  return (
+    <div className="replay-agent-turn qa-process-turn">
+      <div className={isExpanded ? "replay-agent-process-group is-expanded" : "replay-agent-process-group is-collapsed"} role="group" aria-label="Process">
+        <button
+          type="button"
+          className="replay-agent-process-toggle"
+          aria-expanded={isExpanded}
+          aria-label={`${isExpanded ? "Collapse" : "Expand"} process`}
+          onClick={() => setIsExpanded((current) => !current)}
+        >
+          <FileSearch className="replay-agent-process-icon" aria-hidden="true" />
+          <span className="replay-agent-process-summary">{summarizeQaProcessGroup(item.items)}</span>
+          <ChevronRight className="replay-agent-process-chevron" aria-hidden="true" />
+        </button>
+        {isExpanded ? (
+          <div className="replay-agent-process-lines">
+            {item.items.map((processItem) => (
+              <QaStreamRow key={streamItemKey(processItem)} item={processItem} summary={summary} onOpenEvidence={onOpenEvidence} />
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function QaToolGroup({ item, summary, onOpenEvidence }: { item: Extract<QaStreamItem, { kind: "tool-group" }>; summary?: TaskSummary | null; onOpenEvidence: (uri: string, label: string) => void }) {
   const [isExpanded, setIsExpanded] = React.useState(false);
   return (
     <div className="replay-agent-turn qa-tool-turn">
@@ -765,7 +831,7 @@ function QaToolGroup({ item, onOpenEvidence }: { item: Extract<QaStreamItem, { k
         {isExpanded ? (
           <div className="replay-agent-tool-group-lines">
             {item.items.map((tool) => (
-              <QaToolLine key={`${tool.seq}-${tool.toolName}`} item={tool} onOpenEvidence={onOpenEvidence} />
+              <QaToolLine key={`${tool.seq}-${tool.toolName}`} item={tool} summary={summary} onOpenEvidence={onOpenEvidence} />
             ))}
           </div>
         ) : null}
@@ -774,26 +840,497 @@ function QaToolGroup({ item, onOpenEvidence }: { item: Extract<QaStreamItem, { k
   );
 }
 
-function QaToolLine({ item, onOpenEvidence }: { item: Extract<QaStreamItem, { kind: "tool" }>; onOpenEvidence?: (uri: string, label: string) => void }) {
-  if (item.evidenceUri && onOpenEvidence) {
-    return (
-      <button
-        type="button"
-        className="replay-agent-tool-line"
-        aria-label={`tool ${item.toolName}`}
-        onClick={() => onOpenEvidence(item.evidenceUri ?? "", item.label)}
-      >
-        <QaToolIcon toolName={item.toolName} />
-        <span className="replay-agent-tool-summary">{item.label}</span>
-      </button>
-    );
-  }
-  return (
+function QaSingleTool({ item, summary, onOpenEvidence }: { item: Extract<QaStreamItem, { kind: "tool" }>; summary?: TaskSummary | null; onOpenEvidence?: (uri: string, label: string) => void }) {
+  return <QaToolLine item={item} summary={summary} onOpenEvidence={onOpenEvidence} />;
+}
+
+function QaToolLine({
+  item,
+  summary,
+  onOpenEvidence,
+}: {
+  item: Extract<QaStreamItem, { kind: "tool" }>;
+  summary?: TaskSummary | null;
+  onOpenEvidence?: (uri: string, label: string) => void;
+}) {
+  const [isExpanded, setIsExpanded] = React.useState(false);
+  const hasDetail = hasQaToolDetail(item);
+  const displayLabel = getQaToolDisplayLabel(item, summary);
+  const line = hasDetail ? (
+    <button type="button" className="replay-agent-tool-line" aria-label={`tool ${item.toolName}`} aria-expanded={isExpanded} onClick={() => setIsExpanded((current) => !current)}>
+      <QaToolIcon toolName={item.toolName} />
+      <span className="replay-agent-tool-summary">{displayLabel}</span>
+      <ChevronRight className="replay-agent-tool-line-chevron" aria-hidden="true" />
+    </button>
+  ) : (
     <div className="replay-agent-tool-line" aria-label={`tool ${item.toolName}`}>
       <QaToolIcon toolName={item.toolName} />
-      <span className="replay-agent-tool-summary">{item.label}</span>
+      <span className="replay-agent-tool-summary">{displayLabel}</span>
     </div>
   );
+  return (
+    <div className="replay-agent-tool-entry">
+      <div className="replay-agent-tool-row">
+        {line}
+        {item.evidenceUri && onOpenEvidence ? (
+          <button
+            type="button"
+            className="replay-agent-tool-source-button"
+            aria-label={`Open source for ${item.toolName}`}
+            title="Open source"
+            onClick={() => onOpenEvidence(item.evidenceUri ?? "", displayLabel)}
+          >
+            <ExternalLink className="replay-agent-tool-source-icon" aria-hidden="true" />
+          </button>
+        ) : null}
+      </div>
+      {hasDetail && isExpanded ? <QaToolDetail item={item} onOpenEvidence={onOpenEvidence} /> : null}
+    </div>
+  );
+}
+
+function QaToolDetail({ item, onOpenEvidence }: { item: Extract<QaStreamItem, { kind: "tool" }>; onOpenEvidence?: (uri: string, label: string) => void }) {
+  const result = readObject(item.payload.result) ?? {};
+  const errors = readObjectArray(result.errors)
+    .map((error) => readString(error.message).trim())
+    .filter(Boolean);
+  if (item.toolName === "tree") {
+    return <QaMarkdownToolDetail markdown={formatMarkdownCodeBlock(formatTreeToolText(readString(result.text)), "text")} onOpenEvidence={onOpenEvidence} />;
+  }
+  if (item.toolName === "grep") {
+    return <QaGrepToolDetail result={result} onOpenEvidence={onOpenEvidence} />;
+  }
+  if (item.toolName === "read") {
+    return <QaMarkdownToolDetail markdown={getReadableToolText(result)} onOpenEvidence={onOpenEvidence} />;
+  }
+  if (item.toolName === "inspect") {
+    return <QaInspectToolDetail result={result} onOpenEvidence={onOpenEvidence} />;
+  }
+  if (errors.length > 0) {
+    return (
+      <div className="replay-tool-error-list">
+        {errors.map((error, index) => (
+          <div className="replay-tool-error-row" key={`${item.seq}-error-${index}`}>
+            <span>{index + 1}</span>
+            <span>{error}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  return null;
+}
+
+function hasQaToolDetail(item: Extract<QaStreamItem, { kind: "tool" }>): boolean {
+  const result = readObject(item.payload.result) ?? {};
+  if (item.toolName === "tree") {
+    return Boolean(readString(result.text).trim());
+  }
+  if (item.toolName === "grep") {
+    return readObjectArray(result.results).some((resultItem) => Boolean(readString(resultItem.preview).trim()));
+  }
+  if (item.toolName === "read") {
+    return Boolean(stripToolResultMetadata(getReadableToolText(result)).trim());
+  }
+  if (item.toolName === "inspect") {
+    return readObjectArray(result.evidence_texts).some((evidenceText) => Boolean(readString(evidenceText.text).trim()));
+  }
+  return readObjectArray(result.errors).some((error) => Boolean(readString(error.message).trim()));
+}
+
+function QaMarkdownToolDetail({
+  markdown,
+  onOpenEvidence,
+}: {
+  markdown: string;
+  onOpenEvidence?: (uri: string, label: string) => void;
+}) {
+  const trimmedMarkdown = stripToolResultMetadata(markdown).trim();
+  if (!trimmedMarkdown) {
+    return null;
+  }
+  return (
+    <div className="replay-tool-markdown-result">
+      <MarkdownEvidence markdown={trimmedMarkdown} className="replay-tool-markdown-body" onOpenEvidence={onOpenEvidence} />
+    </div>
+  );
+}
+
+function QaGrepToolDetail({
+  result,
+  onOpenEvidence,
+}: {
+  result: Record<string, unknown>;
+  onOpenEvidence?: (uri: string, label: string) => void;
+}) {
+  const results = readObjectArray(result.results)
+    .map((item) => ({
+      preview: readString(item.preview).trim(),
+    }))
+    .filter((item) => item.preview);
+  if (results.length === 0) {
+    return null;
+  }
+  const visibleResults = results.slice(0, 3);
+  const hiddenCount = results.length - visibleResults.length;
+  const markdown = [
+    `**${formatCount(results.length, "match", "matches")}**`,
+    "",
+    ...visibleResults.map((resultItem) => `- ${resultItem.preview}`),
+    ...(hiddenCount > 0 ? ["", `+${hiddenCount} more ${hiddenCount === 1 ? "match" : "matches"}`] : []),
+  ].join("\n");
+  return <QaMarkdownToolDetail markdown={markdown} onOpenEvidence={onOpenEvidence} />;
+}
+
+function QaInspectToolDetail({
+  result,
+  onOpenEvidence,
+}: {
+  result: Record<string, unknown>;
+  onOpenEvidence?: (uri: string, label: string) => void;
+}) {
+  const evidenceTexts = readObjectArray(result.evidence_texts)
+    .map((item) => ({
+      text: readString(item.text).trim(),
+    }))
+    .filter((item) => item.text);
+  if (evidenceTexts.length === 0) {
+    return null;
+  }
+  return <QaMarkdownToolDetail markdown={evidenceTexts.map((item) => `- ${item.text}`).join("\n")} onOpenEvidence={onOpenEvidence} />;
+}
+
+function getReadableToolText(result: Record<string, unknown>): string {
+  const text = readString(result.text).trim();
+  if (text) {
+    return text;
+  }
+  const blockTexts = readObjectArray(result.blocks)
+    .map((block) => readString(block.text).trim())
+    .filter(Boolean);
+  return blockTexts.join("\n\n");
+}
+
+function getGrepToolQuery(payload: Record<string, unknown>, result: Record<string, unknown>): string {
+  const args = readObject(payload.args) ?? {};
+  return firstToolContextValue([readString(args.query), readString(result.query), readString(args.pattern), readString(result.pattern)]);
+}
+
+function getQaToolDisplayLabel(item: Extract<QaStreamItem, { kind: "tool" }>, summary?: TaskSummary | null): string {
+  const result = readObject(item.payload.result) ?? {};
+  if (item.toolName === "grep") {
+    const query = getGrepToolQuery(item.payload, result);
+    return query ? `Searched ${query}` : item.label;
+  }
+  if (item.toolName === "read") {
+    const folder = getReadToolFolderScope(item, summary);
+    return folder ? `${item.label} in ${folder}` : item.label;
+  }
+  return item.label;
+}
+
+function getReadToolFolderScope(item: Extract<QaStreamItem, { kind: "tool" }>, summary?: TaskSummary | null): string {
+  const folderLabels = getReadToolFolderScopeLabels(item, summary);
+  if (folderLabels.length > 0) {
+    return folderLabels.join(" / ");
+  }
+  const result = readObject(item.payload.result) ?? {};
+  const explicitScope = firstToolContextValue([
+    readString(result.scope),
+    readString(result.header),
+    readString(result.heading),
+    readString(result.section),
+  ]);
+  if (explicitScope) {
+    return explicitScope;
+  }
+  return extractToolMetadataValue(getReadableToolText(result), ["scope", "header", "heading", "section"]);
+}
+
+function getReadToolFolderScopeLabels(item: Extract<QaStreamItem, { kind: "tool" }>, summary?: TaskSummary | null): string[] {
+  const evidencePathId = getReadToolEvidencePathId(item);
+  return getEvidenceFolderScopeLabels(summary, evidencePathId);
+}
+
+function getEvidenceFolderScopeLabels(summary: TaskSummary | null | undefined, evidencePathId: string): string[] {
+  const documents = summary?.documents ?? [];
+  if (!evidencePathId || documents.length === 0) {
+    return [];
+  }
+  const document = documents[getEvidenceDocumentIndex(evidencePathId, documents)] ?? documents[0];
+  const sourceDocument = parseQaDisplayHtmlDocument(document?.display_html ?? "");
+  if (!sourceDocument) {
+    return [];
+  }
+  const sourceSelectors = summary?.source_selectors ?? {};
+  const folderLabels: string[] = [];
+  for (const folderPathId of getEvidenceFolderScopePathIds(evidencePathId)) {
+    const headerElement = findQaFolderHeaderElement(sourceDocument, sourceSelectors, folderPathId);
+    const headerText = cleanToolContextValue(headerElement?.textContent ?? "");
+    if (headerText) {
+      folderLabels.push(headerText);
+    }
+  }
+  return uniqueCleanLabels(folderLabels);
+}
+
+function getReadToolEvidencePathId(item: Extract<QaStreamItem, { kind: "tool" }>): string {
+  const args = readObject(item.payload.args) ?? {};
+  const result = readObject(item.payload.result) ?? {};
+  return firstToolContextValue([
+    readString(result.range_start),
+    parseEvidenceRangeStart(readString(args.locator) || readString(result.locator)),
+    readString(result.path_id),
+    readObjectArray(result.blocks).map((block) => readString(block.path_id)).find(Boolean) ?? "",
+    getEvidenceIdFromUri(getToolEvidenceUri(item.toolName, item.payload) ?? "").split("/")[0] ?? "",
+  ]);
+}
+
+function parseEvidenceRangeStart(locator: string): string {
+  const withoutScheme = stripEvidenceScheme(locator).split("#")[0] ?? "";
+  const parts = withoutScheme.split("/").filter(Boolean);
+  if (parts.length >= 2 && parts[0] === "range") {
+    return parts[1] ?? "";
+  }
+  return "";
+}
+
+function getEvidenceFolderScopePathIds(evidencePathId: string): string[] {
+  const pathSegments = stripEvidenceScheme(evidencePathId).split(".").filter(Boolean);
+  const folderPathIds: string[] = [];
+  for (let length = 1; length <= pathSegments.length; length += 1) {
+    folderPathIds.push(pathSegments.slice(0, length).join("."));
+  }
+  return folderPathIds;
+}
+
+function parseQaDisplayHtmlDocument(displayHtml: string): Document | null {
+  if (!displayHtml.trim() || typeof DOMParser === "undefined") {
+    return null;
+  }
+  return new DOMParser().parseFromString(stripExecutableSourceHtml(displayHtml), "text/html");
+}
+
+function findQaFolderHeaderElement(doc: Document, sourceSelectors: Record<string, string>, folderPathId: string): HTMLElement | null {
+  for (const sourceSelector of folderSourceSelectorCandidates(sourceSelectors, folderPathId)) {
+    const element = findQaSourceElementByIdOrDataElementId(doc, sourceSelector);
+    const header = element ? findQaNearestHeaderForElement(doc, element) : null;
+    if (header) {
+      return header;
+    }
+  }
+  return null;
+}
+
+function folderSourceSelectorCandidates(sourceSelectors: Record<string, string>, folderPathId: string): string[] {
+  const candidates = [sourceSelectors[folderPathId], folderPathId]
+    .map((sourceSelector) => normalizeQaSourceSelector(sourceSelector ?? ""))
+    .filter(Boolean);
+  return [...new Set(candidates)];
+}
+
+function isQaHeaderElement(element: HTMLElement): boolean {
+  return /^H[1-6]$/i.test(element.tagName);
+}
+
+function findQaNearestHeaderForElement(doc: Document, element: HTMLElement): HTMLElement | null {
+  if (isQaHeaderElement(element)) {
+    return element;
+  }
+  const labelledAncestor = element.closest<HTMLElement>("[aria-labelledby]");
+  const labelledHeader = labelledAncestor ? findQaHeaderByLabelledBy(doc, labelledAncestor) : null;
+  if (labelledHeader) {
+    return labelledHeader;
+  }
+  const sectionAncestor = element.closest<HTMLElement>("section");
+  const sectionHeader = sectionAncestor?.querySelector<HTMLElement>("h1,h2,h3,h4,h5,h6") ?? null;
+  if (sectionHeader) {
+    return sectionHeader;
+  }
+  return findPreviousQaHeaderElement(element);
+}
+
+function findQaHeaderByLabelledBy(doc: Document, element: HTMLElement): HTMLElement | null {
+  const labelledBy = element.getAttribute("aria-labelledby") ?? "";
+  for (const id of labelledBy.split(/\s+/).filter(Boolean)) {
+    const header = doc.getElementById(id);
+    if (header instanceof HTMLElement && isQaHeaderElement(header)) {
+      return header;
+    }
+  }
+  return null;
+}
+
+function findPreviousQaHeaderElement(element: HTMLElement): HTMLElement | null {
+  let current: Element | null = element;
+  while (current) {
+    let previous = current.previousElementSibling;
+    while (previous) {
+      const header = findLastQaHeaderElement(previous);
+      if (header) {
+        return header;
+      }
+      previous = previous.previousElementSibling;
+    }
+    current = current.parentElement;
+  }
+  return null;
+}
+
+function findLastQaHeaderElement(element: Element): HTMLElement | null {
+  if (element instanceof HTMLElement && isQaHeaderElement(element)) {
+    return element;
+  }
+  const headers = Array.from(element.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6"));
+  return headers.at(-1) ?? null;
+}
+
+function firstToolContextValue(values: string[]): string {
+  for (const value of values) {
+    const cleanedValue = cleanToolContextValue(value);
+    if (cleanedValue) {
+      return cleanedValue;
+    }
+  }
+  return "";
+}
+
+function cleanToolContextValue(value: string): string {
+  return stripInlineToolSelectors(value).replace(/\s+/g, " ").trim();
+}
+
+function uniqueCleanLabels(values: string[]): string[] {
+  const labels: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const label = cleanToolContextValue(value);
+    const key = normalizeQaHeaderText(label);
+    if (!label || seen.has(key)) {
+      continue;
+    }
+    labels.push(label);
+    seen.add(key);
+  }
+  return labels;
+}
+
+function extractToolMetadataValue(text: string, keys: string[]): string {
+  const keyPattern = keys.join("|");
+  const metadataKeyPattern = "kind|locator|path_id|returned_locators?|range_start|range_end|scope|header|heading|title|section|rows|columns|showing";
+  const valuePattern = new RegExp(`\\b(?:${keyPattern})\\s*:\\s*(.*?)(?=\\s+\\b(?:${metadataKeyPattern})\\s*:|$)`, "i");
+  for (const line of text.replace(/\r\n/g, "\n").split("\n")) {
+    const match = valuePattern.exec(line.trim());
+    const cleanedValue = cleanToolContextValue(match?.[1] ?? "");
+    if (cleanedValue) {
+      return cleanedValue;
+    }
+  }
+  return "";
+}
+
+function formatMarkdownCodeBlock(text: string, language: string): string {
+  const trimmedText = text.trim();
+  if (!trimmedText) {
+    return "";
+  }
+  return `\`\`\`${language}\n${trimmedText}\n\`\`\``;
+}
+
+function formatTreeToolText(text: string): string {
+  return text
+    .split("\n")
+    .filter(isDisplayableTreeDirectoryLine)
+    .map((line) =>
+      line
+        .replace(/\bevidence:\/\/\d{4}(?:\.\d{4})*\s+/g, "")
+        .replace(/\.(?:md|list|table)(?=\s*$|\/\s*$)/g, "")
+    )
+    .join("\n");
+}
+
+function isDisplayableTreeDirectoryLine(line: string): boolean {
+  const trimmedRightLine = line.trimEnd();
+  return trimmedRightLine.trim() === "/" || trimmedRightLine.endsWith("/");
+}
+
+function stripToolResultMetadata(markdown: string): string {
+  const withoutBlockComments = markdown.replace(/<!--\s*block\s+evidence:\/\/[\s\S]*?-->/gi, "");
+  const lines = withoutBlockComments.replace(/\r\n/g, "\n").split("\n");
+  const hasMarkdownTable = lines.some((line) => /^\s*\|/.test(line));
+  const strippedLines = lines
+    .map((line) => stripToolResultMetadataLine(line, { hasMarkdownTable }))
+    .filter((line): line is string => line !== null);
+  return stripToolTableSelectorColumn(strippedLines)
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
+function stripToolResultMetadataLine(line: string, { hasMarkdownTable }: { hasMarkdownTable: boolean }): string | null {
+  const trimmedLine = line.trim();
+  if (!trimmedLine) {
+    return line;
+  }
+  if (/^(kind|locator|path_id|returned_locators?|range_start|range_end|scope|header|heading|section|title|rows|showing)\s*:/i.test(trimmedLine)) {
+    return null;
+  }
+  if (/^columns\s*:/i.test(trimmedLine)) {
+    return hasMarkdownTable ? null : stripInlineToolSelectors(trimmedLine.replace(/^columns\s*:\s*/i, ""));
+  }
+  if (!/\b(kind|locator|path_id|scope|header|heading|section|title|rows|columns|showing)\s*:/i.test(trimmedLine)) {
+    return stripInlineToolSelectors(line);
+  }
+  if (hasMarkdownTable) {
+    return null;
+  }
+  const contentFromColumns = /\bcolumns\s*:\s*(.*?)(?=\s+\b(?:kind|locator|path_id|scope|header|heading|section|title|rows|showing)\s*:|$)/i.exec(trimmedLine)?.[1]?.trim();
+  return contentFromColumns ? stripInlineToolSelectors(contentFromColumns) : null;
+}
+
+function stripToolTableSelectorColumn(lines: string[]): string[] {
+  const strippedLines: string[] = [];
+  let isInsideTable = false;
+  let shouldStripFirstColumn = false;
+  for (const line of lines) {
+    if (!isMarkdownTableRow(line)) {
+      isInsideTable = false;
+      shouldStripFirstColumn = false;
+      strippedLines.push(line);
+      continue;
+    }
+    const cells = splitMarkdownTableRow(line);
+    if (!isInsideTable) {
+      isInsideTable = true;
+      shouldStripFirstColumn = isToolTableSelectorColumn(cells[0]);
+    }
+    strippedLines.push(shouldStripFirstColumn && cells.length > 1 ? formatMarkdownTableRow(cells.slice(1)) : stripInlineToolSelectors(line));
+  }
+  return strippedLines;
+}
+
+function isMarkdownTableRow(line: string): boolean {
+  return /^\s*\|.*\|\s*$/.test(line);
+}
+
+function splitMarkdownTableRow(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+function formatMarkdownTableRow(cells: string[]): string {
+  return `| ${cells.map(stripInlineToolSelectors).join(" | ")} |`;
+}
+
+function isToolTableSelectorColumn(cell: string | undefined): boolean {
+  const normalizedCell = (cell ?? "").trim().toLowerCase();
+  return normalizedCell === "row" || normalizedCell === "rows" || normalizedCell === "selector" || normalizedCell === "id" || /^[sir]\d+(?:\.\d+)*$/.test(normalizedCell);
+}
+
+function stripInlineToolSelectors(value: string): string {
+  return value.replace(/\[[sir]\d{3}(?:\.\d{3})*\]\s*/gi, "");
 }
 
 function buildQaStreamItems(events: TaskEvent[]): QaStreamItem[] {
@@ -855,6 +1392,55 @@ function withPendingThinkingItem(items: QaStreamItem[], isRunning: boolean): QaS
   return items;
 }
 
+function groupCompletedQaProcessItems(items: QaStreamItem[]): QaStreamItem[] {
+  const turnsWithFinalMessage = new Set(
+    items
+      .filter((item): item is Extract<QaStreamItem, { kind: "message" }> => item.kind === "message" && item.role === "assistant" && item.isFinal)
+      .map((item) => item.turnId)
+  );
+  if (turnsWithFinalMessage.size === 0) {
+    return items;
+  }
+
+  const groupedItems: QaStreamItem[] = [];
+  let pendingProcessItems: QaStreamItem[] = [];
+  const flushProcessItems = () => {
+    if (pendingProcessItems.length === 0) {
+      return;
+    }
+    const firstItem = pendingProcessItems[0];
+    groupedItems.push({
+      kind: "process-group",
+      groupId: `process-group-${firstItem.turnId ?? "no-turn"}-${firstItem.seq}`,
+      seq: firstItem.seq,
+      turnId: firstItem.turnId,
+      items: pendingProcessItems,
+    });
+    pendingProcessItems = [];
+  };
+
+  for (const item of items) {
+    if (isCompletedTurnProcessItem(item, turnsWithFinalMessage)) {
+      pendingProcessItems.push(item);
+      continue;
+    }
+    flushProcessItems();
+    groupedItems.push(item);
+  }
+  flushProcessItems();
+  return groupedItems;
+}
+
+function isCompletedTurnProcessItem(item: QaStreamItem, turnsWithFinalMessage: Set<string | null>): boolean {
+  if (!turnsWithFinalMessage.has(item.turnId)) {
+    return false;
+  }
+  if (item.kind === "message") {
+    return item.role === "assistant" && !item.isFinal;
+  }
+  return item.kind === "tool" || item.kind === "tool-group";
+}
+
 function eventToStreamItem(event: TaskEvent): QaStreamItem | null {
   const payload = readObject(event.payload) ?? {};
   if (event.type === "message.created") {
@@ -863,7 +1449,7 @@ function eventToStreamItem(event: TaskEvent): QaStreamItem | null {
     if (!content || (role !== "user" && role !== "assistant")) {
       return null;
     }
-    return { kind: "message", seq: event.seq, turnId: event.turn_id ?? null, role, content };
+    return { kind: "message", seq: event.seq, turnId: event.turn_id ?? null, role, content, isFinal: role === "assistant" };
   }
   if (event.type === "agent.event") {
     const payloadType = readString(payload.type);
@@ -872,7 +1458,7 @@ function eventToStreamItem(event: TaskEvent): QaStreamItem | null {
       if (!content) {
         return null;
       }
-      return { kind: "message", seq: event.seq, turnId: event.turn_id ?? null, role: "assistant", content };
+      return { kind: "message", seq: event.seq, turnId: event.turn_id ?? null, role: "assistant", content, isFinal: readBoolean(payload.is_final) };
     }
     if (payloadType === "tool_completed" || payloadType === "tool_failed") {
       const toolName = readString(payload.tool) || readString(payload.tool_name) || "tool";
@@ -884,6 +1470,7 @@ function eventToStreamItem(event: TaskEvent): QaStreamItem | null {
         label: formatToolLabel(toolName, payload),
         evidenceUri: getToolEvidenceUri(toolName, payload),
         ok: payloadType !== "tool_failed",
+        payload,
       };
     }
   }
@@ -963,7 +1550,7 @@ function isOptimisticMessageEvent(event: TaskEvent): boolean {
 }
 
 function streamItemKey(item: QaStreamItem): string {
-  if (item.kind === "tool-group") {
+  if (item.kind === "tool-group" || item.kind === "process-group") {
     return `${item.kind}-${item.groupId}`;
   }
   return `${item.kind}-${item.seq}`;
@@ -1152,6 +1739,27 @@ function summarizeQaToolGroup(items: Extract<QaStreamItem, { kind: "tool" }>[]):
   return capitalizeFirst(parts.join(", "));
 }
 
+function summarizeQaProcessGroup(items: QaStreamItem[]): string {
+  const messageCount = items.filter((item) => item.kind === "message").length;
+  const toolCount = items.reduce((count, item) => {
+    if (item.kind === "tool") {
+      return count + 1;
+    }
+    if (item.kind === "tool-group") {
+      return count + item.items.length;
+    }
+    return count;
+  }, 0);
+  const parts = ["Process"];
+  if (messageCount > 0) {
+    parts.push(formatCount(messageCount, "note"));
+  }
+  if (toolCount > 0) {
+    parts.push(formatCount(toolCount, "tool call"));
+  }
+  return parts.join(" · ");
+}
+
 function formatCount(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
 }
@@ -1223,7 +1831,17 @@ function findEvidenceSource(summary: TaskSummary | null | undefined, uri: string
   if (!document) {
     return null;
   }
-  return { document, evidenceUri: uri, label, openKey: 0, sourceSelector, sourceSelectors, inlineSelector: getEvidenceInlineSelector(uri), headingText: label };
+  const scopePathId = getEvidenceScopePathId(evidenceId);
+  const scopeLabels = getEvidenceFolderScopeLabels(summary, scopePathId);
+  return { document, evidenceUri: uri, label, scopeLabels, openKey: 0, sourceSelector, sourceSelectors, inlineSelector: getEvidenceInlineSelector(uri), headingText: label };
+}
+
+function getEvidenceScopePathId(evidenceId: string): string {
+  const range = parseEvidenceRangeId(evidenceId);
+  if (range) {
+    return range.start;
+  }
+  return stripEvidenceScheme(evidenceId).split(/[/#]/)[0] ?? "";
 }
 
 function findSourceSelectors(sourceSelectors: Record<string, string>, evidenceId: string): string[] {
@@ -1443,11 +2061,21 @@ function normalizeQaSourceSelector(sourceSelector: string): string {
 
 function wrapQaSourceHtml(displayHtml: string): string {
   const style = `<style>
-html, body { margin: 0; padding: 0; background: #fff; color: #171717; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.55; }
-main { max-width: 980px !important; margin: 0 auto !important; padding: 24px !important; }
-.page { background: transparent !important; margin: 0 0 20px !important; padding: 0 !important; box-shadow: none !important; }
+html, body { margin: 0; padding: 0; background: #fff; color: #171717; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", "Yu Gothic", sans-serif; line-height: 1.6; }
+main { box-sizing: border-box !important; max-width: 900px !important; margin: 0 auto !important; padding: 28px 36px 48px !important; }
+.page { display: contents !important; background: transparent !important; margin: 0 !important; padding: 0 !important; box-shadow: none !important; }
 img, svg, canvas, video { max-width: 100% !important; height: auto !important; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.35 !important; margin: 20px 0 10px !important; color: #111827 !important; }
+h1 { font-size: 24px !important; }
+h2 { font-size: 20px !important; }
+h3 { font-size: 17px !important; }
+p, li { font-size: 14px !important; line-height: 1.75 !important; }
+p { margin: 8px 0 !important; }
+ul, ol { margin: 8px 0 8px 22px !important; padding: 0 !important; }
 p, li, td, th, pre, code { max-width: 100% !important; white-space: pre-wrap !important; overflow-wrap: anywhere !important; }
+table { width: 100% !important; border-collapse: collapse !important; margin: 14px 0 !important; font-size: 13px !important; }
+td, th { border: 1px solid #d1d5db !important; padding: 6px 8px !important; vertical-align: top !important; }
+th { background: #f3f4f6 !important; font-weight: 700 !important; }
 .is-current-evidence, [data-current-evidence="true"] { border-radius: 6px !important; background: rgba(51, 156, 255, 0.18) !important; outline: 2px solid rgba(51, 156, 255, 0.55) !important; outline-offset: 2px !important; scroll-margin: 48px !important; }
 </style>`;
   const html = /<html\b/i.test(displayHtml)
@@ -1473,6 +2101,17 @@ function readObject(value: unknown): Record<string, unknown> | null {
   return null;
 }
 
+function readObjectArray(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is Record<string, unknown> => Boolean(readObject(item)));
+}
+
 function readString(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function readBoolean(value: unknown): boolean {
+  return value === true;
 }
