@@ -1,6 +1,6 @@
 # `task-detail.test.tsx`
 
-这组测试覆盖 QA-only 任务详情页。详情页不再读取 result/replay/trace/audit，而是用 task summary 加持久化 SSE 事件重建“用户问题、模型过程输出、工具阅读过程、inline evidence”和多轮输入状态，并保证运行中按钮、输入框和 QA 流区域使用英文 UI label；中间 Agent 面板不再显示单独的内部标题栏。
+这组测试覆盖 QA-only 任务详情页。详情页不再读取 result/replay/trace/audit，而是用 task summary 加持久化 SSE 事件重建“用户问题、模型过程输出、工具阅读过程、inline evidence”和多轮输入状态，并保证运行中按钮、输入框和 QA 流区域使用英文 UI label；中间 Agent 面板不再显示单独的内部标题栏。review 文档会默认出现在 Agent 左侧，不再渲染额外 header，iframe 直接展示文档正文、阅读密度和 evidence 高亮滚动位置。
 
 ## 测试链路
 
@@ -11,16 +11,21 @@
   -> TaskDetail 打开 GET /qa/tasks/{task_id}/events?after_seq=0
   -> agent.event(type=source_indexed) 会把 SSE 里的 source_selectors 立即合并到当前 summary；如果详情还缺 documents/display_html，再补一次 task detail
   -> 如果补详情返回的 stream seq 旧于当前 SSE，也只保留当前运行态/seq，不丢掉补回来的 documents/display_html
+  -> 如果当前 summary 已有 documents[].display_html，详情页默认显示 review 文档，并把 review slot 放在 Agent 左侧
   -> message.created 变成右侧用户消息
   -> agent.event(type=model_message) 变成左侧 assistant 消息，并保留 Markdown evidence link
+  -> agent.event(type=model_message,is_final=true) 变成最终 assistant 消息，正文不再保留 inline evidence link，引用集中放到末尾 Sources
   -> 点击 evidence link 后打开右侧 review 文档并高亮 source_selector 对应 DOM
   -> range evidence 会把 `evidence://range/{start}/{end}` 展开成范围内多个 source_selector，并同时高亮多个 DOM
   -> 文件夹级 evidence 如果没有直接 source_selector，则定位到 header 自己，不跳到下面的第一个子节点
   -> 旧任务缺少文件夹级 source_selector 时，可用 evidence 链接文本匹配同名 heading 作为兼容定位
+  -> review slot 不渲染额外 header、文件名 meta 或关闭按钮，display_html 的正文内容直接出现在 iframe 里
+  -> review iframe 会把 display_html 压成白底、窄列、15px 字号和紧凑段距的阅读页，标题、表格和代码块都走统一基础排版
   -> table row evidence 会把 `/R001` 解析成具体 `<tr>`，不只高亮整张 table
-  -> 同一源文档内切换 evidence 时复用 iframe srcDoc，只在 iframe DOM 内移动 current marker 并 smooth scroll 到新目标
+  -> 同一源文档内切换 evidence 时复用 iframe srcDoc，只在 iframe DOM 内移动 current marker，并用 block=start 加大 scroll-margin，把高亮滚到靠上且适合继续阅读的位置
+  -> 如果刷新后的 display_html 需要重写 iframe srcdoc，但 evidence 没有定位到目标节点，前端会恢复刷新前的滚动位置，避免右侧 review 跳到顶部
   -> 如果 display_html 自带 page-like 纸张框，前端会在 iframe 里把 page 背景、阴影和内边距压平，只保留正文排版
-  -> 右侧 review panel 用独立 resize separator 调整宽度，Agent 对话列按当前 Agent slot 宽度计算中心列和左右 blank，不能用 viewport 或侧栏宽度额外偏移内容列
+  -> review panel 用独立 resize separator 调整宽度；review 位于 Agent 左侧时，ArrowRight 或向右拖拽会增宽，Agent 对话列按当前 Agent slot 宽度计算中心列和左右 blank，不能用 viewport 或侧栏宽度额外偏移内容列
   -> agent.event(type=tool_completed/tool_failed) 变成 Codex 式轻量可折叠工具过程行，摘要按钮带开关箭头，展开明细和摘要左边缘对齐；tool 文案只显示动作和内容类型，不展示具体 evidence/path/locator，失败工具调用也使用普通工具行颜色
   -> Agent 对话流在用户接近底部时跟随 SSE 新消息；用户滚到历史位置阅读时，后续新消息不改写当前滚动位置
   -> turn.completed / turn.cancelled / turn.failed 清理运行态，让稳定的 composer handler 重新允许提交下一轮
@@ -40,14 +45,17 @@
 - `loadTaskDetail 只读取 QA task summary，不再请求 result/replay/trace/audit`：验证详情聚合函数只请求 QA task 详情端点，其余旧详情数据为 `null`，并保留该端点返回的 `documents/source_selectors`。
 - `QA API 会提交输入、取消 active turn，并生成可续传事件 URL`：验证输入、取消和 events URL 都指向 `/api/backend/qa/tasks/*`。
 - `任务详情会从 QA 事件流重建用户问题、模型回答和 inline evidence`：验证 SSE 中的 user message 和 model_message 会进入 Agent 流，且 evidence 链接保持可点击 href。
-- `点击 inline evidence 会用现有任务详情数据打开右侧 review 文档`：验证 evidence link 不请求旧 replay 或新 review 端点，而是使用现有 `GET /qa/tasks/{task_id}` 响应里的 `display_html/source_selectors` 打开右侧 review 文档并高亮证据，右侧 review 保持在主界面右栏。
+- `最终回答会把 evidence 渲染到末尾来源区`：验证 `is_final=true` 的模型消息会把正文 evidence 链接转成纯文本 label，并在末尾 `Sources` 区生成可点击引用。
+- `有 review 文档时默认显示 review，并放在 Agent 左侧`：验证详情响应已经带 `display_html` 时，不需要点击 evidence 就会显示 review，grid columns 和 DOM 顺序都把 review 放在 Agent 左侧，同时确认 review 不再渲染额外 header。
+- `点击 inline evidence 会用现有任务详情数据打开右侧 review 文档`：验证 evidence link 不请求旧 replay 或新 review 端点，而是使用现有 `GET /qa/tasks/{task_id}` 响应里的 `display_html/source_selectors` 打开右侧 review 文档并高亮证据，同时不显示额外 header、文件名 meta 或关闭按钮。
 - `首轮生成中收到 source_indexed 后可以立刻打开右侧 review 文档`：验证第一轮回答还在生成时，前端会直接消费 SSE 中的 `source_selectors`，不必等 turn 终态刷新就能点击 model message 的 evidence link 打开右侧 review。
 - `首轮 source_indexed 触发的旧 seq 详情刷新仍会补齐 review 文档`：验证首轮 SSE 已经推进到更新 seq 时，后续 GET task detail 即使带着较旧的 `stream.last_event_seq`，前端也会合并其中的 `documents/display_html`，让刚出现的 evidence link 可以打开右侧 review。
-- `右侧 review 会压平文档页面外框，只保留正文排版`：验证前端会把 display_html 里自带的 page 式背景、阴影和内边距去掉，避免 review 里再出现一层纸张框。
+- `右侧 review 会压平文档页面外框，只保留正文排版`：验证前端会把 display_html 里自带的 page 式背景、阴影和内边距去掉，避免 review 里再出现一层纸张框，同时确认 iframe 注入 15px 字号、紧凑段距和更靠上的 evidence scroll-margin。
 - `右侧 review panel 支持拖拽调整宽度，并保持 Agent 对话列左右空白对称`：验证 review panel 默认宽度、拖拽和键盘调宽逻辑，以及单开左侧任务栏或左右栏同时打开时，Agent 对话列都按当前 Agent slot 宽度计算中心列和左右 blank，不再注入 viewport 或侧栏宽度偏移变量。
 - `文件夹级 inline evidence 会定位到对应 header 而不是子节点`：验证 `evidence://0001.0001` 这类目录级链接即使没有直接 selector，也会定位到同名 header DOM id，并明确不高亮下面的正文子节点。
 - `旧 source_selectors 缺少文件夹映射时会用链接文本定位 header`：验证老任务没有 folder selector 时，前端只会用链接文本匹配同名 heading，不会退到正文子节点。
 - `切换同一文档内的 inline evidence 会在 iframe 内平滑跳转并移动高亮`：验证第二次点击同一文档的不同 evidence 时不会重写 iframe `srcdoc` 导致回到顶部，而是移除旧 marker、设置新 marker，并调用 smooth `scrollIntoView`。
+- `review html 刷新但 evidence 未定位时保留 iframe 滚动位置`：验证 task detail refresh 带回新版 `display_html` 时，如果没有找到当前 evidence 目标，iframe reload 造成的 scrollTop 清零会被恢复到刷新前的位置。
 - `range evidence 会在右侧 review 同时高亮范围内多个节点并滚到起始节点`：验证 `evidence://range/start/end` 会按 `source_selectors` 同时高亮范围内多个节点，排除范围外节点，并滚动到起始节点。
 - `表格 row evidence 会定位到具体表格行而不是整张表`：验证 `evidence://.../R001` 会优先高亮 table 内对应数据行 `<tr>`，而不是只高亮 `source_selectors` 指向的父 table。
 - `任务详情不显示 Agent 面板内部标题栏`：验证中间 Agent 面板只保留对话流，不再显示 `Document QA` 和内部 `ready/running` 小状态。

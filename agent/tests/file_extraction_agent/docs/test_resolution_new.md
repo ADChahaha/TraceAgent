@@ -7,6 +7,7 @@
 ```text
 GraphState(messages + HtmlDocument)
   -> build_resolution_messages 生成 QA system prompt
+  -> prompt 要求过程消息可以 inline cite，最终回答正文不放 evidence link，末尾追加 Sources 区
   -> build_resolution_messages 把 OpenAI 风格 messages 原样转成 LangChain chat/tool messages
   -> 最新真实用户消息保持为最后一条 HumanMessage，不追加额外运行指令
   -> model.stream / model.invoke 产生 assistant content 和 tool call
@@ -20,7 +21,7 @@ GraphState(messages + HtmlDocument)
 
 ## 测试函数
 
-- `test_resolution_messages_describe_qa_investigation_not_field_extraction`：验证 prompt 说明 QA 调查流程和 evidence 规则，不再出现 `task_spec/write_field/submit_result` 字段抽取语义；同时验证 system prompt 不再接收 memory context，真实用户消息后面不会再追加强制调查文档的 `HumanMessage`。
+- `test_resolution_messages_describe_qa_investigation_not_field_extraction`：验证 prompt 说明 QA 调查流程和 evidence 规则，要求最终回答使用末尾 Sources 区而不是正文 inline evidence link；同时验证不再出现 `task_spec/write_field/submit_result` 字段抽取语义，system prompt 不再接收 memory context，真实用户消息后面不会再追加强制调查文档的 `HumanMessage`。
 - `test_resolution_prompt_allows_direct_answers_without_forced_document_search`：验证 prompt 明确允许身份、能力和已有上下文可回答的问题直接回答，只有用户询问文档内容、要求证据或上下文不清楚时才使用文档工具；同时避免用 `Show your thought process` 这类说法诱导模型输出隐藏推理。
 - `test_resolution_messages_preserve_openai_tool_history`：验证历史 assistant tool_calls 和 tool 结果会保留为真实 chat/tool message，而不是压成单一文本摘要；最新用户消息仍是模型看到的最后一条 human 消息。
 - `test_resolution_graph_preserves_parallel_tool_calls`：验证 provider 同轮返回多个 tool call 时，resolution graph 会保留完整 tool_calls 摘要，并按顺序执行这些工具。

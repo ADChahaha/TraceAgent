@@ -674,34 +674,13 @@ html[data-theme="dark"] .home-task-composer {
   background: var(--replay-surface);
 }
 
-.replay-source-header {
-  display: flex;
-  min-height: 3.35rem;
-  flex: 0 0 auto;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 16px;
-  border-bottom: 1px solid var(--replay-border-soft);
-  padding: 14px 24px 10px;
-}
-
-.replay-source-title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--replay-foreground);
-  font-size: 15px;
-  font-weight: 720;
-}
-
 .replay-source-document {
   flex: 1 1 auto;
   width: 100%;
   min-height: 0;
   border: 0;
   overflow: auto;
-  background: var(--replay-surface);
+  background: #fff;
 }
 
 .replay-source-frame {
@@ -711,16 +690,7 @@ html[data-theme="dark"] .home-task-composer {
   display: block;
   min-height: 0;
   border: 0;
-  background: var(--replay-surface);
-}
-
-.replay-source-subtitle {
-  flex: 0 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--replay-muted);
-  font-size: 12px;
+  background: #fff;
 }
 
 .replay-field-progress-panel-slot,
@@ -1389,6 +1359,72 @@ html[data-theme="dark"] .home-task-composer {
   text-underline-offset: 3px;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.replay-evidence-footer {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--replay-border-soft);
+}
+
+.replay-evidence-footer-label {
+  color: var(--replay-muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.replay-evidence-citation-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.replay-evidence-citation {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 24px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--replay-border);
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--replay-surface) 86%, var(--replay-panel));
+  color: var(--replay-foreground);
+  padding: 2px 8px 2px 5px;
+  font-size: 11px;
+  line-height: 1.35;
+  text-decoration: none;
+}
+
+.replay-evidence-citation:hover,
+.replay-evidence-citation:focus-visible {
+  border-color: color-mix(in oklch, var(--replay-foreground) 44%, var(--replay-border));
+  background: var(--replay-surface);
+  outline: none;
+}
+
+.replay-evidence-citation-index {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--replay-foreground);
+  color: var(--replay-surface);
+  font-size: 10px;
+  font-weight: 760;
+}
+
+.replay-evidence-citation-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .replay-field-progress-panel-slot,

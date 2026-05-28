@@ -2,7 +2,7 @@
 
 本文记录 `file_extraction_agent` 在 `dev-qa` 分支上的当前设计：它已经从“按 `task_spec` 抽取字段”的 agent 重构为“多文档 QA chat completion agent”。模块仍沿用历史包名，但语义已经变成 document QA：backend 每轮把 `documents + append-only messages` 传入，agent 像 code agent 浏览代码仓库一样浏览虚拟文档仓库，并通过 SSE 持续输出 `model_message`、工具事件和终态事件。
 
-核心目标是**过程可追溯**：模型不是最后一次性给出答案和引用，而是在阅读过程中就用 Markdown evidence link 解释每个文档事实、阶段性判断和最终结论。用户可以看到模型看了哪些文档、搜了什么、读了哪些 block、什么时候把 block 展开成句子/列表项/表格行级证据，以及哪一步可能出错。
+核心目标是**过程可追溯**：模型会在阅读过程中用 Markdown evidence link 解释每个文档事实和阶段性判断；最终回答则像 NotebookLM 一样先直接给结论和说明，再把用到的 evidence 统一放进末尾 Sources 区。用户可以看到模型看了哪些文档、搜了什么、读了哪些 block、什么时候把 block 展开成句子/列表项/表格行级证据，以及最终答案引用了哪些来源。
 
 ## 1. 当前边界
 
@@ -291,7 +291,7 @@ table     -> evidence://0001.0003.0001/R001
 
 ## 6. Evidence 和过程消息规则
 
-QA 的证据主容器是 `model_message`，不是最终提交工具。只要 `model_message` 对文档做事实陈述，就应该在首次陈述时携带 Markdown evidence link。
+QA 的证据主容器是 `model_message`，不是最终提交工具。过程 `model_message` 对文档做事实陈述时，应在首次陈述时携带 Markdown evidence link；最终 `model_message` 用 `is_final=true` 标记，正文不再内嵌 evidence link，而是在末尾 `Sources` 区列出引用。
 
 ```text
 检索策略、下一步行动说明
@@ -300,8 +300,11 @@ QA 的证据主容器是 `model_message`，不是最终提交工具。只要 `mo
 文档结构、section 主题、阅读路径说明
   -> 可使用 section 或 block evidence
 
-具体事实、日期、金额、义务、条件、例外、冲突、最终结论
+过程中的具体事实、日期、金额、义务、条件、例外、冲突
   -> 应使用 inspect 产生的 Sxxx/Ixxx/Rxxx inline evidence
+
+最终回答正文里的文档事实
+  -> 正文只写结论和说明，末尾 Sources 区用 `[1] [短标签](evidence://...)` 列出 evidence
 ```
 
 推荐输出节奏：
@@ -313,11 +316,15 @@ model_message: 命中集中在 Termination 章节，我先读该章节。[Termin
 工具: read("evidence://0001.0012.0003")
 工具: inspect("evidence://0001.0012.0003")
 model_message: 这里说明任一方可以终止协议，但该句本身没有写提前通知天数。[任一方可以终止](evidence://0001.0012.0003/S001)
+model_message(is_final=true): 可以提前终止，但需要满足书面通知要求。
+
+Sources
+[1] [任一方可以终止](evidence://0001.0012.0003/S001)
 ```
 
 多轮上下文只来自 backend 传入的 append-only `messages`：上一轮 user/assistant/tool 历史会原样保留并追加新问题。agent 不接收 memory、摘要或自动裁剪结果，避免每轮重写上下文导致 provider prompt cache 失效。新一轮如果复用旧发现，仍应引用原始 `evidence://`。
 
-QA prompt 的默认行为不是强制查文档。模型如果能从当前对话上下文、助手身份或能力说明直接回答，就直接回答；只有用户询问文档内容、要求证据，或当前对话不足以回答时，才使用 `tree/grep/read/inspect`。一旦使用文档工具，模型需要给出简短可见的 investigation trace，说明查了什么、发现了什么、还缺什么；但不能输出隐藏推理。evidence link 只约束来自文档的事实，非文档回答不需要硬贴 evidence。
+QA prompt 的默认行为不是强制查文档。模型如果能从当前对话上下文、助手身份或能力说明直接回答，就直接回答；只有用户询问文档内容、要求证据，或当前对话不足以回答时，才使用 `tree/grep/read/inspect`。一旦使用文档工具，模型需要给出简短可见的 investigation trace，说明查了什么、发现了什么、还缺什么；但不能输出隐藏推理。evidence link 只约束来自文档的事实，非文档回答不需要硬贴 evidence。最终回答使用末尾 Sources，不把 evidence link 混在正文句子里。
 
 ## 7. HTTP API
 
@@ -394,7 +401,7 @@ SSE 事件按 `seq` 递增，常见类型如下：
 | --- | --- | --- |
 | `completion.created` | graph | 标记本轮 completion 开始。 |
 | `source_indexed` | graph | 暴露 `document_tree` 和 `source_selectors`，backend 可提前准备 replay 高亮。 |
-| `model_message` | resolution | 模型面向用户的过程说明或最终回答，事实性内容应内嵌 evidence link；最终回答带 `is_final=true` 和 `stop_signal`。 |
+| `model_message` | resolution | 模型面向用户的过程说明或最终回答；过程事实应内嵌 evidence link，最终回答带 `is_final=true` 和 `stop_signal`，并把 evidence link 放在末尾 Sources 区。 |
 | `tool_started` | html_tools | 记录工具开始及参数。 |
 | `tool_completed` | html_tools | 记录工具成功结果。 |
 | `tool_failed` | html_tools / graph | 记录工具或 resolution 失败。 |

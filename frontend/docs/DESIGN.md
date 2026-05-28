@@ -1,6 +1,6 @@
 # Frontend Design
 
-这份文档是 `frontend` 的设计入口。`frontend` 是 Agent Gate 的浏览器工作台，当前只适配 QA-only backend：用户上传多文档并提问，前端显示模型边阅读边回答的过程流、inline evidence link、多轮追问和取消入口。
+这份文档是 `frontend` 的设计入口。`frontend` 是 Agent Gate 的浏览器工作台，当前只适配 QA-only backend：用户上传多文档并提问，前端显示模型边阅读边回答的过程流、inline evidence link、多轮追问和取消入口；最终回答会把 evidence 统一收在末尾 Sources 区。
 
 ## 1. 基本工作方式
 
@@ -25,6 +25,7 @@
   -> 提交追问时先插入 optimistic message，并在其后追加 assistant 侧 Codex 式上下跳动 Thinking；同时立刻用当前 last seq 重新连接 SSE，不等待 POST /inputs 返回
   -> EventSource 遇到 error 时不由前端主动 close，交给浏览器原生重连，只有组件卸载或主动换 after_seq 时才关闭旧连接
   -> SSE agent.event(model_message) 渲染模型过程回答，保留 [label](evidence://...) inline link
+  -> 若 model_message 带 is_final=true，则正文里的 evidence link 只保留可读 label，并把引用渲染到末尾 Sources footer
   -> 连续 tool_completed/tool_failed 默认折叠成 Codex 式轻量过程行，只显示聚合计数摘要，展开后显示每个 tool
   -> turn.completed / turn.cancelled / turn.failed 结束本轮，composer handler 恢复允许提交下一轮
   -> 如果 cancel 后 backend 先把 summary 切回 ready/idle，再由后续 SSE 终态事件或 refresh 回填，前端会以最新 summary 为准解除本地 running/cancelling 锁定，避免按钮一直停在 Pause 态
@@ -79,7 +80,7 @@ frontend/
 - `src/app/` 只组织 Next.js 路由、布局和 backend proxy route。
 - `src/components/upload-workbench.tsx` 负责首页 QA task 创建、首问提交、recent task 任务栏和主题按钮。
 - `src/components/task-detail.tsx` 负责 QA task 详情、SSE 事件流、追问 composer 和取消按钮。
-- `src/components/markdown-evidence.tsx` 用 `react-markdown + remark-gfm` 渲染模型回答，支持 GFM 表格、连续编号列表和嵌套列表，并保留 `evidence://` link 的点击接管。
+- `src/components/markdown-evidence.tsx` 用 `react-markdown + remark-gfm` 渲染模型回答，支持 GFM 表格、连续编号列表和嵌套列表；默认保留 `evidence://` inline link 的点击接管，最终回答模式会把 evidence link 抽取到末尾 Sources footer。
 - `src/lib/api.ts` 封装 `/api/backend/qa/*` 调用、SSE URL、EventSource 创建和错误语义。
 - `src/lib/task-store.ts` 只缓存 task 摘要，包括 status、stage、document_count、active_turn_id 和 stream。
 - `src/lib/backend-proxy.ts` 透明转发 multipart、JSON 和 text/event-stream。
@@ -112,15 +113,20 @@ TaskDetail(task_id)
   -> 补详情如果比当前 SSE seq 旧，不覆盖当前 status/stage/stream/active_turn_id，但仍合并它带回的 documents/display_html 和 source_selectors
   -> optimisticEvents 保存本地刚提交但还没被 SSE 确认的 user message
   -> eventToStreamItem 把 message.created / agent.event 转成可见流
+  -> agent.event(type=model_message) 会读取 payload.is_final；普通过程消息保持 inline evidence，最终回答把 evidence 渲染为末尾 Sources footer
   -> 点击 Markdown evidence link 时，从 evidence:// path 去掉 S/I/R inline selector，查 source_selectors 得到 display_html DOM id
   -> 如果 evidence 是 `evidence://range/{start}/{end}`，则按 source_selectors 收集同一层级 start 到 end 范围内的所有 DOM id
   -> 如果 evidence 指向文件夹/section 级虚拟路径且没有直接 source_selector，则把虚拟路径本身作为 header DOM id/data-element-id 定位，不跳到下面的第一个子节点
   -> 为兼容旧任务，若虚拟路径 header id 也不存在，则只用 evidence 链接文本匹配同名 h1-h6 heading，不匹配正文 block
-  -> 打开右侧大 review iframe；Sxxx 默认定位父 block，Ixxx 优先定位 `{block_id}_item_000` 这类列表项，Rxxx 优先定位 `{table_id}_tr_001` 这类表格数据行，range 会同时高亮多个范围节点并滚到第一个节点
-  -> 右侧 review panel 默认 560px，范围 480-960px，通过左边缘 resize separator 拖拽；键盘 ArrowLeft 增宽、ArrowRight 缩窄
+  -> 只要 summary.documents 里存在 display_html，就默认显示 review 文档；review slot 位于 Agent 左侧，Agent 始终在最右侧主工作区
+  -> review 不再渲染额外标题栏、文件名 meta 或关闭按钮，iframe 直接占满 review slot，让 display_html 自己的正文标题成为首屏内容
+  -> review iframe 会把 display_html 压成干净的阅读页：白底、窄列、较小字号、紧凑段距，标题/表格/代码块基础排版统一，避免原始 HTML 的 page 壳和工具栏感
+  -> 点击 inline evidence 后复用当前 review iframe；Sxxx 默认定位父 block，Ixxx 优先定位 `{block_id}_item_000` 这类列表项，Rxxx 优先定位 `{table_id}_tr_001` 这类表格数据行，range 会同时高亮多个范围节点并滚到第一个节点
+  -> review panel 默认 560px，范围 480-960px，通过 Agent 左侧的 resize separator 拖拽；键盘 ArrowRight 增宽、ArrowLeft 缩窄
   -> 如果 display_html 自带 page-like 纸张框（page 背景、阴影、内边距），前端会把这层外框压平，只保留正文排版和 evidence 高亮
   -> 同一文档内切换 evidence 时不重写 srcDoc，而是在 iframe.contentDocument 内移除旧 current evidence、给新 id/data-element-id 加 marker
-  -> 对新 marker 调 scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" })，从当前滚动位置平滑跳到对应文本
+  -> 如果 task detail refresh 带回新的 display_html，写入 iframe srcdoc 前先记录当前滚动位置；若刷新后没有定位到 evidence 目标，就恢复旧滚动位置，避免 review 跳回顶部
+  -> 对新 marker 调 scrollIntoView({ behavior: "smooth", block: "start", inline: "nearest" })，并用较大的 scroll-margin 让高亮落在靠上但适合阅读的位置
   -> Agent 对话流和输入框共用同一个水平 inset；content frame 和 composer frame 都使用 `0 / minmax(0, 1fr) / 0`，让正文、工具行和 composer 在当前 Agent slot 内同宽铺开，左右面板只改变外层 stage 的可用宽度，不再用 viewport 或侧栏宽度额外偏移内容列
   -> Agent 对话流只在用户已经接近底部时跟随 SSE 新消息；用户向上滚动阅读历史后，新消息不能强制把滚动位置拉回最底部
   -> applyEventToSummary 用事件更新 running/ready 状态
@@ -137,7 +143,7 @@ TaskDetail(task_id)
 事件渲染规则：
 
 - `message.created` 且 `role=user|assistant`：渲染为无显式角色标签的对话消息；用户消息靠右，assistant 消息靠左。
-- `agent.event` 且 `payload.type=model_message`：渲染为左侧 assistant 过程回答，支持 evidence link。
+- `agent.event` 且 `payload.type=model_message`：渲染为左侧 assistant 消息；`is_final=false` 的过程回答支持 inline evidence link，`is_final=true` 的最终回答把 evidence link 抽到末尾 Sources footer，正文只保留可读 label。
 - `agent.event` 且 `payload.type=tool_completed|tool_failed`：渲染为工具过程行；连续工具事件会默认折叠成一行低权重摘要，例如 `Read 1 passage, inspected 1 evidence, 1 search`，默认摘要只统计动作数量，不写失败状态；展开后也只显示动作和内容类型，例如 `Viewed outline`、`Read paragraph`、`Inspected table row`，不展示具体 evidence/path/locator；`tool_failed` 使用普通工具行颜色，不做红色失败态；read/inspect 行如果带 locator 可点击打开右侧 review；展开明细和摘要行左边缘对齐，展开后同一组继续追加新 tool 时保持展开。
 - `turn.cancel_requested/cancelled/failed`：渲染简短状态行。
 - 空 `model_message` 和内部生命周期事件不进入可见对话流。
@@ -168,7 +174,7 @@ API 测试
 
 任务详情组件测试
   -> 注入 fake EventSource
-  -> 验证用户消息、模型消息、tool 过程和 inline evidence 渲染
+  -> 验证用户消息、模型消息、tool 过程、过程 inline evidence 和最终回答 Sources footer 渲染
   -> 验证追问复用 task_id
   -> 验证 running 时固定主操作按钮调用 cancel，composer 不追加第二个按钮，并只在同一按钮内切换 Send/Pause icon 可见性
 

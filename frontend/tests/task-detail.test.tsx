@@ -34,7 +34,7 @@ const readyDetailSummary: TaskSummary = {
     {
       document_id: "doc_001",
       filename: "contract.pdf",
-      display_html: '<html><body><p id="p1">Either party may terminate with 30 days notice.</p><p id="p2">The notice must be written.</p><table id="table1"><tr id="table1_tr_000"><th>Clause</th><th>Value</th></tr><tr id="table1_tr_001"><td>Notice</td><td>30 days</td></tr></table></body></html>'
+      display_html: '<html><body><h1 id="doc-title">Contract</h1><p id="p1">Either party may terminate with 30 days notice.</p><p id="p2">The notice must be written.</p><table id="table1"><tr id="table1_tr_000"><th>Clause</th><th>Value</th></tr><tr id="table1_tr_001"><td>Notice</td><td>30 days</td></tr></table></body></html>'
     }
   ],
   source_selectors: {
@@ -176,6 +176,12 @@ function taskEvent(overrides: Partial<TaskEvent>): TaskEvent {
   };
 }
 
+function expectReviewHeaderRemoved(reviewWorkspace: HTMLElement) {
+  expect(reviewWorkspace.querySelector(".replay-source-header")).toBeNull();
+  expect(within(reviewWorkspace).queryByRole("button", { name: "Close document review" })).not.toBeInTheDocument();
+  expect(within(reviewWorkspace).queryByText(/Source document ·/)).not.toBeInTheDocument();
+}
+
 it("loadTaskDetail 只读取 QA task summary，不再请求 result/replay/trace/audit", async () => {
   global.fetch = jest.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
@@ -289,6 +295,60 @@ it("任务详情会从 QA 事件流重建用户问题、模型回答和 inline e
   );
 });
 
+it("最终回答会把 evidence 渲染到末尾来源区", async () => {
+  const fakeEventSource = new FakeEventSource();
+  const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
+  renderTaskDetail(detailData, { createTaskEventSource });
+
+  await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledWith("qa_task_001", 0));
+  act(() => {
+    fakeEventSource.emitEvent(
+      "agent.event",
+      taskEvent({
+        seq: 5,
+        type: "agent.event",
+        status: "ready",
+        stage: "ready",
+        turn_id: "turn_001",
+        payload: {
+          agent: "file_extraction_agent",
+          type: "model_message",
+          content: "可以提前终止，但需要提前 30 天通知。[30 天通知](evidence://0001.0001.0001/S001)",
+          is_final: true
+        }
+      })
+    );
+  });
+
+  const qaStream = await screen.findByLabelText("QA conversation and reading process");
+  const finalMessage = within(qaStream).getByText("可以提前终止，但需要提前 30 天通知。30 天通知");
+  expect(within(finalMessage).queryByRole("link")).not.toBeInTheDocument();
+  const sources = within(qaStream).getByLabelText("Sources");
+  const citation = within(sources).getByRole("link", { name: "Source 1: 30 天通知" });
+
+  expect(citation).toHaveAttribute("href", "evidence://0001.0001.0001/S001");
+});
+
+it("有 review 文档时默认显示 review，并放在 Agent 左侧", async () => {
+  const fakeEventSource = new FakeEventSource();
+  const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
+  renderTaskDetail(detailData, { createTaskEventSource });
+
+  await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledWith("qa_task_001", 0));
+  const stage = await screen.findByLabelText("QA stage");
+  const reviewWorkspace = await screen.findByLabelText("Right review workspace");
+  const agentWorkspace = screen.getByLabelText("Agent workspace");
+  const stageChildren = Array.from(stage.children);
+
+  expect(stage).toHaveAttribute("data-right-panel-open", "true");
+  expect(stage).toHaveStyle({
+    "--replay-stage-columns": "var(--replay-left-panel-width) 10px var(--replay-right-panel-width) 10px minmax(0, 1fr)"
+  });
+  expect(stageChildren.indexOf(reviewWorkspace)).toBeLessThan(stageChildren.indexOf(agentWorkspace));
+  expectReviewHeaderRemoved(reviewWorkspace);
+  expect(within(reviewWorkspace).getByTitle("Source document")).toHaveAttribute("srcdoc", expect.stringContaining("Contract"));
+});
+
 it("点击 inline evidence 会用现有任务详情数据打开右侧 review 文档", async () => {
   const user = userEvent.setup();
   const fakeEventSource = new FakeEventSource();
@@ -313,6 +373,7 @@ it("点击 inline evidence 会用现有任务详情数据打开右侧 review 文
       })
     );
     await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
   await user.click(await screen.findByRole("link", { name: "30 天通知" }));
@@ -320,10 +381,10 @@ it("点击 inline evidence 会用现有任务详情数据打开右侧 review 文
   const reviewWorkspace = await screen.findByLabelText("Right review workspace");
   expect(reviewWorkspace).not.toHaveClass("is-fullscreen");
   expect(screen.getByLabelText("QA stage")).toHaveStyle({
-    "--replay-stage-columns": "var(--replay-left-panel-width) 10px minmax(0, 1fr) 10px var(--replay-right-panel-width)"
+    "--replay-stage-columns": "var(--replay-left-panel-width) 10px var(--replay-right-panel-width) 10px minmax(0, 1fr)"
   });
-  expect(within(reviewWorkspace).getByRole("button", { name: "Close document review" })).toBeInTheDocument();
-  expect(within(reviewWorkspace).getByText("contract.pdf")).toBeInTheDocument();
+  expectReviewHeaderRemoved(reviewWorkspace);
+  expect(within(reviewWorkspace).queryByText("evidence://0001.0001.0001/S001")).not.toBeInTheDocument();
   expect(within(reviewWorkspace).getByTitle("Source document")).toHaveAttribute(
     "srcdoc",
     expect.stringContaining("data-current-evidence=\"true\"")
@@ -413,7 +474,7 @@ it("首轮生成中收到 source_indexed 后可以立刻打开右侧 review 文�
   await user.click(await screen.findByRole("link", { name: "30 天通知" }));
 
   const reviewWorkspace = await screen.findByLabelText("Right review workspace");
-  expect(within(reviewWorkspace).getByText("contract.pdf")).toBeInTheDocument();
+  expectReviewHeaderRemoved(reviewWorkspace);
   expect(within(reviewWorkspace).getByTitle("Source document")).toHaveAttribute(
     "srcdoc",
     expect.stringContaining("data-current-evidence=\"true\"")
@@ -499,7 +560,7 @@ it("首轮 source_indexed 触发的旧 seq 详情刷新仍会补齐 review 文�
   await user.click(await screen.findByRole("link", { name: "30 天通知" }));
 
   const reviewWorkspace = await screen.findByLabelText("Right review workspace");
-  expect(within(reviewWorkspace).getByText("contract.pdf")).toBeInTheDocument();
+  expectReviewHeaderRemoved(reviewWorkspace);
   expect(within(reviewWorkspace).getByTitle("Source document")).toHaveAttribute(
     "srcdoc",
     expect.stringContaining("data-current-evidence=\"true\"")
@@ -558,6 +619,9 @@ it("右侧 review 会压平文档页面外框，只保留正文排版", async ()
     "srcdoc",
     expect.stringContaining(".page { background: transparent !important; margin: 0 0 20px !important; padding: 0 !important; box-shadow: none !important; }")
   );
+  expect(sourceFrame).toHaveAttribute("srcdoc", expect.stringContaining("font-size: 15px; line-height: 1.55;"));
+  expect(sourceFrame).toHaveAttribute("srcdoc", expect.stringContaining("p { margin: 0 0 12px !important; }"));
+  expect(sourceFrame).toHaveAttribute("srcdoc", expect.stringContaining("scroll-margin: 96px 0 72px !important;"));
 });
 
 it("右侧 review panel 支持拖拽调整宽度，并保持 Agent 对话列左右空白对称", async () => {
@@ -567,9 +631,17 @@ it("右侧 review panel 支持拖拽调整宽度，并保持 Agent 对话列左�
   renderTaskDetail(detailData, { createTaskEventSource });
 
   await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledWith("qa_task_001", 0));
+  const stage = await screen.findByLabelText("QA stage");
+  const reviewWorkspace = await screen.findByLabelText("Right review workspace");
   const agentWorkspace = screen.getByLabelText("Agent workspace");
+  const stageChildren = Array.from(stage.children);
   const initialAgentStyle = agentWorkspace.getAttribute("style") ?? "";
   expect(agentWorkspace).toHaveAttribute("data-agent-balance-side", "left");
+  expect(stageChildren.indexOf(reviewWorkspace)).toBeLessThan(stageChildren.indexOf(agentWorkspace));
+  expect(stage).toHaveStyle({
+    "--replay-right-panel-width": "560px",
+    "--replay-stage-columns": "var(--replay-left-panel-width) 10px var(--replay-right-panel-width) 10px minmax(0, 1fr)"
+  });
   expect(initialAgentStyle).not.toContain("--replay-agent-left-outer-width");
   expect(initialAgentStyle).not.toContain("--replay-agent-right-outer-width");
   expect(initialAgentStyle).not.toContain("--replay-agent-left-balance");
@@ -595,12 +667,11 @@ it("右侧 review panel 支持拖拽调整宽度，并保持 Agent 对话列左�
 
   await user.click(await screen.findByRole("link", { name: "30 天通知" }));
 
-  const stage = await screen.findByLabelText("QA stage");
   expect(stage).toHaveStyle({
     "--replay-right-panel-width": "560px",
-    "--replay-stage-columns": "var(--replay-left-panel-width) 10px minmax(0, 1fr) 10px var(--replay-right-panel-width)"
+    "--replay-stage-columns": "var(--replay-left-panel-width) 10px var(--replay-right-panel-width) 10px minmax(0, 1fr)"
   });
-  expect(agentWorkspace).toHaveAttribute("data-agent-balance-side", "both");
+  expect(agentWorkspace).toHaveAttribute("data-agent-balance-side", "left");
   const openAgentStyle = agentWorkspace.getAttribute("style") ?? "";
   expect(openAgentStyle).not.toContain("--replay-agent-left-outer-width");
   expect(openAgentStyle).not.toContain("--replay-agent-right-outer-width");
@@ -613,14 +684,14 @@ it("右侧 review panel 支持拖拽调整宽度，并保持 Agent 对话列左�
   expect(resizeHandle).toHaveAttribute("aria-valuenow", "560");
 
   resizeHandle.focus();
-  await user.keyboard("{ArrowLeft}");
+  await user.keyboard("{ArrowRight}");
 
   expect(resizeHandle).toHaveAttribute("aria-valuenow", "576");
   expect(stage).toHaveStyle({ "--replay-right-panel-width": "576px" });
 
   fireEvent(resizeHandle, new MouseEvent("pointerdown", { bubbles: true, clientX: 700 }));
-  fireEvent(window, new MouseEvent("pointermove", { bubbles: true, clientX: 680 }));
-  fireEvent(window, new MouseEvent("pointerup", { bubbles: true, clientX: 680 }));
+  fireEvent(window, new MouseEvent("pointermove", { bubbles: true, clientX: 720 }));
+  fireEvent(window, new MouseEvent("pointerup", { bubbles: true, clientX: 720 }));
 
   expect(resizeHandle).toHaveAttribute("aria-valuenow", "596");
   expect(stage).toHaveStyle({ "--replay-right-panel-width": "596px" });
@@ -664,7 +735,7 @@ it("文件夹级 inline evidence 会定位到对应 header 而不是子节点", 
   await waitFor(() => {
     expect(headerTarget.getAttribute("data-current-evidence")).toBe("true");
     expect(childTarget.hasAttribute("data-current-evidence")).toBe(false);
-    expect(headerScrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center", inline: "nearest" });
+    expect(headerScrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start", inline: "nearest" });
   });
 });
 
@@ -706,7 +777,7 @@ it("旧 source_selectors 缺少文件夹映射时会用链接文本定位 header
   await waitFor(() => {
     expect(headerTarget.getAttribute("data-current-evidence")).toBe("true");
     expect(childTarget.hasAttribute("data-current-evidence")).toBe(false);
-    expect(headerScrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center", inline: "nearest" });
+    expect(headerScrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start", inline: "nearest" });
   });
 });
 
@@ -751,7 +822,7 @@ it("切换同一文档内的 inline evidence 会在 iframe 内平滑跳转并移
 
   await waitFor(() => {
     expect(firstTarget.getAttribute("data-current-evidence")).toBe("true");
-    expect(firstScrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center", inline: "nearest" });
+    expect(firstScrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start", inline: "nearest" });
   });
 
   await user.click(await screen.findByRole("link", { name: "书面通知" }));
@@ -759,9 +830,89 @@ it("切换同一文档内的 inline evidence 会在 iframe 内平滑跳转并移
   await waitFor(() => {
     expect(firstTarget.hasAttribute("data-current-evidence")).toBe(false);
     expect(secondTarget.getAttribute("data-current-evidence")).toBe("true");
-    expect(secondScrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center", inline: "nearest" });
+    expect(secondScrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start", inline: "nearest" });
   });
   expect(sourceFrame).toHaveAttribute("srcdoc", initialSrcDoc);
+});
+
+it("review html 刷新但 evidence 未定位时保留 iframe 滚动位置", async () => {
+  const fakeEventSource = new FakeEventSource();
+  const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
+  const sourceDocument = document.implementation.createHTMLDocument("source");
+  sourceDocument.body.innerHTML = '<p id="p1">Either party may terminate with 30 days notice.</p>';
+  jest.spyOn(HTMLIFrameElement.prototype, "contentDocument", "get").mockReturnValue(sourceDocument);
+  const originalSetAttribute = HTMLIFrameElement.prototype.setAttribute;
+  jest.spyOn(HTMLIFrameElement.prototype, "setAttribute").mockImplementation(function setAttribute(name, value) {
+    originalSetAttribute.call(this, name, value);
+    if (name.toLowerCase() === "srcdoc") {
+      sourceDocument.documentElement.scrollTop = 0;
+      sourceDocument.body.scrollTop = 0;
+    }
+  });
+  const initialDetailData: TaskDetailData = {
+    ...detailData,
+    summary: {
+      ...readyDetailSummary,
+      documents: [
+        {
+          document_id: "doc_001",
+          filename: "contract.pdf",
+          display_html: '<html><body><p id="p1">Either party may terminate with 30 days notice.</p></body></html>'
+        }
+      ]
+    }
+  };
+  const refreshedDetailData: TaskDetailData = {
+    ...initialDetailData,
+    summary: {
+      ...initialDetailData.summary,
+      stream: {
+        state: "idle",
+        last_event_seq: 9
+      },
+      documents: [
+        {
+          document_id: "doc_001",
+          filename: "contract.pdf",
+          display_html: '<html><body><p id="p1">Either party may terminate with 30 days notice.</p><p id="p2">The notice must be written.</p></body></html>'
+        }
+      ]
+    }
+  };
+  let resolveRefreshedDetail: (value: TaskDetailData) => void = () => {};
+  const refreshedDetailPromise = new Promise<TaskDetailData>((resolve) => {
+    resolveRefreshedDetail = resolve;
+  });
+  const loadTaskDetail = jest
+    .fn<Promise<TaskDetailData>, [string]>()
+    .mockResolvedValueOnce(initialDetailData)
+    .mockReturnValueOnce(refreshedDetailPromise);
+  renderTaskDetail(initialDetailData, { createTaskEventSource, loadTaskDetail });
+
+  await waitFor(() => expect(loadTaskDetail).toHaveBeenCalledTimes(1));
+  sourceDocument.documentElement.scrollTop = 360;
+  sourceDocument.body.scrollTop = 360;
+  await act(async () => {
+    fakeEventSource.emitEvent(
+      "turn.completed",
+      taskEvent({
+        seq: 9,
+        type: "turn.completed",
+        status: "ready",
+        stage: "ready",
+        turn_id: "turn_001",
+        payload: { turn_id: "turn_001" }
+      })
+    );
+    resolveRefreshedDetail(refreshedDetailData);
+    await refreshedDetailPromise;
+    await Promise.resolve();
+  });
+
+  expect(loadTaskDetail).toHaveBeenCalledTimes(2);
+
+  expect(sourceDocument.documentElement.scrollTop).toBe(360);
+  expect(sourceDocument.body.scrollTop).toBe(360);
 });
 
 it("range evidence 会在右侧 review 同时高亮范围内多个节点并滚到起始节点", async () => {
@@ -804,7 +955,7 @@ it("range evidence 会在右侧 review 同时高亮范围内多个节点并滚�
     expect(firstTarget.getAttribute("data-current-evidence")).toBe("true");
     expect(secondTarget.getAttribute("data-current-evidence")).toBe("true");
     expect(outsideTarget.hasAttribute("data-current-evidence")).toBe(false);
-    expect(firstScrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center", inline: "nearest" });
+    expect(firstScrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start", inline: "nearest" });
   });
 });
 
@@ -846,7 +997,7 @@ it("表格 row evidence 会定位到具体表格行而不是整张表", async ()
   await waitFor(() => {
     expect(tableTarget.hasAttribute("data-current-evidence")).toBe(false);
     expect(rowTarget.getAttribute("data-current-evidence")).toBe("true");
-    expect(rowScrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center", inline: "nearest" });
+    expect(rowScrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start", inline: "nearest" });
   });
 });
 
@@ -1394,7 +1545,7 @@ it("连续工具事件会用 Codex 式轻量过程行默认折叠，并允许展
 
   const reviewWorkspace = await screen.findByLabelText("Right review workspace");
   expect(reviewWorkspace).not.toHaveClass("is-fullscreen");
-  expect(within(reviewWorkspace).getByText("contract.pdf")).toBeInTheDocument();
+  expectReviewHeaderRemoved(reviewWorkspace);
   expect(within(reviewWorkspace).getByTitle("Source document")).toHaveAttribute(
     "srcdoc",
     expect.stringContaining("data-current-evidence=\"true\"")

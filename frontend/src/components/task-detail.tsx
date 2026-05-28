@@ -8,7 +8,6 @@ import {
   CheckCircle2,
   ChevronRight,
   Clock3,
-  X,
   Eye,
   FileSearch,
   Pause,
@@ -79,6 +78,7 @@ type QaStreamItem =
       turnId: string | null;
       role: "user" | "assistant";
       content: string;
+      isFinal: boolean;
     }
   | {
       kind: "tool";
@@ -427,13 +427,11 @@ function QaWorkspace({
   onComposerPrimaryAction: () => void;
 }) {
   const [isLeftPanelOpen, setIsLeftPanelOpen] = React.useState(true);
-  const [closedReviewOpenKey, setClosedReviewOpenKey] = React.useState<number | null>(null);
-  const isRightPanelOpen = activeEvidenceSource !== null;
-  const isReviewOpen = activeEvidenceSource !== null && activeEvidenceSource.openKey !== closedReviewOpenKey;
-  const isVisibleRightPanelOpen = isRightPanelOpen && isReviewOpen;
+  const reviewSource = activeEvidenceSource ?? getDefaultReviewSource(summary);
+  const isVisibleReviewPanelOpen = reviewSource !== null;
   const { leftPanelWidth, resizeLeftPanelByKeyboard, startLeftPanelResize } = useLeftSidebarResize();
   const { rightPanelWidth, resizeRightPanelByKeyboard, startRightPanelResize } = useRightSidebarResize();
-  const agentBalanceSide = getAgentBalanceSide(isLeftPanelOpen, isVisibleRightPanelOpen);
+  const agentBalanceSide = getAgentBalanceSide(isLeftPanelOpen || isVisibleReviewPanelOpen, false);
   const streamRef = React.useRef<HTMLDivElement | null>(null);
   const shouldFollowStreamRef = React.useRef(true);
 
@@ -479,11 +477,11 @@ function QaWorkspace({
         className="replay-stage replay-stage-fullscreen grid"
         aria-label="QA stage"
         data-left-panel-open={isLeftPanelOpen ? "true" : "false"}
-        data-right-panel-open={isVisibleRightPanelOpen ? "true" : "false"}
+        data-right-panel-open={isVisibleReviewPanelOpen ? "true" : "false"}
         style={{
           "--replay-left-panel-width": `${leftPanelWidth}px`,
           "--replay-right-panel-width": `${rightPanelWidth}px`,
-          "--replay-stage-columns": qaStageColumns(isLeftPanelOpen, isVisibleRightPanelOpen),
+          "--replay-stage-columns": qaStageColumns(isLeftPanelOpen, isVisibleReviewPanelOpen),
         } as React.CSSProperties}
       >
         {isLeftPanelOpen ? (
@@ -496,6 +494,20 @@ function QaWorkspace({
             width={leftPanelWidth}
             onPointerDown={startLeftPanelResize}
             onKeyDown={resizeLeftPanelByKeyboard}
+          />
+        ) : null}
+        {isVisibleReviewPanelOpen && reviewSource ? (
+          <aside className="replay-review-side-panel-slot" aria-label="Right review workspace">
+            <div className="replay-review-side-panel-body">
+              <QaEvidenceSourceFrame source={reviewSource} />
+            </div>
+          </aside>
+        ) : null}
+        {isVisibleReviewPanelOpen ? (
+          <RightSidebarResizeHandle
+            width={rightPanelWidth}
+            onPointerDown={startRightPanelResize}
+            onKeyDown={resizeRightPanelByKeyboard}
           />
         ) : null}
         <section
@@ -538,31 +550,6 @@ function QaWorkspace({
             />
           </div>
         </section>
-        {isVisibleRightPanelOpen ? (
-          <>
-            <RightSidebarResizeHandle
-              width={rightPanelWidth}
-              onPointerDown={startRightPanelResize}
-              onKeyDown={resizeRightPanelByKeyboard}
-            />
-            <aside className="replay-review-side-panel-slot" aria-label="Right review workspace">
-              <div className="replay-source-header">
-                <div className="replay-source-title" title={activeEvidenceSource.document.filename}>
-                  {activeEvidenceSource.document.filename}
-                </div>
-                <div className="replay-source-subtitle" title={activeEvidenceSource.evidenceUri}>
-                  {activeEvidenceSource.label}
-                </div>
-                <Button type="button" variant="ghost" size="icon" aria-label="Close document review" title="Close document review" onClick={() => setClosedReviewOpenKey(activeEvidenceSource.openKey)}>
-                  <X className="h-4 w-4" aria-hidden="true" />
-                </Button>
-              </div>
-              <div className="replay-review-side-panel-body">
-                <QaEvidenceSourceFrame source={activeEvidenceSource} />
-              </div>
-            </aside>
-          </>
-        ) : null}
       </div>
     </section>
   );
@@ -671,12 +658,14 @@ function TaskSidebar({
 
 function QaEvidenceSourceFrame({ source }: { source: ActiveEvidenceSource }) {
   const sourceFrameRef = React.useRef<HTMLIFrameElement | null>(null);
+  const loadedSourceHtmlRef = React.useRef<string | null>(null);
+  const pendingRestoreScrollTopRef = React.useRef<number | null>(null);
   const sourceHtml = React.useMemo(
     () => renderQaSourceHtml(source.document.display_html),
     [source.document.display_html]
   );
 
-  const applyCurrentEvidenceAndScroll = React.useCallback(() => {
+  const applyCurrentEvidenceAndScroll = React.useCallback((options: { restoreScrollTop?: number } = {}) => {
     const frame = sourceFrameRef.current;
     const doc = frame?.contentDocument;
     if (!doc) {
@@ -685,24 +674,64 @@ function QaEvidenceSourceFrame({ source }: { source: ActiveEvidenceSource }) {
     applyQaSourceEvidenceMarker(doc, source.sourceSelectors, source.inlineSelector, source.headingText);
     const target = doc.querySelector<HTMLElement>("[data-current-evidence='true']");
     if (target && typeof target.scrollIntoView === "function") {
-      target.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+      target.scrollIntoView({ behavior: "smooth", block: "start", inline: "nearest" });
+      return;
+    }
+    if (typeof options.restoreScrollTop === "number") {
+      restoreQaSourceFrameScrollTop(doc, options.restoreScrollTop);
     }
   }, [source.headingText, source.inlineSelector, source.sourceSelectors]);
 
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
+    const frame = sourceFrameRef.current;
+    if (!frame) {
+      return;
+    }
+    if (loadedSourceHtmlRef.current !== sourceHtml) {
+      const previousScrollTop = frame.contentDocument ? readQaSourceFrameScrollTop(frame.contentDocument) : 0;
+      loadedSourceHtmlRef.current = sourceHtml;
+      pendingRestoreScrollTopRef.current = previousScrollTop;
+      frame.srcdoc = sourceHtml;
+      applyCurrentEvidenceAndScroll({ restoreScrollTop: previousScrollTop });
+      return;
+    }
     applyCurrentEvidenceAndScroll();
-  }, [applyCurrentEvidenceAndScroll]);
+  }, [applyCurrentEvidenceAndScroll, sourceHtml]);
+
+  const handleFrameLoad = React.useCallback(() => {
+    loadedSourceHtmlRef.current = sourceHtml;
+    const restoreScrollTop = pendingRestoreScrollTopRef.current;
+    pendingRestoreScrollTopRef.current = null;
+    applyCurrentEvidenceAndScroll(
+      typeof restoreScrollTop === "number" ? { restoreScrollTop } : undefined
+    );
+  }, [applyCurrentEvidenceAndScroll, sourceHtml]);
 
   return (
     <iframe
       title="Source document"
       className="replay-source-document replay-source-frame"
-      srcDoc={sourceHtml}
       ref={sourceFrameRef}
-      onLoad={applyCurrentEvidenceAndScroll}
+      onLoad={handleFrameLoad}
       referrerPolicy="no-referrer"
     />
   );
+}
+
+function readQaSourceFrameScrollTop(doc: Document): number {
+  return Math.max(
+    doc.scrollingElement?.scrollTop ?? 0,
+    doc.documentElement?.scrollTop ?? 0,
+    doc.body?.scrollTop ?? 0
+  );
+}
+
+function restoreQaSourceFrameScrollTop(doc: Document, scrollTop: number) {
+  for (const element of [doc.scrollingElement, doc.documentElement, doc.body]) {
+    if (element) {
+      element.scrollTop = scrollTop;
+    }
+  }
 }
 
 function QaStreamRow({ item, onOpenEvidence }: { item: QaStreamItem; onOpenEvidence: (uri: string, label: string) => void }) {
@@ -710,7 +739,12 @@ function QaStreamRow({ item, onOpenEvidence }: { item: QaStreamItem; onOpenEvide
     return (
       <div className={`replay-agent-turn qa-message-turn is-${item.role}`}>
         <div className="qa-message-bubble">
-          <MarkdownEvidence markdown={item.content} className="replay-agent-reason-text" onOpenEvidence={onOpenEvidence} />
+          <MarkdownEvidence
+            markdown={item.content}
+            className="replay-agent-reason-text"
+            onOpenEvidence={onOpenEvidence}
+            evidencePlacement={item.role === "assistant" && item.isFinal ? "footer" : "inline"}
+          />
         </div>
       </div>
     );
@@ -863,7 +897,14 @@ function eventToStreamItem(event: TaskEvent): QaStreamItem | null {
     if (!content || (role !== "user" && role !== "assistant")) {
       return null;
     }
-    return { kind: "message", seq: event.seq, turnId: event.turn_id ?? null, role, content };
+    return {
+      kind: "message",
+      seq: event.seq,
+      turnId: event.turn_id ?? null,
+      role,
+      content,
+      isFinal: role === "assistant" && readBoolean(payload.is_final),
+    };
   }
   if (event.type === "agent.event") {
     const payloadType = readString(payload.type);
@@ -872,7 +913,14 @@ function eventToStreamItem(event: TaskEvent): QaStreamItem | null {
       if (!content) {
         return null;
       }
-      return { kind: "message", seq: event.seq, turnId: event.turn_id ?? null, role: "assistant", content };
+      return {
+        kind: "message",
+        seq: event.seq,
+        turnId: event.turn_id ?? null,
+        role: "assistant",
+        content,
+        isFinal: readBoolean(payload.is_final),
+      };
     }
     if (payloadType === "tool_completed" || payloadType === "tool_failed") {
       const toolName = readString(payload.tool) || readString(payload.tool_name) || "tool";
@@ -1189,10 +1237,10 @@ function StatusBadge({ status }: { status: TaskSummary["status"] }) {
   return <Badge variant="secondary">{status}</Badge>;
 }
 
-function qaStageColumns(isLeftPanelOpen: boolean, isRightPanelOpen: boolean): string {
+function qaStageColumns(isLeftPanelOpen: boolean, isReviewPanelOpen: boolean): string {
   const leftColumns = isLeftPanelOpen ? "var(--replay-left-panel-width) 10px " : "";
-  const rightColumns = isRightPanelOpen ? " 10px var(--replay-right-panel-width)" : "";
-  return `${leftColumns}minmax(0, 1fr)${rightColumns}`;
+  const reviewColumns = isReviewPanelOpen ? "var(--replay-right-panel-width) 10px " : "";
+  return `${leftColumns}${reviewColumns}minmax(0, 1fr)`;
 }
 
 function getAgentBalanceSide(isLeftPanelOpen: boolean, isRightPanelOpen: boolean): "left" | "right" | "both" | "none" {
@@ -1224,6 +1272,23 @@ function findEvidenceSource(summary: TaskSummary | null | undefined, uri: string
     return null;
   }
   return { document, evidenceUri: uri, label, openKey: 0, sourceSelector, sourceSelectors, inlineSelector: getEvidenceInlineSelector(uri), headingText: label };
+}
+
+function getDefaultReviewSource(summary: TaskSummary | null | undefined): ActiveEvidenceSource | null {
+  const document = (summary?.documents ?? []).find((item) => item.display_html.trim().length > 0);
+  if (!document) {
+    return null;
+  }
+  return {
+    document,
+    evidenceUri: "",
+    label: document.filename,
+    openKey: 0,
+    sourceSelector: "",
+    sourceSelectors: [],
+    inlineSelector: "",
+    headingText: "",
+  };
 }
 
 function findSourceSelectors(sourceSelectors: Record<string, string>, evidenceId: string): string[] {
@@ -1443,12 +1508,24 @@ function normalizeQaSourceSelector(sourceSelector: string): string {
 
 function wrapQaSourceHtml(displayHtml: string): string {
   const style = `<style>
-html, body { margin: 0; padding: 0; background: #fff; color: #171717; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.55; }
-main { max-width: 980px !important; margin: 0 auto !important; padding: 24px !important; }
+html, body { margin: 0; padding: 0; background: #fff; color: #1f2328; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 15px; line-height: 1.55; }
+body { min-width: 0; }
+main { max-width: 760px !important; margin: 0 !important; padding: 0 28px 36px !important; }
 .page { background: transparent !important; margin: 0 0 20px !important; padding: 0 !important; box-shadow: none !important; }
+h1, h2, h3 { color: #1f2328 !important; font-weight: 700 !important; line-height: 1.25 !important; letter-spacing: 0 !important; }
+h1 { font-size: 23px !important; margin: 16px 0 10px !important; }
+h2 { font-size: 20px !important; margin: 22px 0 9px !important; }
+h3 { font-size: 17px !important; margin: 18px 0 8px !important; }
+p { margin: 0 0 12px !important; }
+ul, ol { margin: 0 0 12px 20px !important; padding: 0 !important; }
+li + li { margin-top: 5px !important; }
+table { border-collapse: collapse !important; width: 100% !important; margin: 0 0 14px !important; }
+th, td { border: 1px solid #d0d7de !important; padding: 8px 10px !important; vertical-align: top !important; }
+pre, code { white-space: pre-wrap !important; overflow-wrap: anywhere !important; }
+pre { margin: 0 0 14px !important; padding: 12px 14px !important; background: #f6f8fa !important; border: 1px solid #d0d7de !important; border-radius: 6px !important; }
 img, svg, canvas, video { max-width: 100% !important; height: auto !important; }
 p, li, td, th, pre, code { max-width: 100% !important; white-space: pre-wrap !important; overflow-wrap: anywhere !important; }
-.is-current-evidence, [data-current-evidence="true"] { border-radius: 6px !important; background: rgba(51, 156, 255, 0.18) !important; outline: 2px solid rgba(51, 156, 255, 0.55) !important; outline-offset: 2px !important; scroll-margin: 48px !important; }
+.is-current-evidence, [data-current-evidence="true"] { border-radius: 6px !important; background: rgba(51, 156, 255, 0.18) !important; outline: 2px solid rgba(51, 156, 255, 0.55) !important; outline-offset: 2px !important; scroll-margin: 96px 0 72px !important; }
 </style>`;
   const html = /<html\b/i.test(displayHtml)
     ? displayHtml
@@ -1475,4 +1552,8 @@ function readObject(value: unknown): Record<string, unknown> | null {
 
 function readString(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function readBoolean(value: unknown): boolean {
+  return value === true;
 }

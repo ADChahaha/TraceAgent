@@ -69,6 +69,16 @@ it("Agent 文本和工具摘要在窄宽度下换行，不用隐藏省略裁剪"
   }
 });
 
+it("右侧 review 不再渲染文档 header", () => {
+  expect(cssRule(".replay-source-header")).toBe("");
+  expect(cssRule(".replay-source-header-copy")).toBe("");
+  expect(cssRule(".replay-source-title")).toBe("");
+  expect(cssRule(".replay-source-meta")).toBe("");
+
+  const sourceFrameRule = cssRule(".replay-source-frame");
+  expect(sourceFrameRule).toContain("background: #fff;");
+});
+
 it("Replay stage 在窄视口也使用左右栏列布局，不把 Review 原文栏堆到下方", () => {
   const baseStageBlock = globalsCss.match(/\.replay-stage\s*\{([^}]*)\}/)?.[1] ?? "";
   const baseFullscreenBlock = globalsCss.match(/\.replay-stage-fullscreen\s*\{([^}]*)\}/)?.[1] ?? "";

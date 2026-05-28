@@ -8,6 +8,7 @@ interface MarkdownEvidenceProps {
   markdown: string;
   className?: string;
   onOpenEvidence?: (uri: string, label: string) => void;
+  evidencePlacement?: "inline" | "footer";
 }
 
 type MarkdownChildrenProps = {
@@ -16,7 +17,15 @@ type MarkdownChildrenProps = {
 
 type MarkdownAnchorProps = React.AnchorHTMLAttributes<HTMLAnchorElement> & MarkdownChildrenProps;
 
-export function MarkdownEvidence({ markdown, className, onOpenEvidence }: MarkdownEvidenceProps) {
+type EvidenceCitation = {
+  href: string;
+  label: string;
+};
+
+const EVIDENCE_MARKDOWN_LINK_PATTERN = /\[([^\]]+)\]\((evidence:\/\/[^)\s]+)\)/g;
+
+export function MarkdownEvidence({ markdown, className, onOpenEvidence, evidencePlacement = "inline" }: MarkdownEvidenceProps) {
+  const preparedMarkdown = prepareMarkdown(markdown, evidencePlacement);
   return (
     <div className={className ?? "space-y-3 text-sm leading-6 text-foreground"}>
       <ReactMarkdown
@@ -24,8 +33,47 @@ export function MarkdownEvidence({ markdown, className, onOpenEvidence }: Markdo
         components={markdownComponents(onOpenEvidence)}
         transformLinkUri={transformMarkdownUrl}
       >
-        {normalizeMarkdown(markdown)}
+        {preparedMarkdown.body}
       </ReactMarkdown>
+      {preparedMarkdown.citations.length > 0 ? (
+        <EvidenceFooter citations={preparedMarkdown.citations} onOpenEvidence={onOpenEvidence} />
+      ) : null}
+    </div>
+  );
+}
+
+function EvidenceFooter({
+  citations,
+  onOpenEvidence,
+}: {
+  citations: EvidenceCitation[];
+  onOpenEvidence?: (uri: string, label: string) => void;
+}) {
+  return (
+    <div className="replay-evidence-footer" aria-label="Sources">
+      <div className="replay-evidence-footer-label">Sources</div>
+      <div className="replay-evidence-citation-list">
+        {citations.map((citation, index) => (
+          <a
+            key={`${citation.href}-${index}`}
+            href={citation.href}
+            aria-label={`Source ${index + 1}: ${citation.label}`}
+            className="replay-evidence-citation"
+            onClick={
+              onOpenEvidence
+                ? (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onOpenEvidence(citation.href, citation.label);
+                  }
+                : undefined
+            }
+          >
+            <span className="replay-evidence-citation-index">{index + 1}</span>
+            <span className="replay-evidence-citation-label">{citation.label}</span>
+          </a>
+        ))}
+      </div>
     </div>
   );
 }
@@ -95,6 +143,63 @@ function transformMarkdownUrl(url: string): string {
     return trimmed;
   }
   return ReactMarkdown.uriTransformer(url);
+}
+
+function prepareMarkdown(markdown: string, evidencePlacement: "inline" | "footer"): { body: string; citations: EvidenceCitation[] } {
+  const normalized = normalizeMarkdown(markdown);
+  if (evidencePlacement === "inline") {
+    return { body: normalized, citations: [] };
+  }
+
+  const splitMarkdown = splitTrailingSourcesSection(normalized);
+  return {
+    body: replaceEvidenceLinksWithText(splitMarkdown.body),
+    citations: extractEvidenceCitations(normalized),
+  };
+}
+
+function splitTrailingSourcesSection(markdown: string): { body: string; sources: string } {
+  const lines = markdown.split("\n");
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index].trim();
+    if (!line) {
+      continue;
+    }
+    if (isSourcesHeading(line)) {
+      return {
+        body: lines.slice(0, index).join("\n").trimEnd(),
+        sources: lines.slice(index).join("\n"),
+      };
+    }
+  }
+  return { body: markdown, sources: "" };
+}
+
+function isSourcesHeading(line: string): boolean {
+  return /^(?:#{1,6}\s*)?(?:sources|citations|references|来源|引用|参考资料)[:：]?\s*$/i.test(line);
+}
+
+function replaceEvidenceLinksWithText(markdown: string): string {
+  return markdown.replace(EVIDENCE_MARKDOWN_LINK_PATTERN, (_match, label: string) => normalizeCitationLabel(label));
+}
+
+function extractEvidenceCitations(markdown: string): EvidenceCitation[] {
+  const citations: EvidenceCitation[] = [];
+  const seenHrefs = new Set<string>();
+  for (const match of markdown.matchAll(EVIDENCE_MARKDOWN_LINK_PATTERN)) {
+    const label = normalizeCitationLabel(match[1]);
+    const href = match[2].trim();
+    if (!label || !href || seenHrefs.has(href)) {
+      continue;
+    }
+    seenHrefs.add(href);
+    citations.push({ href, label });
+  }
+  return citations;
+}
+
+function normalizeCitationLabel(label: string): string {
+  return label.replace(/\s+/g, " ").trim();
 }
 
 function normalizeMarkdown(markdown: string): string {

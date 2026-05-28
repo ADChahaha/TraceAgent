@@ -47,6 +47,9 @@ def test_resolution_messages_describe_qa_investigation_not_field_extraction():
     assert "document" in system_content.lower()
     assert "answer" in system_content.lower()
     assert "evidence" in system_content.lower()
+    assert "Do not put evidence links inline in the final answer body" in system_content
+    assert "Append a final Sources section" in system_content
+    assert "[1] [short label](evidence://...)" in system_content
     assert "task_spec" not in system_content
     assert "write_field" not in system_content
     assert "submit_result" not in system_content

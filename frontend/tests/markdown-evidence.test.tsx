@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 
 import { MarkdownEvidence } from "@/components/markdown-evidence";
 
@@ -41,5 +41,44 @@ describe("MarkdownEvidence", () => {
     fireEvent.click(screen.getByRole("link", { name: "30 天通知" }));
 
     expect(onOpenEvidence).toHaveBeenCalledWith("evidence://0001.0001.0001/S001", "30 天通知");
+  });
+
+  it("moves final answer evidence links into a sources footer", () => {
+    const onOpenEvidence = jest.fn();
+    const { container } = render(
+      <MarkdownEvidence
+        markdown={"可以提前终止，但必须提前通知。[30 天通知](evidence://0001.0001.0001/S001)"}
+        evidencePlacement="footer"
+        onOpenEvidence={onOpenEvidence}
+      />
+    );
+
+    const paragraph = screen.getByText("可以提前终止，但必须提前通知。30 天通知");
+    expect(within(paragraph).queryByRole("link")).not.toBeInTheDocument();
+    const sources = screen.getByLabelText("Sources");
+    const citation = within(sources).getByRole("link", { name: "Source 1: 30 天通知" });
+
+    expect(citation).toHaveAttribute("href", "evidence://0001.0001.0001/S001");
+    expect(container.querySelector(".replay-evidence-footer")).toBeInTheDocument();
+
+    fireEvent.click(citation);
+
+    expect(onOpenEvidence).toHaveBeenCalledWith("evidence://0001.0001.0001/S001", "30 天通知");
+  });
+
+  it("renders a model-authored sources section as the unified footer", () => {
+    const { container } = render(
+      <MarkdownEvidence
+        markdown={"可以提前终止，但必须提前通知。\n\nSources\n[1] [30 天通知](evidence://0001.0001.0001/S001)"}
+        evidencePlacement="footer"
+      />
+    );
+
+    const paragraphs = container.querySelectorAll("p");
+    expect(paragraphs).toHaveLength(1);
+    expect(paragraphs[0]).toHaveTextContent("可以提前终止，但必须提前通知。");
+    const sources = screen.getByLabelText("Sources");
+
+    expect(within(sources).getByRole("link", { name: "Source 1: 30 天通知" })).toBeInTheDocument();
   });
 });
