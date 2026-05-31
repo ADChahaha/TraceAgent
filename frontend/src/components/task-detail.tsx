@@ -10,6 +10,7 @@ import {
   Clock3,
   Eye,
   FileSearch,
+  List,
   Pause,
   Plus,
   Search,
@@ -743,7 +744,7 @@ function QaStreamRow({ item, onOpenEvidence }: { item: QaStreamItem; onOpenEvide
             markdown={item.content}
             className="replay-agent-reason-text"
             onOpenEvidence={onOpenEvidence}
-            evidencePlacement={item.role === "assistant" && item.isFinal ? "footer" : "inline"}
+            evidencePlacement={item.role === "assistant" && item.isFinal ? "citation" : "inline"}
           />
         </div>
       </div>
@@ -792,7 +793,7 @@ function QaToolGroup({ item, onOpenEvidence }: { item: Extract<QaStreamItem, { k
           aria-label={`${isExpanded ? "Collapse" : "Expand"} tool activity`}
           onClick={() => setIsExpanded((current) => !current)}
         >
-          <FileSearch className="replay-agent-tool-group-icon" aria-hidden="true" />
+          <List className="replay-agent-tool-group-icon" aria-hidden="true" />
           <span className="replay-agent-tool-group-summary">{summarizeQaToolGroup(item.items)}</span>
           <ChevronRight className="replay-agent-tool-group-chevron" aria-hidden="true" />
         </button>
@@ -1103,6 +1104,9 @@ function formatToolLabel(toolName: string, payload: Record<string, unknown>): st
   if (toolName === "grep") {
     return query ? `Searched ${query}` : "Searched document";
   }
+  if (toolName === "ls") {
+    return "Listed current level";
+  }
   if (toolName === "tree") {
     return "Viewed outline";
   }
@@ -1172,6 +1176,8 @@ function summarizeQaToolGroup(items: Extract<QaStreamItem, { kind: "tool" }>[]):
         summary.reads += 1;
       } else if (item.toolName === "inspect") {
         summary.inspects += 1;
+      } else if (item.toolName === "ls") {
+        summary.listings += 1;
       } else if (item.toolName === "tree") {
         summary.outlines += 1;
       } else {
@@ -1179,9 +1185,12 @@ function summarizeQaToolGroup(items: Extract<QaStreamItem, { kind: "tool" }>[]):
       }
       return summary;
     },
-    { inspects: 0, outlines: 0, other: 0, reads: 0, searches: 0 }
+    { inspects: 0, listings: 0, outlines: 0, other: 0, reads: 0, searches: 0 }
   );
   const parts: string[] = [];
+  if (counts.listings > 0) {
+    parts.push(`listed ${formatCount(counts.listings, "level")}`);
+  }
   if (counts.reads > 0) {
     parts.push(`read ${formatCount(counts.reads, "passage")}`);
   }
@@ -1218,6 +1227,9 @@ function QaToolIcon({ toolName }: { toolName: string }) {
   if (toolName === "read") {
     return <BookOpenText className="replay-agent-tool-icon" aria-hidden="true" />;
   }
+  if (toolName === "ls") {
+    return <List className="replay-agent-tool-icon" aria-hidden="true" />;
+  }
   if (toolName === "tree") {
     return <FileSearch className="replay-agent-tool-icon" aria-hidden="true" />;
   }
@@ -1239,8 +1251,14 @@ function StatusBadge({ status }: { status: TaskSummary["status"] }) {
 
 function qaStageColumns(isLeftPanelOpen: boolean, isReviewPanelOpen: boolean): string {
   const leftColumns = isLeftPanelOpen ? "var(--replay-left-panel-width) 10px " : "";
-  const reviewColumns = isReviewPanelOpen ? "var(--replay-right-panel-width) 10px " : "";
-  return `${leftColumns}${reviewColumns}minmax(0, 1fr)`;
+  const reviewMaxWidth = isLeftPanelOpen
+    ? "calc(100vw - var(--replay-left-panel-width) - 20px - var(--replay-agent-panel-compact-min-width))"
+    : "calc(100vw - 10px - var(--replay-agent-panel-compact-min-width))";
+  const reviewColumns = isReviewPanelOpen
+    ? `minmax(var(--replay-review-panel-compact-min-width), min(var(--replay-right-panel-width), ${reviewMaxWidth})) 10px `
+    : "";
+  const agentColumn = isReviewPanelOpen ? "minmax(var(--replay-agent-panel-compact-min-width), 1fr)" : "minmax(0, 1fr)";
+  return `${leftColumns}${reviewColumns}${agentColumn}`;
 }
 
 function getAgentBalanceSide(isLeftPanelOpen: boolean, isRightPanelOpen: boolean): "left" | "right" | "both" | "none" {
@@ -1485,7 +1503,7 @@ function normalizeQaHeaderText(value: string): string {
 
 function inlineQaSourceSelectorCandidates(sourceSelector: string, inlineSelector: string): string[] {
   const normalizedInlineSelector = inlineSelector.trim().toUpperCase();
-  const match = /^([IR])(\d+)$/.exec(normalizedInlineSelector);
+  const match = /^([SIR])(\d+)$/.exec(normalizedInlineSelector);
   if (!match) {
     return [];
   }
@@ -1493,12 +1511,24 @@ function inlineQaSourceSelectorCandidates(sourceSelector: string, inlineSelector
   if (!Number.isFinite(inlineIndex) || inlineIndex <= 0) {
     return [];
   }
+  const zeroBasedIndex = String(inlineIndex - 1).padStart(3, "0");
+  const oneBasedIndex = String(inlineIndex).padStart(3, "0");
+  if (match[1] === "S") {
+    return [
+      `${sourceSelector}_sentence_${zeroBasedIndex}`,
+      `${sourceSelector}_sent_${zeroBasedIndex}`,
+      `${sourceSelector}_s_${zeroBasedIndex}`,
+      `${sourceSelector}_sentence_${oneBasedIndex}`,
+      `${sourceSelector}_sent_${oneBasedIndex}`,
+      `${sourceSelector}_s_${oneBasedIndex}`,
+    ];
+  }
   if (match[1] === "I") {
-    return [`${sourceSelector}_item_${String(inlineIndex - 1).padStart(3, "0")}`];
+    return [`${sourceSelector}_item_${zeroBasedIndex}`];
   }
   return [
-    `${sourceSelector}_tr_${String(inlineIndex).padStart(3, "0")}`,
-    `${sourceSelector}_tr_${String(inlineIndex - 1).padStart(3, "0")}`,
+    `${sourceSelector}_tr_${oneBasedIndex}`,
+    `${sourceSelector}_tr_${zeroBasedIndex}`,
   ];
 }
 
@@ -1508,9 +1538,10 @@ function normalizeQaSourceSelector(sourceSelector: string): string {
 
 function wrapQaSourceHtml(displayHtml: string): string {
   const style = `<style>
-html, body { margin: 0; padding: 0; background: #fff; color: #1f2328; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 15px; line-height: 1.55; }
+html, body { margin: 0; padding: 0; background: #fff; color: #1f2328; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 15px; line-height: 1.55; text-align: left; }
 body { min-width: 0; }
-main { max-width: 760px !important; margin: 0 !important; padding: 0 28px 36px !important; }
+main { max-width: 760px !important; margin: 0 auto !important; padding: 0 28px 36px !important; text-align: left !important; }
+main, article, section { text-align: left !important; }
 .page { background: transparent !important; margin: 0 0 20px !important; padding: 0 !important; box-shadow: none !important; }
 h1, h2, h3 { color: #1f2328 !important; font-weight: 700 !important; line-height: 1.25 !important; letter-spacing: 0 !important; }
 h1 { font-size: 23px !important; margin: 16px 0 10px !important; }
@@ -1525,7 +1556,8 @@ pre, code { white-space: pre-wrap !important; overflow-wrap: anywhere !important
 pre { margin: 0 0 14px !important; padding: 12px 14px !important; background: #f6f8fa !important; border: 1px solid #d0d7de !important; border-radius: 6px !important; }
 img, svg, canvas, video { max-width: 100% !important; height: auto !important; }
 p, li, td, th, pre, code { max-width: 100% !important; white-space: pre-wrap !important; overflow-wrap: anywhere !important; }
-.is-current-evidence, [data-current-evidence="true"] { border-radius: 6px !important; background: rgba(51, 156, 255, 0.18) !important; outline: 2px solid rgba(51, 156, 255, 0.55) !important; outline-offset: 2px !important; scroll-margin: 96px 0 72px !important; }
+.is-current-evidence, [data-current-evidence="true"] { border-radius: 6px !important; background: rgba(51, 156, 255, 0.24) !important; outline: 2px solid rgba(51, 156, 255, 0.62) !important; outline-offset: 2px !important; scroll-margin: 96px 0 72px !important; }
+span.is-current-evidence, mark.is-current-evidence, span[data-current-evidence="true"], mark[data-current-evidence="true"] { padding: 1px 3px !important; -webkit-box-decoration-break: clone !important; box-decoration-break: clone !important; box-shadow: 0 0 0 2px rgba(51, 156, 255, 0.32) !important; outline: none !important; }
 </style>`;
   const html = /<html\b/i.test(displayHtml)
     ? displayHtml

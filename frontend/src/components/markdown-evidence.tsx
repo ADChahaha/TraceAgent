@@ -8,7 +8,7 @@ interface MarkdownEvidenceProps {
   markdown: string;
   className?: string;
   onOpenEvidence?: (uri: string, label: string) => void;
-  evidencePlacement?: "inline" | "footer";
+  evidencePlacement?: "inline" | "citation";
 }
 
 type MarkdownChildrenProps = {
@@ -17,68 +17,41 @@ type MarkdownChildrenProps = {
 
 type MarkdownAnchorProps = React.AnchorHTMLAttributes<HTMLAnchorElement> & MarkdownChildrenProps;
 
-type EvidenceCitation = {
-  href: string;
-  label: string;
+type MarkdownBlock = {
+  body: string;
 };
-
-const EVIDENCE_MARKDOWN_LINK_PATTERN = /\[([^\]]+)\]\((evidence:\/\/[^)\s]+)\)/g;
 
 export function MarkdownEvidence({ markdown, className, onOpenEvidence, evidencePlacement = "inline" }: MarkdownEvidenceProps) {
   const preparedMarkdown = prepareMarkdown(markdown, evidencePlacement);
   return (
     <div className={className ?? "space-y-3 text-sm leading-6 text-foreground"}>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={markdownComponents(onOpenEvidence)}
-        transformLinkUri={transformMarkdownUrl}
-      >
-        {preparedMarkdown.body}
-      </ReactMarkdown>
-      {preparedMarkdown.citations.length > 0 ? (
-        <EvidenceFooter citations={preparedMarkdown.citations} onOpenEvidence={onOpenEvidence} />
-      ) : null}
-    </div>
-  );
-}
-
-function EvidenceFooter({
-  citations,
-  onOpenEvidence,
-}: {
-  citations: EvidenceCitation[];
-  onOpenEvidence?: (uri: string, label: string) => void;
-}) {
-  return (
-    <div className="replay-evidence-footer" aria-label="Sources">
-      <div className="replay-evidence-footer-label">Sources</div>
-      <div className="replay-evidence-citation-list">
-        {citations.map((citation, index) => (
-          <a
-            key={`${citation.href}-${index}`}
-            href={citation.href}
-            aria-label={`Source ${index + 1}: ${citation.label}`}
-            className="replay-evidence-citation"
-            onClick={
-              onOpenEvidence
-                ? (event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    onOpenEvidence(citation.href, citation.label);
-                  }
-                : undefined
-            }
+      {preparedMarkdown.blocks.map((block, index) => (
+        <React.Fragment key={`${block.body}-${index}`}>
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={markdownComponents(onOpenEvidence, evidencePlacement)}
+            transformLinkUri={transformMarkdownUrl}
           >
-            <span className="replay-evidence-citation-index">{index + 1}</span>
-            <span className="replay-evidence-citation-label">{citation.label}</span>
-          </a>
-        ))}
-      </div>
+            {block.body}
+          </ReactMarkdown>
+        </React.Fragment>
+      ))}
     </div>
   );
 }
 
-function markdownComponents(onOpenEvidence?: (uri: string, label: string) => void) {
+function markdownComponents(onOpenEvidence?: (uri: string, label: string) => void, evidencePlacement: "inline" | "citation" = "inline") {
+  const shouldRenderCitationMarkers = evidencePlacement === "citation";
+  let citationIndex = 0;
+
+  function MarkdownParagraph({ children }: MarkdownChildrenProps) {
+    return <p className="whitespace-pre-wrap text-muted-foreground">{children}</p>;
+  }
+
+  function MarkdownListItem({ children }: MarkdownChildrenProps) {
+    return <li className="pl-1">{children}</li>;
+  }
+
   return {
     h1: ({ children }: MarkdownChildrenProps) => <h2 className="text-sm font-semibold text-foreground">{children}</h2>,
     h2: ({ children }: MarkdownChildrenProps) => <h3 className="text-sm font-semibold text-foreground">{children}</h3>,
@@ -86,10 +59,10 @@ function markdownComponents(onOpenEvidence?: (uri: string, label: string) => voi
     h4: ({ children }: MarkdownChildrenProps) => <h5 className="text-sm font-semibold text-foreground">{children}</h5>,
     h5: ({ children }: MarkdownChildrenProps) => <h6 className="text-sm font-semibold text-foreground">{children}</h6>,
     h6: ({ children }: MarkdownChildrenProps) => <h6 className="text-sm font-semibold text-foreground">{children}</h6>,
-    p: ({ children }: MarkdownChildrenProps) => <p className="whitespace-pre-wrap text-muted-foreground">{children}</p>,
+    p: MarkdownParagraph,
     ul: ({ children }: MarkdownChildrenProps) => <ul className="list-disc space-y-1 pl-5 text-muted-foreground">{children}</ul>,
     ol: ({ children }: MarkdownChildrenProps) => <ol className="list-decimal space-y-1 pl-5 text-muted-foreground">{children}</ol>,
-    li: ({ children }: MarkdownChildrenProps) => <li className="pl-1">{children}</li>,
+    li: MarkdownListItem,
     table: ({ children }: MarkdownChildrenProps) => (
       <div className="overflow-x-auto rounded-md border border-border">
         <table className="w-full border-collapse text-left text-xs">{children}</table>
@@ -110,6 +83,30 @@ function markdownComponents(onOpenEvidence?: (uri: string, label: string) => voi
       const safeHref = href ?? "";
       const label = textFromChildren(children);
       if (safeHref.startsWith("evidence://")) {
+        if (shouldRenderCitationMarkers) {
+          citationIndex += 1;
+          const citationNumber = String(citationIndex);
+          const citationLabel = `Source ${citationNumber}`;
+          return (
+            <a
+              href={safeHref}
+              aria-label={citationLabel}
+              className="replay-evidence-citation-marker"
+              title={citationLabel}
+              onClick={
+                onOpenEvidence
+                  ? (event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onOpenEvidence(safeHref, citationLabel);
+                    }
+                  : undefined
+              }
+            >
+              {citationNumber}
+            </a>
+          );
+        }
         return (
           <a
             href={safeHref}
@@ -145,17 +142,14 @@ function transformMarkdownUrl(url: string): string {
   return ReactMarkdown.uriTransformer(url);
 }
 
-function prepareMarkdown(markdown: string, evidencePlacement: "inline" | "footer"): { body: string; citations: EvidenceCitation[] } {
+function prepareMarkdown(markdown: string, evidencePlacement: "inline" | "citation"): { blocks: MarkdownBlock[] } {
   const normalized = normalizeMarkdown(markdown);
   if (evidencePlacement === "inline") {
-    return { body: normalized, citations: [] };
+    return { blocks: [{ body: normalized }] };
   }
 
   const splitMarkdown = splitTrailingSourcesSection(normalized);
-  return {
-    body: replaceEvidenceLinksWithText(splitMarkdown.body),
-    citations: extractEvidenceCitations(normalized),
-  };
+  return { blocks: splitMarkdown.body ? [{ body: splitMarkdown.body }] : [] };
 }
 
 function splitTrailingSourcesSection(markdown: string): { body: string; sources: string } {
@@ -177,29 +171,6 @@ function splitTrailingSourcesSection(markdown: string): { body: string; sources:
 
 function isSourcesHeading(line: string): boolean {
   return /^(?:#{1,6}\s*)?(?:sources|citations|references|来源|引用|参考资料)[:：]?\s*$/i.test(line);
-}
-
-function replaceEvidenceLinksWithText(markdown: string): string {
-  return markdown.replace(EVIDENCE_MARKDOWN_LINK_PATTERN, (_match, label: string) => normalizeCitationLabel(label));
-}
-
-function extractEvidenceCitations(markdown: string): EvidenceCitation[] {
-  const citations: EvidenceCitation[] = [];
-  const seenHrefs = new Set<string>();
-  for (const match of markdown.matchAll(EVIDENCE_MARKDOWN_LINK_PATTERN)) {
-    const label = normalizeCitationLabel(match[1]);
-    const href = match[2].trim();
-    if (!label || !href || seenHrefs.has(href)) {
-      continue;
-    }
-    seenHrefs.add(href);
-    citations.push({ href, label });
-  }
-  return citations;
-}
-
-function normalizeCitationLabel(label: string): string {
-  return label.replace(/\s+/g, " ").trim();
 }
 
 function normalizeMarkdown(markdown: string): string {

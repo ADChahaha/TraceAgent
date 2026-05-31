@@ -23,20 +23,21 @@ def build_tools(state: Any) -> list[Any]:
     """Build model-facing QA navigation tools bound to the current graph state."""
 
     @tool
-    def tree(path_id: str = "", depth: int = 3) -> dict[str, Any]:
-        """Expand the virtual document tree at a directory evidence link.
+    def ls(path_id: str = "") -> dict[str, Any]:
+        """List one level of the virtual document repository at a directory evidence link.
 
         Use this to see document structure. Leave path_id empty for the root.
         path_id MUST be a full evidence link starting with "evidence://" — e.g.
         evidence://0001 or evidence://0001.0003. Never pass a bare number like
         "0001" or "0001.0003" without the evidence:// prefix.
-        Directory names show a trailing slash in tree output.
-        tree returns child directories and readable block links (.md/.list/.table);
-        it does NOT return file text. To get content, call read on a child block link.
+        Directory names show a trailing slash in ls output.
+        ls returns only direct child directories and readable block links
+        (.md/.list/.table); it does NOT recursively expand descendants and does
+        NOT return file text. To get content, call read on a child block link.
         Start every investigation here to understand document layout before reading.
         """
 
-        return _tree(state, path_id, depth=depth)
+        return _ls(state, path_id)
 
     @tool
     def grep(query: str, scope: str = "", kind: str = "", max_results: int = 20) -> dict[str, Any]:
@@ -57,7 +58,7 @@ def build_tools(state: Any) -> list[Any]:
         """Read one block or a consecutive range of sibling blocks.
 
         locator MUST start with "evidence://" — never pass a bare path ID.
-        Single block: pass evidence://0001.0001.0002 from tree output.
+        Single block: pass evidence://0001.0001.0002 from ls output.
         Range of siblings: pass evidence://range/<start>/<end>, e.g.
         evidence://range/0001.0001.0002/0001.0001.0005 reads blocks 0002–0005
         together. Endpoints must be different readable siblings in the same
@@ -85,16 +86,16 @@ def build_tools(state: Any) -> list[Any]:
 
         return _inspect(state, locator)
 
-    return [tree, grep, read, inspect]
+    return [ls, grep, read, inspect]
 
 
-def _tree(state: Any, path_id: str = "", *, depth: int = 3) -> dict[str, Any]:
-    canonical_path_id = _tree_path_id_from_locator(path_id)
+def _ls(state: Any, path_id: str = "") -> dict[str, Any]:
+    canonical_path_id = _directory_path_id_from_locator(path_id)
     return _run_tool(
         state,
-        "tree",
-        {"path_id": path_id, "depth": depth},
-        lambda: _locator_error(path_id, canonical_path_id) or _tree_result(state, canonical_path_id, depth),
+        "ls",
+        {"path_id": path_id},
+        lambda: _locator_error(path_id, canonical_path_id) or _ls_result(state, canonical_path_id),
     )
 
 
@@ -111,7 +112,7 @@ def _grep(
             return {"ok": False, "errors": [{"code": "BAD_QUERY", "message": "query is required"}]}
         if kind and kind not in {"paragraph", "list", "table"}:
             return {"ok": False, "errors": [{"code": "BAD_KIND", "message": "kind must be paragraph, list, or table"}]}
-        scope_path_id = _tree_path_id_from_locator(scope)
+        scope_path_id = _directory_path_id_from_locator(scope)
         if _locator_error(scope, scope_path_id):
             return _locator_error(scope, scope_path_id)  # type: ignore[return-value]
         results = _grep_results(
@@ -187,18 +188,17 @@ def _inspect(state: Any, locator: str) -> dict[str, Any]:
     return _run_tool(state, "inspect", {"locator": locator}, execute)
 
 
-def _tree_result(state: Any, path_id: str, depth: int) -> dict[str, Any]:
+def _ls_result(state: Any, path_id: str) -> dict[str, Any]:
     canonical_path_id = state.document.path_id(path_id)
     return {
         "ok": True,
         "locator": _block_link(canonical_path_id),
-        "depth": depth,
-        "text": _link_tree_text(state.document.tree_text(canonical_path_id, depth=depth)),
+        "text": _link_locator_text(state.document.tree_text(canonical_path_id, depth=1)),
     }
 
 
-def model_tree_text(document: Any, path: str = "/", depth: int = 3) -> str:
-    return _link_tree_text(document.tree_text(path, depth=depth))
+def model_ls_text(document: Any, path: str = "/") -> str:
+    return _link_locator_text(document.tree_text(path, depth=1))
 
 
 def _grep_results(
@@ -274,7 +274,7 @@ def _locator_error(locator: Any, canonical_path_id: str | None) -> dict[str, Any
         "errors": [
             {
                 "code": "BAD_LOCATOR",
-                "message": "use an evidence link like evidence://0001 copied from tree output",
+                "message": "use an evidence link like evidence://0001 copied from ls output",
             }
         ],
     }
@@ -299,7 +299,7 @@ def _range_path_ids_from_locator(locator: Any) -> tuple[str, str] | None:
     return match.group("start"), match.group("end")
 
 
-def _tree_path_id_from_locator(locator: Any) -> str | None:
+def _directory_path_id_from_locator(locator: Any) -> str | None:
     if locator in ("", None):
         return "0000"
     if isinstance(locator, str) and locator.strip() == "/":
@@ -350,13 +350,13 @@ def _expose_read_result(result: dict[str, Any]) -> dict[str, Any]:
         elif key == "blocks" and isinstance(value, list):
             exposed["blocks"] = [_expose_read_result(block) if isinstance(block, dict) else block for block in value]
         elif key == "text" and isinstance(value, str):
-            exposed["text"] = _link_tree_text(value)
+            exposed["text"] = _link_locator_text(value)
         else:
             exposed[key] = value
     return exposed
 
 
-def _link_tree_text(text: str) -> str:
+def _link_locator_text(text: str) -> str:
     linked_lines: list[str] = []
     for line in text.splitlines():
         linked = re.sub(
@@ -433,8 +433,8 @@ def _emit_event(state: Any, payload: dict[str, Any]) -> None:
 
 __all__ = [
     "build_tools",
-    "model_tree_text",
-    "_tree",
+    "model_ls_text",
+    "_ls",
     "_grep",
     "_read",
     "_inspect",

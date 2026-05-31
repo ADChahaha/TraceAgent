@@ -338,6 +338,8 @@ html[data-theme="dark"] .home-task-composer {
   --replay-agent-readable-min-width: 520px;
   --replay-agent-readable-optional-width: 200px;
   --replay-agent-readable-max-width: calc(var(--replay-agent-readable-min-width) + var(--replay-agent-readable-optional-width));
+  --replay-agent-panel-compact-min-width: 280px;
+  --replay-review-panel-compact-min-width: 280px;
   --replay-surface: var(--background);
   --replay-panel: var(--card);
   --replay-tool-row: var(--secondary);
@@ -1330,6 +1332,48 @@ html[data-theme="dark"] .home-task-composer {
   pointer-events: auto;
 }
 
+@container (max-width: 360px) {
+  .replay-agent-stream {
+    padding: 14px 12px 16px;
+  }
+
+  .replay-agent-composer {
+    padding: 10px 12px;
+  }
+
+  .qa-message-bubble {
+    max-width: 100%;
+  }
+
+  .qa-message-turn.is-user .qa-message-bubble {
+    padding: 9px 10px;
+  }
+
+  .replay-agent-readable-column,
+  .replay-agent-turn {
+    gap: 12px;
+  }
+
+  .replay-agent-reason-text {
+    font-size: 12px;
+    line-height: 1.55;
+    text-align: left;
+  }
+
+  .replay-agent-composer textarea,
+  .replay-agent-composer-input {
+    min-height: 4.75rem;
+    padding: 11px 12px 44px;
+    font-size: 12px;
+  }
+
+  .replay-agent-composer-actions {
+    right: 16px;
+    bottom: 16px;
+    left: 16px;
+  }
+}
+
 .replay-agent-composer-action-icon-shell {
   position: relative;
   display: inline-grid;
@@ -1359,6 +1403,30 @@ html[data-theme="dark"] .home-task-composer {
   text-underline-offset: 3px;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.replay-evidence-citation-marker {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  align-items: center;
+  justify-content: center;
+  vertical-align: super;
+  margin-left: 2px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--replay-foreground) 88%, var(--replay-accent));
+  color: var(--replay-surface);
+  font-size: 9px;
+  font-weight: 780;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.replay-evidence-citation-marker:hover,
+.replay-evidence-citation-marker:focus-visible {
+  background: var(--replay-foreground);
+  outline: 2px solid color-mix(in oklch, var(--replay-foreground) 28%, transparent);
+  outline-offset: 2px;
 }
 
 .replay-evidence-footer {

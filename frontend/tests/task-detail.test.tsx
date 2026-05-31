@@ -79,6 +79,9 @@ const recentTaskSummaries: TaskSummary[] = [
   }
 ];
 
+const STAGE_COLUMNS_WITH_LEFT_AND_REVIEW =
+  "var(--replay-left-panel-width) 10px minmax(var(--replay-review-panel-compact-min-width), min(var(--replay-right-panel-width), calc(100vw - var(--replay-left-panel-width) - 20px - var(--replay-agent-panel-compact-min-width)))) 10px minmax(var(--replay-agent-panel-compact-min-width), 1fr)";
+
 class FakeEventSource extends EventTarget {
   closed = false;
   onerror: ((event: Event) => void) | null = null;
@@ -295,7 +298,7 @@ it("任务详情会从 QA 事件流重建用户问题、模型回答和 inline e
   );
 });
 
-it("最终回答会把 evidence 渲染到末尾来源区", async () => {
+it("最终回答会把 evidence 渲染成句尾数字引用", async () => {
   const fakeEventSource = new FakeEventSource();
   const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
   renderTaskDetail(detailData, { createTaskEventSource });
@@ -321,11 +324,12 @@ it("最终回答会把 evidence 渲染到末尾来源区", async () => {
   });
 
   const qaStream = await screen.findByLabelText("QA conversation and reading process");
-  const finalMessage = within(qaStream).getByText("可以提前终止，但需要提前 30 天通知。30 天通知");
-  expect(within(finalMessage).queryByRole("link")).not.toBeInTheDocument();
-  const sources = within(qaStream).getByLabelText("Sources");
-  const citation = within(sources).getByRole("link", { name: "Source 1: 30 天通知" });
+  const finalMessage = within(qaStream).getByText("可以提前终止，但需要提前 30 天通知。", { exact: false });
+  expect(within(qaStream).queryByLabelText("Sources")).not.toBeInTheDocument();
+  expect(within(finalMessage).queryByRole("link", { name: "30 天通知" })).not.toBeInTheDocument();
+  const citation = within(finalMessage).getByRole("link", { name: "Source 1" });
 
+  expect(citation).toHaveTextContent("1");
   expect(citation).toHaveAttribute("href", "evidence://0001.0001.0001/S001");
 });
 
@@ -342,7 +346,7 @@ it("有 review 文档时默认显示 review，并放在 Agent 左侧", async () 
 
   expect(stage).toHaveAttribute("data-right-panel-open", "true");
   expect(stage).toHaveStyle({
-    "--replay-stage-columns": "var(--replay-left-panel-width) 10px var(--replay-right-panel-width) 10px minmax(0, 1fr)"
+    "--replay-stage-columns": STAGE_COLUMNS_WITH_LEFT_AND_REVIEW
   });
   expect(stageChildren.indexOf(reviewWorkspace)).toBeLessThan(stageChildren.indexOf(agentWorkspace));
   expectReviewHeaderRemoved(reviewWorkspace);
@@ -381,7 +385,7 @@ it("点击 inline evidence 会用现有任务详情数据打开右侧 review 文
   const reviewWorkspace = await screen.findByLabelText("Right review workspace");
   expect(reviewWorkspace).not.toHaveClass("is-fullscreen");
   expect(screen.getByLabelText("QA stage")).toHaveStyle({
-    "--replay-stage-columns": "var(--replay-left-panel-width) 10px var(--replay-right-panel-width) 10px minmax(0, 1fr)"
+    "--replay-stage-columns": STAGE_COLUMNS_WITH_LEFT_AND_REVIEW
   });
   expectReviewHeaderRemoved(reviewWorkspace);
   expect(within(reviewWorkspace).queryByText("evidence://0001.0001.0001/S001")).not.toBeInTheDocument();
@@ -579,7 +583,7 @@ it("右侧 review 会压平文档页面外框，只保留正文排版", async ()
           document_id: "doc_001",
           filename: "framed.pdf",
           display_html:
-            '<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>Processed Document</title><style>body { margin: 0; background: #f3f4f6; color: #171717; font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif; } main { max-width: 980px; margin: 0 auto; padding: 24px; } .page { background: #fff; margin: 0 0 20px; padding: 44px 56px; box-shadow: 0 1px 4px rgba(0,0,0,.12); position: relative; }</style></head><body><main><section class="page" id="page_001"><p id="p1">Either party may terminate with 30 days notice.</p></section></main></body></html>'
+            '<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>Processed Document</title><style>body { margin: 0; background: #f3f4f6; color: #171717; font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif; text-align: center; } main { max-width: 980px; margin: 0 auto; padding: 24px; } article { max-width: 680px; margin: 0 auto; text-align: center; } .page { background: #fff; margin: 0 0 20px; padding: 44px 56px; box-shadow: 0 1px 4px rgba(0,0,0,.12); position: relative; }</style></head><body><main><article><section class="page" id="page_001"><p id="p1">Either party may terminate with 30 days notice.</p></section></article></main></body></html>'
         }
       ],
       source_selectors: {
@@ -619,9 +623,16 @@ it("右侧 review 会压平文档页面外框，只保留正文排版", async ()
     "srcdoc",
     expect.stringContaining(".page { background: transparent !important; margin: 0 0 20px !important; padding: 0 !important; box-shadow: none !important; }")
   );
+  expect(sourceFrame).toHaveAttribute("srcdoc", expect.stringContaining("text-align: left;"));
+  expect(sourceFrame).toHaveAttribute(
+    "srcdoc",
+    expect.stringContaining("main { max-width: 760px !important; margin: 0 auto !important; padding: 0 28px 36px !important; text-align: left !important; }")
+  );
+  expect(sourceFrame).toHaveAttribute("srcdoc", expect.stringContaining("main, article, section { text-align: left !important; }"));
   expect(sourceFrame).toHaveAttribute("srcdoc", expect.stringContaining("font-size: 15px; line-height: 1.55;"));
   expect(sourceFrame).toHaveAttribute("srcdoc", expect.stringContaining("p { margin: 0 0 12px !important; }"));
   expect(sourceFrame).toHaveAttribute("srcdoc", expect.stringContaining("scroll-margin: 96px 0 72px !important;"));
+  expect(sourceFrame).toHaveAttribute("srcdoc", expect.stringContaining("box-decoration-break: clone !important;"));
 });
 
 it("右侧 review panel 支持拖拽调整宽度，并保持 Agent 对话列左右空白对称", async () => {
@@ -640,7 +651,7 @@ it("右侧 review panel 支持拖拽调整宽度，并保持 Agent 对话列左�
   expect(stageChildren.indexOf(reviewWorkspace)).toBeLessThan(stageChildren.indexOf(agentWorkspace));
   expect(stage).toHaveStyle({
     "--replay-right-panel-width": "560px",
-    "--replay-stage-columns": "var(--replay-left-panel-width) 10px var(--replay-right-panel-width) 10px minmax(0, 1fr)"
+    "--replay-stage-columns": STAGE_COLUMNS_WITH_LEFT_AND_REVIEW
   });
   expect(initialAgentStyle).not.toContain("--replay-agent-left-outer-width");
   expect(initialAgentStyle).not.toContain("--replay-agent-right-outer-width");
@@ -669,7 +680,7 @@ it("右侧 review panel 支持拖拽调整宽度，并保持 Agent 对话列左�
 
   expect(stage).toHaveStyle({
     "--replay-right-panel-width": "560px",
-    "--replay-stage-columns": "var(--replay-left-panel-width) 10px var(--replay-right-panel-width) 10px minmax(0, 1fr)"
+    "--replay-stage-columns": STAGE_COLUMNS_WITH_LEFT_AND_REVIEW
   });
   expect(agentWorkspace).toHaveAttribute("data-agent-balance-side", "left");
   const openAgentStyle = agentWorkspace.getAttribute("style") ?? "";
@@ -833,6 +844,49 @@ it("切换同一文档内的 inline evidence 会在 iframe 内平滑跳转并移
     expect(secondScrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start", inline: "nearest" });
   });
   expect(sourceFrame).toHaveAttribute("srcdoc", initialSrcDoc);
+});
+
+it("sentence evidence 会优先高亮句子节点而不是整段", async () => {
+  const user = userEvent.setup();
+  const fakeEventSource = new FakeEventSource();
+  const createTaskEventSource = jest.fn(() => fakeEventSource as unknown as EventSource);
+  const sourceDocument = document.implementation.createHTMLDocument("source");
+  sourceDocument.body.innerHTML =
+    '<p id="p1"><span id="p1_sentence_000">Either party may terminate with 30 days notice.</span> <span id="p1_sentence_001">The notice must be written.</span></p>';
+  const paragraphTarget = sourceDocument.getElementById("p1") as HTMLElement;
+  const sentenceTarget = sourceDocument.getElementById("p1_sentence_000") as HTMLElement;
+  const sentenceScrollIntoView = jest.fn();
+  sentenceTarget.scrollIntoView = sentenceScrollIntoView;
+  jest.spyOn(HTMLIFrameElement.prototype, "contentDocument", "get").mockReturnValue(sourceDocument);
+
+  renderTaskDetail(detailData, { createTaskEventSource });
+
+  await waitFor(() => expect(createTaskEventSource).toHaveBeenCalledWith("qa_task_001", 0));
+  act(() => {
+    fakeEventSource.emitEvent(
+      "agent.event",
+      taskEvent({
+        seq: 5,
+        type: "agent.event",
+        status: "running",
+        stage: "answering",
+        turn_id: "turn_001",
+        payload: {
+          agent: "file_extraction_agent",
+          type: "model_message",
+          content: "需要提前 30 天通知。[30 天通知](evidence://0001.0001.0001/S001)"
+        }
+      })
+    );
+  });
+
+  await user.click(await screen.findByRole("link", { name: "30 天通知" }));
+
+  await waitFor(() => {
+    expect(paragraphTarget.hasAttribute("data-current-evidence")).toBe(false);
+    expect(sentenceTarget.getAttribute("data-current-evidence")).toBe("true");
+    expect(sentenceScrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start", inline: "nearest" });
+  });
 });
 
 it("review html 刷新但 evidence 未定位时保留 iframe 滚动位置", async () => {
@@ -1563,7 +1617,7 @@ it("连续工具事件会用 Codex 式轻量过程行默认折叠，并允许展
         payload: {
           agent: "file_extraction_agent",
           type: "tool_completed",
-          tool: "tree",
+          tool: "ls",
           args: {},
           result: { ok: true }
         }
@@ -1572,7 +1626,7 @@ it("连续工具事件会用 Codex 式轻量过程行默认折叠，并允许展
   });
 
   expect(await screen.findByRole("button", { name: "Collapse tool activity" })).toHaveAttribute("aria-expanded", "true");
-  expect(screen.getByLabelText("tool tree")).toBeInTheDocument();
+  expect(screen.getByLabelText("tool ls")).toHaveTextContent("Listed current level");
 });
 
 it("运行中点击稳定单按钮会调用 cancel", async () => {
