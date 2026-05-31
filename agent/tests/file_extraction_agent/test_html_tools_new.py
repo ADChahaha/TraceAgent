@@ -7,8 +7,8 @@ from service.file_extraction_agent.impl.html_tools import (
     __all__ as html_tools_all,
     _grep,
     _inspect,
+    _ls,
     _read,
-    _tree,
     build_tools,
 )
 from service.file_extraction_agent.input_adapter import build_completion_input
@@ -84,11 +84,12 @@ def test_build_tools_exposes_qa_navigation_tools_only():
     tools = build_tools(_state())
     tool_names = [getattr(tool, "name", getattr(tool, "__name__", "")) for tool in tools]
 
-    assert tool_names == ["tree", "grep", "read", "inspect"]
+    assert tool_names == ["ls", "grep", "read", "inspect"]
 
 
 def test_module_exports_qa_helpers_only():
-    assert "_tree" in html_tools_all
+    assert "_ls" in html_tools_all
+    assert "_tree" not in html_tools_all
     assert "_grep" in html_tools_all
     assert "_read" in html_tools_all
     assert "_inspect" in html_tools_all
@@ -99,25 +100,42 @@ def test_module_exports_qa_helpers_only():
 
 
 def test_internal_tool_helpers_do_not_accept_reason_parameter():
-    for helper in (_tree, _grep, _read, _inspect):
+    for helper in (_ls, _grep, _read, _inspect):
         assert "reason" not in inspect.signature(helper).parameters
 
 
-def test_tree_and_read_use_evidence_locators():
+def test_ls_and_read_use_evidence_locators():
     state = _state()
     paragraph = _paragraph_path_id_containing(state, "Either party")
 
-    tree = _tree(state, "", depth=2)
+    listing = _ls(state, "")
     read = _read(state, f"evidence://{paragraph}")
     raw_path_result = _read(state, paragraph)
 
-    assert tree["ok"] is True
-    assert "evidence://0001" in tree["text"]
+    assert listing["ok"] is True
+    assert "evidence://0001" in listing["text"]
     assert read["ok"] is True
     assert read["locator"] == f"evidence://{paragraph}"
     assert "30 days written notice" in read["text"]
     assert raw_path_result["ok"] is False
     assert raw_path_result["errors"][0]["code"] == "BAD_LOCATOR"
+
+
+def test_ls_lists_only_the_current_tree_level():
+    state = _state()
+    document_listing = _ls(state, "evidence://0001")
+    h1_section = state.document.path_id("/001-contract-服务合同/001-服务合同")
+    h1_listing = _ls(state, f"evidence://{h1_section}")
+
+    assert document_listing["ok"] is True
+    assert "服务合同/" in document_listing["text"]
+    assert "Term/" not in document_listing["text"]
+    assert "Either party" not in document_listing["text"]
+
+    assert h1_listing["ok"] is True
+    assert "Term/" in h1_listing["text"]
+    assert "Notice/" in h1_listing["text"]
+    assert "Either party" not in h1_listing["text"]
 
 
 def test_grep_returns_candidate_blocks_but_not_inline_evidence():

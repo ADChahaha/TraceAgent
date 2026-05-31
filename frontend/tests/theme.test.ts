@@ -69,9 +69,14 @@ it("Agent 文本和工具摘要在窄宽度下换行，不用隐藏省略裁剪"
   }
 });
 
-it("右侧 review scope breadcrumb 使用前景色显示", () => {
-  const breadcrumbRule = cssRule(".replay-source-breadcrumb");
-  expect(breadcrumbRule).toContain("color: var(--replay-foreground);");
+it("右侧 review 不再渲染文档 header", () => {
+  expect(cssRule(".replay-source-header")).toBe("");
+  expect(cssRule(".replay-source-header-copy")).toBe("");
+  expect(cssRule(".replay-source-title")).toBe("");
+  expect(cssRule(".replay-source-meta")).toBe("");
+
+  const sourceFrameRule = cssRule(".replay-source-frame");
+  expect(sourceFrameRule).toContain("background: #fff;");
 });
 
 it("Replay stage 在窄视口也使用左右栏列布局，不把 Review 原文栏堆到下方", () => {
@@ -90,6 +95,9 @@ it("Agent 对话流和 composer 使用同一套左右 inset 铺满中间 panel",
   expect(globalsCss).toContain(
     "--replay-agent-readable-max-width: calc(var(--replay-agent-readable-min-width) + var(--replay-agent-readable-optional-width));",
   );
+  expect(globalsCss).toContain("--replay-agent-panel-compact-min-width: 280px;");
+  expect(globalsCss).toContain("--replay-review-panel-compact-min-width: 280px;");
+
   const fullWidthColumnRule = /grid-template-columns:\s*0\s+minmax\(0,\s*1fr\)\s+0;/;
   for (const selector of [
     '.replay-agent-panel-slot[data-agent-content-mode="centered"] .replay-agent-content-frame',
@@ -123,6 +131,27 @@ it("Agent 对话流和 composer 使用同一套左右 inset 铺满中间 panel",
 
   const composerRule = cssRule(".replay-agent-composer");
   expect(composerRule).toContain("padding: 12px var(--replay-agent-horizontal-inset);");
+});
+
+it("Agent 被右侧 review 挤窄时使用紧凑阅读模式", () => {
+  const agentSlotRule =
+    Array.from(globalsCss.matchAll(/(?:^|\n)\.replay-agent-panel-slot\s*\{([^}]*)\}/g))
+      .map((match) => match[1])
+      .find((rule) => rule.includes("container-type")) ?? "";
+  expect(agentSlotRule).toContain("container-type: inline-size;");
+
+  expect(globalsCss).toMatch(
+    /@container\s*\(max-width:\s*360px\)\s*\{[\s\S]*?\.replay-agent-stream\s*\{[^}]*padding:\s*14px 12px 16px;/
+  );
+  expect(globalsCss).toMatch(
+    /@container\s*\(max-width:\s*360px\)\s*\{[\s\S]*?\.replay-agent-composer\s*\{[^}]*padding:\s*10px 12px;/
+  );
+  expect(globalsCss).toMatch(
+    /@container\s*\(max-width:\s*360px\)\s*\{[\s\S]*?\.qa-message-bubble\s*\{[^}]*max-width:\s*100%;/
+  );
+  expect(globalsCss).toMatch(
+    /@container\s*\(max-width:\s*360px\)\s*\{[\s\S]*?\.replay-agent-reason-text\s*\{[^}]*font-size:\s*12px;[^}]*text-align:\s*left;/
+  );
 });
 
 it("Contents 面板保留可读宽度、纵向滚动和多行文本", () => {

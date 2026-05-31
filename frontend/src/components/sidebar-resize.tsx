@@ -109,7 +109,7 @@ export function useRightSidebarResize() {
       const pointerId = event.pointerId;
 
       const updateWidth = (clientX: number) => {
-        setRightPanelWidth(clampRightPanelWidth(startWidth + startX - clientX));
+        setRightPanelWidth(clampRightPanelWidth(startWidth + clientX - startX));
       };
       const stopResize = () => {
         window.removeEventListener("pointermove", handlePointerMove);
@@ -162,7 +162,7 @@ export function useRightSidebarResize() {
       setRightPanelWidth(RIGHT_PANEL_MAX_WIDTH);
       return;
     }
-    const delta = event.key === "ArrowLeft" ? RIGHT_PANEL_KEY_STEP : event.key === "ArrowRight" ? -RIGHT_PANEL_KEY_STEP : 0;
+    const delta = event.key === "ArrowRight" ? RIGHT_PANEL_KEY_STEP : event.key === "ArrowLeft" ? -RIGHT_PANEL_KEY_STEP : 0;
     if (delta === 0) {
       return;
     }

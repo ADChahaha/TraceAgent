@@ -47,6 +47,12 @@ def test_resolution_messages_describe_qa_investigation_not_field_extraction():
     assert "document" in system_content.lower()
     assert "answer" in system_content.lower()
     assert "evidence" in system_content.lower()
+    assert "Use numeric citation labels in the final answer" in system_content
+    assert "[1](evidence://0001.0002.0003/S001)" in system_content
+    assert "Do not use descriptive final citation labels" in system_content
+    assert "During investigation, use human-readable labels; in final answers, use numeric labels" in system_content
+    assert "Do not collect everything into one final Sources section" in system_content
+    assert "put the numbered citation immediately after the sentence it supports" in system_content
     assert "task_spec" not in system_content
     assert "write_field" not in system_content
     assert "submit_result" not in system_content
@@ -55,14 +61,22 @@ def test_resolution_messages_describe_qa_investigation_not_field_extraction():
     assert "Investigate the documents" not in human_content
 
 
-def test_resolution_messages_do_not_inject_forced_document_search_instruction():
+def test_resolution_prompt_allows_direct_answers_without_forced_document_search():
     messages = build_resolution_messages(_state())
-    human_messages = [message for message in messages if getattr(message, "type", "") == "human"]
+    system_content = messages[0].content
 
-    assert len(human_messages) == 1
-    assert messages[-1] is human_messages[0]
-    assert human_messages[0].content == "公司什么时候成立？"
-    assert "Investigate the documents" not in human_messages[0].content
+    assert "Answer directly when the question can be answered from conversation context" in system_content
+    assert "general assistant identity/capability" in system_content
+    assert "Use document tools when the user asks about document content" in system_content
+    assert "ls / grep / read / inspect" in system_content
+    assert "[ls, grep, read]" in system_content
+    assert "[tree, grep, read]" not in system_content
+    assert "When adjacent readable blocks matter, prefer one read with an evidence://range locator" in system_content
+    assert "instead of separate reads" in system_content
+    assert "When using document tools, show a brief investigation trace" in system_content
+    assert "Do not inspect unrelated documents just to satisfy symmetry" in system_content
+    assert "Show your thought process" not in system_content
+    assert "One tool per turn" not in system_content
 
 
 def test_resolution_messages_preserve_openai_tool_history():
@@ -140,8 +154,8 @@ def test_resolution_graph_preserves_parallel_tool_calls():
                 tool_call_chunks=[
                     {
                         "type": "tool_call_chunk",
-                        "name": "tree",
-                        "args": '{"path_id":"","depth":1}',
+                        "name": "ls",
+                        "args": '{"path_id":""}',
                         "id": "call-1",
                         "index": 0,
                     },
@@ -162,9 +176,9 @@ def test_resolution_graph_preserves_parallel_tool_calls():
 
     model_events = [event for event in state.events if event.get("type") == "model_message"]
     assert model.bind_kwargs == {}
-    assert [action["tool_name"] for action in state.actions] == ["tree", "read"]
+    assert [action["tool_name"] for action in state.actions] == ["ls", "read"]
     assert model_events[0]["tool_call_count"] == 2
-    assert [call["name"] for call in model_events[0]["tool_calls"]] == ["tree", "read"]
+    assert [call["name"] for call in model_events[0]["tool_calls"]] == ["ls", "read"]
 
 
 def test_resolution_uses_responses_api_stream_and_merges_content_with_tool_calls():
@@ -183,7 +197,7 @@ def test_resolution_uses_responses_api_stream_and_merges_content_with_tool_calls
                 tool_call_chunks=[
                     {
                         "type": "tool_call_chunk",
-                        "name": "tree",
+                        "name": "ls",
                         "args": "",
                         "id": "call-1",
                         "index": 1,
@@ -196,12 +210,7 @@ def test_resolution_uses_responses_api_stream_and_merges_content_with_tool_calls
                     {"type": "tool_call_chunk", "args": '{"path_id":""', "index": 1}
                 ],
             )
-            yield AIMessageChunk(
-                content="",
-                tool_call_chunks=[
-                    {"type": "tool_call_chunk", "args": ',"depth":3}', "index": 1}
-                ],
-            )
+            yield AIMessageChunk(content="", tool_call_chunks=[{"type": "tool_call_chunk", "args": "}", "index": 1}])
 
         def invoke(self, messages):
             self.invoked = True
@@ -217,8 +226,8 @@ def test_resolution_uses_responses_api_stream_and_merges_content_with_tool_calls
     assert message.content == [{"type": "text", "text": "I will inspect root.", "index": 0}]
     assert message.tool_calls == [
         {
-            "name": "tree",
-            "args": {"path_id": "", "depth": 3},
+            "name": "ls",
+            "args": {"path_id": ""},
             "id": "call-1",
             "type": "tool_call",
         }
@@ -247,8 +256,8 @@ def test_resolution_falls_back_from_stream_to_invoke_within_configured_transport
                 tool_calls=[
                     {
                         "id": "call-1",
-                        "name": "tree",
-                        "args": {"path_id": "", "depth": 1},
+                        "name": "ls",
+                        "args": {"path_id": ""},
                     }
                 ],
             )
@@ -269,7 +278,7 @@ def test_resolution_falls_back_from_stream_to_invoke_within_configured_transport
 
     assert calls == ["responses.stream", "responses.invoke"]
     assert message.content == "fallback invoke worked"
-    assert message.tool_calls[0]["name"] == "tree"
+    assert message.tool_calls[0]["name"] == "ls"
 
 
 def test_resolution_uses_ethernet_backoff_between_failed_provider_attempts(monkeypatch):
@@ -292,8 +301,8 @@ def test_resolution_uses_ethernet_backoff_between_failed_provider_attempts(monke
                 tool_calls=[
                     {
                         "id": "call-1",
-                        "name": "tree",
-                        "args": {"path_id": "", "depth": 1},
+                        "name": "ls",
+                        "args": {"path_id": ""},
                     }
                 ],
             )
@@ -348,13 +357,13 @@ def test_resolution_records_text_from_responses_api_content_blocks():
         content=[
             {"type": "reasoning", "summary": []},
             {"type": "text", "text": "I will inspect root. "},
-            {"type": "function_call", "name": "tree", "arguments": '{"path_id":""}'},
+            {"type": "function_call", "name": "ls", "arguments": '{"path_id":""}'},
         ],
         tool_calls=[
             {
                 "id": "call-1",
-                "name": "tree",
-                "args": {"path_id": "", "depth": 3},
+                "name": "ls",
+                "args": {"path_id": ""},
             }
         ],
     )
@@ -388,8 +397,8 @@ def test_resolution_retries_transport_when_provider_stop_signal_requires_missing
                 tool_calls=[
                     {
                         "id": "call-1",
-                        "name": "tree",
-                        "args": {"path_id": "", "depth": 3},
+                        "name": "ls",
+                        "args": {"path_id": ""},
                     }
                 ],
                 response_metadata={"finish_reason": "tool_calls"},
@@ -406,7 +415,7 @@ def test_resolution_retries_transport_when_provider_stop_signal_requires_missing
 
     assert calls == ["responses.stream", "responses.invoke"]
     assert message.content == "我先看结构。"
-    assert message.tool_calls[0]["name"] == "tree"
+    assert message.tool_calls[0]["name"] == "ls"
 
 
 def test_resolution_accepts_terminal_stop_message_without_tool_calls():
@@ -461,13 +470,13 @@ def test_resolution_rejects_plan_only_message_without_terminal_stop_signal():
 def test_resolution_records_model_message_content_and_tool_calls_without_reasoning():
     state = _state()
     message = AIMessage(
-        content="I will inspect the root tree while calling a tool.",
+        content="I will inspect the root listing while calling a tool.",
         additional_kwargs={"reasoning_content": "hidden reasoning must not be persisted"},
         tool_calls=[
             {
                 "id": "call-1",
-                "name": "tree",
-                "args": {"path_id": "", "depth": 3},
+                "name": "ls",
+                "args": {"path_id": ""},
             }
         ],
     )
@@ -477,8 +486,8 @@ def test_resolution_records_model_message_content_and_tool_calls_without_reasoni
     assert state.events[-1] == {
         "seq": 1,
         "type": "model_message",
-        "content": "I will inspect the root tree while calling a tool.",
+        "content": "I will inspect the root listing while calling a tool.",
         "tool_call_count": 1,
-        "tool_calls": [{"id": "call-1", "name": "tree", "args": {"path_id": "", "depth": 3}}],
+        "tool_calls": [{"id": "call-1", "name": "ls", "args": {"path_id": ""}}],
         "is_final": False,
     }

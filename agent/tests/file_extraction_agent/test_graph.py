@@ -10,9 +10,9 @@ class FakeStreamingModel:
     def __init__(self):
         self.calls = [
             {
-                "tool_name": "tree",
+                "tool_name": "ls",
                 "content": "我先看文档结构。",
-                "arguments": {"path_id": "", "depth": 2},
+                "arguments": {"path_id": ""},
             },
             {
                 "tool_name": "grep",
@@ -81,7 +81,7 @@ def test_run_completion_graph_stream_yields_sse_events_and_terminal_completion()
     }
     assert payloads[2]["type"] == "model_message"
     assert payloads[3]["type"] == "tool_started"
-    assert payloads[3]["tool"] == "tree"
+    assert payloads[3]["tool"] == "ls"
     assert payloads[-1]["type"] == "completion.completed"
     assert payloads[-1]["id"] == "cmp_123"
     assert [payload["seq"] for payload in payloads] == list(range(1, len(payloads) + 1))
@@ -100,5 +100,5 @@ def test_run_completion_graph_stream_flushes_after_each_tool_call():
     assert source["type"] == "source_indexed"
     assert model_message["type"] == "model_message"
     assert tool_started["type"] == "tool_started"
-    assert tool_started["tool"] == "tree"
+    assert tool_started["tool"] == "ls"
     assert len(model.calls) == 4

@@ -1,8 +1,16 @@
 # file_extraction_agent
 
-`file_extraction_agent` 当前是多文档 QA chat completion agent。它接收 backend 每轮传入的 `completion_id + documents(filename + html) + append-only messages`，把多份语义 HTML 虚拟成只读文档仓库，再让模型用 `tree / grep / read / inspect` 像 code agent 看项目一样浏览材料，并通过 SSE 持续输出带 evidence link 的过程消息。
+`file_extraction_agent` 当前是多文档 QA chat completion agent。它接收 backend 每轮传入的 `completion_id + documents(filename + html) + append-only messages`，把多份语义 HTML 虚拟成只读文档仓库，再让模型用 `ls / grep / read / inspect` 像 code agent 看项目一样浏览材料，并通过 SSE 持续输出带 evidence link 的过程消息。
 
 包名仍沿用历史 `file_extraction_agent`，但本分支不再做 `task_spec` 字段抽取。
+
+## 补充文档
+
+本 README 记录当前模块职责和主要入口；更轻量的流程草稿见：
+
+- [docs/flowchart.md](docs/flowchart.md)：用流程图描述 chat completions、cancel 和 agent loop 线程/队列关系。
+- [docs/agent_loop.md](docs/agent_loop.md)：用伪代码描述 Iterable consumer 和 agent loop 的协作式 `cancel_flag` 检查模型。
+- [docs/tools.md](docs/tools.md)：记录模型可用工具和计划中的 `fuzzy_search`；其中 `fuzzy_search` 当前仍是未实现设想。
 
 ## 工作链路
 
@@ -15,7 +23,7 @@ completion_id + documents + messages + run_options
   -> html_index 解析 HTML，生成 HtmlDocument、path_id 索引和 source_selectors
   -> processor 创建 ActiveCompletion，写入 _ACTIVE_COMPLETIONS
   -> graph 输出 completion.created 和 source_indexed
-  -> resolution_new 构建 QA prompt，并挂载 tree/grep/read/inspect
+  -> resolution_new 构建 QA prompt，并挂载 ls/grep/read/inspect
   -> 模型输出 model_message；如需继续阅读，就单轮调用一个工具
   -> html_tools 把工具调用写成 tool_started/tool_completed/tool_failed 事件
   -> inspect 把关键 block 展开成 Sxxx/Ixxx/Rxxx inline evidence
@@ -29,7 +37,7 @@ completion_id + documents + messages + run_options
 
 ## 虚拟文件树
 
-虚拟树不会落盘。raw virtual path 只作为内部索引和调试信息使用；模型看到和提交的 locator 是 `evidence://0001.0000.0001` 这种 evidence link。根目录只在 `tree(path_id="", depth=...)` 或 `tree(path_id="/", depth=...)` 里表示。
+虚拟树不会落盘。raw virtual path 只作为内部索引和调试信息使用；模型看到和提交的 locator 是 `evidence://0001.0000.0001` 这种 evidence link。根目录只在 `ls(path_id="")` 或 `ls(path_id="/")` 里表示。
 
 建树规则：
 
@@ -47,7 +55,7 @@ paragraph/list/table 文件名只是预览，不代表截断正文。完整正�
 
 | Tool | 作用 |
 | --- | --- |
-| `tree(path_id, depth)` | 展开 root、文档目录或 section，返回模型可复制的 `evidence://` locator。 |
+| `ls(path_id)` | 列出 root、文档目录或 section 当前层，返回模型可复制的 `evidence://` locator。 |
 | `grep(query, scope, kind, max_results)` | 在可读 block 中做候选搜索，返回 locator、document、section、preview 和 match_spans。 |
 | `read(locator)` | 读取一个 paragraph/list/table block，或读取同一 section 下相邻 block range。 |
 | `inspect(locator)` | 把一个可读 block 展开成 paragraph sentence、list item 或 table row 的 inline evidence link。 |
@@ -56,7 +64,7 @@ paragraph/list/table 文件名只是预览，不代表截断正文。完整正�
 
 ```text
 用户问题
-  -> tree 理解文档结构
+  -> ls 分层理解文档结构
   -> grep 定位候选 block
   -> read 打开上下文
   -> inspect 展开精确 evidence
@@ -70,7 +78,7 @@ paragraph/list/table 文件名只是预览，不代表截断正文。完整正�
 paragraph：
 
 ```text
-tree(path_id="", depth=2)
+ls(path_id="")
   -> 显示 evidence://0001.0001.0001 公司成立于2020年.md
 read(locator="evidence://0001.0001.0001")
   -> 返回完整 paragraph 正文

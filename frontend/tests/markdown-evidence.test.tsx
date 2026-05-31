@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 
 import { MarkdownEvidence } from "@/components/markdown-evidence";
 
@@ -41,5 +41,93 @@ describe("MarkdownEvidence", () => {
     fireEvent.click(screen.getByRole("link", { name: "30 天通知" }));
 
     expect(onOpenEvidence).toHaveBeenCalledWith("evidence://0001.0001.0001/S001", "30 天通知");
+  });
+
+  it("renders final answer evidence as inline numbered citations after sentences", () => {
+    const onOpenEvidence = jest.fn();
+    const { container } = render(
+      <MarkdownEvidence
+        markdown={[
+          "第一段可以提前终止，但必须提前通知。[30 天通知](evidence://0001.0001.0001/S001)",
+          "",
+          "第二段要点是书面通知。[书面通知](evidence://0001.0001.0001/S002)"
+        ].join("\n")}
+        evidencePlacement="citation"
+        onOpenEvidence={onOpenEvidence}
+      />
+    );
+
+    const paragraphs = container.querySelectorAll("p");
+    expect(paragraphs).toHaveLength(2);
+    expect(paragraphs[0]).toHaveTextContent("第一段可以提前终止，但必须提前通知。1");
+    expect(paragraphs[1]).toHaveTextContent("第二段要点是书面通知。2");
+    expect(container.querySelectorAll(".replay-evidence-footer")).toHaveLength(0);
+    expect(within(paragraphs[0]).queryByRole("link", { name: "30 天通知" })).not.toBeInTheDocument();
+    expect(within(paragraphs[1]).queryByRole("link", { name: "书面通知" })).not.toBeInTheDocument();
+
+    const firstCitation = within(paragraphs[0]).getByRole("link", { name: "Source 1" });
+    const secondCitation = within(paragraphs[1]).getByRole("link", { name: "Source 2" });
+    expect(firstCitation).toHaveClass("replay-evidence-citation-marker");
+    expect(firstCitation).toHaveTextContent("1");
+    expect(firstCitation).toHaveAttribute(
+      "href",
+      "evidence://0001.0001.0001/S001"
+    );
+    expect(secondCitation).toHaveTextContent("2");
+    expect(secondCitation).toHaveAttribute(
+      "href",
+      "evidence://0001.0001.0001/S002"
+    );
+
+    fireEvent.click(firstCitation);
+    expect(onOpenEvidence).toHaveBeenCalledWith("evidence://0001.0001.0001/S001", "Source 1");
+  });
+
+  it("strips model-authored trailing sources sections in final citation mode", () => {
+    const { container } = render(
+      <MarkdownEvidence
+        markdown={[
+          "可以提前终止，但必须提前通知。[1](evidence://0001.0001.0001/S001)",
+          "",
+          "Sources",
+          "- [1](evidence://0001.0001.0001/S001)"
+        ].join("\n")}
+        evidencePlacement="citation"
+      />
+    );
+
+    const paragraphs = container.querySelectorAll("p");
+    expect(paragraphs).toHaveLength(1);
+    expect(paragraphs[0]).toHaveTextContent("可以提前终止，但必须提前通知。1");
+    expect(screen.queryByText("Sources")).not.toBeInTheDocument();
+    expect(container.querySelectorAll(".replay-evidence-citation-marker")).toHaveLength(1);
+  });
+
+  it("renders each bullet evidence as inline numbered citations", () => {
+    const { container } = render(
+      <MarkdownEvidence
+        markdown={[
+          "- 终止条款要求提前通知。[30 天通知](evidence://0001.0001.0001/S001)",
+          "- 付款条款要求按月支付。[按月支付](evidence://0001.0001.0002/S001)"
+        ].join("\n")}
+        evidencePlacement="citation"
+      />
+    );
+
+    const listItems = container.querySelectorAll("li");
+    expect(listItems).toHaveLength(2);
+    expect(listItems[0]).toHaveTextContent("终止条款要求提前通知。1");
+    expect(within(listItems[0]).queryByRole("link", { name: "30 天通知" })).not.toBeInTheDocument();
+    expect(within(listItems[0]).getByRole("link", { name: "Source 1" })).toHaveAttribute(
+      "href",
+      "evidence://0001.0001.0001/S001"
+    );
+    expect(listItems[1]).toHaveTextContent("付款条款要求按月支付。2");
+    expect(within(listItems[1]).queryByRole("link", { name: "按月支付" })).not.toBeInTheDocument();
+    expect(within(listItems[1]).getByRole("link", { name: "Source 2" })).toHaveAttribute(
+      "href",
+      "evidence://0001.0001.0002/S001"
+    );
+    expect(container.querySelectorAll(".replay-evidence-footer")).toHaveLength(0);
   });
 });

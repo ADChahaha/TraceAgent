@@ -3,7 +3,7 @@
 `agent/` 是 TraceAgent 的 AI 能力层，给 `backend` 提供两个 HTTP 阶段：
 
 - `document_processor`：把 PDF/DOCX 标准化成 QA 友好的语义 HTML、展示用 HTML、markdown、blocks 和处理元信息。
-- `file_extraction_agent`：对 backend 传入的多份语义 HTML 做多轮文档 QA chat completion，像 code agent 浏览代码仓库一样用 `tree / grep / read / inspect` 查文档，并通过 SSE 返回带 evidence link 的过程消息和终态事件。
+- `file_extraction_agent`：对 backend 传入的多份语义 HTML 做多轮文档 QA chat completion，像 code agent 浏览代码仓库一样用 `ls / grep / read / inspect` 查文档，并通过 SSE 返回带 evidence link 的过程消息和终态事件。
 
 它不访问 backend SQLite，不保存多轮 conversation，也不直接连接前端。任务、append-only messages、事件续传、replay 和最终展示都由 `backend` 负责。
 
@@ -106,7 +106,7 @@ completion_id + documents + messages
   -> html_index 构建只读 semantic virtual tree
   -> graph 输出 completion.created + source_indexed
   -> resolution_new 构建 QA prompt 并调用模型
-  -> html_tools 提供 tree / grep / read / inspect
+  -> html_tools 提供 ls / grep / read / inspect
   -> model_message 在过程中引用 evidence:// link
   -> graph/processor 输出 completion.completed / completion.cancelled / completion.failed
 ```
@@ -117,7 +117,7 @@ completion_id + documents + messages
 
 | Tool / Event | 粒度 | 保留的关键信息 | 用途 |
 | --- | --- | --- | --- |
-| `tree(path_id, depth)` | 文件树导航 | `evidence://` locator、展开深度、目录/文件名 | 追踪模型先看了哪些文档和章节。 |
+| `ls(path_id)` | 当前层列表 | `evidence://` locator、目录/文件名 | 追踪模型先看了哪些文档和章节。 |
 | `grep(query, scope, kind, max_results)` | 候选搜索 | 命中文档、section、block locator、preview、match_spans | 像 `rg` 一样定位候选 block；不作为最终证据。 |
 | `read(locator)` | 上下文读取 | 单个 block 或连续 range 的 Markdown 阅读视图 | 追踪模型实际读了哪些 paragraph/list/table。 |
 | `inspect(locator)` | 精确证据展开 | `Sxxx` / `Ixxx` / `Rxxx` inline link 和反查文本 | 支撑具体事实、条件、金额、日期、冲突和最终结论。 |
