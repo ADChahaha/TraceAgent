@@ -155,7 +155,7 @@ ChatCompletionRequest
   -> input_adapter 校验 completion_id/documents/messages/run_options
   -> html_index 构建多文档 semantic virtual tree
   -> graph 先输出 completion.created 和 source_indexed
-  -> resolution_new 构建 QA prompt，暴露 tree / grep / read / inspect
+  -> resolution_new 构建 QA prompt，暴露 ls / grep / read / inspect
   -> 模型边回答边调用工具，过程消息用 evidence:// Markdown link 引用证据
   -> 无 tool_calls 且 provider terminal stop signal 的 model_message 带 is_final=true
   -> graph 输出 completion.completed / completion.failed

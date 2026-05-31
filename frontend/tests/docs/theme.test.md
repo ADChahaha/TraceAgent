@@ -14,6 +14,7 @@
   -> 检查 Replay stage 在窄视口也使用列布局，避免右侧 Review 原文栏掉到 Agent 下方
   -> 检查右侧 review 是否移除额外 header/title/meta，只保留白底 iframe 文档阅读区
   -> 检查 Agent 对话流和底部输入框在 centered/full 两种内容模式下都铺满当前 Agent slot，并共用同一个水平 inset，避免正文和 composer 左右边距不一致
+  -> 检查 review 打开并挤压 Agent 时，Agent 和 review 都有紧凑最小宽度 token，窄容器下会减少内边距、放开气泡宽度并改用左对齐小字号文本
   -> 检查 Contents 面板列表是否自身纵向滚动、隐藏横向溢出，并让长标题和值多行换行，不用 ellipsis 裁剪
   -> 检查首页首屏是否固定在视口内，左侧栏隐藏溢出，只允许左侧 Tasks 列表作为剩余高度区域自己纵向滚动，并且首页左侧栏宽度使用统一的 `--replay-left-panel-width`
   -> 检查首页打开左侧栏时在窄视口仍保留 `sidebar / resize handle / main` 三列，只在关闭左栏时隐藏 sidebar 和 handle
@@ -29,6 +30,7 @@
 - `Replay stage 在窄视口也使用左右栏列布局，不把 Review 原文栏堆到下方`：验证 `.replay-stage` 的基础样式就使用 `--replay-stage-columns`，保证 in-app browser 等窄视口下点击证据后右侧 Review 仍出现在右侧列。
 - `右侧 review 不再渲染文档 header`：验证 review 相关 header/title/meta 样式已移除，白底 frame 仍保留。
 - `Agent 对话流和 composer 使用同一套左右 inset 铺满中间 panel`：验证 Agent 正文流和底部输入框在 centered/full 两种内容模式下都使用 `0 / minmax(0, 1fr) / 0`，实际宽度由外层统一水平 inset 控制，防止正文窄列和 composer 宽度不一致。
+- `Agent 被右侧 review 挤窄时使用紧凑阅读模式`：验证 Agent slot 保持 container query 能力，并在小于 360px 时收紧正文和 composer 内边距、让消息气泡铺满可用宽度、把正文改成更小字号和左对齐，避免 Review 打开后最右侧文字被挤到不可读。
 - `Contents 面板保留可读宽度、纵向滚动和多行文本`：验证 Contents 列表有 `min-height: 0` 和纵向滚动，横向溢出被收住，outline 标题和值都允许多行换行而不是隐藏省略。
 - `首页首屏只让 Tasks 列表成为滚动容器，整页工作台不滚动`：验证首页 workbench 以 fixed/inset 固定到 viewport，stage 和左侧栏隐藏整体溢出，真正可滚动的是占据剩余高度的 `.replay-task-list`，且首页和详情页复用同一个左侧栏宽度变量。
 - `首页打开左侧栏时窄视口仍保留侧栏和拖拽手柄`：验证首页打开左栏时不会被 900px 响应式规则改成单列，也不会隐藏 `.replay-task-sidebar` 或 `.replay-panel-resize-handle`；关闭左栏时才隐藏这两个元素。

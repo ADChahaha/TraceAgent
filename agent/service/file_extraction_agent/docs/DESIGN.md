@@ -2,7 +2,7 @@
 
 本文记录 `file_extraction_agent` 在 `dev-qa` 分支上的当前设计：它已经从“按 `task_spec` 抽取字段”的 agent 重构为“多文档 QA chat completion agent”。模块仍沿用历史包名，但语义已经变成 document QA：backend 每轮把 `documents + append-only messages` 传入，agent 像 code agent 浏览代码仓库一样浏览虚拟文档仓库，并通过 SSE 持续输出 `model_message`、工具事件和终态事件。
 
-核心目标是**过程可追溯**：模型会在阅读过程中用 Markdown evidence link 解释每个文档事实和阶段性判断；最终回答则像 NotebookLM 一样先直接给结论和说明，再把用到的 evidence 统一放进末尾 Sources 区。用户可以看到模型看了哪些文档、搜了什么、读了哪些 block、什么时候把 block 展开成句子/列表项/表格行级证据，以及最终答案引用了哪些来源。
+核心目标是**过程可追溯**：模型会在阅读过程中用 Markdown evidence link 解释每个文档事实和阶段性判断；最终回答则像 NotebookLM 一样把数字 evidence citation 紧跟在被支撑的句子后面。用户可以看到模型看了哪些文档、搜了什么、读了哪些 block、什么时候把 block 展开成句子/列表项/表格行级证据，以及每个最终结论句引用了哪些来源。
 
 ## 1. 当前边界
 
@@ -19,6 +19,12 @@ backend 持久化 task / messages / documents / events
 ```
 
 第一版 agent 内部只保存 active completion 的内存状态，用于当前流和取消；它不保存完整历史消息，也不把 SQLite / LangGraph checkpointer 当成会话事实来源。
+
+配套草稿文档：
+
+- [flowchart.md](flowchart.md)：描述 chat completions、cancel 和 agent loop 的高层流程。
+- [agent_loop.md](agent_loop.md)：描述更轻量的协作式 cancel 伪代码；在 backend 作为事实来源时，agent 只需要在安全点检查 `cancel_flag` 并尽快停止。
+- [tools.md](tools.md)：描述 `ls/read/inspect/grep` 等工具表面，以及尚未实现的 `fuzzy_search` 设想。
 
 ## 2. 输入、输出和运行步骤
 
@@ -41,7 +47,7 @@ completion_id + documents + messages + run_options + model_config
        -> resolution_new.run_resolution_stream(...)
             -> build_resolution_messages，把历史 OpenAI messages 原样转成 chat/tool messages
                并保持最新真实用户消息为最后一条 human message
-            -> build_tools(state) 暴露 tree / grep / read / inspect
+            -> build_tools(state) 暴露 ls / grep / read / inspect
             -> 模型产生 model_message，先校验 provider stop signal 与 tool_calls 是否一致
             -> 有 tool_calls 时保留同轮一个或多个工具调用并交给 ToolNode 执行；terminal stop signal 且无工具时自然结束
        -> resolution 正常结束输出 completion.completed
@@ -54,6 +60,50 @@ completion_id + documents + messages + run_options + model_config
        -> consumer 收到 cancel sentinel 后输出 completion.cancelled 并结束 stream，不等待 provider 下一个 chunk
        -> producer 后续若从 provider 返回更多 event，看到 runtime 已结束后丢弃
   -> finally 从 _ACTIVE_COMPLETIONS 移除本轮 completion
+```
+
+整体流程图：
+
+```mermaid
+flowchart TD
+    A["completion_id + documents + messages + run_options + model_config"]
+    B["input_adapter.build_completion_input<br/>校验 completion_id / documents / messages<br/>归一化 RunOptions"]
+    C["html_index.build_html_document<br/>HTML -> HtmlDocument<br/>构建只读虚拟文档仓库"]
+    D["html_state.build_graph_state<br/>生成 GraphState"]
+    E["graph.run_completion_graph_stream<br/>组织本轮 completion 事件"]
+    F["completion.created"]
+    G["source_indexed<br/>document_tree + source_selectors"]
+    H["resolution_new.run_resolution_stream<br/>构建 prompt / 历史消息 / tools"]
+    I["build_tools(state)<br/>ls / grep / read / inspect"]
+    J["模型输出 model_message"]
+    K{"是否有 tool_calls?"}
+    L["ToolNode 执行工具"]
+    M["html_tools<br/>记录 tool_started / tool_completed / tool_failed"]
+    N["ls<br/>看虚拟目录当前层"]
+    O["grep<br/>搜索候选 readable block"]
+    P["read<br/>读取 block 或 sibling range"]
+    Q["inspect<br/>展开 S001 / I001 / R001 evidence"]
+    R["model_message<br/>过程解释或最终答案<br/>带 evidence:// citation"]
+    S{"terminal stop<br/>且无工具调用?"}
+    T["completion.completed"]
+    U["异常<br/>tool_failed(resolution) + completion.failed"]
+
+    A --> B --> C --> D --> E
+    E --> F
+    E --> G
+    E --> H --> I --> J --> K
+    K -- "有工具调用" --> L --> M
+    M --> N
+    M --> O
+    M --> P
+    M --> Q
+    N --> J
+    O --> J
+    P --> J
+    Q --> J
+    K -- "无工具调用" --> S
+    S -- "是" --> R --> T
+    H -- "异常" --> U
 ```
 
 输出是 SSE 字符串迭代器，每条形如：
@@ -213,7 +263,7 @@ producer 生成 completion.completed / completion.failed / completion.cancelled
 
 建模规则：
 
-- 根目录固定为 `/`；工具里可用 `tree(path_id="")` 或 `tree(path_id="/")` 打开。
+- 根目录固定为 `/`；工具里可用 `ls(path_id="")` 或 `ls(path_id="/")` 打开当前层。
 - 每个输入 HTML 是根目录下的文档目录，文档目录的可见 locator 是 `evidence://0001`、`evidence://0002`。
 - 文档标题只决定文档目录显示名；同一个 `h1` 仍会作为正文 section 目录进入树，多个 `h1` 会成为文档目录下的多个一级 section。
 - `h2` 到 `h6` 按 HTML heading 层级挂到最近的更高层 section 下面。
@@ -227,7 +277,7 @@ producer 生成 completion.completed / completion.failed / completion.cancelled
 当前只暴露四个模型工具：
 
 ```text
-tree(path_id="", depth=3)
+ls(path_id="")
 grep(query, scope="", kind="", max_results=20)
 read(locator="evidence://...")
 inspect(locator="evidence://...")
@@ -235,18 +285,20 @@ inspect(locator="evidence://...")
 
 已删除旧字段抽取工具：`add_candidate_evidence`、`review_evidences`、`write_field`、`submit_result`。QA 模式不设置 `answer` 或 `finish` 工具；模型消息只有在 provider 给出 terminal stop signal（例如 `finish_reason=stop` 或 `stop_reason=end_turn`）且没有工具调用时才被视为本轮自然结束，SSE 用 `completion.completed` 收口。对应的 `model_message` 会带 `is_final=true` 和归一化后的 `stop_signal`，backend 只用这个标记决定哪条 assistant 文本进入下一轮历史。如果 provider 给出 `finish_reason=tool_calls`、`stop_reason=tool_use`、`length/max_tokens` 等非终态信号但 LangChain 消息没有实际 `tool_calls`，agent 会把该 transport 视为不完整并继续 fallback，避免把“我先去查”这类计划性文本误判为最终回答。
 
-### `tree`
+### `ls`
 
-`tree` 展开 root、文档目录或 section 目录，用于让模型先理解多文档结构。
+`ls` 列出 root、文档目录或 section 目录的当前一层，用于让模型逐层理解多文档结构，避免一次工具调用把深层目录全部塞进上下文。
 
 ```text
 用户问题
-  -> tree(path_id="", depth=3)
-  -> 模型看到文档目录、section 和 block locator
-  -> 选择下一步 grep 或 read
+  -> ls(path_id="")
+  -> 模型看到文档目录 locator
+  -> ls(path_id="evidence://0001")
+  -> 模型看到该文档当前层的 section 或 block locator
+  -> 选择下一步 grep、read 或继续 ls 子 section
 ```
 
-`tree` 的输出可以作为结构性 evidence。例如模型说“相关内容集中在 Termination 章节”时，可以引用 section/block locator；但它不能支撑具体日期、金额或义务结论。
+`ls` 的输出可以作为结构性 evidence。例如模型说“相关内容集中在 Termination 章节”时，可以引用 section/block locator；但它不能支撑具体日期、金额或义务结论。
 
 ### `grep`
 
@@ -291,7 +343,7 @@ table     -> evidence://0001.0003.0001/R001
 
 ## 6. Evidence 和过程消息规则
 
-QA 的证据主容器是 `model_message`，不是最终提交工具。过程 `model_message` 对文档做事实陈述时，应在首次陈述时携带 Markdown evidence link；最终 `model_message` 用 `is_final=true` 标记，正文不再内嵌 evidence link，而是在末尾 `Sources` 区列出引用。
+QA 的证据主容器是 `model_message`，不是最终提交工具。过程 `model_message` 对文档做事实陈述时，应在首次陈述时携带带可读 label 的 Markdown evidence link；最终 `model_message` 用 `is_final=true` 标记，并把数字 label 的 evidence citation 紧跟在被支撑的句子后面，不再收束成末尾 `Sources` 区。
 
 ```text
 检索策略、下一步行动说明
@@ -304,7 +356,7 @@ QA 的证据主容器是 `model_message`，不是最终提交工具。过程 `mo
   -> 应使用 inspect 产生的 Sxxx/Ixxx/Rxxx inline evidence
 
 最终回答正文里的文档事实
-  -> 正文只写结论和说明，末尾 Sources 区用 `[1] [短标签](evidence://...)` 列出 evidence
+  -> 正文先写结论和说明，再把 [1](evidence://...) 这类数字 citation 紧跟在对应句子后面
 ```
 
 推荐输出节奏：
@@ -316,15 +368,12 @@ model_message: 命中集中在 Termination 章节，我先读该章节。[Termin
 工具: read("evidence://0001.0012.0003")
 工具: inspect("evidence://0001.0012.0003")
 model_message: 这里说明任一方可以终止协议，但该句本身没有写提前通知天数。[任一方可以终止](evidence://0001.0012.0003/S001)
-model_message(is_final=true): 可以提前终止，但需要满足书面通知要求。
-
-Sources
-[1] [任一方可以终止](evidence://0001.0012.0003/S001)
+model_message(is_final=true): 可以提前终止。[1](evidence://0001.0012.0003/S001) 还需要满足书面通知要求。[2](evidence://0001.0012.0004/S001)
 ```
 
 多轮上下文只来自 backend 传入的 append-only `messages`：上一轮 user/assistant/tool 历史会原样保留并追加新问题。agent 不接收 memory、摘要或自动裁剪结果，避免每轮重写上下文导致 provider prompt cache 失效。新一轮如果复用旧发现，仍应引用原始 `evidence://`。
 
-QA prompt 的默认行为不是强制查文档。模型如果能从当前对话上下文、助手身份或能力说明直接回答，就直接回答；只有用户询问文档内容、要求证据，或当前对话不足以回答时，才使用 `tree/grep/read/inspect`。一旦使用文档工具，模型需要给出简短可见的 investigation trace，说明查了什么、发现了什么、还缺什么；但不能输出隐藏推理。evidence link 只约束来自文档的事实，非文档回答不需要硬贴 evidence。最终回答使用末尾 Sources，不把 evidence link 混在正文句子里。
+QA prompt 的默认行为不是强制查文档。模型如果能从当前对话上下文、助手身份或能力说明直接回答，就直接回答；只有用户询问文档内容、要求证据，或当前对话不足以回答时，才使用 `ls/grep/read/inspect`。一旦使用文档工具，模型需要给出简短可见的 investigation trace，说明查了什么、发现了什么、还缺什么；但不能输出隐藏推理。evidence link 只约束来自文档的事实，非文档回答不需要硬贴 evidence。过程消息使用可读 citation label；最终回答使用 `[1](evidence://...)`、`[2](evidence://...)` 这类数字 label，并把数字 citation 放在被支撑句子后面，不收束成一个总 `Sources` 区。
 
 ## 7. HTTP API
 
@@ -401,7 +450,7 @@ SSE 事件按 `seq` 递增，常见类型如下：
 | --- | --- | --- |
 | `completion.created` | graph | 标记本轮 completion 开始。 |
 | `source_indexed` | graph | 暴露 `document_tree` 和 `source_selectors`，backend 可提前准备 replay 高亮。 |
-| `model_message` | resolution | 模型面向用户的过程说明或最终回答；过程事实应内嵌 evidence link，最终回答带 `is_final=true` 和 `stop_signal`，并把 evidence link 放在末尾 Sources 区。 |
+| `model_message` | resolution | 模型面向用户的过程说明或最终回答；过程事实应内嵌带可读 label 的 evidence link，最终回答带 `is_final=true` 和 `stop_signal`，并把数字 evidence citation 放在被支撑句子后面。 |
 | `tool_started` | html_tools | 记录工具开始及参数。 |
 | `tool_completed` | html_tools | 记录工具成功结果。 |
 | `tool_failed` | html_tools / graph | 记录工具或 resolution 失败。 |
@@ -431,7 +480,7 @@ impl/html_state.py
   -> 保存本轮 completion_id、HtmlDocument、messages、events、actions、next_seq
 
 impl/html_tools.py
-  -> 构建 tree / grep / read / inspect
+  -> 构建 ls / grep / read / inspect
   -> 每次工具调用写入 tool_started/tool_completed/tool_failed 事件
   -> 把内部 path_id 暴露成 evidence:// link
 

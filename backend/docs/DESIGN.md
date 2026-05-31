@@ -64,6 +64,7 @@ backend/
     API.md
     DESIGN.md
     DEVLOG.md
+    table.md
 ```
 
 模块边界：
@@ -203,6 +204,217 @@ DB 写入可以放在 `turn_runtime.lock` 内，因为它是本地短事务，�
 
 和 agent 一样，backend consumer 的结束也应由已提交事件决定，而不是直接读取 cancel flag。cancel flag/status 只用于 producer/cancel 决定后续事件还能不能写入；已经写进 `qa_events` 或 runtime queue 的旧事件必须按顺序发给前端，直到遇到 `turn.cancelled`、`turn.completed` 或 `turn.failed` 终态。
 
+backend 的并发一致性必须以 `qa_turns.status` 为主要事实来源，不能依赖“请求先到先赢”或“刚刚 SELECT 过所以状态不会变”。数据库只能保证单条 SQL 的原子性；多条 SQL 之间如果没有事务、锁或条件写入，另一个请求可能在两次查询之间把状态改掉。因此所有会写入消息、终态或 active turn 的路径，都必须把“当前状态仍然允许写入”放到写入当下重新判断。
+
+异步 backend 不适合用一张图解释完。这里按四种视角拆开：组件数据流、正常时序、状态机、竞态时序。
+
+组件数据流图只说明 HTTP 请求进入 backend 后，普通响应、后台 worker 和 SSE 输出分别从哪里来：
+
+```mermaid
+flowchart TD
+    FE["Frontend"]
+    Routes["backend routes/tasks.py\n解析 HTTP 参数 / SSE 序列化 / 错误映射"]
+    Service["QaTaskService\n业务编排"]
+    DB[("SQLite QA tables\nqa_tasks / qa_documents / qa_turns / qa_messages / qa_events")]
+    DocWorker["后台文档线程\n_process_task_documents"]
+    TurnWorker["后台 QA 线程\n_run_turn_when_ready / _run_turn"]
+    Agent["AgentClient\nHTTP 调 agent service"]
+    Immediate["立即返回 task / turn snapshot"]
+    SSE["GET /events\n按 qa_events.sequence 输出 SSE"]
+
+    FE -->|"POST /qa/tasks\n上传文档"| Routes
+    FE -->|"POST /qa/tasks/{id}/inputs\n提交问题"| Routes
+    FE -->|"POST /qa/tasks/{id}/cancel\n取消当前 turn"| Routes
+    FE -->|"GET /qa/tasks/{id}/events?after_seq=n"| Routes
+
+    Routes --> Service
+    Service -->|"短事务写 task / message / turn / event"| DB
+    Service -->|"启动后台文档处理"| DocWorker
+    Service -->|"启动后台 QA run"| TurnWorker
+    Service -->|"普通 HTTP 响应"| Immediate
+    Immediate --> FE
+
+    DocWorker --> Agent
+    Agent -->|"document result"| DocWorker
+    DocWorker -->|"写 qa_documents / document.processed / task.ready"| DB
+
+    TurnWorker -->|"读取 documents + messages + replay events"| DB
+    TurnWorker --> Agent
+    Agent -->|"completion stream events"| TurnWorker
+    TurnWorker -->|"写 agent.event / terminal event / assistant message"| DB
+
+    Routes --> SSE
+    SSE -->|"读取 qa_events sequence > after_seq"| DB
+    SSE -->|"event/id/data"| FE
+```
+
+正常异步时序图说明一轮 `POST /inputs` 如何立即返回，同时后台 worker 继续写事件，前端再通过 SSE 收到结果：
+
+```mermaid
+sequenceDiagram
+    participant FE as Frontend
+    participant RT as routes/tasks.py
+    participant SV as QaTaskService
+    participant DB as DB
+    participant AG as Agent
+
+    FE->>RT: POST /qa/tasks/{task_id}/inputs
+    RT->>SV: create_input(task_id, content)
+    SV->>DB: 检查没有 active turn
+    SV->>DB: 写 user message + queued turn + active_turn_id
+    SV->>DB: 写 message.created / turn.created
+    SV-->>RT: turn snapshot
+    RT-->>FE: 200 JSON: turn snapshot
+
+    FE->>RT: GET /qa/tasks/{task_id}/events?after_seq=n
+    RT->>DB: 读取已有 qa_events
+    RT-->>FE: SSE: message.created / turn.created
+
+    SV->>DB: 文档 ready 后读取 documents + messages + replay events
+    SV->>DB: turn.status queued -> in_progress
+    SV->>DB: 写 turn.started
+    RT->>DB: 轮询新 qa_events
+    RT-->>FE: SSE: turn.started
+
+    SV->>AG: 发起 completion stream
+
+    loop agent event
+        AG-->>SV: agent.event
+        SV->>DB: 重新读取 turn.status
+        alt turn 仍是 in_progress
+            SV->>DB: 写 qa_events(agent.event)
+            RT->>DB: 轮询新 qa_events
+            RT-->>FE: SSE: agent.event
+        else turn 已终态
+            SV-->>SV: 丢弃迟到 event
+        end
+    end
+
+    AG-->>SV: completion.completed
+    SV->>DB: 完成收口：仅当 status = in_progress 时写 completed + assistant message + turn.completed
+    alt 收口成功
+        RT->>DB: 轮询新 qa_events
+        RT-->>FE: SSE: completion.completed / turn.completed
+    else turn 已不是 in_progress
+        SV-->>SV: 不写 assistant message
+    end
+```
+
+turn 状态机只说明 `qa_turns.status` 允许怎样流转。终态一旦写入，后续 worker 只能丢弃迟到结果，不能再覆盖：
+
+```mermaid
+stateDiagram-v2
+    [*] --> queued: create_input
+    queued --> in_progress: worker starts after documents ready
+    queued --> cancelled: cancel before run
+    queued --> failed: task/document failed
+
+    in_progress --> completed: completion completed
+    in_progress --> cancelling: cancel requested
+    in_progress --> failed: agent/provider error
+
+    cancelling --> cancelled: local cancel settles
+    cancelling --> failed: cancel-side failure path
+
+    completed --> [*]
+    cancelled --> [*]
+    failed --> [*]
+```
+
+竞态时序图单独说明 cancel 和 completed 同时到达时，谁先完成条件写入谁收口；失败路径不再写 assistant message：
+
+```mermaid
+sequenceDiagram
+    participant FE as Frontend
+    participant RT as routes/tasks.py
+    participant SV as QaTaskService
+    participant DB as DB
+    participant AG as Agent
+
+    FE->>RT: POST /qa/tasks/{task_id}/cancel
+    RT->>SV: cancel_task(task_id)
+    SV->>DB: 取消收口：找到 active turn，且 status 可取消时写 cancelled
+
+    alt cancel 先成功
+        SV->>DB: 清 active_turn_id + 写 turn.cancel_requested / turn.cancelled
+        SV-->>RT: cancelled snapshot
+        RT-->>FE: 200 JSON: cancelled
+        SV-->>AG: 锁外 best-effort cancel(completion_id)
+        RT->>DB: events 轮询读到 turn.cancelled
+        RT-->>FE: SSE: turn.cancel_requested / turn.cancelled
+        AG-->>SV: 迟到 completion.completed / agent.event
+        SV->>DB: 重新读取 turn.status
+        SV-->>SV: status 已 cancelled，不写 assistant message
+    else completed 先成功
+        AG-->>SV: completion.completed
+        SV->>DB: 完成收口：仅当 status = in_progress 时写 completed + assistant message + turn.completed
+        RT->>DB: events 轮询读到 turn.completed
+        RT-->>FE: SSE: completion.completed / turn.completed
+        SV-->>RT: cancel 发现没有 active turn 或条件更新失败
+        RT-->>FE: 409 Conflict 或 no active turn
+    end
+```
+
+关键规则：
+
+```text
+读 active turn / status
+  -> 只能作为后续写入的候选信息
+  -> 写入前必须再次检查 qa_turns.status
+  -> 只有当前状态仍允许，才提交 message/event/terminal state
+  -> 如果状态已经 cancelled/completed/failed，迟到结果直接丢弃
+```
+
+`qa_tasks.active_turn_id` 是 task 当前活跃 turn 的辅助索引，适合用于详情读模型和快速找到当前 turn；它不是数据库锁，也不是唯一的并发事实来源。真正防止 cancel 后旧 worker 写入 assistant message 的规则应放在 `qa_turns.status` 上：
+
+```text
+completion.completed
+  -> 条件 UPDATE qa_turns
+       SET status = completed
+       WHERE id = turn_id AND status = in_progress
+  -> 如果 rowcount = 0，说明 turn 已经被 cancel/fail/complete
+  -> 直接 return，不写 assistant message
+  -> 如果 rowcount = 1，才允许写 assistant message、清 active_turn_id、写 turn.completed
+```
+
+cancel 也必须是条件状态转移：
+
+```text
+cancel_task
+  -> 找到当前 active turn
+  -> 仅当 status 是 queued/in_progress/cancelling 时，才改成 cancelled
+  -> 清 qa_tasks.active_turn_id
+  -> 写 turn.cancel_requested / turn.cancelled
+  -> 锁外 best-effort 通知 agent cancel
+```
+
+如果代码先 `SELECT status`，再用 Python 判断，最后普通 `INSERT qa_messages`，中间另一个请求可能已经把 turn 改成 terminal 并写入结束事件。数据库不会自动阻止这个旧写入；必须使用条件 `UPDATE`、条件 `INSERT ... SELECT WHERE EXISTS`、事务或显式行锁把判断和写入绑定起来。
+
+在 PostgreSQL 这类数据库里，`SELECT ... FOR UPDATE` 的含义是“读出这些行，并在当前事务提交前锁住它们，阻止其他事务修改这些行”。它只锁已经查出来的行，因此不能单独保护“没有 active turn 所以可以创建”的场景；如果要保护这个 absence check，应锁父表 `qa_tasks(task_id)` 这一行，或用 partial unique index 约束一个 task 同时最多一个 active turn。SQLite 没有同样的行级 `FOR UPDATE`，本地实现可以用 `BEGIN IMMEDIATE` 或进程内 task lock 做较粗粒度串行。
+
+锁的使用原则：
+
+```text
+task 内状态变更串行
+  -> create_input / cancel / finish_completed / finish_failed 进入 task 级短临界区
+  -> task 间互不影响，可以并发
+  -> 临界区内只做短 DB 操作
+  -> 不在锁内执行 agent HTTP、provider stream、文件处理或重试等待
+```
+
+如果一个事务确实需要同时锁 `qa_tasks` 和 `qa_turns`，必须固定锁顺序，避免死锁：
+
+```text
+qa_tasks(task_id)
+  -> qa_turns(turn_id)
+  -> qa_messages
+  -> qa_events
+```
+
+固定锁顺序不是要求所有路径都拿满这些锁，而是要求“需要多把锁时顺序一致”。能用单条条件 SQL 或数据库唯一约束表达的不变量，应优先用条件写入和约束；只有读完必须基于该状态做多步写入时，才显式加锁。
+
+当前实现已在 completion/cancel 的关键路径使用 `qa_turns.status` 条件更新来避免终态覆盖，但仍应继续收紧多语句一致性：`finish_completed` 中的 turn 终态、assistant message、task ready、turn.completed event 应放进同一个短事务；`create_input` 中的“没有 active turn -> 创建 user message -> 创建 turn -> 写 active_turn_id”也应由 task 级锁、事务或数据库约束保护。
+
 事件续传：
 
 ```text
@@ -227,6 +439,8 @@ GET /qa/tasks/{task_id}
 ## 4. 数据表
 
 QA-only schema：
+
+字段级说明见 [table.md](table.md)。
 
 ```text
 qa_tasks

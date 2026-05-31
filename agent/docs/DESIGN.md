@@ -13,9 +13,9 @@
   -> document_processor 标准化为 html / display_html / markdown / blocks
   -> backend 保存文档和对话状态
   -> file_extraction_agent 接收 documents + append-only messages
-  -> agent 像 code agent 浏览代码仓库一样 tree/grep/read/inspect 文档
+  -> agent 像 code agent 浏览代码仓库一样 ls/grep/read/inspect 文档
   -> agent 用过程 model_message + inline evidence link 流式说明阅读发现
-  -> 最终 model_message 正文直接回答，并在末尾 Sources 区列出 evidence link
+  -> 最终 model_message 正文直接回答，并在被支撑句子后紧跟数字 evidence citation
   -> backend 持久化事件并转发给前端
 ```
 
@@ -126,10 +126,10 @@ POST /v1/document-qa/chat/completions
   -> input_adapter 校验 completion_id/documents/messages/run_options
   -> html_index 把多份 HTML 构建成只读 virtual document repository
   -> graph 输出 completion.created 和 source_indexed
-  -> resolution_new 让模型通过 tree / grep / read / inspect 浏览文档
+  -> resolution_new 让模型通过 ls / grep / read / inspect 浏览文档
   -> html_tools 把每次工具调用写成 tool_started/tool_completed/tool_failed
   -> 过程 model_message 在阅读过程中内嵌 evidence:// Markdown link
-  -> 最终 model_message 带 is_final=true，正文不内嵌 evidence link，末尾 Sources 区承载引用
+  -> 最终 model_message 带 is_final=true，在被支撑句子后紧跟数字 evidence citation
   -> completion.completed / completion.cancelled / completion.failed 收口 SSE
 ```
 
@@ -143,7 +143,7 @@ raw PDF/DOCX
   -> backend 持久化 documents + display_html
   -> 用户提问
   -> backend 调用 document QA chat completion
-  -> agent stream 输出阅读过程、工具调用和末尾 Sources 引用的最终回答
+  -> agent stream 输出阅读过程、工具调用和句尾数字 citation 的最终回答
   -> backend 保存 events/messages
   -> 下一轮用户提问时 backend 再传入更新后的 append-only messages
 ```
