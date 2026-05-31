@@ -170,7 +170,7 @@ function splitTrailingSourcesSection(markdown: string): { body: string; sources:
 }
 
 function isSourcesHeading(line: string): boolean {
-  return /^(?:#{1,6}\s*)?(?:sources|citations|references|来源|引用|参考资料)[:：]?\s*$/i.test(line);
+  return /^(?:#{1,6}\s*)?(?:sources|citations|references|\u6765\u6e90|\u5f15\u7528|\u53c2\u8003\u8d44\u6599)[:：]?\s*$/i.test(line);
 }
 
 function normalizeMarkdown(markdown: string): string {
