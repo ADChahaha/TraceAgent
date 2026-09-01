@@ -1,4 +1,16 @@
-last updated: 2026-09-01 13:00:00 CST
+last updated: 2026-09-01 14:00:00 CST
+
+## 2026-09-01 14:00:00 CST
+- completed work:
+  - `ProcessResult` 收敛为 `filename + html` 两个字段，删除 `display_html` / `markdown` / `md_list` / `blocks` / `meta_info` / `warnings`。
+  - `mineru_html` 精简为单一 `build_html_from_content_list`：直接产出带 CSS 的完整 HTML 文档（含 `dp-evidence-highlight` 等样式 + h1-h6/p/ul/ol/table 结构骨架），删除 `build_display_html_from_content_list` / `build_blocks_from_content_list` / `build_markdown_from_content_list` 及 `normalize_block_kind`。
+  - `processor` 的 PDF / DOCX 分支只返回 `(filename, html)`；删除 docx 的 `process_block_to_dict` / `build_markdown` / `table_markdown_lines` / `markdown_row`。
+  - route 的 `ProcessResponse` 只保留 `filename` + `html`。
+- current progress:
+  - `html` 现在是带 CSS 的完整文档：前端 review / iframe 直接渲染，同时保留结构骨架供 `file_extraction_agent` 解析建树（其 `parse_html` 只认 h1-h6/p/ul/ol/table，忽略 `<style>`/`<main>`）。
+  - `tests`（document_processor 与 routes 相关）全量通过。
+- next step:
+  - `file_extraction_agent` 侧后续按新契约单独调整（当前仍接收 `InputDocument(filename, html)`，无需改动）。
 
 ## 2026-09-01 13:00:00 CST
 - completed work:
