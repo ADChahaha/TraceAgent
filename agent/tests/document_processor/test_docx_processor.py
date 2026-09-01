@@ -71,24 +71,6 @@ def test_process_docx_builds_sections_from_word_heading_styles():
         "Beta paragraph.",
         "Term Notice Termination 30 days",
     ]
-    assert result.semantic_document["sections"] == [
-        {
-            "section_id": "docx_b001",
-            "title": "Overview",
-            "level": 1,
-            "text": "Overview\nAlpha paragraph.\nDetails\nBeta paragraph.\nTerm Notice Termination 30 days",
-            "block_ids": ["docx_b001", "docx_b002", "docx_b003", "docx_b004", "docx_b005"],
-        },
-        {
-            "section_id": "docx_b003",
-            "title": "Details",
-            "level": 2,
-            "text": "Details\nBeta paragraph.\nTerm Notice Termination 30 days",
-            "block_ids": ["docx_b003", "docx_b004", "docx_b005"],
-        },
-    ]
-    assert result.semantic_document["blocks"][-1]["block_id"] == "docx_b005"
-    assert result.semantic_document["blocks"][-1]["rows"][1]["row_id"] == "docx_b005_tr_002"
 
 
 def test_process_docx_without_heading_styles_keeps_flat_original_order():
@@ -104,8 +86,6 @@ def test_process_docx_without_heading_styles_keeps_flat_original_order():
         "Plain second paragraph.",
         "Term Notice Termination 30 days",
     ]
-    assert result.semantic_document["sections"] == []
-    assert result.semantic_document["blocks"][0]["block_id"] == "docx_b001"
     assert '<section id=' not in result.html
     assert "<h1" not in result.html
     assert "Plain first paragraph." in result.markdown

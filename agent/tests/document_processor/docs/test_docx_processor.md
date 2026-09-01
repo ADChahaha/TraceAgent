@@ -14,16 +14,16 @@ BytesIO(.docx)
   -> read_source_bytes(...) 读取 bytes 并复位
   -> python-docx Document(BytesIO(...))
   -> 按 Word body 原始顺序遍历 paragraph/table
-  -> 只用 Word heading style 创建 section
+  -> 只用 Word heading style 生成 heading block
   -> 普通 paragraph/table 保留原顺序生成 block
-  -> 输出 ProcessResult(html/display_html/markdown/md_list/blocks/semantic_document)
+  -> 输出 ProcessResult(html/display_html/markdown/md_list/blocks)
 ```
 
 ## 测试函数
 
 - `test_process_docx_builds_sections_from_word_heading_styles`：验证显式
-  `Heading 1/2` 会创建嵌套 section，DOM id、table row evidence id、Markdown
-  heading 和 `semantic_document` 都保持稳定顺序。
+  `Heading 1/2` 会生成 heading block，DOM id、table row 的 HTML id 和 Markdown
+  heading 都保持稳定顺序。
 - `test_process_docx_without_heading_styles_keeps_flat_original_order`：验证没有
   heading style 的 DOCX 不做字体/粗体启发式猜测，段落和表格按原文顺序作为
   flat blocks 输出。

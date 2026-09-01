@@ -53,7 +53,6 @@ class ProcessResponse(BaseModel):
     markdown: str = ""
     md_list: list[str] = Field(default_factory=list)
     blocks: list[dict[str, Any]] = Field(default_factory=list)
-    semantic_document: dict[str, Any] = Field(default_factory=dict)
     meta_info: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
 
@@ -129,7 +128,6 @@ def _build_process_response(result) -> ProcessResponse:
         markdown=result.markdown,
         md_list=result.md_list,
         blocks=result.blocks,
-        semantic_document=result.semantic_document,
         meta_info=result.meta_info,
         warnings=result.warnings,
     )

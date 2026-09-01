@@ -1,8 +1,7 @@
 # `test_mineru_html.py`
 
 Tests conversion from MinerU `content_list_v2` pages to traceable extraction HTML,
-display HTML, markdown-like text, backend evidence blocks, and semantic
-section/block/inline output.
+display HTML, markdown-like text, and block-level backend evidence blocks.
 
 实现步骤：
 
@@ -18,12 +17,7 @@ MinerU pages
   -> level>=4 的 title 降级为普通 paragraph block，不再让工具当成 section heading
   -> list/table 的主 block id 直接落在原生 ul/table 上，后续工具可按该 id 检索
   -> Markdown 输出保留 rendered block 原文顺序，不写入调试注释
-  -> Markdown 标题按同上的 heading_level 规则生成，正文字体小标题降级为普通正文行
-  -> build_semantic_document_from_blocks(...) 可复用缓存的 MinerU blocks
-  -> semantic_document 把 heading 后直到下一个 section 的内容收进 section.text
-  -> section 内 block 识别 lead_in、clause、paragraph、list_item 等类型
-  -> clause block 继承最近的 lead_in 作为 parent_block_id
-  -> block 内再按分号和条件短语生成 inline 片段
+  -> Markdown 标题按同上的 heading_level 规则生成，正文小标题降级为普通正文行
 ```
 
 测试覆盖：
@@ -37,12 +31,9 @@ MinerU pages
 - `test_build_markdown_keeps_compact_numbered_title_as_heading`：确认 `2.日程` 这类紧凑编号 title 按 level 输出为 heading；不再用特征/聚类降级。
 - `test_build_html_skips_pages_without_visible_content`：确认空页和纯图片页不会进入 HTML。
 - `test_build_html_skips_pages_with_only_page_number`：确认纯页码页不会进入 HTML、blocks 或 Markdown。
-- `test_build_outputs_skip_page_footer_noise`：确认页脚版本号不会进入 extraction HTML、display HTML、blocks、Markdown 或 semantic_document。
-- `test_build_blocks_from_content_list_uses_rendered_ids_for_text_list_and_table_rows`：确认 blocks 和 HTML 复用同一套可追踪 id，表格行也能作为 evidence block。
+- `test_build_outputs_skip_page_footer_noise`：确认页脚版本号不会进入 extraction HTML、display HTML、blocks 或 Markdown。
+- `test_build_blocks_from_content_list_uses_rendered_ids_for_text_list_and_table_rows`：确认 blocks 和 HTML 复用同一套可追踪 id，且只保留块级 block（无列表项 / 表格行子证据）。
 - `test_build_markdown_from_content_list_keeps_basic_structure`：确认标题和列表能转成基础 Markdown，并且输出不包含调试注释。
 - `test_build_markdown_from_content_list_embeds_clustered_block_structure`：确认 Markdown 会按原文顺序输出每个 block，并保持真标题的 heading 层级。
 - `test_build_markdown_from_content_list_separates_true_titles_from_body_subheadings`：确认正文里的 `1）`、`【...】` 这类小标题会被降级为普通正文行，而真正的章节标题仍然保持 Markdown heading。
 - `test_build_markdown_from_content_list_promotes_numbered_paragraph_body_items`：确认分隔的段落保持普通正文行，而 `3．「エッセイ」...` 这类标题按 level 输出为 heading。
-- `test_build_semantic_document_groups_sections_blocks_and_inlines`：确认 section 包含标题和正文内容，page header 被过滤，clause 挂到最近 lead-in，inline 能切出条件片段。
-- `test_extract_inline_id_is_stable_from_normalized_text`：确认 inline id 由归一化文本哈希得到，稳定且与空格无关。
-- `test_build_semantic_document_from_blocks_reuses_cached_mineru_blocks`：确认已有 `document_processor.json` 里的 blocks 不重跑 MinerU 也能生成相同三层结构。

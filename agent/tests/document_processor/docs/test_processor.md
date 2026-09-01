@@ -4,7 +4,7 @@ Tests the public `service.document_processor.processor.process(...)` entry point
 
 The tests mock MinerU output, then assert PDF/DOCX type routing, filename
 handling, byte reading, generated HTML, display HTML, Markdown, md_list,
-backend blocks, semantic document output, and processor metadata.
+block-level backend blocks, and processor metadata.
 
 实现步骤：
 
@@ -14,7 +14,7 @@ file_obj
   -> detect_file_type(file_type, filename)  显式类型优先，否则看后缀
        ├─ "docx" -> 内部 _process_docx，engine=python-docx
        └─ "pdf"  -> 调用 convert_pdf_bytes_to_content_list(...)，engine=mineru-pipeline
-  -> 复用 mineru_html 生成 html / display_html / markdown / blocks / semantic_document
+  -> 复用 mineru_html 生成 html / display_html / markdown / blocks
 ```
 
 测试覆盖：

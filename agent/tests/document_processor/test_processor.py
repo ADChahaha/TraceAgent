@@ -49,8 +49,6 @@ def test_process_validates_input_then_calls_pdf_pipeline(monkeypatch):
     assert result.md_list == ["正文"]
     assert result.blocks[0]["block_id"] == "p001_b000"
     assert result.blocks[0]["text"] == "正文"
-    assert result.semantic_document["sections"][0]["text"] == "正文"
-    assert result.semantic_document["blocks"][0]["block_id"] == "p001_b000"
     assert result.meta_info == {"engine": "mineru-pipeline"}
     assert result.warnings == []
     assert seen_call["source_bytes"] == b"%PDF-1.4"

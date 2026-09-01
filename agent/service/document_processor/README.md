@@ -38,9 +38,9 @@ HTTP endpoints:
   -> detect_file_type(file_type, filename)  显式类型优先，否则看后缀
        ├─ pdf  -> MinerU pipeline CLI
        └─ docx -> python-docx Document(BytesIO(...))
-  -> traceable extraction HTML + self-contained display HTML
-  -> markdown, md_list, backend evidence blocks, semantic_document, meta_info, warnings
-  -> ProcessResult(filename, html, display_html, markdown, md_list, blocks, semantic_document, meta_info, warnings)
+   -> traceable extraction HTML + self-contained display HTML
+  -> markdown, md_list, block-level evidence blocks, meta_info, warnings
+  -> ProcessResult(filename, html, display_html, markdown, md_list, blocks, meta_info, warnings)
 ```
 
 DOCX 解析细节：
@@ -48,7 +48,7 @@ DOCX 解析细节：
 ```text
 python-docx Document
   -> 按 Word body 原始顺序遍历 paragraph/table
-  -> 只用 Word heading style 创建 section
+  -> 只用 Word heading style 生成 heading block
   -> 无 heading style 时保留 flat paragraph/table blocks
 ```
 
@@ -59,21 +59,11 @@ Source files:
 - `mineru_html.py`: MinerU content list to HTML conversion.
 - `schemas.py`: `ProcessResult`.
 
-`blocks` 使用和 HTML 一致的可追踪 id。PDF 普通 block id 形如
-`p001_b000`，列表项形如 `p001_b000_item_000`，表格行形如
-`p001_b000_tr_000`。DOCX block id 形如 `docx_b001`，表格行形如
-`docx_b003_tr_001`。backend 会再补上自己的 `document_id`，用于
-replay/audit 展示和字段证据定位。
-
-`semantic_document` 是 MinerU 后处理出的三层语义结构：
-
-```text
-MinerU blocks
-  -> 过滤 page_header/page_number
-  -> heading 创建 section，section.text 包含标题和本 section 的正文
-  -> section 内保留 block，block 记录 clause_marker、parent_block_id 和来源 metadata
-  -> block 内生成 inline，用于短证据片段和高亮
-```
+`blocks` 使用和 HTML 一致的可追踪 id，只到块级。PDF 普通 block id 形如
+`p001_b000`。DOCX block id 形如 `docx_b001`。backend 会再补上自己的
+`document_id`，用于 replay/audit 展示和字段证据定位。不再生成列表项
+（`_item_000`）或表格行（`_tr_000`）级子证据（HTML 里仍保留列表项与表格行的
+id，但 `blocks` 不再展开成独立子 block）。
 
 ## Output HTML
 

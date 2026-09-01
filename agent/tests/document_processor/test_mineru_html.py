@@ -3,9 +3,6 @@ from service.document_processor.mineru_html import (
     build_display_html_from_content_list,
     build_html_from_content_list,
     build_markdown_from_content_list,
-    build_semantic_document_from_blocks,
-    build_semantic_document_from_content_list,
-    extract_inline_id,
 )
 
 
@@ -478,7 +475,6 @@ def test_build_outputs_skip_page_footer_noise():
     display_html = build_display_html_from_content_list(pages)
     blocks = build_blocks_from_content_list(pages)
     markdown = build_markdown_from_content_list(pages)
-    semantic_document = build_semantic_document_from_content_list(pages)
 
     assert "Agreement" in html
     assert "正文" in html
@@ -487,7 +483,6 @@ def test_build_outputs_skip_page_footer_noise():
     assert [block["block_id"] for block in blocks] == ["p001_b000", "p002_b000"]
     assert all(block["text"] != "428249v2" for block in blocks)
     assert "428249v2" not in markdown
-    assert all(block["text"] != "428249v2" for block in semantic_document["blocks"])
 
 
 def test_build_blocks_from_content_list_uses_rendered_ids_for_text_list_and_table_rows():
@@ -524,11 +519,10 @@ def test_build_blocks_from_content_list_uses_rendered_ids_for_text_list_and_tabl
     assert by_id["p001_b000"]["kind"] == "text"
     assert by_id["p001_b000"]["bbox"] == [1, 2, 3, 4]
     assert by_id["p001_b001"]["text"] == "出願資格\n試験日程"
-    assert by_id["p001_b001_item_000"]["text"] == "出願資格"
+    assert by_id["p001_b001"]["kind"] == "list"
     assert by_id["p001_b002"]["kind"] == "table"
     assert "区分 | 日程" in by_id["p001_b002"]["text"]
-    assert by_id["p001_b002_tr_000"]["kind"] == "table_header"
-    assert by_id["p001_b002_tr_001"]["text"] == "出願 | 5月"
+    assert all(block["kind"] not in {"list_item", "table_header", "table_row"} for block in blocks)
 
 
 def test_build_markdown_from_content_list_keeps_basic_structure():
@@ -829,145 +823,3 @@ def test_build_markdown_from_content_list_promotes_numbered_paragraph_body_items
     assert "**2．Web 出願システムでは、志願票入力と写真のアップロード、および選考料の納入が完了すると、「マイページ」が生成されます。**" not in result
     assert "**3．「エッセイ」については以下の指示に従ってください。**" not in result
     assert "## 3．「エッセイ」については以下の指示に従ってください。" in result
-
-
-def test_build_semantic_document_groups_sections_blocks_and_inlines():
-    pages = [
-        [
-            {
-                "type": "title",
-                "content": {
-                    "title_content": [{"type": "text", "content": "Contract"}],
-                    "level": 1,
-                },
-                "bbox": [1, 2, 3, 4],
-            },
-            {
-                "type": "title",
-                "content": {
-                    "title_content": [{"type": "text", "content": "2. Exclusions"}],
-                    "level": 2,
-                },
-            },
-            {
-                "type": "paragraph",
-                "content": {
-                    "paragraph_content": [
-                        {
-                            "type": "text",
-                            "content": "The obligation shall not apply to Confidential Information that:",
-                        }
-                    ]
-                },
-            },
-            {
-                "type": "paragraph",
-                "content": {
-                    "paragraph_content": [
-                        {
-                            "type": "text",
-                            "content": "a) was known to the Receiving Party prior to disclosure; provided that records exist.",
-                        }
-                    ]
-                },
-            },
-            {
-                "type": "page_header",
-                "content": {"text": "REPEATED HEADER"},
-            },
-            {
-                "type": "title",
-                "content": {
-                    "title_content": [{"type": "text", "content": "3. Obligations"}],
-                    "level": 2,
-                },
-            },
-            {
-                "type": "paragraph",
-                "content": {
-                    "paragraph_content": [
-                        {"type": "text", "content": "The Receiving Party shall protect the information."}
-                    ]
-                },
-            },
-        ]
-    ]
-
-    result = build_semantic_document_from_content_list(pages)
-
-    assert [section["title"] for section in result["sections"]] == [
-        "Contract",
-        "2. Exclusions",
-        "3. Obligations",
-    ]
-    exclusions = result["sections"][1]
-    assert exclusions["block_ids"] == ["p001_b001", "p001_b002", "p001_b003"]
-    assert "2. Exclusions" in exclusions["text"]
-    assert "a) was known" in exclusions["text"]
-    assert "3. Obligations" not in exclusions["text"]
-    assert "REPEATED HEADER" not in exclusions["text"]
-
-    blocks = {block["block_id"]: block for block in result["blocks"]}
-    assert blocks["p001_b003"]["type"] == "clause"
-    assert blocks["p001_b003"]["clause_marker"] == "a)"
-    assert blocks["p001_b003"]["parent_block_id"] == "p001_b002"
-    assert blocks["p001_b003"]["section_id"] == exclusions["section_id"]
-    assert blocks["p001_b003"]["inline_ids"] == [
-        extract_inline_id("was known to the Receiving Party prior to disclosure"),
-        extract_inline_id("provided that records exist"),
-    ]
-
-    inlines = {inline["inline_id"]: inline for inline in result["inlines"]}
-    clause_inline_id = extract_inline_id("was known to the Receiving Party prior to disclosure")
-    condition_inline_id = extract_inline_id("provided that records exist")
-    assert inlines[clause_inline_id]["type"] == "clause_body"
-    assert inlines[clause_inline_id]["text"] == "was known to the Receiving Party prior to disclosure"
-    assert inlines[condition_inline_id]["type"] == "condition"
-    assert inlines[condition_inline_id]["text"] == "provided that records exist"
-
-
-def test_extract_inline_id_is_stable_from_normalized_text():
-    assert extract_inline_id("Alpha   Beta") == extract_inline_id("Alpha Beta")
-    assert extract_inline_id("Alpha Beta") == "inline_d911f80b1165"
-
-
-def test_build_semantic_document_from_blocks_reuses_cached_mineru_blocks():
-    blocks = [
-        {
-            "block_id": "p001_b000",
-            "text": "1. Definitions",
-            "page_no": 1,
-            "kind": "heading",
-            "meta_info": {"mineru_type": "title"},
-        },
-        {
-            "block_id": "p001_b001",
-            "text": "Confidential Information means business information.",
-            "page_no": 1,
-            "kind": "text",
-            "meta_info": {"mineru_type": "paragraph"},
-        },
-        {
-            "block_id": "p001_b002",
-            "text": "Address\nContact",
-            "page_no": 1,
-            "kind": "list",
-            "meta_info": {"mineru_type": "list"},
-        },
-        {
-            "block_id": "p001_b002_item_000",
-            "text": "Address",
-            "page_no": 1,
-            "kind": "list_item",
-            "meta_info": {"mineru_type": "list_item"},
-        },
-    ]
-
-    result = build_semantic_document_from_blocks(blocks)
-
-    assert result["sections"][0]["title"] == "1. Definitions"
-    assert result["sections"][0]["text"] == (
-        "1. Definitions\n\nConfidential Information means business information.\n\n- Address"
-    )
-    assert result["blocks"][1]["section_id"] == result["sections"][0]["section_id"]
-    assert "p001_b002" not in {block["block_id"] for block in result["blocks"]}

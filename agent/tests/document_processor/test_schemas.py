@@ -14,7 +14,6 @@ def test_process_result_exposes_extraction_and_display_html():
         "markdown",
         "md_list",
         "blocks",
-        "semantic_document",
         "meta_info",
         "warnings",
     ]
@@ -24,7 +23,6 @@ def test_process_result_exposes_extraction_and_display_html():
     assert result.markdown == ""
     assert result.md_list == []
     assert result.blocks == []
-    assert result.semantic_document == {}
     assert result.meta_info == {}
     assert result.warnings == []
 
@@ -39,7 +37,6 @@ def test_process_result_serializes_as_plain_dataclass_data():
         "markdown": "",
         "md_list": [],
         "blocks": [],
-        "semantic_document": {},
         "meta_info": {},
         "warnings": [],
     }

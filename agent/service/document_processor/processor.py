@@ -62,7 +62,6 @@ from service.document_processor.mineru_html import (
     build_display_html_from_content_list,
     build_html_from_content_list,
     build_markdown_from_content_list,
-    build_semantic_document_from_content_list,
 )
 from service.document_processor.schemas import ProcessResult
 
@@ -185,7 +184,6 @@ def _process_pdf(file_obj, filename: str) -> ProcessResult:
         markdown=build_markdown_from_content_list(content_list),
         md_list=[block["text"] for block in blocks if block.get("text")],
         blocks=blocks,
-        semantic_document=build_semantic_document_from_content_list(content_list),
         meta_info={"engine": "mineru-pipeline"},
         warnings=[],
     )
@@ -206,21 +204,12 @@ class _DocxBlock:
     rows: list[dict[str, Any]] = field(default_factory=list)
 
 
-@dataclass(slots=True)
-class _DocxSection:
-    section_id: str
-    title: str
-    level: int
-    block_ids: list[str] = field(default_factory=list)
-    texts: list[str] = field(default_factory=list)
-
-
 def _process_docx(file_obj, filename: str) -> ProcessResult:
     """DOCX 分支：读取字节并用 python-docx 解析。"""
 
     source_bytes = read_source_bytes(file_obj)
     document = Document(BytesIO(source_bytes))
-    blocks, sections = build_docx_blocks(document)
+    blocks = build_docx_blocks(document)
     html = build_html(blocks)
     return ProcessResult(
         filename=filename,
@@ -229,16 +218,13 @@ def _process_docx(file_obj, filename: str) -> ProcessResult:
         markdown=build_markdown(blocks),
         md_list=[block.text for block in blocks if block.text],
         blocks=[process_block_to_dict(block) for block in blocks],
-        semantic_document=build_semantic_document(blocks, sections),
         meta_info={"engine": "python-docx"},
         warnings=[],
     )
 
 
-def build_docx_blocks(document: DocxDocument) -> tuple[list[_DocxBlock], list[_DocxSection]]:
+def build_docx_blocks(document: DocxDocument) -> list[_DocxBlock]:
     blocks: list[_DocxBlock] = []
-    sections: list[_DocxSection] = []
-    section_stack: list[_DocxSection] = []
 
     for item in iter_block_items(document):
         block_id = f"docx_b{len(blocks) + 1:03d}"
@@ -257,16 +243,6 @@ def build_docx_blocks(document: DocxDocument) -> tuple[list[_DocxBlock], list[_D
                     level=heading_level,
                 )
                 blocks.append(block)
-                while section_stack and section_stack[-1].level >= heading_level:
-                    section_stack.pop()
-                section = _DocxSection(
-                    section_id=block_id,
-                    title=text,
-                    level=heading_level,
-                )
-                sections.append(section)
-                section_stack.append(section)
-                append_block_to_sections(section_stack, block)
                 continue
 
             block = _DocxBlock(
@@ -276,7 +252,6 @@ def build_docx_blocks(document: DocxDocument) -> tuple[list[_DocxBlock], list[_D
                 style_name=style_name,
             )
             blocks.append(block)
-            append_block_to_sections(section_stack, block)
             continue
 
         if isinstance(item, Table):
@@ -290,9 +265,8 @@ def build_docx_blocks(document: DocxDocument) -> tuple[list[_DocxBlock], list[_D
                 rows=rows,
             )
             blocks.append(block)
-            append_block_to_sections(section_stack, block)
 
-    return blocks, sections
+    return blocks
 
 
 def iter_block_items(document: DocxDocument) -> Iterable[Paragraph | Table]:
@@ -338,12 +312,6 @@ def table_rows(table: Table, block_id: str) -> list[dict[str, Any]]:
     return rows
 
 
-def append_block_to_sections(section_stack: list[_DocxSection], block: _DocxBlock) -> None:
-    for section in section_stack:
-        section.block_ids.append(block.block_id)
-        section.texts.append(block.text)
-
-
 def process_block_to_dict(block: _DocxBlock) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "block_id": block.block_id,
@@ -360,32 +328,6 @@ def process_block_to_dict(block: _DocxBlock) -> dict[str, Any]:
     if block.rows:
         payload["rows"] = block.rows
     return payload
-
-
-def build_semantic_document(
-    blocks: list[_DocxBlock],
-    sections: list[_DocxSection],
-) -> dict[str, Any]:
-    return {
-        "sections": [
-            {
-                "section_id": section.section_id,
-                "title": section.title,
-                "level": section.level,
-                "text": "\n".join(section.texts),
-                "block_ids": section.block_ids,
-            }
-            for section in sections
-        ],
-        "blocks": [
-            {
-                **process_block_to_dict(block),
-                "type": block.kind,
-            }
-            for block in blocks
-        ],
-        "inlines": [],
-    }
 
 
 def build_html(blocks: list[_DocxBlock]) -> str:

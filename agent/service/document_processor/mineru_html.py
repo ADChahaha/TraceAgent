@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import html
-import hashlib
 import json
 import re
 from typing import Any
@@ -63,10 +62,13 @@ td, th {{ border: 1px solid #737373; padding: 5px 7px; vertical-align: top; }}
 
 
 def build_blocks_from_content_list(pages: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
-    """Build backend evidence blocks using the same ids as rendered HTML."""
+    """Build block-level evidence blocks using the same ids as rendered HTML.
+
+    只保留块级证据（paragraph / list / table 各一个 block），不再展开列表项
+    （Ixxx）或表格行（Rxxx）级子证据。
+    """
 
     blocks: list[dict[str, Any]] = []
-    table_row_counter = 0
     for page_idx, page in enumerate(pages):
         page_no = page_idx + 1
         for block_idx, block in enumerate(page):
@@ -84,116 +86,7 @@ def build_blocks_from_content_list(pages: list[list[dict[str, Any]]]) -> list[di
                     "meta_info": {"mineru_type": block_type},
                 }
             )
-            if block_type in {"index", "list"}:
-                blocks.extend(build_list_item_blocks(block, block_id, page_no))
-            if block_type == "table":
-                table_blocks, table_row_counter = build_table_row_blocks(
-                    block,
-                    block_id,
-                    page_no,
-                    table_row_counter,
-                )
-                blocks.extend(table_blocks)
     return blocks
-
-
-def build_semantic_document_from_content_list(
-    pages: list[list[dict[str, Any]]],
-) -> dict[str, Any]:
-    """Build section/block/inline semantic structure from MinerU pages."""
-
-    return build_semantic_document_from_blocks(build_blocks_from_content_list(pages))
-
-
-def build_semantic_document_from_blocks(
-    source_blocks: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """Build section/block/inline semantic structure from evidence blocks."""
-
-    sections: list[dict[str, Any]] = []
-    semantic_blocks: list[dict[str, Any]] = []
-    inlines: list[dict[str, Any]] = []
-    current_section: dict[str, Any] | None = None
-    current_lead_in_id: str | None = None
-    seen_inline_ids: dict[str, int] = {}
-
-    for source_block in source_blocks:
-        if is_noise_semantic_block(source_block):
-            continue
-        if source_block.get("kind") == "list":
-            continue
-        text = normalize_inline_space(source_block.get("text") or "")
-        if not text:
-            continue
-        block_id = str(source_block["block_id"])
-        block_type = semantic_block_type(source_block, text)
-        if block_type == "heading":
-            level = heading_level(text, len(sections))
-            current_section = {
-                "section_id": f"sec_{len(sections) + 1:03d}",
-                "title": text,
-                "level": level,
-                "source_heading_block_id": block_id,
-                "page_no": source_block.get("page_no"),
-                "bbox": source_block.get("bbox"),
-                "block_ids": [],
-                "text": "",
-            }
-            sections.append(current_section)
-            current_lead_in_id = None
-        elif current_section is None:
-            current_section = {
-                "section_id": "sec_001",
-                "title": "Document",
-                "level": 1,
-                "source_heading_block_id": None,
-                "page_no": source_block.get("page_no"),
-                "bbox": None,
-                "block_ids": [],
-                "text": "",
-            }
-            sections.append(current_section)
-
-        section_id = current_section["section_id"]
-        clause_marker = extract_clause_marker(text)
-        parent_block_id = semantic_parent_block_id(
-            block_type=block_type,
-            clause_marker=clause_marker,
-            current_lead_in_id=current_lead_in_id,
-        )
-        inline_items = build_inlines_for_block(
-            block_id,
-            text,
-            block_type,
-            clause_marker,
-            seen_inline_ids=seen_inline_ids,
-        )
-        semantic_block = {
-            "block_id": block_id,
-            "section_id": section_id,
-            "parent_block_id": parent_block_id,
-            "type": block_type,
-            "clause_marker": clause_marker,
-            "text": text,
-            "page_no": source_block.get("page_no"),
-            "bbox": source_block.get("bbox"),
-            "source_kind": source_block.get("kind"),
-            "source_mineru_type": (source_block.get("meta_info") or {}).get(
-                "mineru_type"
-            ),
-            "inline_ids": [item["inline_id"] for item in inline_items],
-        }
-        semantic_blocks.append(semantic_block)
-        inlines.extend(inline_items)
-        current_section["block_ids"].append(block_id)
-        current_section["text"] = append_section_text(current_section["text"], text, block_type)
-
-        if block_type == "lead_in":
-            current_lead_in_id = block_id
-        elif block_type not in {"clause", "list_item"}:
-            current_lead_in_id = None
-
-    return {"sections": sections, "blocks": semantic_blocks, "inlines": inlines}
 
 
 def build_markdown_from_content_list(pages: list[list[dict[str, Any]]]) -> str:
@@ -662,58 +555,6 @@ def table_text(content: dict[str, Any]) -> str:
     return "\n".join(part for part in parts if part)
 
 
-def build_list_item_blocks(
-    block: dict[str, Any],
-    block_id: str,
-    page_no: int,
-) -> list[dict[str, Any]]:
-    blocks: list[dict[str, Any]] = []
-    content = block.get("content", {})
-    for item_idx, item in enumerate(content.get("list_items") or []):
-        if not isinstance(item, dict):
-            continue
-        text = flatten_text(item.get("item_content"))
-        blocks.append(
-            {
-                "block_id": f"{block_id}_item_{item_idx:03d}",
-                "text": text,
-                "page_no": page_no,
-                "bbox": None,
-                "kind": "list_item",
-                "meta_info": {"parent_block_id": block_id, "mineru_type": "list_item"},
-            }
-        )
-    return blocks
-
-
-def build_table_row_blocks(
-    block: dict[str, Any],
-    block_id: str,
-    page_no: int,
-    row_counter: int,
-) -> tuple[list[dict[str, Any]], int]:
-    content = block.get("content", {})
-    rows = extract_table_rows(ensure_table_evidence_ids(content.get("html") or "", block_id=block_id))
-    blocks: list[dict[str, Any]] = []
-    for row_index, row in enumerate(rows):
-        row_counter += 1
-        blocks.append(
-            {
-                "block_id": row["id"] or f"{block_id}_tr_{row_index:03d}",
-                "text": row["text"],
-                "page_no": page_no,
-                "bbox": None,
-                "kind": "table_header" if row_index == 0 else "table_row",
-                "meta_info": {
-                    "parent_block_id": block_id,
-                    "mineru_type": "table_row",
-                    "row_index": row_index,
-                },
-            }
-        )
-    return blocks, row_counter
-
-
 def normalize_block_kind(block_type: str) -> str:
     if block_type == "title":
         return "heading"
@@ -728,163 +569,8 @@ def normalize_block_kind(block_type: str) -> str:
     return block_type
 
 
-def is_noise_semantic_block(block: dict[str, Any]) -> bool:
-    kind = block.get("kind")
-    mineru_type = (block.get("meta_info") or {}).get("mineru_type")
-    return kind in {"page_header", "page_number", "page_footer"} or mineru_type in {
-        "page_header",
-        "page_number",
-        "page_footer",
-    }
-
-
 def normalize_inline_space(text: str) -> str:
     return " ".join(text.split())
-
-
-def semantic_block_type(block: dict[str, Any], text: str) -> str:
-    kind = block.get("kind")
-    if kind == "heading":
-        return "heading"
-    if kind in {"table", "table_header", "table_row"}:
-        return str(kind)
-    if kind == "list_item":
-        return "list_item"
-    if extract_clause_marker(text):
-        return "clause"
-    if text.endswith(":"):
-        return "lead_in"
-    if is_signature_text(text):
-        return "signature"
-    return "paragraph"
-
-
-def semantic_parent_block_id(
-    *,
-    block_type: str,
-    clause_marker: str | None,
-    current_lead_in_id: str | None,
-) -> str | None:
-    if block_type == "clause" and clause_marker:
-        return current_lead_in_id
-    if block_type == "list_item":
-        return current_lead_in_id
-    return None
-
-
-def heading_level(text: str, section_count: int) -> int:
-    if section_count == 0:
-        return 1
-    if re.match(r"^\d+(?:\.\d+)*[.)]?\s+\S+", text):
-        return 2
-    if re.match(r"^[A-Z][.)]\s+\S+", text):
-        return 3
-    return 2
-
-
-def extract_clause_marker(text: str) -> str | None:
-    match = re.match(r"^\s*((?:\d+|[A-Za-z]|[ivxlcdmIVXLCDM]+)[.)])\s+", text)
-    if not match:
-        match = re.match(r"^\s*(\((?:\d+|[A-Za-z]|[ivxlcdmIVXLCDM]+)\))\s+", text)
-    return match.group(1) if match else None
-
-
-def is_signature_text(text: str) -> bool:
-    return text in {"For and on behalf of", "Name Name", "Date Date"} or text.startswith(
-        "For and on behalf of "
-    )
-
-
-def append_section_text(existing: str, text: str, block_type: str) -> str:
-    prefix = "- " if block_type == "list_item" else ""
-    rendered = prefix + text
-    return rendered if not existing else f"{existing}\n\n{rendered}"
-
-
-def build_inlines_for_block(
-    block_id: str,
-    text: str,
-    block_type: str,
-    clause_marker: str | None,
-    seen_inline_ids: dict[str, int] | None = None,
-) -> list[dict[str, Any]]:
-    if block_type == "heading":
-        inline_id = unique_inline_id(text, seen_inline_ids)
-        return [
-            {
-                "inline_id": inline_id,
-                "block_id": block_id,
-                "type": "heading_text",
-                "text": text,
-                "char_start": 0,
-                "char_end": len(text),
-            }
-        ]
-    content_start = len(clause_marker) + 1 if clause_marker else 0
-    content = text[content_start:].strip()
-    if not content:
-        content = text
-        content_start = 0
-    segments = split_inline_segments(content)
-    inlines: list[dict[str, Any]] = []
-    cursor = content_start
-    for index, segment in enumerate(segments, start=1):
-        start = text.find(segment, cursor)
-        if start < 0:
-            start = cursor
-        end = start + len(segment)
-        inlines.append(
-            {
-                "inline_id": unique_inline_id(segment, seen_inline_ids),
-                "block_id": block_id,
-                "type": inline_type(segment, block_type, index),
-                "text": segment,
-                "char_start": start,
-                "char_end": end,
-            }
-        )
-        cursor = end
-    return inlines
-
-
-def extract_inline_id(text: str) -> str:
-    normalized = normalize_inline_space(text)
-    digest = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:12]
-    return f"inline_{digest}"
-
-
-def unique_inline_id(text: str, seen_inline_ids: dict[str, int] | None) -> str:
-    inline_id = extract_inline_id(text)
-    if seen_inline_ids is None:
-        return inline_id
-    count = seen_inline_ids.get(inline_id, 0) + 1
-    seen_inline_ids[inline_id] = count
-    if count == 1:
-        return inline_id
-    return f"{inline_id}_{count:03d}"
-
-
-def split_inline_segments(text: str) -> list[str]:
-    normalized = text.strip().rstrip(".;")
-    if not normalized:
-        return []
-    parts = re.split(r";\s+", normalized)
-    return [part.strip().rstrip(".;") for part in parts if part.strip()]
-
-
-def inline_type(segment: str, block_type: str, index: int) -> str:
-    lowered = segment.lower()
-    if lowered.startswith(
-        ("provided that", "except that", "unless ", "if ", "when ", "without ")
-    ):
-        return "condition"
-    if re.match(r"^[\"“].+?[\"”]\s+shall mean\b", segment):
-        return "definition"
-    if block_type == "clause":
-        return "clause_body" if index == 1 else "condition"
-    if block_type == "lead_in":
-        return "lead_in"
-    return "sentence"
 
 
 def ensure_table_evidence_ids(table_html: str, *, block_id: str) -> str:

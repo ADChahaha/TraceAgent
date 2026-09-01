@@ -1,6 +1,16 @@
-last updated: 2026-09-01 11:30:00 CST
+last updated: 2026-09-01 13:00:00 CST
 
-## 2026-09-01 11:30:00 CST
+## 2026-09-01 13:00:00 CST
+- completed work:
+  - 删除 MinerU 的 semantic_document / inline 语义后处理：`build_semantic_document_from_content_list`、`build_semantic_document_from_blocks`、`build_inlines_for_block`、`extract_inline_id` / `unique_inline_id` / `split_inline_segments` / `inline_type`、`semantic_block_type` / `semantic_parent_block_id`、`heading_level`、`extract_clause_marker`、`is_signature_text`、`append_section_text`、`is_noise_semantic_block`。
+  - `ProcessResult` 与 route 响应移除 `semantic_document` 字段；`mineru_html.py` 从 823 行降到 546 行。
+  - `blocks` 收敛为块级证据：不再展开列表项（`_item_000`）或表格行（`_tr_000`）子 block；HTML 里列表项与表格行 id 仍保留用于定位。
+  - `process_docx` 简化：删除 `_DocxSection` / `append_block_to_sections` / `build_semantic_document`，`build_docx_blocks` 只产出块级 block。
+- current progress:
+  - 引证粒度收敛到块级：paragraph / list / table 各为一个 evidence 单元，无句子 / 列表项 / 表格行级 selector。
+  - `tests`（document_processor 与 routes 相关）全量通过。
+- next step:
+  - 无；后续如需更细引证，可考虑用行号锚点而非重造语义切分。
 - completed work:
   - 删除 MinerU 标题的层次聚类后处理（AgglomerativeClustering / MinMaxScaler 及选择 h2 聚类的全部辅助函数），mineru_html 标题层级改为信任 MinerU 的 `content.level`。
   - 保留轻量过滤：`目次` 页目录条目不进真章节；正文小标题（`1）` / `【...】` / 括号编号 / `<<...>>` / 单字母标号 / 短标题）统一降级为普通正文行。

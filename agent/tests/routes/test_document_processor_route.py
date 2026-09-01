@@ -45,11 +45,6 @@ def test_document_processor_process_route_calls_business_processor(monkeypatch):
             markdown="正文",
             md_list=["正文"],
             blocks=[{"block_id": "p001_b000", "text": "正文", "page_no": 1, "kind": "text"}],
-            semantic_document={
-                "sections": [{"section_id": "sec_001", "text": "正文"}],
-                "blocks": [{"block_id": "p001_b000", "text": "正文"}],
-                "inlines": [],
-            },
             meta_info={"engine": "fake"},
             warnings=["fake-warning"],
         )
@@ -81,11 +76,6 @@ def test_document_processor_process_route_calls_business_processor(monkeypatch):
                 "kind": "text",
             }
         ],
-        "semantic_document": {
-            "sections": [{"section_id": "sec_001", "text": "正文"}],
-            "blocks": [{"block_id": "p001_b000", "text": "正文"}],
-            "inlines": [],
-        },
         "meta_info": {"engine": "fake"},
         "warnings": ["fake-warning"],
     }
@@ -114,11 +104,6 @@ def test_document_processor_docx_route_calls_unified_processor(monkeypatch):
                     "kind": "heading",
                 }
             ],
-            semantic_document={
-                "sections": [{"section_id": "docx_b001", "title": "Overview", "level": 1}],
-                "blocks": [{"block_id": "docx_b001", "text": "Overview"}],
-                "inlines": [],
-            },
             meta_info={"engine": "python-docx"},
             warnings=[],
         )
@@ -155,11 +140,6 @@ def test_document_processor_docx_route_calls_unified_processor(monkeypatch):
                 "kind": "heading",
             }
         ],
-        "semantic_document": {
-            "sections": [{"section_id": "docx_b001", "title": "Overview", "level": 1}],
-            "blocks": [{"block_id": "docx_b001", "text": "Overview"}],
-            "inlines": [],
-        },
         "meta_info": {"engine": "python-docx"},
         "warnings": [],
     }

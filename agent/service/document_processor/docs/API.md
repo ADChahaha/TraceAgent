@@ -86,12 +86,7 @@ Response:
 {
   "filename": "sample.pdf",
   "html": "<section ...>...</section>",
-  "display_html": "<!doctype html>...",
-  "semantic_document": {
-    "sections": [],
-    "blocks": [],
-    "inlines": []
-  }
+  "display_html": "<!doctype html>..."
 }
 ```
 
@@ -102,28 +97,18 @@ Fields:
 - `display_html`: self-contained HTML document for user review.
 - `markdown`: markdown-like text for storage and audit views.
 - `md_list`: block text list.
-- `blocks`: page-aware evidence blocks using rendered ids.
-- `semantic_document`: section/block/inline semantic structure.
+- `blocks`: block-level evidence blocks using rendered ids.
 
-`semantic_document` 的生成链路：
-
-```text
-MinerU content_list_v2
-  -> blocks 保留 block_id/page_no/bbox/kind
-  -> 过滤 page_header/page_number
-  -> heading 到下一个 section 前的内容聚合成 section.text
-  -> block 识别 lead_in/clause/paragraph/list_item/table/signature
-  -> inline 切出 clause_body、condition、definition 等短片段
-```
+不再返回 `semantic_document`（section/block/inline 三层结构），引证粒度收敛到块级。
 
 DOCX 的生成链路：
 
 ```text
 python-docx Document
   -> 按 Word body 原始顺序读取 paragraph/table
-  -> 仅 Word heading style 生成 section
+  -> 仅 Word heading style 生成 heading block
   -> 无 heading style 时保持 flat paragraph/table blocks
-  -> table row 生成 {table_block_id}_tr_NNN 证据 id
+  -> blocks 只到块级，不再生成 {table_block_id}_tr_NNN 行级证据 id
   -> blocks[].page_no 固定为 null
 ```
 

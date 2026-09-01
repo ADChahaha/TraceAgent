@@ -40,11 +40,10 @@ file_obj
   -> read_source_bytes(...)
   -> mineru_converter.convert_pdf_bytes_to_content_list(...)
   -> mineru_html.build_blocks_from_content_list(...)
-  -> mineru_html.build_semantic_document_from_content_list(...)
   -> mineru_html.build_html_from_content_list(...)
   -> mineru_html.build_display_html_from_content_list(...)
   -> mineru_html.build_markdown_from_content_list(...)
-  -> ProcessResult(filename, html, display_html, markdown, md_list, blocks, semantic_document, meta_info, warnings)
+  -> ProcessResult(filename, html, display_html, markdown, md_list, blocks, meta_info, warnings)
 ```
 
 DOCX pipeline:
@@ -59,10 +58,10 @@ file_obj
   -> read_source_bytes(...)
   -> python-docx Document(BytesIO(source_bytes))
   -> iter_block_items(document) 按 Word body 原始顺序遍历 paragraph/table
-  -> paragraph style 是 Heading 1/2/3... 时打开或切换 section stack
+  -> paragraph style 是 Heading 1/2/3... 时生成 heading block
   -> 普通 paragraph 保留原文顺序，生成 paragraph block
-  -> table 保留原文顺序，生成 table block 和 row evidence
-  -> 生成 html / display_html / markdown / md_list / blocks / semantic_document
+  -> table 保留原文顺序，生成 table block
+  -> 生成 html / display_html / markdown / md_list / blocks
   -> ProcessResult(..., meta_info.engine="python-docx")
 ```
 
@@ -118,11 +117,11 @@ Public contract:
 ```
 
 `_process_docx` deliberately does not guess headings from font size, bold text
-or manual formatting. Only explicit Word heading styles create sections;
+or manual formatting. Only explicit Word heading styles create heading blocks;
 documents without heading styles become a flat ordered set of paragraph/table
 blocks under the document root.
 
-DOCX semantic tree construction:
+DOCX block construction:
 
 ```text
 上传的 .docx file_obj
@@ -131,34 +130,24 @@ DOCX semantic tree construction:
   -> python-docx 打开 Document(BytesIO(bytes))
   -> 按 document.element.body 原始顺序读取 paragraph/table
   -> paragraph 文本为空则跳过
-  -> paragraph style.name 匹配 Heading N / 标题 N 时：
-       创建 section，section_id 使用 docx_bNNN
-       用 heading level 维护 section stack
-  -> 非 heading paragraph：
-       生成 docx_bNNN paragraph block
-       如果当前有 section，挂到最近 section；否则挂到 document root
-  -> table：
-       生成 docx_bNNN table block
-       每个非空 row 生成 docx_bNNN_tr_NNN 行级 evidence
-       table 挂到当前 section 或 document root
+  -> paragraph style.name 匹配 Heading N / 标题 N 时：生成 heading block
+  -> 非 heading paragraph：生成 docx_bNNN paragraph block 保留原顺序
+  -> table：生成 docx_bNNN table block 保留原顺序
   -> 返回 ProcessResult
 ```
 
-DOCX evidence id 只表达文档内顺序，不表达页码或 bbox：
+DOCX block id 只表达文档内顺序，不表达页码或 bbox：
 
 ```text
 docx_b001
 docx_b002
-docx_b003_tr_001
 ```
 
 输出约束：
 
-- `html` 是供 QA agent 建虚拟文档树的 traceable fragment。
+- `html` 是供 QA agent 建真实文件树的 traceable fragment。
 - `display_html` 是带基础样式的完整 HTML，前端右侧 review iframe 直接使用。
-- `blocks` 的 `block_id` 与 HTML DOM id 一致；table row 的 id 使用
-  `{table_block_id}_tr_NNN`。
-- `semantic_document.sections` 只来自 Word heading style。
+- `blocks` 的 `block_id` 与 HTML DOM id 一致，只到块级（不再有列表项 / 表格行子证据）。
 - 没有 heading style 时不做启发式标题识别，所有非空段落都作为
   paragraph block 保留原顺序。
 - DOCX 没有稳定 page/bbox，`blocks[].page_no` 固定为 `None`，`meta_info`
@@ -185,27 +174,15 @@ Owns conversion from MinerU pages to HTML.
 
 - `build_html_from_content_list(...)`: extraction HTML fragment.
 - `build_display_html_from_content_list(...)`: full HTML document with CSS.
-- `build_blocks_from_content_list(...)`: backend evidence blocks using the same
-  rendered ids as HTML.
-- `build_semantic_document_from_content_list(...)`: section/block/inline
-  semantic structure for section-level context and fine evidence highlighting.
+- `build_blocks_from_content_list(...)`: backend block-level evidence blocks
+  using the same rendered ids as HTML (no list-item / table-row sub-evidence).
 - `build_markdown_from_content_list(...)`: markdown-like text for storage and
   audit views. It keeps the rendered block order and separates true headings
   from body-local subheadings.
 
-`semantic_document` 的基础实现思路：
-
-```text
-MinerU content_list_v2 pages
-  -> 复用 build_blocks_from_content_list(...) 生成稳定 block_id/page_no/bbox/kind
-  -> 过滤 page_header/page_number/page_footer 等不适合推理的页眉、页码和页脚版本号噪声
-  -> 遇到 heading block 创建新 section
-  -> section.text 收入 heading 本身和直到下一个 section 前的所有正文 block
-  -> block 按 heading/lead_in/clause/paragraph/list_item/table/signature 标注类型
-  -> clause block 挂到最近一个以冒号结尾的 lead_in block
-  -> block 内按分号和条件短语生成 inline 片段
-  -> 返回 {"sections": [...], "blocks": [...], "inlines": [...]}
-```
+不再生成 `semantic_document`（section/block/inline 三层语义结构）。引证粒度
+收敛到块级：paragraph/list/table 各是一个 evidence 单元，前端按块 id 高亮；
+没有句子 / 列表项 / 表格行级 selector。
 
 HTML fragment 的层级输出规则：
 
