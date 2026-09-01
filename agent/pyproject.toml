@@ -21,7 +21,6 @@ dependencies = [
     "pydantic>=2,<3",
     "python-multipart>=0.0.9",
     "python-docx>=1.1,<2",
-    "scikit-learn>=1.7,<2",
     "starlette>=0.37,<1",
     "torch>=2.0",
     "transformers>=4.57,<5",

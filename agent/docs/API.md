@@ -91,7 +91,7 @@ DOCX 处理流程：
 ```text
 DOCX UploadFile
   -> route 层包装成可读 file-like 对象
-  -> process_docx(file_obj)
+  -> process(file_obj, "docx")  统一入口，分流到 DOCX
   -> python-docx Document(BytesIO(...))
   -> 按 Word body 原始顺序遍历 paragraph/table
   -> 只用 Word heading style 生成 section
@@ -153,10 +153,10 @@ ChatCompletionRequest
   -> route 层解析 JSON，禁止未知字段
   -> processor.create_completion_stream(...)
   -> input_adapter 校验 completion_id/documents/messages/run_options
-  -> html_index 构建多文档 semantic virtual tree
-  -> graph 先输出 completion.created 和 source_indexed
-  -> resolution_new 构建 QA prompt，暴露 ls / grep / read / inspect
-  -> 模型边回答边调用工具，过程消息用 evidence:// Markdown link 引用证据
+  -> html_index 把多份 HTML 落盘成真实文件树（DocumentFileTree）
+  -> graph 先输出 completion.created 和 source_indexed（workspace_root + tree）
+  -> resolution_new 构建 QA prompt，暴露 ls / grep / read
+  -> 模型边回答边调用工具，过程消息用真实 .md 文件路径 Markdown link 引用证据
   -> 无 tool_calls 且 provider terminal stop signal 的 model_message 带 is_final=true
   -> graph 输出 completion.completed / completion.failed
   -> processor 若收到 cancel flag，则输出 completion.cancelled
@@ -183,13 +183,13 @@ event: completion.created
 data: {"seq":1,"id":"cmp_456","type":"completion.created","status":"in_progress"}
 
 event: source_indexed
-data: {"seq":2,"type":"source_indexed","tool":"source_index","result":{"ok":true,"document_tree":"...","source_selectors":{}}}
+data: {"seq":2,"type":"source_indexed","tool":"source_index","result":{"ok":true,"workspace_root":"/tmp/qa_workspace/cmp_456","tree":["└── 0001-contract/"]}}
 
 event: model_message
-data: {"seq":4,"type":"model_message","content":"我先查看 Termination 章节。[Termination](evidence://0001.0012)","tool_call_count":1,"tool_calls":[{"name":"read","args":{"locator":"evidence://0001.0012.0003"}}],"is_final":false}
+data: {"seq":4,"type":"model_message","content":"我先查看 Termination 章节。[Termination](/tmp/qa_workspace/cmp_456/0001-contract/0001-Termination)","tool_call_count":1,"tool_calls":[{"name":"read","args":{"path":"/tmp/qa_workspace/cmp_456/0001-contract/0001-Termination/0001-termination.md"}}],"is_final":false}
 
 event: model_message
-data: {"seq":11,"type":"model_message","content":"可以提前终止。[任一方可以终止](evidence://0001.0012.0003/S001)","tool_call_count":0,"tool_calls":[],"is_final":true,"stop_signal":"stop"}
+data: {"seq":11,"type":"model_message","content":"可以提前终止。[任一方可以终止](/tmp/qa_workspace/cmp_456/0001-contract/0001-Termination/0001-termination.md)","tool_call_count":0,"tool_calls":[],"is_final":true,"stop_signal":"stop"}
 
 event: completion.completed
 data: {"seq":12,"id":"cmp_456","type":"completion.completed","status":"completed"}
@@ -197,10 +197,9 @@ data: {"seq":12,"id":"cmp_456","type":"completion.completed","status":"completed
 
 ### 证据规则
 
-- `grep` 只是候选搜索，不能单独作为最终事实依据。
-- `read` 读取 block 或连续 range，用于理解上下文。
-- `inspect` 把 block 展开成 `Sxxx` / `Ixxx` / `Rxxx` inline evidence。
-- `model_message` 中首次陈述具体事实时，应使用 Markdown evidence link，例如 `[任一方可以终止](evidence://0001.0012.0003/S001)`。
+- `grep` 只是候选搜索（rg 原样 stdout），不能单独作为最终事实依据。
+- `read` 读取一个 `.md` block 文件，用于理解上下文。
+- `model_message` 中首次陈述具体事实时，应使用真实文件路径的 Markdown evidence link，例如 `[任一方可以终止](/abs/path/.../0001-termination.md)`。
 
 ## 6. 查询 completion
 

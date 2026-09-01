@@ -6,11 +6,8 @@ import html
 import hashlib
 import json
 import re
-from collections import defaultdict
 from typing import Any
 
-from sklearn.cluster import AgglomerativeClustering
-from sklearn.preprocessing import MinMaxScaler
 
 
 def build_html_from_content_list(pages: list[list[dict[str, Any]]]) -> str:
@@ -250,114 +247,20 @@ def markdown_blocks(
 
 
 def classify_markdown_blocks(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Classify renderable blocks once so HTML and Markdown share structure."""
+    """Classify renderable blocks once so HTML and Markdown share structure.
+
+    不再做聚类选 h2；只保留目录页识别和正文小标题降级两类轻量过滤。
+    真正的大章节标题直接信任 MinerU 的 content.level。
+    """
 
     toc_pages = detect_table_of_contents_pages(blocks)
-    h2_cluster_keys = infer_global_h2_cluster_keys(blocks, toc_pages)
     for block in blocks:
         is_toc_entry = block["page_no"] in toc_pages and not is_table_of_contents_heading(block)
         block["is_toc_entry"] = is_toc_entry
-        block["heading_level"] = infer_markdown_heading_level(block, h2_cluster_keys)
+        block["heading_level"] = infer_markdown_heading_level(block)
         if is_toc_entry and not is_table_of_contents_heading(block):
             block["heading_level"] = None
     return blocks
-
-
-def infer_global_h2_cluster_keys(
-    blocks: list[dict[str, Any]], toc_pages: set[int]
-) -> set[tuple[int, int]] | None:
-    candidates: list[dict[str, Any]] = []
-    for block in blocks:
-        if block.get("type") != "title":
-            continue
-        if block["page_no"] in toc_pages and not is_table_of_contents_heading(block):
-            continue
-        if is_table_of_contents_heading(block):
-            continue
-        text = normalize_inline_space(block.get("text") or "")
-        if not text or not is_global_h2_candidate(block, text):
-            continue
-        height, _width, chars, line_count, _x0, _y0 = block.get(
-            "features", [0, 0, 0, 1, 0, 0]
-        )
-        if int(line_count) > 2 or int(chars) > 100 or int(height) <= 0:
-            continue
-        candidates.append(block)
-    if len(candidates) < 2:
-        return None
-    cluster_keys = select_h2_cluster_keys(candidates)
-    if not cluster_keys:
-        return None
-    return cluster_keys
-
-
-def select_h2_cluster_keys(candidates: list[dict[str, Any]]) -> set[tuple[int, int]]:
-    cluster_count = 2
-    vectors = normalized_h2_cluster_vectors(candidates)
-    labels = AgglomerativeClustering(n_clusters=cluster_count, linkage="ward").fit_predict(
-        vectors
-    )
-    selected_label = select_h2_cluster_label(candidates, labels)
-    return {
-        (int(block["page_no"]), int(block["block_idx"]))
-        for block, label in zip(candidates, labels)
-        if int(label) == selected_label
-    }
-
-
-def normalized_h2_cluster_vectors(candidates: list[dict[str, Any]]) -> list[list[float]]:
-    rows: list[list[float]] = []
-    for block in candidates:
-        height, width, chars, line_count, x0, _y0 = block.get(
-            "features", [0, 0, 0, 1, 0, 0]
-        )
-        rows.append([float(height), float(width), float(chars), float(line_count), float(x0)])
-    vectors = MinMaxScaler().fit_transform(rows)
-    vectors[:, 0] *= 2
-    return vectors.tolist()
-
-
-def select_h2_cluster_label(candidates: list[dict[str, Any]], labels: list[int]) -> int:
-    grouped: dict[int, list[dict[str, Any]]] = defaultdict(list)
-    for block, label in zip(candidates, labels):
-        grouped[int(label)].append(block)
-    return max(
-        grouped,
-        key=lambda label: (
-            average_feature(grouped[label], 0),
-            -abs(average_feature(grouped[label], 4) - median_feature(candidates, 4)),
-            -average_feature(grouped[label], 2),
-        ),
-    )
-
-
-def average_feature(blocks: list[dict[str, Any]], index: int) -> float:
-    return sum(float(block["features"][index]) for block in blocks) / len(blocks)
-
-
-def median_feature(blocks: list[dict[str, Any]], index: int) -> float:
-    values = sorted(float(block["features"][index]) for block in blocks)
-    midpoint = len(values) // 2
-    if len(values) % 2:
-        return values[midpoint]
-    return (values[midpoint - 1] + values[midpoint]) / 2
-
-
-def is_global_h2_candidate(block: dict[str, Any], text: str) -> bool:
-    source_level = int(block["block"].get("content", {}).get("level") or 0)
-    if source_level == 1:
-        return False
-    if is_deadline_body_line(text):
-        return False
-    if re.search(r"[。！？!?]\s*$", text):
-        return False
-    if re.match(r"^[0-9０-９]+[）)]\s*", text):
-        return False
-    if re.match(r"^[（(][0-9０-９一二三四五六七八九十A-Za-z]+[)）]\s*", text):
-        return False
-    if re.match(r"^【.+】$", text) or re.match(r"^<<.+>>$", text):
-        return False
-    return True
 
 
 def detect_table_of_contents_pages(blocks: list[dict[str, Any]]) -> set[int]:
@@ -379,28 +282,14 @@ def normalize_table_of_contents_text(text: str) -> str:
     return re.sub(r"\s+", "", normalize_inline_space(text)).lower()
 
 
-def infer_markdown_heading_level(
-    block: dict[str, Any], h2_cluster_keys: set[tuple[int, int]] | None = None
-) -> int | None:
+def infer_markdown_heading_level(block: dict[str, Any]) -> int | None:
     if block.get("type") != "title":
         return None
     if is_table_of_contents_heading(block):
         return markdown_title_level(block)
-    if block_in_h2_cluster_keys(block, h2_cluster_keys):
-        return 2
     if markdown_is_body_subheading(block):
         return None
-    if h2_cluster_keys is not None:
-        return None
     return markdown_title_level(block)
-
-
-def block_in_h2_cluster_keys(
-    block: dict[str, Any], h2_cluster_keys: set[tuple[int, int]] | None
-) -> bool:
-    if h2_cluster_keys is None:
-        return False
-    return (int(block["page_no"]), int(block["block_idx"])) in h2_cluster_keys
 
 
 def markdown_heading_level(block: dict[str, Any]) -> int | None:
@@ -438,24 +327,6 @@ def markdown_is_body_subheading(block: dict[str, Any]) -> bool:
     text = normalize_inline_space(block.get("text") or "")
     if not text:
         return False
-    block_type = block.get("type")
-    height, _width, chars, line_count, _x0, _y0 = block.get("features", [0, 0, 0, 1, 0, 0])
-    if block_type == "paragraph":
-        return (
-            int(line_count) <= 2
-            and int(chars) <= 120
-            and int(height) <= 60
-            and bool(re.match(r"^[0-9０-９]+[．.]\s*", text))
-        )
-    if (
-        block_type == "title"
-        and int(height) <= 18
-        and int(chars) <= 80
-        and is_compact_numbered_body_title(text)
-    ):
-        return True
-    if block_type == "title" and is_deadline_body_line(text):
-        return True
     if text in {"目次", "募集要項"}:
         return False
     if re.match(r"^<<.+>>$", text):
@@ -476,25 +347,6 @@ def markdown_is_body_subheading(block: dict[str, Any]) -> bool:
         if not re.match(r"^\d+[．.]\s*", text):
             return True
     return False
-
-
-def is_compact_numbered_body_title(text: str) -> bool:
-    if re.match(r"^[0-9０-９]+[．]\s*", text):
-        return True
-    return bool(re.match(r"^[0-9０-９]+\.[^\s0-9０-９]", text))
-
-
-def is_deadline_body_line(text: str) -> bool:
-    normalized = normalize_inline_space(text)
-    has_deadline_label = any(label in normalized for label in ("提出期限", "締切", "期限"))
-    has_date = bool(
-        re.search(r"[12１２][0-9０-９]{3}\s*年\s*[0-9０-９]{1,2}\s*月\s*[0-9０-９]{1,2}\s*日", normalized)
-    )
-    has_time_or_until = bool(
-        re.search(r"[0-9０-９]{1,2}\s*[:：]\s*[0-9０-９]{2}", normalized)
-        or "まで" in normalized
-    )
-    return has_deadline_label and has_date and has_time_or_until
 
 
 def markdown_layout_features(block: dict[str, Any], text: str) -> list[int]:

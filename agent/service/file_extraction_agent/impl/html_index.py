@@ -1,22 +1,40 @@
-"""Build a read-only virtual tree from semantic HTML documents."""
+"""Materialize semantic HTML documents into a real, on-disk file tree.
+
+`DocumentFileTree` 是把上传的 HTML documents 落成一个真实目录树，每个
+paragraph / list / table 都写成一个 `.md` 文件，供 `ls` / `grep`(rg) /
+`read` 工具在真实文件系统上操作。没有 `path_id`、`evidence://` 或
+`sentence/row selector`；引证就用真实文件路径。
+
+实现步骤：
+
+```text
+documents(filename + html)
+  -> 解析每个 HTML 生成 HtmlNode 树
+  -> 按 h1-h6 层级建 section 目录，paragraph/list/table 各写一个 .md 文件
+  -> 目录 / 文件用数字前缀保序（0001-xxx / 0002-xxx）
+  -> DocumentFileTree.root / entries(path) / read(path) / scope_path(scope)
+```
+
+设计约定：
+
+- 每个 document 是 workspace_root/\<completion_id\>/0001-\<doc\> 目录。
+- section 是子目录；paragraph 是 `0001-xxx.md`，list 是 `0002-xxx.md`，
+  table 是 `0003-xxx.md`（均写 markdown，表格整表一个文件）。
+- list/table 不再有行级 selector，只保留一个文件作为证据单元。
+- 排序靠文件名数字前缀，不靠 `os.listdir`。
+"""
 
 from __future__ import annotations
 
 import re
-import sqlite3
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote
-
 
 HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 BLOCK_TAGS = {"p", "ul", "ol", "table"}
 DEFAULT_SNIPPET_CHARS = 24
-DEFAULT_READ_LIMIT = 30
-MAX_READ_LIMIT = 100
-READABLE_KINDS = {"paragraph", "list", "table"}
 
 
 @dataclass
@@ -35,385 +53,82 @@ class HtmlNode:
 
 
 @dataclass
-class VirtualNode:
+class FileEntry:
     name: str
     path: str
-    path_id: str
     kind: str
-    display_name: str | None = None
-    source: HtmlNode | None = None
-    source_document: str | None = None
-    title: str | None = None
-    text: str = ""
-    children: list["VirtualNode"] = field(default_factory=list)
-    list_items: list[dict[str, Any]] = field(default_factory=list)
-    table: dict[str, Any] | None = None
+    order: int
 
 
 @dataclass
-class HtmlDocument:
-    virtual_root: VirtualNode
-    nodes_by_path: dict[str, VirtualNode]
-    nodes_by_path_id: dict[str, VirtualNode]
-    source_documents: list[SourceDocument]
+class DocumentFileTree:
+    root: Path
 
-    def resolve_path(self, path: str) -> str:
-        return self._node(path).path
+    def entries(self, path: str | None = None) -> list[FileEntry]:
+        """List one level of the tree at a directory path, sorted by order.
 
-    def resolve_path_id(self, path_id: str) -> str:
-        return self._node_by_path_id(path_id).path
+        path may be a directory path (str) or None to use the tree root.
+        Returns FileEntry with name/path/kind(order). kind is "dir" or "md".
+        """
 
-    def path_id(self, path: str) -> str:
-        if not is_path_id(path):
-            return self._node(path).path_id
-        return self._node_by_path_id(path).path_id
+        directory = self._resolve_directory(path)
+        entries: list[FileEntry] = []
+        for child in sorted(directory.iterdir(), key=lambda p: _order_key(p.name)):
+            if child.is_dir():
+                entries.append(
+                    FileEntry(name=child.name, path=str(child), kind="dir", order=_order_key(child.name))
+                )
+            elif child.is_file() and child.suffix == ".md":
+                entries.append(
+                    FileEntry(name=child.name, path=str(child), kind="md", order=_order_key(child.name))
+                )
+        return sorted(entries, key=lambda entry: entry.order)
 
-    def canonical_path_id(self, path_id: str) -> str:
-        if not is_path_id(path_id):
-            raise ValueError(f"invalid path_id: {path_id}")
-        return self._node_by_path_id(path_id).path_id
+    def read(self, path: str) -> str:
+        """Read the markdown content of a file path as UTF-8 text."""
 
-    def tree_text(self, path: str = "/", depth: int = 3) -> str:
-        node = self._node(path)
-        max_depth = max(0, int(depth))
-        lines = ["/" if node.path == "/" else f"{node.path_id} {display_name(node)}/"]
-        if max_depth > 0:
-            self._append_tree_lines(node, lines, prefix="", depth=max_depth)
-        return "\n".join(lines)
+        resolved = self._resolve_file(path)
+        return resolved.read_text(encoding="utf-8")
 
-    def read_markdown(
-        self,
-        path: str,
-        *,
-        offset: int = 0,
-        limit: int = 0,
-    ) -> dict[str, Any]:
-        node = self._node(path)
-        if node.kind == "paragraph":
-            return {"path_id": node.path_id, "kind": "paragraph", "text": node.text}
-        if node.kind == "list":
-            return self._read_list(node, offset=offset, limit=limit)
-        if node.kind == "table":
-            return self._read_table(node, offset=offset, limit=limit)
-        raise ValueError(f"path is not readable: {path}")
+    def scope_path(self, scope: str | None = None) -> Path:
+        """Resolve a model-facing scope to a directory under the tree root.
 
-    def read_sequence(
-        self,
-        path: str,
-        *,
-        count: int,
-        offset: int = 0,
-        limit: int = 0,
-    ) -> dict[str, Any]:
-        start = self._node(path)
-        if start.kind not in READABLE_KINDS:
-            raise ValueError(f"path is not readable: {path}")
-        parent = self._parent_node(start)
-        siblings = parent.children
-        start_index = siblings.index(start)
-        requested_count = int(count)
-        bounded_count = max(1, min(3, requested_count))
-        selected: list[VirtualNode] = []
-        has_more_in_section = False
-        for sibling in siblings[start_index:]:
-            if sibling.kind not in READABLE_KINDS:
-                break
-            if len(selected) >= bounded_count:
-                has_more_in_section = True
-                break
-            selected.append(sibling)
-        blocks = [self.read_markdown(node.path, offset=offset, limit=limit) for node in selected]
-        return {
-            "path_id": start.path_id,
-            "kind": "read_sequence",
-            "count_requested": requested_count,
-            "count_limit": 3,
-            "count_returned": len(blocks),
-            "returned_path_ids": [block["path_id"] for block in blocks],
-            "blocks": blocks,
-            "text": render_read_sequence_text(blocks),
-            "has_more_in_section": has_more_in_section,
-        }
+        Empty scope returns the root. Rejects `..` traversal outside the root.
+        """
 
-    def read_range(
-        self,
-        start_path_id: str,
-        end_path_id: str,
-        *,
-        offset: int = 0,
-        limit: int = 0,
-    ) -> dict[str, Any]:
-        start = self._node_by_path_id(start_path_id)
-        end = self._node_by_path_id(end_path_id)
-        if start.kind not in READABLE_KINDS or end.kind not in READABLE_KINDS:
-            raise ValueError("range endpoints must be readable files")
-        parent = self._parent_node(start)
-        if self._parent_node(end) is not parent:
-            raise ValueError("range endpoints must be direct siblings in the same section")
-        siblings = parent.children
-        start_index = siblings.index(start)
-        end_index = siblings.index(end)
-        if start_index == end_index:
-            raise ValueError("range must cover at least two readable files")
-        if end_index < start_index:
-            raise ValueError("range end must come after range start")
-        selected = siblings[start_index : end_index + 1]
-        if any(node.kind not in READABLE_KINDS for node in selected):
-            raise ValueError("range can only cover consecutive readable files")
-        blocks = [self.read_markdown(node.path, offset=offset, limit=limit) for node in selected]
-        return {
-            "path_id": start.path_id,
-            "kind": "read_range",
-            "range_start": start.path_id,
-            "range_end": end.path_id,
-            "count_returned": len(blocks),
-            "returned_path_ids": [block["path_id"] for block in blocks],
-            "blocks": blocks,
-            "text": render_read_sequence_text(blocks),
-        }
+        if scope is None or not str(scope or "").strip():
+            return self.root
+        candidate = Path(str(scope)).resolve()
+        root = self.root.resolve()
+        if candidate == root:
+            return root
+        if root not in candidate.parents:
+            raise ValueError("scope escapes the document workspace")
+        if not candidate.exists() or not candidate.is_dir():
+            raise ValueError(f"scope is not a directory: {scope}")
+        return candidate
 
-    def paragraph_anchors(self, path: str) -> list[dict[str, str]]:
-        node = self._node(path)
-        if node.kind != "paragraph":
-            raise ValueError("anchors only supports .md paragraph files")
-        return [
-            {"id": f"S{index:03d}", "preview": sentence}
-            for index, sentence in enumerate(split_sentences(node.text), start=1)
-        ]
+    def _resolve_directory(self, path: str | None) -> Path:
+        if path is None or not str(path or "").strip():
+            return self.root
+        candidate = Path(str(path)).resolve()
+        root = self.root.resolve()
+        if candidate == root:
+            return root
+        if root not in candidate.parents:
+            raise ValueError("path escapes the document workspace")
+        if not candidate.exists() or not candidate.is_dir():
+            raise ValueError(f"path is not a directory: {path}")
+        return candidate
 
-    def file_kind(self, path: str) -> str:
-        node = self._node(path)
-        if node.kind not in {"paragraph", "list", "table"}:
-            raise ValueError(f"path is not readable: {path}")
-        return node.kind
-
-    def inline_selector_for_path(self, path: str) -> dict[str, Any]:
-        node = self._node(path)
-        if node.kind == "paragraph":
-            return {"path_id": node.path_id, "sentences": [anchor["id"] for anchor in self.paragraph_anchors(node.path)]}
-        if node.kind == "list":
-            return {"path_id": node.path_id, "items": [item["id"] for item in node.list_items]}
-        if node.kind == "table":
-            table = node.table or {"rows": []}
-            return {"path_id": node.path_id, "rows": [row["row_id"] for row in table["rows"]]}
-        raise ValueError(f"path is not readable: {path}")
-
-    def source_selectors(self) -> dict[str, str]:
-        selectors: dict[str, str] = {}
-        for path_id, node in self.nodes_by_path_id.items():
-            if node.kind not in READABLE_KINDS and node.kind not in {"document", "section"}:
-                continue
-            source_id = source_dom_id(node.source)
-            if source_id:
-                selectors[path_id] = source_id
-        return selectors
-
-    def outline_tree(self) -> list[dict[str, Any]]:
-        root = self.virtual_root
-        return [self._outline_node(child) for child in root.children]
-
-    def _outline_node(self, node: VirtualNode) -> dict[str, Any]:
-        label = node.display_name or node.title or node.name
-        entry: dict[str, Any] = {
-            "id": node.path_id,
-            "type": node.kind,
-            "text": label,
-        }
-        if node.children:
-            children = [self._outline_node(c) for c in node.children if c.kind not in READABLE_KINDS]
-            if children:
-                entry["children"] = children
-        return entry
-
-    def query_table(
-        self,
-        path: str,
-        sql: str,
-        *,
-        offset: int = 0,
-        limit: int = DEFAULT_READ_LIMIT,
-    ) -> dict[str, Any]:
-        node = self._node(path)
-        if node.kind != "table":
-            raise ValueError("query_table only supports .table paths")
-        table = node.table or {"columns": [], "rows": []}
-        rows = query_table_rows(table, sql)
-        bounded_offset, bounded_limit = normalize_window(offset, limit)
-        visible_rows = rows[bounded_offset : bounded_offset + bounded_limit]
-        text = render_table_markdown(
-            kind="table_query",
-            path_id=node.path_id,
-            title=node.title or node.name,
-            columns=table["columns"],
-            rows=visible_rows,
-            total=len(rows),
-            offset=bounded_offset,
-            selected_columns=visible_rows[0]["values"].keys() if visible_rows else table["columns"],
-            extra_metadata={"sql": sql, "matched_rows": len(rows)},
-        )
-        return {
-            "path_id": node.path_id,
-            "kind": "table_query",
-            "text": text,
-            "offset": bounded_offset,
-            "limit": bounded_limit,
-            "total": len(rows),
-            "has_more": bounded_offset + bounded_limit < len(rows),
-        }
-
-    def validate_evidence(self, evidence: Any) -> list[dict[str, Any]]:
-        errors: list[dict[str, Any]] = []
-        if not isinstance(evidence, list):
-            return [{"message": "evidence must be a list"}]
-        for index, selector in enumerate(evidence):
-            if not isinstance(selector, dict):
-                errors.append({"index": index, "message": "evidence selector must be an object"})
-                continue
-            path_id = selector.get("path_id")
-            if not isinstance(path_id, str):
-                errors.append({"index": index, "message": "unknown evidence path_id"})
-                continue
-            try:
-                node = self._node_by_path_id(path_id)
-            except ValueError:
-                errors.append({"index": index, "message": "unknown evidence path_id"})
-                continue
-            if node.kind == "paragraph":
-                errors.extend(validate_selector_values(index, selector, "sentences", [a["id"] for a in self.paragraph_anchors(node.path)]))
-            elif node.kind == "list":
-                errors.extend(validate_selector_values(index, selector, "items", [item["id"] for item in node.list_items]))
-            elif node.kind == "table":
-                table = node.table or {"rows": []}
-                errors.extend(validate_selector_values(index, selector, "rows", [row["row_id"] for row in table["rows"]]))
-            else:
-                errors.append({"index": index, "message": "evidence path_id must point to a file"})
-        return errors
-
-    def canonicalize_evidence(self, evidence: Any) -> Any:
-        if not isinstance(evidence, list):
-            return evidence
-        canonicalized: list[Any] = []
-        for selector in evidence:
-            if not isinstance(selector, dict):
-                canonicalized.append(selector)
-                continue
-            path_id = selector.get("path_id")
-            if not isinstance(path_id, str):
-                canonicalized.append(selector)
-                continue
-            try:
-                canonicalized.append({**selector, "path_id": self.canonical_path_id(path_id)})
-            except ValueError:
-                canonicalized.append(selector)
-        return canonicalized
-
-    def evidence_texts(self, evidence: list[dict[str, Any]]) -> list[dict[str, str]]:
-        texts: list[dict[str, str]] = []
-        for selector in evidence:
-            locator = selector.get("path_id") or selector.get("path")
-            node = self._node(locator)
-            if node.kind == "paragraph":
-                sentences = {item["id"]: item["preview"] for item in self.paragraph_anchors(node.path)}
-                for sentence_id in selector.get("sentences", []) or []:
-                    texts.append({"path_id": node.path_id, "selector": sentence_id, "text": sentences.get(sentence_id, "")})
-            elif node.kind == "list":
-                items = {item["id"]: item["text"] for item in node.list_items}
-                for item_id in selector.get("items", []) or []:
-                    texts.append({"path_id": node.path_id, "selector": item_id, "text": items.get(item_id, "")})
-            elif node.kind == "table":
-                rows = {row["row_id"]: " | ".join(str(value) for value in row["values"].values()) for row in (node.table or {}).get("rows", [])}
-                for row_id in selector.get("rows", []) or []:
-                    texts.append({"path_id": node.path_id, "selector": row_id, "text": rows.get(row_id, "")})
-        return texts
-
-    def _node(self, path: str) -> VirtualNode:
-        if is_path_id(path):
-            return self._node_by_path_id(path)
-        normalized = normalize_path(path)
-        node = self.nodes_by_path.get(normalized)
-        if node is not None:
-            return node
-        decoded = normalize_path(unquote(normalized))
-        node = self.nodes_by_path.get(decoded)
-        if node is not None:
-            return node
-        raise ValueError(f"unknown path: {path}")
-
-    def _node_by_path_id(self, path_id: str) -> VirtualNode:
-        normalized = normalize_path_id(path_id)
-        node = self.nodes_by_path_id.get(normalized)
-        if node is not None:
-            return node
-        raise ValueError(f"unknown path_id: {path_id}")
-
-    def _parent_node(self, node: VirtualNode) -> VirtualNode:
-        parent_path = node.path.rsplit("/", 1)[0] or "/"
-        parent = self.nodes_by_path.get(parent_path)
-        if parent is None:
-            raise ValueError(f"missing parent for path: {node.path}")
-        return parent
-
-    def _append_tree_lines(
-        self,
-        node: VirtualNode,
-        lines: list[str],
-        *,
-        prefix: str,
-        depth: int,
-    ) -> None:
-        if depth <= 0:
-            return
-        for index, child in enumerate(node.children):
-            connector = "└── " if index == len(node.children) - 1 else "├── "
-            suffix = "/" if child.kind in {"root", "document", "section"} else ""
-            lines.append(f"{prefix}{connector}{child.path_id} {display_name(child)}{suffix}")
-            extension = "    " if index == len(node.children) - 1 else "│   "
-            self._append_tree_lines(child, lines, prefix=prefix + extension, depth=depth - 1)
-
-    def _read_list(self, node: VirtualNode, *, offset: int, limit: int) -> dict[str, Any]:
-        top_level_items = [item for item in node.list_items if "." not in item["id"][1:]]
-        bounded_offset, bounded_limit = normalize_window(offset, limit, total=len(top_level_items))
-        visible = top_level_items[bounded_offset : bounded_offset + bounded_limit]
-        allowed_prefixes = {item["id"] for item in visible}
-        rendered_items = [
-            item
-            for item in node.list_items
-            if item["id"] in allowed_prefixes or any(item["id"].startswith(prefix + ".") for prefix in allowed_prefixes)
-        ]
-        text = render_list_markdown(node, rendered_items, offset=bounded_offset, total=len(top_level_items))
-        return {
-            "path_id": node.path_id,
-            "kind": "list",
-            "text": text,
-            "offset": bounded_offset,
-            "limit": bounded_limit,
-            "total": len(node.list_items),
-            "has_more": bounded_offset + bounded_limit < len(top_level_items),
-        }
-
-    def _read_table(self, node: VirtualNode, *, offset: int, limit: int) -> dict[str, Any]:
-        table = node.table or {"columns": [], "rows": []}
-        bounded_offset, bounded_limit = normalize_window(offset, limit, total=len(table["rows"]))
-        visible_rows = table["rows"][bounded_offset : bounded_offset + bounded_limit]
-        text = render_table_markdown(
-            kind="table",
-            path_id=node.path_id,
-            title=node.title or node.name,
-            columns=table["columns"],
-            rows=visible_rows,
-            total=len(table["rows"]),
-            offset=bounded_offset,
-            selected_columns=table["columns"],
-        )
-        return {
-            "path_id": node.path_id,
-            "kind": "table",
-            "text": text,
-            "offset": bounded_offset,
-            "limit": bounded_limit,
-            "total": len(table["rows"]),
-            "has_more": bounded_offset + bounded_limit < len(table["rows"]),
-        }
+    def _resolve_file(self, path: str) -> Path:
+        candidate = Path(str(path)).resolve()
+        root = self.root.resolve()
+        if root not in candidate.parents:
+            raise ValueError("file escapes the document workspace")
+        if not candidate.exists() or not candidate.is_file():
+            raise ValueError(f"file not found: {path}")
+        return candidate
 
 
 class _Parser(HTMLParser):
@@ -443,11 +158,12 @@ class _Parser(HTMLParser):
             self.stack[-1].children.append(node)
 
 
-def build_html_document(documents: Any) -> HtmlDocument:
+def materialize_tree(documents: Any, workspace_root: Path) -> DocumentFileTree:
+    """Write documents to an on-disk file tree and return its accessor."""
+
     source_documents = normalize_documents(documents)
-    root = VirtualNode(name="", path="/", path_id="0000", kind="root")
-    nodes_by_path = {"/": root}
-    nodes_by_path_id = {root.path_id: root}
+    root = Path(workspace_root)
+    root.mkdir(parents=True, exist_ok=True)
     used_root_names: dict[str, int] = {}
 
     for document_index, source in enumerate(source_documents, start=1):
@@ -458,28 +174,11 @@ def build_html_document(documents: Any) -> HtmlDocument:
         title_slug = slug_text(title) if title else ""
         base_name = f"{document_index:03d}-{basename}" + (f"-{title_slug}" if title_slug else "")
         doc_name = unique_name(base_name, used_root_names)
-        doc_path = f"/{doc_name}"
-        doc_node = VirtualNode(
-            name=doc_name,
-            path=doc_path,
-            path_id=f"{len(root.children) + 1:04d}",
-            display_name=decode_display_name(f"{basename}" + (f"-{title_slug}" if title_slug else "")),
-            kind="document",
-            source=title_node,
-            source_document=source.filename,
-            title=title,
-        )
-        root.children.append(doc_node)
-        nodes_by_path[doc_path] = doc_node
-        nodes_by_path_id[doc_node.path_id] = doc_node
-        add_document_children(doc_node, parsed_root, nodes_by_path, nodes_by_path_id)
+        doc_dir = root / doc_name
+        doc_dir.mkdir(parents=True, exist_ok=True)
+        write_document_children(doc_dir, parsed_root, document_index)
 
-    return HtmlDocument(
-        virtual_root=root,
-        nodes_by_path=nodes_by_path,
-        nodes_by_path_id=nodes_by_path_id,
-        source_documents=source_documents,
-    )
+    return DocumentFileTree(root=root)
 
 
 def normalize_documents(documents: Any) -> list[SourceDocument]:
@@ -504,84 +203,48 @@ def parse_html(html: str) -> HtmlNode:
     return parser.root
 
 
-def add_document_children(
-    doc_node: VirtualNode,
+def write_document_children(
+    doc_dir: Path,
     parsed_root: HtmlNode,
-    nodes_by_path: dict[str, VirtualNode],
-    nodes_by_path_id: dict[str, VirtualNode],
+    document_index: int,
 ) -> None:
-    section_stack: list[tuple[int, VirtualNode]] = [(0, doc_node)]
-    sibling_counters: dict[str, dict[str, int]] = {doc_node.path: {}}
+    """Write section dirs and block .md files from the parsed HTML tree."""
+
+    section_stack: list[tuple[int, Path]] = [(0, doc_dir)]
+    sibling_counters: dict[Path, dict[str, int]] = {doc_dir: {}}
 
     for node in block_nodes(parsed_root):
         if node.tag in HEADING_TAGS:
             level = int(node.tag[1])
             while section_stack and section_stack[-1][0] >= level:
                 section_stack.pop()
-            parent = section_stack[-1][1] if section_stack else doc_node
-            name = numbered_name(parent, slug_text(node_text(node)) or "section", sibling_counters, suffix="")
-            section = add_virtual_child(parent, name, "section", nodes_by_path, nodes_by_path_id, source=node, text=node_text(node))
-            sibling_counters[section.path] = {}
-            section_stack.append((level, section))
+            parent_dir = section_stack[-1][1] if section_stack else doc_dir
+            name = numbered_name(parent_dir, slug_text(node_text(node)) or "section", sibling_counters, suffix="")
+            section_dir = parent_dir / name
+            section_dir.mkdir(parents=True, exist_ok=True)
+            sibling_counters[section_dir] = {}
+            section_stack.append((level, section_dir))
             continue
 
-        parent = section_stack[-1][1] if section_stack else doc_node
+        parent_dir = section_stack[-1][1] if section_stack else doc_dir
         if node.tag == "p":
             text = node_text(node)
-            name = numbered_name(parent, paragraph_slug(text), sibling_counters, suffix=".md")
-            add_virtual_child(parent, name, "paragraph", nodes_by_path, nodes_by_path_id, source=node, text=text)
+            name = numbered_name(parent_dir, paragraph_slug(text), sibling_counters, suffix=".md")
+            write_markdown_file(parent_dir / name, text)
         elif node.tag in {"ul", "ol"}:
             items = list_items(node)
             title = slug_text(items[0]["text"][:DEFAULT_SNIPPET_CHARS]) if items else "list"
-            name = numbered_name(parent, title or "list", sibling_counters, suffix=".list")
-            child = add_virtual_child(parent, name, "list", nodes_by_path, nodes_by_path_id, source=node, title=title or "list")
-            child.list_items = items
+            name = numbered_name(parent_dir, title or "list", sibling_counters, suffix=".md")
+            write_markdown_file(parent_dir / name, render_list_markdown(items))
         elif node.tag == "table":
             table = parse_table(node)
             title = slug_text(table.get("label") or " ".join(table["columns"][:3]) or "table")
-            name = numbered_name(parent, title or "table", sibling_counters, suffix=".table")
-            child = add_virtual_child(parent, name, "table", nodes_by_path, nodes_by_path_id, source=node, title=table.get("label") or title)
-            child.table = table
+            name = numbered_name(parent_dir, title or "table", sibling_counters, suffix=".md")
+            write_markdown_file(parent_dir / name, render_table_markdown(table))
 
 
-def add_virtual_child(
-    parent: VirtualNode,
-    name: str,
-    kind: str,
-    nodes_by_path: dict[str, VirtualNode],
-    nodes_by_path_id: dict[str, VirtualNode],
-    *,
-    source: HtmlNode | None = None,
-    title: str | None = None,
-    text: str = "",
-) -> VirtualNode:
-    path = parent.path.rstrip("/") + "/" + name
-    visible_name = decode_display_name(strip_ordinal_prefix(name))
-    child = VirtualNode(
-        name=name,
-        path=path,
-        path_id=next_child_path_id(parent, kind),
-        display_name=visible_name,
-        kind=kind,
-        source=source,
-        source_document=parent.source_document,
-        title=title,
-        text=text,
-    )
-    parent.children.append(child)
-    nodes_by_path[path] = child
-    nodes_by_path_id[child.path_id] = child
-    return child
-
-
-def source_dom_id(node: HtmlNode | None) -> str:
-    if node is None:
-        return ""
-    for attr_name in ("id", "data-element-id"):
-        value = node.attrs.get(attr_name)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
+def write_markdown_file(path: Path, text: str) -> None:
+    path.write_text(text, encoding="utf-8")
 
 
 def block_nodes(root: HtmlNode) -> list[HtmlNode]:
@@ -597,11 +260,6 @@ def block_nodes(root: HtmlNode) -> list[HtmlNode]:
 
     visit(root)
     return result
-
-
-def document_title(root: HtmlNode) -> str:
-    title_node = document_title_node(root)
-    return node_text(title_node) if title_node is not None else ""
 
 
 def document_title_node(root: HtmlNode) -> HtmlNode | None:
@@ -654,144 +312,35 @@ def parse_table(node: HtmlNode) -> dict[str, Any]:
                 rows.append(cells)
     columns = rows[0] if rows else []
     data_rows = rows[1:] if rows else []
-    parsed_rows: list[dict[str, Any]] = []
-    for index, row in enumerate(data_rows, start=1):
-        values = {
-            column: row[column_index] if column_index < len(row) else ""
-            for column_index, column in enumerate(columns)
-        }
-        parsed_rows.append({"row_id": f"R{index:03d}", "values": values})
-    return {"label": label, "columns": columns, "rows": parsed_rows}
+    return {"label": label, "columns": columns, "rows": data_rows}
 
 
-def query_table_rows(table: dict[str, Any], sql: str) -> list[dict[str, Any]]:
-    if not isinstance(sql, str) or not sql.strip().lower().startswith("select"):
-        raise ValueError("query_table only allows SELECT statements")
-    if ";" in sql.strip().rstrip(";"):
-        raise ValueError("query_table only allows a single SELECT statement")
-    connection = sqlite3.connect(":memory:")
-    connection.row_factory = sqlite3.Row
-    columns = table["columns"]
-    column_defs = ", ".join(f'"{column}" TEXT' for column in columns)
-    quoted_columns = ", ".join(f'"{column}"' for column in columns)
-    connection.execute(f'CREATE TABLE data ({column_defs})')
-    for row in table["rows"]:
-        placeholders = ", ".join("?" for _ in columns)
-        connection.execute(
-            f"INSERT INTO data ({quoted_columns}) VALUES ({placeholders})",
-            [row["values"].get(column, "") for column in columns],
-        )
-    selected = connection.execute(sql).fetchall()
-    results: list[dict[str, Any]] = []
-    for selected_row in selected:
-        selected_values = dict(selected_row)
-        for row in table["rows"]:
-            if all(str(row["values"].get(key, "")) == str(value) for key, value in selected_values.items() if key in row["values"]):
-                results.append({"row_id": row["row_id"], "values": selected_values})
-                break
-    connection.close()
-    return results
-
-
-def render_list_markdown(node: VirtualNode, items: list[dict[str, Any]], *, offset: int, total: int) -> str:
-    showing_end = min(total, offset + len([item for item in items if item["depth"] == 0]))
-    lines = [
-        "---",
-        "kind: list",
-        f"path_id: {node.path_id}",
-        f"title: {node.title or node.name}",
-        f"items: {total}",
-        f"showing: {offset + 1}-{showing_end}" if total else "showing: 0-0",
-        "---",
-        "",
-    ]
+def render_list_markdown(items: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
     for item in items:
         indent = "  " * item["depth"]
-        lines.append(f"{indent}- [{item['id']}] {item['text']}")
+        lines.append(f"{indent}- {item['text']}")
     return "\n".join(lines)
 
 
-def render_table_markdown(
-    *,
-    kind: str,
-    path_id: str,
-    title: str,
-    columns: list[str],
-    rows: list[dict[str, Any]],
-    total: int,
-    offset: int,
-    selected_columns: Any,
-    extra_metadata: dict[str, Any] | None = None,
-) -> str:
-    selected = list(selected_columns)
-    showing_end = min(total, offset + len(rows))
-    lines = [
-        "---",
-        f"kind: {kind}",
-        f"path_id: {path_id}",
-        f"title: {title}",
-        f"rows: {total}",
-        "columns: " + " | ".join(columns),
-    ]
-    for key, value in (extra_metadata or {}).items():
-        lines.append(f"{key}: {value}")
-    lines.extend(
-        [
-            f"showing: {offset + 1}-{showing_end}" if total else "showing: 0-0",
-            "---",
-            "",
-            "| row | " + " | ".join(selected) + " |",
-            "| --- | " + " | ".join("---" for _ in selected) + " |",
-        ]
-    )
+def render_table_markdown(table: dict[str, Any]) -> str:
+    columns = table["columns"]
+    rows = table["rows"]
+    if not columns:
+        return ""
+    lines: list[str] = []
+    if table.get("label"):
+        lines.append(table["label"])
+    lines.append("| " + " | ".join(columns) + " |")
+    lines.append("| " + " | ".join("---" for _ in columns) + " |")
     for row in rows:
-        lines.append("| " + row["row_id"] + " | " + " | ".join(str(row["values"].get(column, "")) for column in selected) + " |")
+        padded = list(row) + [""] * (len(columns) - len(row))
+        lines.append("| " + " | ".join(padded[: len(columns)]) + " |")
     return "\n".join(lines)
 
 
-def render_read_sequence_text(blocks: list[dict[str, Any]]) -> str:
-    rendered: list[str] = []
-    for block in blocks:
-        rendered.extend(
-            [
-                f"<!-- block evidence://{block.get('path_id', '')} kind={block.get('kind', 'unknown')} -->",
-                "",
-                str(block.get("text", "")),
-            ]
-        )
-    return "\n\n".join(rendered)
-
-
-def validate_selector_values(index: int, selector: dict[str, Any], key: str, allowed: list[str]) -> list[dict[str, Any]]:
-    if key not in selector:
-        return [{"index": index, "message": f"evidence selector for this path_id must use {key}"}]
-    values = selector.get(key)
-    if not isinstance(values, list) or not values:
-        return [{"index": index, "message": f"{key} must be a non-empty list"}]
-    errors = []
-    for value in values:
-        if value not in allowed:
-            errors.append({"index": index, "message": f"unknown {key} value: {value}"})
-    return errors
-
-
-def normalize_window(offset: int, limit: int, *, total: int | None = None) -> tuple[int, int]:
-    try:
-        normalized_offset = max(0, int(offset))
-    except (TypeError, ValueError):
-        normalized_offset = 0
-    try:
-        normalized_limit = int(limit)
-    except (TypeError, ValueError):
-        normalized_limit = DEFAULT_READ_LIMIT
-    if normalized_limit <= 0 and total is not None:
-        return normalized_offset, max(0, total - normalized_offset)
-    normalized_limit = max(1, min(normalized_limit, MAX_READ_LIMIT))
-    return normalized_offset, normalized_limit
-
-
-def numbered_name(parent: VirtualNode, slug: str, counters: dict[str, dict[str, int]], *, suffix: str) -> str:
-    bucket = counters.setdefault(parent.path, {})
+def numbered_name(parent: Path, slug: str, counters: dict[Path, dict[str, int]], *, suffix: str) -> str:
+    bucket = counters.setdefault(parent, {})
     ordinal = sum(bucket.values()) + 1
     base = f"{ordinal:03d}-{slug}{suffix}"
     bucket[base] = bucket.get(base, 0) + 1
@@ -808,48 +357,14 @@ def unique_name(base: str, used: dict[str, int]) -> str:
     return f"{base}-{used[base]}"
 
 
-def display_name(node: VirtualNode) -> str:
-    return node.display_name or strip_ordinal_prefix(node.name)
-
-
-def strip_ordinal_prefix(name: str) -> str:
-    return re.sub(r"^\d{3}-", "", name)
-
-
-def decode_display_name(name: str) -> str:
-    return unquote(name)
-
-
-def normalize_path(path: str) -> str:
-    normalized = "/" + str(path or "/").strip("/")
-    return "/" if normalized == "/" else normalized
-
-
-def next_child_path_id(parent: VirtualNode, kind: str) -> str:
-    if parent.kind == "document" and kind in READABLE_KINDS:
-        index = sum(1 for child in parent.children if child.kind in READABLE_KINDS) + 1
-        return f"{parent.path_id}.0000.{index:04d}"
-    if parent.kind == "document" and kind == "section":
-        index = sum(1 for child in parent.children if child.kind == "section") + 1
-        return f"{parent.path_id}.{index:04d}"
-    return child_path_id(parent.path_id, len(parent.children) + 1)
-
-
-def child_path_id(parent_path_id: str, index: int) -> str:
-    prefix = normalize_path_id(parent_path_id)
-    return f"{prefix}.{index:04d}"
-
-
-def is_path_id(value: str) -> bool:
-    normalized = str(value or "").strip()
-    return bool(re.fullmatch(r"\d{4}(?:\.\d{4})*", normalized))
-
-
-def normalize_path_id(path_id: str) -> str:
-    normalized = str(path_id or "").strip()
-    if not re.fullmatch(r"\d{4}(?:\.\d{4})*", normalized):
-        raise ValueError(f"invalid path_id: {path_id}")
-    return normalized
+def _order_key(name: str) -> int:
+    digits = ""
+    for char in name:
+        if char.isdigit():
+            digits += char
+        else:
+            break
+    return int(digits) if digits else 0
 
 
 def slug_text(text: str) -> str:
@@ -869,14 +384,6 @@ def node_text(node: HtmlNode) -> str:
     return " ".join(part for part in (node_text(child) for child in node.children) if part).strip()
 
 
-def split_sentences(text: str) -> list[str]:
-    normalized = " ".join(str(text or "").split())
-    if not normalized:
-        return []
-    parts = re.findall(r".+?(?:[。！？!?；;.]|$)", normalized)
-    return [part.strip() for part in parts if part.strip()]
-
-
 def walk(node: HtmlNode):
     yield node
     for child in node.children:
@@ -886,7 +393,7 @@ def walk(node: HtmlNode):
 __all__ = [
     "SourceDocument",
     "HtmlNode",
-    "VirtualNode",
-    "HtmlDocument",
-    "build_html_document",
+    "FileEntry",
+    "DocumentFileTree",
+    "materialize_tree",
 ]

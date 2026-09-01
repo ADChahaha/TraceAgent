@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from service.file_extraction_agent.impl.html_index import HtmlDocument
+from service.file_extraction_agent.impl.html_index import DocumentFileTree
 from service.file_extraction_agent.schemas import (
     DocumentQaMessage,
     InputDocument,
@@ -18,7 +18,7 @@ class DocumentQaCompletionInput:
     completion_id: str
     documents: list[InputDocument]
     messages: list[DocumentQaMessage]
-    document: HtmlDocument
+    document: DocumentFileTree
     run_options: RunOptions = field(default_factory=RunOptions)
 
 
@@ -26,7 +26,7 @@ class DocumentQaCompletionInput:
 class GraphState:
     completion_input: DocumentQaCompletionInput
     completion_id: str
-    document: HtmlDocument
+    document: DocumentFileTree
     messages: list[DocumentQaMessage]
     run_options: RunOptions
     actions: list[dict[str, Any]] = field(default_factory=list)

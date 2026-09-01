@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from service.file_extraction_agent.impl.html_index import build_html_document
+from service.file_extraction_agent.impl.html_index import materialize_tree
 
 
 def _documents():
@@ -40,245 +42,118 @@ def _documents():
     ]
 
 
-def test_build_html_document_builds_virtual_tree_for_multiple_documents():
-    document = build_html_document(_documents())
+def test_materialize_tree_writes_real_files_for_multiple_documents(tmp_path):
+    tree = materialize_tree(_documents(), tmp_path)
 
-    root = document.virtual_root
-    assert root.path == "/"
-    assert root.path_id == "0000"
-    assert [child.name for child in root.children] == [
+    assert tree.root == tmp_path
+    assert tree.root.is_dir()
+    doc_dirs = [entry for entry in tree.entries() if entry.kind == "dir"]
+    assert [entry.name for entry in doc_dirs] == [
         "001-contract-项目设计说明",
         "002-contract-项目设计说明",
     ]
-    assert [child.path_id for child in root.children] == ["0001", "0002"]
-    assert "/001-contract-项目设计说明/001-项目设计说明" in document.nodes_by_path
-    assert "/001-contract-项目设计说明/001-项目设计说明/001-背景" in document.nodes_by_path
-    assert "/001-contract-项目设计说明/001-项目设计说明/002-背景" in document.nodes_by_path
-    assert "/001-contract-项目设计说明/002-补充说明" in document.nodes_by_path
-    assert (
-        "/001-contract-项目设计说明/001-项目设计说明/001-背景/001-这个项目最初是为了抽取字段.md"
-        in document.nodes_by_path
-    )
-    assert (
-        "/001-contract-项目设计说明/001-项目设计说明/001-背景/002-这个项目最初是为了验证重名段落.md"
-        in document.nodes_by_path
-    )
-    assert "/001-contract-项目设计说明/001-项目设计说明/002-背景/001-第一项.list" in document.nodes_by_path
-    assert "/001-contract-项目设计说明/002-补充说明/001-补充说明正文.md" in document.nodes_by_path
-    assert "/001-contract-项目设计说明/002-补充说明/002-费用明细.table" in document.nodes_by_path
+    assert [entry.path for entry in doc_dirs] == [
+        str(tmp_path / "001-contract-项目设计说明"),
+        str(tmp_path / "002-contract-项目设计说明"),
+    ]
 
 
-def test_tree_view_respects_depth_and_file_kinds():
-    document = build_html_document(_documents())
+def test_tree_entries_respect_depth_and_file_kinds(tmp_path):
+    tree = materialize_tree(_documents(), tmp_path)
 
-    depth_one = document.tree_text("/", depth=1)
-    assert depth_one.splitlines()[0] == "/"
-    assert "0001 contract-项目设计说明/" in depth_one
-    assert "0000 /" not in depth_one
-    assert "001-contract-项目设计说明/" not in depth_one
-    assert "背景/" not in depth_one
+    root_entries = tree.entries()
+    assert [e.name for e in root_entries] == [
+        "001-contract-项目设计说明",
+        "002-contract-项目设计说明",
+    ]
 
-    depth_three = document.tree_text("/001-contract-项目设计说明", depth=3)
-    assert "0001" in depth_three
-    assert "/001-contract-项目设计说明/001-背景" not in depth_three
-    assert "项目设计说明/" in depth_three
-    assert "背景/" in depth_three
-    assert "这个项目最初是为了抽取字段.md" in depth_three
-    assert "第一项.list" in depth_three
-    assert "补充说明/" in depth_three
-    assert "001-这个项目最初是为了抽取字段.md" not in depth_three
+    doc_entries = tree.entries(str(tmp_path / "001-contract-项目设计说明"))
+    assert [e.name for e in doc_entries] == [
+        "001-项目设计说明",
+        "002-补充说明",
+    ]
+    assert [e.kind for e in doc_entries] == ["dir", "dir"]
 
 
-def test_path_ids_are_stable_model_visible_locators_for_raw_paths():
-    document = build_html_document(_documents())
-    path = "/001-contract-项目设计说明/001-项目设计说明/001-背景/001-这个项目最初是为了抽取字段.md"
+def test_tree_writes_paragraph_list_and_table_as_markdown_files(tmp_path):
+    tree = materialize_tree(_documents(), tmp_path)
 
-    path_id = document.path_id(path)
+    section = tree.entries(str(tmp_path / "001-contract-项目设计说明" / "001-项目设计说明"))
+    names = [e.name for e in section]
+    assert names == [
+        "001-背景",
+        "002-背景",
+    ]
 
-    assert path_id == "0001.0001.0001.0001"
-    assert document.resolve_path_id(path_id) == path
-    assert document.resolve_path(path_id) == path
-    assert document.read_markdown(path_id)["path_id"] == path_id
-    assert "path" not in document.read_markdown(path_id)
+    first_section = tree.entries(str(tmp_path / "001-contract-项目设计说明" / "001-项目设计说明" / "001-背景"))
+    assert [e.name for e in first_section] == [
+        "001-这个项目最初是为了抽取字段.md",
+        "002-这个项目最初是为了验证重名段落.md",
+    ]
+    assert [e.kind for e in first_section] == ["md", "md"]
 
-
-def test_source_selectors_map_readable_path_ids_to_original_dom_ids():
-    document = build_html_document(_documents())
-
-    source_selectors = document.source_selectors()
-
-    assert source_selectors["0001"] == "t1"
-    assert source_selectors["0001.0001"] == "t1"
-    assert source_selectors["0001.0001.0001"] == "h1"
-    assert source_selectors["0001.0001.0002"] == "h2"
-    assert source_selectors["0001.0002"] == "t1b"
-    assert source_selectors["0001.0001.0001.0001"] == "p1"
-    assert source_selectors["0001.0001.0001.0002"] == "p2"
-    assert source_selectors["0001.0001.0002.0001"] == "l1"
-    assert source_selectors["0001.0002.0001"] == "p1b"
-    assert source_selectors["0001.0002.0002"] == "tbl1"
+    read = tree.read(str(tmp_path / "001-contract-项目设计说明" / "001-项目设计说明" / "001-背景" / "001-这个项目最初是为了抽取字段.md"))
+    assert read == "这个项目最初是为了抽取字段。"
 
 
-def test_h1_sections_wrap_following_blocks_and_subsections():
-    document = build_html_document(
+def test_tree_writes_list_with_nested_markdown(tmp_path):
+    tree = materialize_tree(_documents(), tmp_path)
+
+    list_file = tmp_path / "001-contract-项目设计说明" / "001-项目设计说明" / "002-背景" / "001-第一项.md"
+    content = tree.read(str(list_file))
+
+    assert "- 第一项" in content
+    assert "- 第二项 子项" in content
+    assert "  - 子项" in content
+
+
+def test_tree_writes_table_as_one_markdown_file(tmp_path):
+    tree = materialize_tree(_documents(), tmp_path)
+
+    table_file = tmp_path / "001-contract-项目设计说明" / "002-补充说明" / "002-费用明细.md"
+    content = tree.read(str(table_file))
+
+    assert "费用明细" in content
+    assert "| 项目 | 金额 |" in content
+    assert "| 服务费 | 1000 |" in content
+
+
+def test_tree_orders_entries_by_numeric_prefix_not_filesystem(tmp_path):
+    tree = materialize_tree(
         [
             {
-                "filename": "cover.html",
-                "html": """
-                <h1 id="title">封面</h1>
-                <p id="cover-p1">封面第一行。</p>
-                <p id="cover-p2">封面第二行。</p>
-                <h2 id="section">第一章</h2>
-                <p id="section-p1">章节正文。</p>
-                """,
+                "filename": "letters.html",
+                "html": "<h1>Letters</h1><p id=\"p1\">Beta paragraph.</p><p id=\"p2\">Alpha paragraph.</p>",
             }
-        ]
+        ],
+        tmp_path,
     )
 
-    assert document.path_id("/001-cover-封面/001-封面/001-封面第一行.md") == "0001.0001.0001"
-    assert document.path_id("/001-cover-封面/001-封面/002-封面第二行.md") == "0001.0001.0002"
-    assert document.path_id("/001-cover-封面/001-封面/003-第一章") == "0001.0001.0003"
-    assert document.path_id("/001-cover-封面/001-封面/003-第一章/001-章节正文.md") == "0001.0001.0003.0001"
-    assert document.source_selectors()["0001.0001.0001"] == "cover-p1"
-    assert "0001.0000" not in document.nodes_by_path_id
+    section = tree.entries(str(tmp_path / "001-letters-Letters" / "001-Letters"))
+    names = [e.name for e in section]
+
+    assert names == [
+        "001-Beta paragraph.md",
+        "002-Alpha paragraph.md",
+    ]
 
 
-def test_pre_heading_direct_blocks_use_document_root_namespace():
-    document = build_html_document(
-        [
-            {
-                "filename": "mixed.html",
-                "html": """
-                <p id="intro">标题前说明。</p>
-                <h1 id="title">正文标题</h1>
-                <p id="body">正文内容。</p>
-                """,
-            }
-        ]
-    )
-
-    assert document.path_id("/001-mixed-正文标题/001-标题前说明.md") == "0001.0000.0001"
-    assert document.path_id("/001-mixed-正文标题/002-正文标题") == "0001.0001"
-    assert document.path_id("/001-mixed-正文标题/002-正文标题/001-正文内容.md") == "0001.0001.0001"
-    assert document.source_selectors()["0001.0000.0001"] == "intro"
-    assert document.source_selectors()["0001.0001"] == "title"
-
-
-def test_bracketed_path_ids_are_rejected_instead_of_canonicalized():
-    document = build_html_document(_documents())
-    legacy_path_id = "[0001.0001.0001]"
+def test_tree_read_rejects_paths_outside_workspace(tmp_path):
+    tree = materialize_tree([{"filename": "a.html", "html": "<p>text</p>"}], tmp_path)
 
     with pytest.raises(ValueError):
-        document.resolve_path_id(legacy_path_id)
+        tree.read(str(tmp_path.parent / "outside.md"))
+
+
+def test_tree_entries_reject_paths_outside_workspace(tmp_path):
+    tree = materialize_tree([{"filename": "a.html", "html": "<p>text</p>"}], tmp_path)
+
     with pytest.raises(ValueError):
-        document.canonical_path_id(legacy_path_id)
-    with pytest.raises(ValueError):
-        document.path_id(legacy_path_id)
-    with pytest.raises(ValueError):
-        document.read_markdown(legacy_path_id)
+        tree.entries(str(tmp_path.parent))
 
 
-def test_tree_display_names_decode_percent_encoded_filenames_without_changing_raw_paths():
-    document = build_html_document(
-        [
-            {
-                "filename": "Confidentiality%20Agreement.html",
-                "html": "<h1>NDA</h1><p>Confidential text.</p>",
-            }
-        ]
-    )
-
-    tree = document.tree_text("/", depth=1)
-
-    assert "0001 Confidentiality Agreement-NDA/" in tree
-    assert "Confidentiality%20Agreement" not in tree
-    assert "/001-Confidentiality%20Agreement-NDA" in document.nodes_by_path
-
-
-def test_paragraph_anchors_use_sentence_ids_without_polluting_read():
-    document = build_html_document(_documents())
-    path = "/001-contract-项目设计说明/001-项目设计说明/001-背景/001-这个项目最初是为了抽取字段.md"
-
-    assert document.read_markdown(path)["text"] == "这个项目最初是为了抽取字段。"
-    anchors = document.paragraph_anchors(path)
-
-    assert anchors == [{"id": "S001", "preview": "这个项目最初是为了抽取字段。"}]
-
-
-def test_list_markdown_uses_item_numbers_and_nested_numbers():
-    document = build_html_document(_documents())
-
-    result = document.read_markdown("/001-contract-项目设计说明/001-项目设计说明/002-背景/001-第一项.list")
-
-    assert result["kind"] == "list"
-    assert "kind: list" in result["text"]
-    assert "- [I001] 第一项" in result["text"]
-    assert "- [I002] 第二项 子项" in result["text"]
-    assert "  - [I002.001] 子项" in result["text"]
-    assert document.validate_evidence(
-        [{"path_id": result["path_id"], "items": ["I002", "I002.001"]}]
-    ) == []
-
-
-def test_list_markdown_reports_has_more_against_top_level_items():
-    document = build_html_document(
-        [
-            {
-                "filename": "items.html",
-                "html": """
-                <h1>列表</h1>
-                <ul>
-                  <li>第一项</li>
-                  <li>第二项</li>
-                  <li>第三项</li>
-                </ul>
-                """,
-            }
-        ]
-    )
-    path = "/001-items-列表/001-列表/001-第一项.list"
-
-    first_page = document.read_markdown(path, offset=0, limit=1)
-    second_page = document.read_markdown(path, offset=1, limit=1)
-    last_page = document.read_markdown(path, offset=2, limit=1)
-
-    assert first_page["has_more"] is True
-    assert second_page["has_more"] is True
-    assert last_page["has_more"] is False
-
-
-def test_table_markdown_uses_row_numbers_and_supports_pagination():
-    document = build_html_document(_documents())
-    path = "/001-contract-项目设计说明/002-补充说明/002-费用明细.table"
-
-    first_row = document.read_markdown(path, offset=0, limit=1)
-
-    assert first_row["kind"] == "table"
-    assert "kind: table" in first_row["text"]
-    assert "showing: 1-1" in first_row["text"]
-    assert "| R001 | 服务费 | 1000 |" in first_row["text"]
-    assert "| R002 | 押金 | 500 |" not in first_row["text"]
-    assert document.validate_evidence([{"path_id": document.path_id(path), "rows": ["R002"]}]) == []
-
-
-def test_query_table_only_accepts_table_paths_and_keeps_original_row_numbers():
-    document = build_html_document(_documents())
-    path = "/001-contract-项目设计说明/002-补充说明/002-费用明细.table"
-
-    result = document.query_table(
-        path,
-        'SELECT "项目", "金额" FROM data WHERE "项目" = \'押金\'',
-        offset=0,
-        limit=20,
-    )
-
-    assert result["kind"] == "table_query"
-    assert "kind: table_query" in result["text"]
-    assert "| R002 | 押金 | 500 |" in result["text"]
-    assert "| R001 | 服务费 | 1000 |" not in result["text"]
-
-    with pytest.raises(ValueError, match=".table"):
-        document.query_table(
-            "/001-contract-项目设计说明/001-项目设计说明/001-背景/001-这个项目最初是为了抽取字段.md",
-            'SELECT "项目" FROM data',
-        )
+def test_materialize_tree_rejects_document_without_filename_or_html(tmp_path):
+    with pytest.raises(ValueError, match="filename"):
+        materialize_tree([{"html": "<p>x</p>"}], tmp_path)
+    with pytest.raises(ValueError, match="html"):
+        materialize_tree([{"filename": "a.html", "html": ""}], tmp_path)

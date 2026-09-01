@@ -1,26 +1,25 @@
-## fuzzy_search(未实现)
-模糊搜索，输入关键词，返回符合条件的文件列表。
+# 工具表面
 
-## ls文件
-列出文件的section，返回section列表。
-```python
-def ls(path_id: str = "") -> dict[str, Any]:
-```
+QA completion 只暴露三个工具，全部在真实文件树上操作。没有 `path_id` /
+`evidence://` / `inspect`；引用证据直接用真实 `.md` 文件路径。
 
-## read
-读取模型想要read的paragraph、table和list等内容。
-```python
-def read(locator: str) -> dict[str, Any]:
-```
+## ls
 
-## inspect
-inspect句子，作为输出引用，返回句子内容和标识符。
+列出当前目录层的一个层级。
 ```python
-def inspect(locator: str) -> dict[str, Any]:
+def ls(path: str = "") -> dict[str, Any]:
 ```
 
 ## grep
-文件内搜索(精细匹配)，输入关键词，返回符合条件的句子列表。
+
+在 scope 目录（默认整个 workspace 根）跑 ripgrep，返回原样 stdout。
 ```python
-def grep(query: str, scope: str = "", kind: str = "", max_results: int = 20) -> dict[str, Any]:
+def grep(query: str, scope: str = "", max_results: int = 20) -> dict[str, Any]:
+```
+
+## read
+
+读取一个 `.md` block 文件的 markdown 内容。
+```python
+def read(path: str) -> dict[str, Any]:
 ```

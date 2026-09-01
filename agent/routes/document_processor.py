@@ -106,7 +106,7 @@ async def process_docx_document(
         file=file.file,
     )
     try:
-        result = await run_in_threadpool(_process_docx_document, file_proxy)
+        result = await run_in_threadpool(_process_document, file_proxy, "docx")
     except (InvalidFileObjectError, UnsupportedFileTypeError) as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -119,11 +119,6 @@ async def process_docx_document(
 def _process_document(file_obj, file_type: str | None):
     process_document = import_module("service.document_processor.processor").process
     return process_document(file_obj, file_type)
-
-
-def _process_docx_document(file_obj):
-    process_docx = import_module("service.document_processor.docx_processor").process_docx
-    return process_docx(file_obj)
 
 
 def _build_process_response(result) -> ProcessResponse:

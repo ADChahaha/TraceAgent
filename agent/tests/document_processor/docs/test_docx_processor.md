@@ -1,14 +1,17 @@
 # `test_docx_processor.py`
 
-这份测试覆盖 DOCX 专用处理器。测试用 `python-docx` 在内存里生成真实
+这份测试覆盖 DOCX 解析行为。测试用 `python-docx` 在内存里生成真实
 `.docx` 文件，只验证结构解析，不依赖 Word 渲染。
+
+注意：这里不直接调用 DOCX 内部函数 `_process_docx`，而是通过统一入口
+`processor.process(file_obj)` 触发 DOCX 分流。
 
 ## 实现链路
 
 ```text
 BytesIO(.docx)
-  -> docx_processor.process_docx(file_obj)
-  -> 校验 file-like、解析源文件名、读取 bytes 并复位
+  -> processor.process(file_obj)  按 .docx 后缀分流到 DOCX 分支
+  -> read_source_bytes(...) 读取 bytes 并复位
   -> python-docx Document(BytesIO(...))
   -> 按 Word body 原始顺序遍历 paragraph/table
   -> 只用 Word heading style 创建 section

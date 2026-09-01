@@ -83,12 +83,30 @@ def _append_source_index_event(state: GraphState) -> None:
             "tool": "source_index",
             "result": {
                 "ok": True,
-                "document_tree": state.document.outline_tree(),
-                "source_selectors": state.document.source_selectors(),
+                "workspace_root": str(state.document.root),
+                "tree": _file_tree_lines(state.document),
             },
         }
     )
     state.next_seq += 1
+
+
+def _file_tree_lines(document: Any) -> list[str]:
+    lines: list[str] = []
+
+    def walk(path: str | None, prefix: str) -> None:
+        entries = document.entries(path)
+        for index, entry in enumerate(entries):
+            current_last = index == len(entries) - 1
+            connector = "└── " if current_last else "├── "
+            suffix = "/" if entry.kind == "dir" else ""
+            lines.append(f"{prefix}{connector}{entry.name}{suffix}")
+            if entry.kind == "dir":
+                next_prefix = prefix + ("    " if current_last else "│   ")
+                walk(entry.path, next_prefix)
+
+    walk(None, "")
+    return lines
 
 
 def _resolution_failed(outcome: Any) -> bool:

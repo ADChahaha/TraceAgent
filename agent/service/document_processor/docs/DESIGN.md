@@ -11,14 +11,32 @@ structure.
 The module handles PDF and DOCX. It does not extract task fields, and it does
 not support legacy `.doc`.
 
-## Pipeline
+## Entry
+
+`processor.process(file_obj, file_type=None)` is the single public entry. It
+validates the file-like object, resolves the source filename, and dispatches by
+detected type (explicit `file_type` wins, otherwise the filename suffix). Both
+PDF and DOCX pipelines are reached only through this entry; the document type
+is decided once at the boundary.
 
 ```text
 file_obj
   -> processor.process(file_obj, file_type)
   -> validate_file_obj(...)
   -> resolve_filename(...)
-  -> validate_pdf_type(...)
+   -> detect_file_type(file_type, filename):
+        ├─ pdf  -> _process_pdf(...)
+        └─ docx -> _process_docx(file_obj, filename)
+```
+
+For PDF, the pipeline is:
+
+```text
+file_obj
+  -> processor.process(file_obj, file_type)
+  -> validate_file_obj(...)
+  -> resolve_filename(...)
+  -> detect_file_type(...) -> "pdf"
   -> read_source_bytes(...)
   -> mineru_converter.convert_pdf_bytes_to_content_list(...)
   -> mineru_html.build_blocks_from_content_list(...)
@@ -33,10 +51,12 @@ DOCX pipeline:
 
 ```text
 file_obj
-  -> docx_processor.process_docx(file_obj)
-  -> processor.validate_file_obj(...)
-  -> processor.resolve_filename(...)
-  -> processor.read_source_bytes(...)
+  -> processor.process(file_obj, file_type)
+  -> validate_file_obj(...)
+  -> resolve_filename(...)
+   -> detect_file_type(...) -> "docx"
+  -> _process_docx(file_obj, filename)
+  -> read_source_bytes(...)
   -> python-docx Document(BytesIO(source_bytes))
   -> iter_block_items(document) 按 Word body 原始顺序遍历 paragraph/table
   -> paragraph style 是 Heading 1/2/3... 时打开或切换 section stack
@@ -51,7 +71,6 @@ file_obj
 ```text
 service/document_processor/
 ├── __init__.py
-├── docx_processor.py
 ├── processor.py
 ├── schemas.py
 ├── mineru_converter.py
@@ -65,39 +84,50 @@ service/document_processor/
 
 ## `processor.py`
 
-Owns the existing PDF public input validation and orchestration.
+This is the single module that owns the public entry, the shared entry helpers,
+the PDF orchestration, and the DOCX parsing. Nothing else in the package is
+reachable from outside except `ProcessResult` (via `schemas.py`).
 
-- `process(file_obj, file_type=None)`: public entry point.
+The shared entry helpers live here so there is no separate `common` module:
+- `InvalidFileObjectError`, `UnsupportedFileTypeError`: exceptions.
 - `validate_file_obj(file_obj)`: requires callable `read()`.
-- `resolve_filename(file_obj)`: uses `filename`, then `name`, then `document.pdf`.
-- `validate_pdf_type(...)`: accepts only PDF.
+- `resolve_filename(file_obj, *, fallback)`: uses `filename`, then `name`, then
+  `fallback` (default `document.pdf`).
+- `normalize_file_type(value)`: lowercase, strip dots.
+- `detect_file_type(file_type, filename)`: explicit type wins, else filename
+  suffix; returns `"pdf"` or `"docx"` or raises `UnsupportedFileTypeError`.
 - `read_source_bytes(file_obj)`: reads bytes and rewinds when possible.
+
+Public contract:
+- `process(file_obj, file_type=None)`: validates, resolves filename, and
+  dispatches to PDF or DOCX by `detect_file_type(...)`.
+- `_process_pdf(file_obj, filename)`: internal PDF branch (reads bytes and
+  drives the MinerU pipeline).
+- `_process_docx(file_obj, filename)`: internal DOCX branch (reads bytes and
+  parses with python-docx).
 
 `processor.py` 的分流逻辑：
 
 ```text
 调用方传入 file_obj，可选传 file_type
-  -> 校验 file-like 和 PDF 类型
-  -> 读取 PDF bytes 并复位文件指针
-  -> 调用 MinerU pipeline 生成 content_list_v2
-  -> meta_info.engine = "mineru-pipeline"
-  -> 复用 mineru_html 生成 html/display_html/markdown/blocks/semantic_document
+  -> validate_file_obj(...)
+  -> resolve_filename（docx 缺省 document.docx，否则 document.pdf）
+  -> detect_file_type(file_type, filename)
+       ├─ docx -> _process_docx(...)，engine="python-docx"
+       └─ pdf  -> _process_pdf(...)，engine="mineru-pipeline"
 ```
 
-## `docx_processor.py`
-
-Owns DOCX-specific parsing. It deliberately does not guess headings from font
-size, bold text or manual formatting. Only explicit Word heading styles create
-sections; documents without heading styles become a flat ordered set of
-paragraph/table blocks under the document root.
+`_process_docx` deliberately does not guess headings from font size, bold text
+or manual formatting. Only explicit Word heading styles create sections;
+documents without heading styles become a flat ordered set of paragraph/table
+blocks under the document root.
 
 DOCX semantic tree construction:
 
 ```text
 上传的 .docx file_obj
-  -> 校验 file-like
-  -> 从 filename/name 取源文件名，没有则用 document.docx
-  -> 读取 bytes 并复位文件指针
+  -> processor.process(...) 已完成 file-like 校验、文件名解析和类型分流
+  -> _process_docx(file_obj, filename) 读取 bytes 并复位文件指针
   -> python-docx 打开 Document(BytesIO(bytes))
   -> 按 document.element.body 原始顺序读取 paragraph/table
   -> paragraph 文本为空则跳过
@@ -184,16 +214,15 @@ MinerU content_list_v2 pages
   -> 逐页过滤不可见 block 以及 page_header/page_number/page_footer 文档 chrome
   -> 先把可渲染 block 拉平成带 page_no/block_idx/bbox 特征的 rendered blocks
   -> 识别 `目次` / `Contents` 这类目录页标题，并把同页后续条目标为目录条目
-  -> 从非目录 title 候选里去掉封面标题、正文句子、日期期限行和明显正文小标题
-  -> 对剩余 title 候选按归一化 height/width/chars/line_count/x0 做层次聚类，height 权重为 2，不使用 y0
-  -> 选出更像主章节的高置信簇作为 h2 heading_level
-  -> 目录条目和不在 h2 簇里的 title 没有 heading_level，只作为普通正文段落
+  -> 识别正文小标题样式（`1）` / `【...】` / `(..)` 括号编号 / `<<..>>` / 单字母标号 / 短标题）
+  -> 其余 title 直接信任 MinerU 的 content.level 生成对应 heading（不再做层次聚类）
+  -> 目录条目和正文小标题没有 heading_level，只作为普通正文段落
   -> 页面 wrapper 只保留 `section.page` 和 `data-page` 定位属性，不主动插入 `Page N` 可见页码
   -> HTML 和 Markdown 复用同一份 rendered block 分类结果
   -> 真 heading 才输出 h1/h2/h3 并参与 section/subsection 包裹
   -> 正文小标题输出为普通 `<p>...</p>`，不参与 outline_tree
   -> 目录页条目保留可见文本，但不打开 section/subsection
-  -> 全局 h2 高度档 title 打开 <section id="{block_id}_section">，标题本身保留为 <h2 id="{block_id}">
+  -> level=2 title 打开 <section id="{block_id}_section">，标题本身保留为 <h2 id="{block_id}">
   -> level=3 title 打开 <section id="{block_id}_subsection">，标题本身保留为 <h3 id="{block_id}">
   -> level>=4 title 不再作为章节层级，降级为 <p id="{block_id}" data-type="title" data-level="N">
   -> paragraph/list/table 分别输出为原生 <p>/<ul>/<table> block，block id 直接放在该标签上
@@ -216,36 +245,29 @@ paths are filtered out so replay HTML only shows content that the extraction
 agent can actually use. In generated HTML, level-2 titles define section
 wrappers, level-3 titles define subsection wrappers, and level-4 or deeper
 titles stay at ordinary block level so downstream tools do not treat them as
-additional section scopes.
+additional section scopes. The converter no longer runs layout clustering to
+infer chapter levels; only `目次`-page entries and body subheadings are demoted.
 
-Markdown 输出的层级和聚类规则：
+Markdown 输出的层级规则：
 
 ```text
 MinerU content_list_v2 pages
   -> 过滤 page_header/page_number/page_footer/image 等不进入推理正文的 block
   -> 按原始页序和页内顺序收集 title/paragraph/list/table
-  -> 为每个 block 计算 height、width、chars、line_count、x0、y0
   -> 先识别目录页，目录条目不参与 Markdown heading 或 HTML section
-  -> title 不直接照抄 MinerU level；MinerU level 只作为候选过滤特征
-  -> 从 title 候选中取 height、width、chars、line_count、x0 做 MinMax 归一化
-  -> 将归一化后的 height 乘以 2，强调真实章节标题和正文局部标题的字号差异
-  -> 对候选做 AgglomerativeClustering(n_clusters=2, linkage="ward")
-  -> 按簇内平均 height、与候选整体中位 x0 的距离和平均字符数选择 h2 章节簇
-  -> 不在 h2 簇里的 title 即使 MinerU 标成 level=2，也降级成普通正文行
-  -> 以 `1）`、`【...】`、`<<...>>`、括号编号、单字母标号等样式识别正文里的小标题
-  -> `2.日程` 这类 ASCII 点后无空格的紧凑编号 title 按正文小标题处理，避免把条目标题当成大章
-  -> 小字号的 `title + 1．/2．/3．` 编号块也会被视为正文小标题，避免把列表内部项目当成大章
-  -> 含提出期限/締切、完整日期和时间或“まで”的提示行，即使 MinerU 标成 title，也作为正文提示行
-  -> paragraph 如果是短的独立 `1．` / `2．` 编号块，也作为正文小标题候选处理
+  -> title 的 heading_level 与 HTML 共用同一份分类结果（目次条目 / 正文小标题降级）
+  -> 其余 title 直接信任 MinerU content.level 生成对应 Markdown heading
+  -> 以 `1）`、`【...】`、`<<..>>`、`(..)` 括号编号、单字母标号等样式识别正文小标题
   -> 这些正文小标题不再当成 Markdown heading，统一降级为普通正文行
   -> 真标题继续按 heading 输出，保持原文顺序和正文内容紧跟其后
   -> paragraph/list/table 保持在原文顺序中，跟随对应标题输出
 ```
 
-标题层级不是直接照抄 MinerU 的 `level`。MinerU 在部分 PDF 里会把 `1．`
+标题层级不再做聚类/特征推断，只做轻量过滤：MinerU 在部分 PDF 里会把 `1．`
 大章、`1）` 小节和 `【注意事項】` 都标成同一层；Markdown 会保留原文顺序，
-但会把正文里的小标题从 heading 降级，避免把它们和真正的章节标题混在一起。
-这样用户查看 Markdown 时能看到更接近人类阅读的标题结构。
+但只把明显属于正文小标题的样式（`1）`、`【...】`、括号编号等）从 heading
+降级，避免把它们和真正的章节标题混在一起。不再根据版面 height/width/
+聚类选 h2 频带，也不删除日期/締切提示行或 ASCII 点后无空格的紧凑编号标题。
 
 ## Table Handling
 

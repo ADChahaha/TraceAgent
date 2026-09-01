@@ -86,6 +86,7 @@ class ModelConfig:
 @dataclass
 class RunOptions:
     max_tool_calls: int = 200
+    workspace_root: str | None = None
 
 
 __all__ = [

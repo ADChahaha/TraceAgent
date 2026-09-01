@@ -1,4 +1,23 @@
-last updated: 2026-05-23 00:00:00
+last updated: 2026-09-01 12:00:00
+
+## 2026-09-01 12:00:00
+
+### 已完成工作
+
+- 将 `file_extraction_agent` 的「虚拟文件树」重构为「真实文件树」：`html_index.materialize_tree` 把文档落盘成 `DocumentFileTree`（每个 paragraph/list/table 写成一个 `.md`，表格整表一个文件），目录/文件按数字前缀保序。
+- 删除 `path_id` / `evidence://` / `inspect` 及句(sentence)/列表项/表格行级 selector；工具收敛为 `ls` / `grep`(调用真实 ripgrep，stdout 原样返回) / `read`；引证直接用真实 `.md` 文件路径。
+- `source_indexed` 事件不再携带 `document_tree` + `source_selectors`，改为暴露 `workspace_root` 和逐层 `tree` 清单。
+- workspace 根默认 `agent/data/qa_workspace`（可用 `FILE_EXTRACTION_AGENT_WORKSPACE_ROOT` 覆盖）；每 completion 一个子目录，completion 结束清理。
+- 重写 `test_html_index_new` / `test_html_tools_new` / `test_graph` / `test_input_adapter` / `test_resolution_new` 等测试及对应 test 文档、`tools.md`、`agent_loop.md`、DESIGN/API 文档。
+
+### 当前进展
+
+- `tests/file_extraction_agent` 全量通过；`tests/document_processor` 全量通过。
+- 跨仓库的 backend/前端 replay 高亮契约因 `source_selectors` 删除而改变，需另起任务在 backend/前端同步。
+
+### 下一步
+
+- 对接 backend/前端按新的 `source_indexed(workspace_root + tree)` 和真实文件路径 evidence 做 replay 高亮。
 
 ## 2026-05-23 00:00:00
 

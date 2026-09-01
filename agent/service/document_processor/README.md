@@ -15,14 +15,13 @@ Callers pass an opened binary file object, not a filesystem path.
 
 ```python
 from service.document_processor.processor import process
-from service.document_processor.docx_processor import process_docx
 
-result = process(pdf_file_obj, file_type=None)
-docx_result = process_docx(docx_file_obj)
+pdf_result = process(pdf_file_obj, file_type=None)
+docx_result = process(docx_file_obj)
 
-print(result.filename)
-print(result.html)
-print(result.display_html)
+print(pdf_result.filename)
+print(pdf_result.html)
+print(pdf_result.display_html)
 ```
 
 HTTP endpoints:
@@ -34,34 +33,28 @@ HTTP endpoints:
 ## Pipeline
 
 ```text
-调用方传入 PDF file_obj，可选传 file_type
-  -> validate file object and PDF type
-  -> read PDF bytes
-  -> MinerU pipeline CLI
-  -> content_list_v2.json
-  -> traceable extraction HTML
-  -> self-contained display HTML
-  -> markdown, md_list, backend evidence blocks, semantic_document, meta_info, warnings
-  -> ProcessResult(filename, html, display_html, markdown, md_list, blocks, semantic_document, meta_info, warnings)
-```
-
-```text
-调用方传入 DOCX file_obj
+调用方传入 PDF / DOCX file_obj，可选传 file_type
   -> validate file object
-  -> read DOCX bytes
-  -> python-docx Document(BytesIO(...))
-  -> 按 Word body 原始顺序遍历 paragraph/table
-  -> 只用 Word heading style 创建 section
-  -> 无 heading style 时保留 flat paragraph/table blocks
+  -> detect_file_type(file_type, filename)  显式类型优先，否则看后缀
+       ├─ pdf  -> MinerU pipeline CLI
+       └─ docx -> python-docx Document(BytesIO(...))
   -> traceable extraction HTML + self-contained display HTML
   -> markdown, md_list, backend evidence blocks, semantic_document, meta_info, warnings
   -> ProcessResult(filename, html, display_html, markdown, md_list, blocks, semantic_document, meta_info, warnings)
 ```
 
+DOCX 解析细节：
+
+```text
+python-docx Document
+  -> 按 Word body 原始顺序遍历 paragraph/table
+  -> 只用 Word heading style 创建 section
+  -> 无 heading style 时保留 flat paragraph/table blocks
+```
+
 Source files:
 
-- `processor.py`: input validation and main orchestration.
-- `docx_processor.py`: DOCX structure parsing and HTML/semantic output.
+- `processor.py`: 唯一公共入口 `process(...)`，内含类型分流、PDF 编排和 DOCX 解析。
 - `mineru_converter.py`: MinerU CLI invocation and `content_list_v2` loading.
 - `mineru_html.py`: MinerU content list to HTML conversion.
 - `schemas.py`: `ProcessResult`.

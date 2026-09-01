@@ -91,13 +91,14 @@ def test_document_processor_process_route_calls_business_processor(monkeypatch):
     }
 
 
-def test_document_processor_docx_route_calls_docx_processor(monkeypatch):
-    from service.document_processor import docx_processor
+def test_document_processor_docx_route_calls_unified_processor(monkeypatch):
+    from service.document_processor import processor as processor_module
 
     seen_call: dict[str, object] = {}
 
-    def fake_process_docx(file_obj):
+    def fake_process(file_obj, file_type=None):
         seen_call["file_obj"] = file_obj
+        seen_call["file_type"] = file_type
         seen_call["prefix"] = file_obj.read(4)
         return ProcessResult(
             filename="sample.docx",
@@ -122,7 +123,7 @@ def test_document_processor_docx_route_calls_docx_processor(monkeypatch):
             warnings=[],
         )
 
-    monkeypatch.setattr(docx_processor, "process_docx", fake_process_docx)
+    monkeypatch.setattr(processor_module, "process", fake_process)
 
     client = TestClient(create_app())
     response = client.post(
@@ -138,6 +139,7 @@ def test_document_processor_docx_route_calls_docx_processor(monkeypatch):
 
     assert response.status_code == 200
     assert getattr(seen_call["file_obj"], "filename") == "sample.docx"
+    assert seen_call["file_type"] == "docx"
     assert seen_call["prefix"] == b"PK\x03\x04"
     assert response.json() == {
         "filename": "sample.docx",

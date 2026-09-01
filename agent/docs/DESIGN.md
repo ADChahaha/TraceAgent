@@ -13,7 +13,7 @@
   -> document_processor 标准化为 html / display_html / markdown / blocks
   -> backend 保存文档和对话状态
   -> file_extraction_agent 接收 documents + append-only messages
-  -> agent 像 code agent 浏览代码仓库一样 ls/grep/read/inspect 文档
+  -> agent 像 code agent 浏览代码仓库一样 ls/grep/read 文档
   -> agent 用过程 model_message + inline evidence link 流式说明阅读发现
   -> 最终 model_message 正文直接回答，并在被支撑句子后紧跟数字 evidence citation
   -> backend 持久化事件并转发给前端
@@ -88,21 +88,22 @@ agent/
 
 ### `document_processor`
 
-输入是可读的 PDF 或 DOCX 文件对象。PDF 由 `processor.process(...)` 调
-MinerU；DOCX 由 `docx_processor.process_docx(...)` 调 `python-docx`。
+输入是可读的 PDF 或 DOCX 文件对象。统一走唯一的公共入口
+`processor.process(file_obj, file_type=None)`，内部按类型分流：PDF 调
+MinerU，DOCX 调 `python-docx`。两者都在 `processor.py` 模块内，没有独立的
+DOCX 公共入口。
 
 ```text
 PDF UploadFile / file-like object
-  -> 校验 file_obj.read() 是否可调用
-  -> 校验或推断 PDF 类型
+  -> processor.process(...) -> 校验 file-like、推断类型、分流
   -> 调用 MinerU 解析 PDF bytes
-  -> 生成语义 HTML、展示 HTML、markdown、md_list 和 blocks
+  -> generate 语义 HTML、展示 HTML、markdown、md_list 和 blocks
   -> 返回 ProcessResult(filename, html, display_html, markdown, md_list, blocks, meta_info, warnings)
 ```
 
 ```text
 DOCX UploadFile / file-like object
-  -> 校验 file_obj.read() 是否可调用
+  -> processor.process(...) -> 校验 file-like、推断类型、分流到 DOCX
   -> python-docx 解析 DOCX bytes
   -> 按 Word body 原始顺序读取 paragraph/table
   -> 只用 Word heading style 建 section；无 heading style 时保持 flat blocks
@@ -124,11 +125,11 @@ POST /v1/document-qa/chat/completions
   -> route 解析 ChatCompletionRequest
   -> processor.create_completion_stream(...)
   -> input_adapter 校验 completion_id/documents/messages/run_options
-  -> html_index 把多份 HTML 构建成只读 virtual document repository
-  -> graph 输出 completion.created 和 source_indexed
-  -> resolution_new 让模型通过 ls / grep / read / inspect 浏览文档
+  -> html_index 把多份 HTML 落盘成真实文件树（DocumentFileTree）
+  -> graph 输出 completion.created 和 source_indexed（workspace_root + tree）
+  -> resolution_new 让模型通过 ls / grep / read 浏览文档
   -> html_tools 把每次工具调用写成 tool_started/tool_completed/tool_failed
-  -> 过程 model_message 在阅读过程中内嵌 evidence:// Markdown link
+  -> 过程 model_message 在阅读过程中内嵌真实 .md 文件路径 Markdown link
   -> 最终 model_message 带 is_final=true，在被支撑句子后紧跟数字 evidence citation
   -> completion.completed / completion.cancelled / completion.failed 收口 SSE
 ```

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import queue
+import shutil
 import threading
 from typing import Any, Iterable
 
@@ -146,6 +147,7 @@ def create_completion_stream(
             with _ACTIVE_COMPLETIONS_LOCK:
                 if _ACTIVE_COMPLETIONS.get(completion_id) is runtime:
                     _ACTIVE_COMPLETIONS.pop(completion_id, None)
+            _cleanup_workspace(completion_input)
 
     return stream()
 
@@ -177,6 +179,14 @@ def _produce_completion_events(
 
 def run_completion_graph_stream(completion_input: Any, resolution_model: Any) -> Iterable[str]:
     return completion_graph.run_completion_graph_stream(completion_input, resolution_model=resolution_model)
+
+
+def _cleanup_workspace(completion_input: Any) -> None:
+    workspace = getattr(completion_input, "document", None)
+    root = getattr(workspace, "root", None)
+    if root is None:
+        return
+    shutil.rmtree(root, ignore_errors=True)
 
 
 def cancel_completion(completion_id: str) -> dict[str, Any]:

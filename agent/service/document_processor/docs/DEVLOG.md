@@ -1,4 +1,29 @@
-last updated: 2026-05-04 02:20:00 CST
+last updated: 2026-09-01 11:30:00 CST
+
+## 2026-09-01 11:30:00 CST
+- completed work:
+  - 删除 MinerU 标题的层次聚类后处理（AgglomerativeClustering / MinMaxScaler 及选择 h2 聚类的全部辅助函数），mineru_html 标题层级改为信任 MinerU 的 `content.level`。
+  - 保留轻量过滤：`目次` 页目录条目不进真章节；正文小标题（`1）` / `【...】` / 括号编号 / `<<...>>` / 单字母标号 / 短标题）统一降级为普通正文行。
+  - 移除 `is_deadline_body_line`（提出期限/締切/まで）、`is_compact_numbered_body_title`、依赖特征（高度/宽度/字符数）的降级判断，以及 sklearn 依赖（`scikit-learn` 从 pyproject 移除）。
+  - `infer_markdown_heading_level` 不再需要 `h2_cluster_keys`；HTML 与 Markdown 复用同一份分类结果。
+- current progress:
+  - `test_mineru_html.py` 删除 4 个聚类专用测试（layout band / width-indent / same-height / angle-bracket-after-clustering），改写 3 个长期标题断言为「信任 level」语义。
+  - `agent/tests/document_processor` 全量通过。
+- next step:
+  - 后续若需提升 PDF 标题层级精度，应考虑更通用的规则或大模型判级，而不是恢复版面聚类。
+
+## 2026-09-01 10:15:00 CST
+- completed work:
+  - 将 document_processor 从「PDF / DOCX 双入口」收敛为单一公共入口 `processor.process(file_obj, file_type=None)`，内部按检测到的类型分流：pdf 调 MinerU（`_process_pdf`），docx 调 python-docx（`_process_docx`）。
+  - 把 DOCX 解析逻辑全部折入 `processor.py`，删除 `docx_processor.py` 和 `common.py`；校验 / 文件名 / 类型检测 / 读字节等共享工具也一并并入，`processor.py` 成为唯一对外模块。
+  - 类型判定规则：显式 `file_type` 优先，否则看文件名后缀；DOCX 缺省文件名 `document.docx`。`routes/document_processor.py` 的两个 endpoint（PDF/DOCX）都改调统一入口，DOCX endpoint 显式传 `file_type="docx"`。
+- current progress:
+  - PDF/DOCX 分流、显式类型优先于后缀、DOCX 默认文件名、统一异常协议均已覆盖测试；`agent/tests/document_processor` 与 routes 相关用例共 46 例通过。
+  - 唯一未通过项是既有的 Windows GBK 编码环境噪声（`test_document_processor_route_uses_public_processor_exception_contract` 用默认 locale 读 UTF-8 源文件），与本次改动无关。
+- encountered problems:
+  - 原先是 `docx_processor` import `processor`（借校验工具），若 `processor` 反向 import 会形成顶层循环 import；通过把 DOCX 逻辑与公共工具一并并入 `processor.py` 彻底消除该问题，无需额外模块。
+- next step:
+  - 可评估是否在 `service/document_processor/__init__.py` 再导出 `process` 作为包级入口，进一步收敛对外 API。
 
 ## 2026-05-04 02:20:00 CST
 - completed work:

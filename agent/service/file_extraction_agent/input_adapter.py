@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Any
 
-from service.file_extraction_agent.impl.html_index import build_html_document
+from service.file_extraction_agent.impl.html_index import DocumentFileTree, materialize_tree
 from service.file_extraction_agent.impl.html_state import DocumentQaCompletionInput
 from service.file_extraction_agent.schemas import (
     DocumentQaMessage,
     InputDocument,
     RunOptions,
+)
+
+DEFAULT_WORKSPACE_ROOT = os.getenv(
+    "FILE_EXTRACTION_AGENT_WORKSPACE_ROOT",
+    str(Path(__file__).resolve().parents[2] / "data" / "qa_workspace"),
 )
 
 
@@ -19,13 +26,18 @@ def build_completion_input(
     documents: Any,
     messages: Any,
     run_options: Any = None,
+    workspace_root: str | Path | None = None,
 ) -> DocumentQaCompletionInput:
     if not isinstance(completion_id, str) or not completion_id.strip():
         raise ValueError("completion_id is required")
     normalized_documents = normalize_documents(documents)
     normalized_messages = normalize_messages(messages)
     normalized_run_options = normalize_run_options(run_options)
-    document = build_html_document([item.model_dump() for item in normalized_documents])
+    resolved_root = _resolve_workspace_root(workspace_root, normalized_run_options)
+    document = materialize_tree(
+        [item.model_dump() for item in normalized_documents],
+        Path(resolved_root) / completion_id,
+    )
     return DocumentQaCompletionInput(
         completion_id=completion_id,
         documents=normalized_documents,
@@ -33,6 +45,14 @@ def build_completion_input(
         document=document,
         run_options=normalized_run_options,
     )
+
+
+def _resolve_workspace_root(explicit: str | Path | None, run_options: RunOptions) -> Path:
+    if explicit is not None:
+        return Path(explicit)
+    if run_options.workspace_root:
+        return Path(run_options.workspace_root)
+    return Path(DEFAULT_WORKSPACE_ROOT)
 
 
 def normalize_documents(documents: Any) -> list[InputDocument]:

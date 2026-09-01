@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import random
 from types import SimpleNamespace
 
@@ -18,7 +19,26 @@ from service.file_extraction_agent.impl.resolution_new import (
 from service.file_extraction_agent.input_adapter import build_completion_input
 
 
-def _state():
+def _company_paragraph_path(state):
+    def first_md(dir_path):
+        for entry in state.document.entries(dir_path):
+            if entry.kind == "dir":
+                found = first_md(entry.path)
+                if found:
+                    return found
+            elif entry.kind == "md":
+                return entry.path
+        return None
+
+    for top in state.document.entries():
+        if top.kind == "dir":
+            found = first_md(top.path)
+            if found:
+                return found
+    raise AssertionError("missing company paragraph")
+
+
+def _state(tmp_path):
     completion_input = build_completion_input(
         completion_id="cmp_123",
         documents=[
@@ -34,12 +54,13 @@ def _state():
         messages=[
             {"role": "user", "content": "公司什么时候成立？"},
         ],
+        workspace_root=tmp_path,
     )
     return build_graph_state(completion_input)
 
 
-def test_resolution_messages_describe_qa_investigation_not_field_extraction():
-    messages = build_resolution_messages(_state())
+def test_resolution_messages_describe_qa_investigation_not_field_extraction(tmp_path):
+    messages = build_resolution_messages(_state(tmp_path))
     system_content = messages[0].content
     human_content = messages[1].content
 
@@ -48,7 +69,7 @@ def test_resolution_messages_describe_qa_investigation_not_field_extraction():
     assert "answer" in system_content.lower()
     assert "evidence" in system_content.lower()
     assert "Use numeric citation labels in the final answer" in system_content
-    assert "[1](evidence://0001.0002.0003/S001)" in system_content
+    assert "[1](/abs/path/0001-contract/0001-section/0001-block.md)" in system_content
     assert "Do not use descriptive final citation labels" in system_content
     assert "During investigation, use human-readable labels; in final answers, use numeric labels" in system_content
     assert "Do not collect everything into one final Sources section" in system_content
@@ -61,25 +82,23 @@ def test_resolution_messages_describe_qa_investigation_not_field_extraction():
     assert "Investigate the documents" not in human_content
 
 
-def test_resolution_prompt_allows_direct_answers_without_forced_document_search():
-    messages = build_resolution_messages(_state())
+def test_resolution_prompt_allows_direct_answers_without_forced_document_search(tmp_path):
+    messages = build_resolution_messages(_state(tmp_path))
     system_content = messages[0].content
 
     assert "Answer directly when the question can be answered from conversation context" in system_content
     assert "general assistant identity/capability" in system_content
     assert "Use document tools when the user asks about document content" in system_content
-    assert "ls / grep / read / inspect" in system_content
-    assert "[ls, grep, read]" in system_content
+    assert "ls / grep / read" in system_content
+    assert "[ls, grep]" in system_content
     assert "[tree, grep, read]" not in system_content
-    assert "When adjacent readable blocks matter, prefer one read with an evidence://range locator" in system_content
-    assert "instead of separate reads" in system_content
     assert "When using document tools, show a brief investigation trace" in system_content
     assert "Do not inspect unrelated documents just to satisfy symmetry" in system_content
     assert "Show your thought process" not in system_content
     assert "One tool per turn" not in system_content
 
 
-def test_resolution_messages_preserve_openai_tool_history():
+def test_resolution_messages_preserve_openai_tool_history(tmp_path):
     completion_input = build_completion_input(
         completion_id="cmp_123",
         documents=[
@@ -112,6 +131,7 @@ def test_resolution_messages_preserve_openai_tool_history():
             },
             {"role": "user", "content": "所以是哪一年？"},
         ],
+        workspace_root=tmp_path,
     )
     messages = build_resolution_messages(build_graph_state(completion_input))
 
@@ -126,9 +146,9 @@ def test_resolution_messages_preserve_openai_tool_history():
     assert "Investigate the documents" not in messages[-1].content
 
 
-def test_resolution_graph_preserves_parallel_tool_calls():
-    state = _state()
-    paragraph_path_id = "0001.0001.0001"
+def test_resolution_graph_preserves_parallel_tool_calls(tmp_path):
+    state = _state(tmp_path)
+    read_path = _company_paragraph_path(state)
 
     class MultiToolModel:
         def __init__(self):
@@ -155,14 +175,14 @@ def test_resolution_graph_preserves_parallel_tool_calls():
                     {
                         "type": "tool_call_chunk",
                         "name": "ls",
-                        "args": '{"path_id":""}',
+                        "args": '{"path":""}',
                         "id": "call-1",
                         "index": 0,
                     },
                     {
                         "type": "tool_call_chunk",
                         "name": "read",
-                        "args": f'{{"locator":"evidence://{paragraph_path_id}"}}',
+                        "args": json.dumps({"path": read_path}),
                         "id": "call-2",
                         "index": 1,
                     },
@@ -351,8 +371,8 @@ def test_resolution_stops_after_provider_attempt_limit(monkeypatch):
     assert "attempt_5" not in message
 
 
-def test_resolution_records_text_from_responses_api_content_blocks():
-    state = _state()
+def test_resolution_records_text_from_responses_api_content_blocks(tmp_path):
+    state = _state(tmp_path)
     message = AIMessage(
         content=[
             {"type": "reasoning", "summary": []},
@@ -433,8 +453,8 @@ def test_resolution_accepts_terminal_stop_message_without_tool_calls():
     assert message.tool_calls == []
 
 
-def test_resolution_records_terminal_stop_message_as_final_answer():
-    state = _state()
+def test_resolution_records_terminal_stop_message_as_final_answer(tmp_path):
+    state = _state(tmp_path)
     message = AIMessage(
         content="最终答案。",
         response_metadata={"finish_reason": "stop"},
@@ -467,8 +487,8 @@ def test_resolution_rejects_plan_only_message_without_terminal_stop_signal():
         raise AssertionError("plan-only message without terminal stop signal should fail")
 
 
-def test_resolution_records_model_message_content_and_tool_calls_without_reasoning():
-    state = _state()
+def test_resolution_records_model_message_content_and_tool_calls_without_reasoning(tmp_path):
+    state = _state(tmp_path)
     message = AIMessage(
         content="I will inspect the root listing while calling a tool.",
         additional_kwargs={"reasoning_content": "hidden reasoning must not be persisted"},

@@ -1,27 +1,29 @@
 # Document Processor API
 
 This document describes the Python and HTTP contract for
-`service.document_processor`。PDF 和 DOCX 使用不同入口：PDF 走 MinerU，
-DOCX 走 `python-docx`，两者返回同一个 `ProcessResult` 形状。
+`service.document_processor`。`process(...)` 是唯一公共入口，按类型分流：
+PDF 走 MinerU，DOCX 走 `python-docx`，两者返回同一个 `ProcessResult` 形状。
 
 ## Python Entry
 
 ```python
 from service.document_processor.processor import process
-from service.document_processor.docx_processor import process_docx
 
 pdf_result = process(pdf_file_obj, file_type=None)
-docx_result = process_docx(docx_file_obj)
+docx_result = process(docx_file_obj)
 ```
+
+`process(...)` is the single public entry. It validates the file-like object,
+resolves the source filename, and dispatches by detected type: explicit
+`file_type` wins, otherwise the filename suffix decides PDF vs DOCX.
 
 Requirements:
 
 - `file_obj` must expose a callable `read()`.
 - If `file_obj` exposes `seek()`, the processor rewinds before and after reading.
-- PDF `file_type` may be `"pdf"` or `".pdf"`.
-- PDF without `file_type` must have `.pdf` filename suffix.
-- DOCX uses the dedicated `process_docx(...)` entry and `.docx` HTTP route.
-- If no filename exists, PDF uses `document.pdf`; DOCX uses `document.docx`.
+- `file_type` may be `"pdf"` / `".pdf"` or `"docx"` / `".docx"`.
+- Without `file_type`, the filename suffix (`.pdf` / `.docx`) decides the type.
+- If no filename exists, PDF falls back to `document.pdf`; DOCX to `document.docx`.
 
 Failures:
 

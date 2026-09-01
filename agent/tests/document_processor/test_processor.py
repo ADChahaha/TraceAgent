@@ -1,6 +1,7 @@
 from io import BytesIO
 
 import pytest
+from docx import Document
 
 from service.document_processor.schemas import ProcessResult
 
@@ -9,6 +10,15 @@ class NamedBytesIO(BytesIO):
     def __init__(self, data: bytes, filename: str | None = None) -> None:
         super().__init__(data)
         self.filename = filename
+
+
+def build_docx_bytes() -> bytes:
+    document = Document()
+    document.add_heading("Overview", level=1)
+    document.add_paragraph("Alpha paragraph.")
+    output = BytesIO()
+    document.save(output)
+    return output.getvalue()
 
 
 def test_process_validates_input_then_calls_pdf_pipeline(monkeypatch):
@@ -103,14 +113,48 @@ def test_process_rejects_objects_without_file_like_read_method():
         processor_module.process(object(), file_type="pdf")
 
 
-def test_process_rejects_non_pdf_explicit_type():
+def test_process_routes_docx_explicit_type_to_docx_pipeline():
+    from service.document_processor import processor as processor_module
+
+    result = processor_module.process(
+        NamedBytesIO(build_docx_bytes(), filename="sample.pdf"),
+        file_type="docx",
+    )
+
+    assert result.meta_info == {"engine": "python-docx"}
+    assert result.filename == "sample.pdf"
+    assert result.blocks[0]["block_id"] == "docx_b001"
+    assert result.blocks[0]["text"] == "Overview"
+
+
+def test_process_routes_docx_filename_suffix_to_docx_pipeline():
+    from service.document_processor import processor as processor_module
+
+    result = processor_module.process(NamedBytesIO(build_docx_bytes(), filename="sample.DOCX"))
+
+    assert result.meta_info == {"engine": "python-docx"}
+    assert result.filename == "sample.DOCX"
+    assert result.blocks[0]["block_id"] == "docx_b001"
+    assert result.blocks[0]["text"] == "Overview"
+
+
+def test_process_routes_docx_explicit_type_to_default_docx_filename():
+    from service.document_processor import processor as processor_module
+
+    result = processor_module.process(BytesIO(build_docx_bytes()), file_type="docx")
+
+    assert result.meta_info == {"engine": "python-docx"}
+    assert result.filename == "document.docx"
+
+
+def test_process_rejects_unsupported_explicit_type():
     from service.document_processor import processor as processor_module
     from service.document_processor.processor import UnsupportedFileTypeError
 
-    with pytest.raises(UnsupportedFileTypeError, match="docx"):
+    with pytest.raises(UnsupportedFileTypeError, match="txt"):
         processor_module.process(
-            NamedBytesIO(b"fake-docx", filename="sample.pdf"),
-            file_type="docx",
+            NamedBytesIO(b"fake", filename="sample.pdf"),
+            file_type="txt",
         )
 
 

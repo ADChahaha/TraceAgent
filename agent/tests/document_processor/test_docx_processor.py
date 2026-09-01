@@ -34,11 +34,11 @@ def build_docx_bytes(*, with_headings: bool) -> bytes:
 
 
 def test_process_docx_builds_sections_from_word_heading_styles():
-    from service.document_processor import docx_processor
+    from service.document_processor import processor
 
     file_obj = NamedBytesIO(build_docx_bytes(with_headings=True), filename="/tmp/sample.DOCX")
 
-    result = docx_processor.process_docx(file_obj)
+    result = processor.process(file_obj)
 
     assert result.filename == "sample.DOCX"
     assert result.meta_info == {"engine": "python-docx"}
@@ -92,11 +92,11 @@ def test_process_docx_builds_sections_from_word_heading_styles():
 
 
 def test_process_docx_without_heading_styles_keeps_flat_original_order():
-    from service.document_processor import docx_processor
+    from service.document_processor import processor
 
     file_obj = NamedBytesIO(build_docx_bytes(with_headings=False), filename="flat.docx")
 
-    result = docx_processor.process_docx(file_obj)
+    result = processor.process(file_obj)
 
     assert [block["kind"] for block in result.blocks] == ["paragraph", "paragraph", "table"]
     assert [block["text"] for block in result.blocks] == [

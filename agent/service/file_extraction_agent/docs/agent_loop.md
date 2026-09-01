@@ -56,9 +56,9 @@ sequenceDiagram
     D->>A: 返回section列表
     A->>D: read模型想要read的paragraph、table和list等内容
     D->>A: 返回对应内容
-    A->>D: grep文件内搜索(精细匹配)，输入关键词
-    D->>A: 返回符合条件的句子列表
-    A->>D: inspect句子，作为输出引用
-    D->>A: 返回句子内容和标识符
-    A->>A: 模型输出结果，引用了paragraph级别或者inline级别的标识符
+    A->>D: grep范围内搜索，输入关键词
+    D->>A: 返回匹配行（rg 原样 stdout）
+    A->>D: read一个 .md block 文件
+    D->>A: 返回文件 markdown 内容
+    A->>A: 模型输出结果，引用了 .md 文件路径作为证据
 ```

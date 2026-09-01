@@ -12,7 +12,7 @@ class FakeStreamingModel:
             {
                 "tool_name": "ls",
                 "content": "我先看文档结构。",
-                "arguments": {"path_id": ""},
+                "arguments": {"path": ""},
             },
             {
                 "tool_name": "grep",
@@ -22,15 +22,10 @@ class FakeStreamingModel:
             {
                 "tool_name": "read",
                 "content": "我读取命中的终止条款。",
-                "arguments": {"locator": "evidence://0001.0001.0001.0001"},
+                "arguments": {"path": "/abs/0001-contract/0001-Termination/0001-termination.md"},
             },
             {
-                "tool_name": "inspect",
-                "content": "这段说明任一方可提前 30 天书面通知终止。[终止条款](evidence://0001.0001.0001.0001)",
-                "arguments": {"locator": "evidence://0001.0001.0001.0001"},
-            },
-            {
-                "content": "答案：可以提前终止，但需要提前 30 天书面通知。[30 天书面通知](evidence://0001.0001.0001.0001/S001)",
+                "content": "答案：可以提前终止，但需要提前 30 天书面通知。[30 天书面通知](/abs/0001-contract/0001-Termination/0001-termination.md)",
             },
         ]
 
@@ -39,7 +34,7 @@ class FakeStreamingModel:
         return self.calls.pop(0)
 
 
-def _input():
+def _input(tmp_path):
     return build_completion_input(
         completion_id="cmp_123",
         documents=[
@@ -53,6 +48,7 @@ def _input():
             }
         ],
         messages=[{"role": "user", "content": "Can this contract be terminated early?"}],
+        workspace_root=tmp_path,
     )
 
 
@@ -65,20 +61,16 @@ def _sse_payloads(events: list[str]) -> list[dict]:
     return payloads
 
 
-def test_run_completion_graph_stream_yields_sse_events_and_terminal_completion():
-    events = list(run_completion_graph_stream(_input(), FakeStreamingModel()))
+def test_run_completion_graph_stream_yields_sse_events_and_terminal_completion(tmp_path):
+    events = list(run_completion_graph_stream(_input(tmp_path), FakeStreamingModel()))
 
     assert all(event.endswith("\n\n") for event in events)
     payloads = _sse_payloads(events)
     assert payloads[0]["type"] == "completion.created"
     assert payloads[0]["id"] == "cmp_123"
     assert payloads[1]["type"] == "source_indexed"
-    assert payloads[1]["result"]["source_selectors"] == {
-        "0001": "title",
-        "0001.0001": "title",
-        "0001.0001.0001": "term",
-        "0001.0001.0001.0001": "p1",
-    }
+    assert payloads[1]["result"]["workspace_root"] == str(tmp_path / "cmp_123")
+    assert isinstance(payloads[1]["result"]["tree"], list)
     assert payloads[2]["type"] == "model_message"
     assert payloads[3]["type"] == "tool_started"
     assert payloads[3]["tool"] == "ls"
@@ -87,9 +79,9 @@ def test_run_completion_graph_stream_yields_sse_events_and_terminal_completion()
     assert [payload["seq"] for payload in payloads] == list(range(1, len(payloads) + 1))
 
 
-def test_run_completion_graph_stream_flushes_after_each_tool_call():
+def test_run_completion_graph_stream_flushes_after_each_tool_call(tmp_path):
     model = FakeStreamingModel()
-    stream = iter(run_completion_graph_stream(_input(), model))
+    stream = iter(run_completion_graph_stream(_input(tmp_path), model))
 
     created = _sse_payloads([next(stream)])[0]
     source = _sse_payloads([next(stream)])[0]
@@ -101,4 +93,4 @@ def test_run_completion_graph_stream_flushes_after_each_tool_call():
     assert model_message["type"] == "model_message"
     assert tool_started["type"] == "tool_started"
     assert tool_started["tool"] == "ls"
-    assert len(model.calls) == 4
+    assert len(model.calls) == 3

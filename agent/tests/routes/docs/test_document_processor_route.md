@@ -10,8 +10,8 @@ HTTP request
   -> capabilities returns PDF + DOCX engine declaration
   -> multipart file + file_type upload
   -> UploadFileProxy exposes a file-like object
-  -> PDF route calls service.document_processor.processor.process(file_obj, file_type)
-  -> DOCX route calls service.document_processor.docx_processor.process_docx(file_obj)
+  -> /v1/document-processor/process      调 processor.process(file_obj, file_type)
+  -> /v1/document-processor/docx/process  调 processor.process(file_obj, "docx")
   -> ProcessResult(filename, html, display_html, markdown, md_list, blocks, semantic_document, meta_info, warnings)
   -> JSON response
 ```
@@ -35,8 +35,8 @@ HTTP request
 - Verifies upload and `file_type` forwarding.
 - Verifies JSON response shape, including structured blocks and semantic document output used later for evidence lookup.
 
-`test_document_processor_docx_route_calls_docx_processor`
+`test_document_processor_docx_route_calls_unified_processor`
 
-- Mocks `process_docx(...)`.
-- Verifies `/v1/document-processor/docx/process` forwards the upload as a file-like object.
+- Mocks unified `process(...)` (forwarding `file_type="docx"`).
+- Verifies `/v1/document-processor/docx/process` forwards the upload as a file-like object and passes `file_type="docx"` to the unified entry.
 - Verifies DOCX response shape keeps `page_no=null`, python-docx metadata and traceable semantic output.

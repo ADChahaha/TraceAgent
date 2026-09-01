@@ -243,11 +243,10 @@ def test_build_html_renders_body_subheadings_without_section_nodes():
     assert "3．出願手続</h2>" in result
     assert "1）出願手順</h2>" not in result
     assert "1．出願期間中に Web 出願システムにより入力してください。</h2>" not in result
-    assert "3．「エッセイ」については以下の指示に従ってください。</h2>" not in result
+    assert "3．「エッセイ」については以下の指示に従ってください。</h2>" in result
     assert "<p id=\"p001_b001\"" in result
     assert ">1）出願手順</p>" in result
     assert ">1．出願期間中に Web 出願システムにより入力してください。</p>" in result
-    assert ">3．「エッセイ」については以下の指示に従ってください。</p>" in result
 
 
 def test_build_html_keeps_table_of_contents_entries_out_of_outline_headings():
@@ -317,7 +316,7 @@ def test_build_html_keeps_table_of_contents_entries_out_of_outline_headings():
     assert '<section class="section section-level-2" id="p002_b000_section"' in result
 
 
-def test_build_markdown_demotes_deadline_title_to_body_line():
+def test_build_markdown_keeps_deadline_title_as_heading():
     pages = [
         [
             {
@@ -359,14 +358,12 @@ def test_build_markdown_demotes_deadline_title_to_body_line():
     html = build_html_from_content_list(pages)
     markdown = build_markdown_from_content_list(pages)
 
-    assert "## 提出期限 2025 年9月9日（火） 日本時間 23:59 まで" not in markdown
-    assert "提出期限 2025 年9月9日（火） 日本時間 23:59 まで" in markdown
-    assert "**提出期限 2025 年9月9日（火） 日本時間 23:59 まで**" not in markdown
-    assert "提出期限 2025 年9月9日（火） 日本時間 23:59 まで</h2>" not in html
-    assert ">提出期限 2025 年9月9日（火） 日本時間 23:59 まで</p>" in html
+    assert "## 提出期限 2025 年9月9日（火） 日本時間 23:59 まで" in markdown
+    assert "3）出願書類" in markdown
+    assert "提出期限 2025 年9月9日（火） 日本時間 23:59 まで</h2>" in html
 
 
-def test_build_markdown_demotes_compact_numbered_title_with_ascii_dot():
+def test_build_markdown_keeps_compact_numbered_title_as_heading():
     pages = [
         [
             {
@@ -391,205 +388,9 @@ def test_build_markdown_demotes_compact_numbered_title_with_ascii_dot():
     html = build_html_from_content_list(pages)
     markdown = build_markdown_from_content_list(pages)
 
-    assert "## 2.日程" not in markdown
-    assert "2.日程" in markdown
-    assert "**2.日程**" not in markdown
-    assert "2.日程</h2>" not in html
-    assert ">2.日程</p>" in html
-
-
-def test_build_markdown_uses_global_h2_layout_band_and_bolds_other_titles():
-    pages = [
-        [
-            {
-                "type": "title",
-                "content": {
-                    "title_content": [{"type": "text", "content": "Ⅰ．入学試験方式・募集人数・日程等"}],
-                    "level": 2,
-                },
-                "bbox": [88, 120, 610, 145],
-            },
-            {
-                "type": "title",
-                "content": {
-                    "title_content": [{"type": "text", "content": "1．入学試験方式・募集人数"}],
-                    "level": 2,
-                },
-                "bbox": [105, 170, 360, 186],
-            },
-            {
-                "type": "paragraph",
-                "content": {"paragraph_content": [{"type": "text", "content": "本文"}]},
-                "bbox": [90, 190, 500, 220],
-            },
-        ],
-        [
-            {
-                "type": "title",
-                "content": {
-                    "title_content": [{"type": "text", "content": "Ⅱ．出願資格・要件"}],
-                    "level": 2,
-                },
-                "bbox": [88, 120, 430, 145],
-            },
-            {
-                "type": "title",
-                "content": {
-                    "title_content": [{"type": "text", "content": "2．日程"}],
-                    "level": 2,
-                },
-                "bbox": [105, 170, 190, 186],
-            },
-        ],
-    ]
-
-    html = build_html_from_content_list(pages)
-    markdown = build_markdown_from_content_list(pages)
-
+    assert "## 2.日程" in markdown
     assert "## Ⅰ．入学試験方式・募集人数・日程等" in markdown
-    assert "## Ⅱ．出願資格・要件" in markdown
-    assert "1．入学試験方式・募集人数" in markdown
-    assert "2．日程" in markdown
-    assert "**1．入学試験方式・募集人数**" not in markdown
-    assert "**2．日程**" not in markdown
-    assert "## 1．入学試験方式・募集人数" not in markdown
-    assert "## 2．日程" not in markdown
-    assert 'id="p001_b000_section"' in html
-    assert 'id="p002_b000_section"' in html
-    assert "1．入学試験方式・募集人数</h2>" not in html
-
-
-def test_build_markdown_clusters_h2_band_with_width_and_indent_features():
-    pages = [
-        [
-            {
-                "type": "title",
-                "content": {"title_content": [{"type": "text", "content": "Ⅰ．入学試験方式・募集人数・日程等"}], "level": 2},
-                "bbox": [88, 120, 610, 141],
-            },
-            {
-                "type": "title",
-                "content": {"title_content": [{"type": "text", "content": "学位授与方針（ディプロマ・ポリシー）"}], "level": 2},
-                "bbox": [130, 170, 430, 190],
-            },
-            {
-                "type": "title",
-                "content": {"title_content": [{"type": "text", "content": "1．入学試験方式・募集人数"}], "level": 2},
-                "bbox": [134, 230, 360, 248],
-            },
-            {
-                "type": "title",
-                "content": {"title_content": [{"type": "text", "content": "Ⅱ．出願資格・要件"}], "level": 2},
-                "bbox": [88, 300, 430, 321],
-            },
-        ]
-    ]
-
-    markdown = build_markdown_from_content_list(pages)
-
-    assert "## Ⅰ．入学試験方式・募集人数・日程等" in markdown
-    assert "## Ⅱ．出願資格・要件" in markdown
-    assert "学位授与方針（ディプロマ・ポリシー）" in markdown
-    assert "**学位授与方針（ディプロマ・ポリシー）**" not in markdown
-    assert "1．入学試験方式・募集人数" in markdown
-    assert "**1．入学試験方式・募集人数**" not in markdown
-
-
-def test_build_markdown_keeps_same_height_body_subheadings_out_of_h2_cluster():
-    pages = [
-        [
-            {
-                "type": "title",
-                "content": {
-                    "title_content": [{"type": "text", "content": "Ⅰ．入学試験方式・募集人数・日程等"}],
-                    "level": 2,
-                },
-                "bbox": [88, 120, 610, 145],
-            },
-            {
-                "type": "title",
-                "content": {
-                    "title_content": [{"type": "text", "content": "1．募集人員および試験関連日程等"}],
-                    "level": 2,
-                },
-                "bbox": [100, 150, 500, 171],
-            },
-            {
-                "type": "title",
-                "content": {
-                    "title_content": [{"type": "text", "content": "2．出願資格"}],
-                    "level": 2,
-                },
-                "bbox": [100, 220, 260, 241],
-            },
-        ]
-    ]
-
-    markdown = build_markdown_from_content_list(pages)
-
-    assert "## Ⅰ．入学試験方式・募集人数・日程等" in markdown
-    assert "## 1．募集人員および試験関連日程等" not in markdown
-    assert "## 2．出願資格" not in markdown
-    assert "1．募集人員および試験関連日程等" in markdown
-    assert "2．出願資格" in markdown
-    assert "**1．募集人員および試験関連日程等**" not in markdown
-    assert "**2．出願資格**" not in markdown
-
-
-def test_build_markdown_demotes_angle_bracket_title_after_agglomerative_clustering():
-    pages = [
-        [
-            {
-                "type": "title",
-                "content": {
-                    "title_content": [{"type": "text", "content": "4．入学試験"}],
-                    "level": 2,
-                },
-                "bbox": [109, 52, 295, 77],
-            },
-            {
-                "type": "title",
-                "content": {
-                    "title_content": [{"type": "text", "content": "5．合格発表"}],
-                    "level": 2,
-                },
-                "bbox": [110, 49, 297, 76],
-            },
-            {
-                "type": "title",
-                "content": {
-                    "title_content": [{"type": "text", "content": "6．入学手続"}],
-                    "level": 2,
-                },
-                "bbox": [109, 52, 295, 77],
-            },
-            {
-                "type": "title",
-                "content": {
-                    "title_content": [{"type": "text", "content": "＜選考料の返還ができる場合＞"}],
-                    "level": 2,
-                },
-                "bbox": [109, 457, 366, 473],
-            },
-            {
-                "type": "paragraph",
-                "content": {
-                    "paragraph_content": [{"type": "text", "content": "＜返還手続き＞"}],
-                },
-                "bbox": [109, 551, 242, 567],
-            },
-        ]
-    ]
-
-    markdown = build_markdown_from_content_list(pages)
-
-    assert "## 4．入学試験" in markdown
-    assert "## 5．合格発表" in markdown
-    assert "## 6．入学手続" in markdown
-    assert "## ＜選考料の返還ができる場合＞" not in markdown
-    assert "＜選考料の返還ができる場合＞" in markdown
-    assert "**＜選考料の返還ができる場合＞**" not in markdown
-    assert "＜返還手続き＞" in markdown
+    assert "2.日程</h2>" in html
 
 
 def test_build_html_skips_pages_without_visible_content():
@@ -1027,7 +828,7 @@ def test_build_markdown_from_content_list_promotes_numbered_paragraph_body_items
     assert "**1．出願期間中に Web 出願システムにより入力してください。**" not in result
     assert "**2．Web 出願システムでは、志願票入力と写真のアップロード、および選考料の納入が完了すると、「マイページ」が生成されます。**" not in result
     assert "**3．「エッセイ」については以下の指示に従ってください。**" not in result
-    assert "## 3．「エッセイ」については以下の指示に従ってください。" not in result
+    assert "## 3．「エッセイ」については以下の指示に従ってください。" in result
 
 
 def test_build_semantic_document_groups_sections_blocks_and_inlines():
