@@ -8,7 +8,7 @@
 backend 持有原始 PDF/DOCX
   -> PDF POST /v1/document-processor/process
   -> DOCX POST /v1/document-processor/docx/process
-  -> 得到 filename + html + display_html + markdown + blocks
+  -> 得到 filename + html
   -> backend 保存文档和对话状态
 
 backend 持有 documents(filename + html) + append-only messages
@@ -78,11 +78,8 @@ PDF UploadFile
   -> process(file_obj, file_type)
   -> 校验 PDF 类型
   -> convert_pdf_bytes_to_content_list(source_bytes, filename)
-  -> build_html_from_content_list(content_list)
-  -> build_display_html_from_content_list(content_list)
-  -> build_markdown_from_content_list(content_list)
-  -> build_blocks_from_content_list(content_list)
-  -> ProcessResult(filename, html, display_html, markdown, md_list, blocks, meta_info, warnings)
+  -> build_html_from_content_list(content_list)  生成带 CSS 的完整 HTML
+  -> ProcessResult(filename, html)
   -> route 层返回 JSON
 ```
 
@@ -96,7 +93,8 @@ DOCX UploadFile
   -> 按 Word body 原始顺序遍历 paragraph/table
   -> 只用 Word heading style 生成 section
   -> 无 heading style 时保持 flat paragraph/table blocks
-  -> ProcessResult(filename, html, display_html, markdown, md_list, blocks, meta_info, warnings)
+  -> 生成带 CSS 的完整 HTML 文档
+  -> ProcessResult(filename, html)
   -> route 层返回 JSON
 ```
 

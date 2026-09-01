@@ -37,20 +37,10 @@ def test_process_validates_input_then_calls_pdf_pipeline(monkeypatch):
     result = processor_module.process(file_obj)
 
     assert result.filename == "sample.PDF"
+    assert '<!doctype html>' in result.html
+    assert "<style>" in result.html
     assert 'id="p001_b000"' in result.html
     assert "正文" in result.html
-    assert result.display_html is not None
-    assert "<style>" in result.display_html
-    assert 'id="p001_b000"' in result.display_html
-    assert "正文" in result.display_html
-    assert "<!-- Cluster summary:" not in result.markdown
-    assert "<!-- cluster=" not in result.markdown
-    assert "正文" in result.markdown
-    assert result.md_list == ["正文"]
-    assert result.blocks[0]["block_id"] == "p001_b000"
-    assert result.blocks[0]["text"] == "正文"
-    assert result.meta_info == {"engine": "mineru-pipeline"}
-    assert result.warnings == []
     assert seen_call["source_bytes"] == b"%PDF-1.4"
     assert seen_call["filename"] == "sample.PDF"
     assert file_obj.tell() == 0
@@ -70,12 +60,7 @@ def test_process_uses_mineru_even_when_pdf_text_layer_is_readable(monkeypatch):
 
     result = processor_module.process(NamedBytesIO(b"%PDF-1.4", filename="text.pdf"))
 
-    assert result.meta_info == {"engine": "mineru-pipeline"}
-    assert result.warnings == []
-    assert "MinerU正文" in result.markdown
     assert "MinerU正文" in result.html
-    assert result.blocks[0]["block_id"] == "p001_b000"
-    assert result.md_list == ["MinerU正文"]
     assert seen_call["source_bytes"] == b"%PDF-1.4"
     assert seen_call["filename"] == "text.pdf"
 
@@ -98,9 +83,7 @@ def test_process_accepts_explicit_pdf_type_without_filename_suffix(monkeypatch):
 
     assert result.filename == "upload.bin"
     assert 'id="p001_b000"' in result.html
-    assert result.display_html is not None
-    assert 'id="p001_b000"' in result.display_html
-    assert "正文" in result.display_html
+    assert "正文" in result.html
 
 
 def test_process_rejects_objects_without_file_like_read_method():
@@ -119,10 +102,9 @@ def test_process_routes_docx_explicit_type_to_docx_pipeline():
         file_type="docx",
     )
 
-    assert result.meta_info == {"engine": "python-docx"}
     assert result.filename == "sample.pdf"
-    assert result.blocks[0]["block_id"] == "docx_b001"
-    assert result.blocks[0]["text"] == "Overview"
+    assert "Overview" in result.html
+    assert "Alpha paragraph." in result.html
 
 
 def test_process_routes_docx_filename_suffix_to_docx_pipeline():
@@ -130,10 +112,9 @@ def test_process_routes_docx_filename_suffix_to_docx_pipeline():
 
     result = processor_module.process(NamedBytesIO(build_docx_bytes(), filename="sample.DOCX"))
 
-    assert result.meta_info == {"engine": "python-docx"}
     assert result.filename == "sample.DOCX"
-    assert result.blocks[0]["block_id"] == "docx_b001"
-    assert result.blocks[0]["text"] == "Overview"
+    assert "Overview" in result.html
+    assert "Alpha paragraph." in result.html
 
 
 def test_process_routes_docx_explicit_type_to_default_docx_filename():
@@ -141,8 +122,8 @@ def test_process_routes_docx_explicit_type_to_default_docx_filename():
 
     result = processor_module.process(BytesIO(build_docx_bytes()), file_type="docx")
 
-    assert result.meta_info == {"engine": "python-docx"}
     assert result.filename == "document.docx"
+    assert "Overview" in result.html
 
 
 def test_process_rejects_unsupported_explicit_type():
@@ -185,4 +166,4 @@ def test_process_uses_default_pdf_filename_when_name_is_missing(monkeypatch):
 
     assert result.filename == "document.pdf"
     assert seen_call["filename"] == "document.pdf"
-    assert result.display_html is not None
+    assert "<style>" in result.html

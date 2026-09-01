@@ -1,4 +1,9 @@
-"""Convert MinerU content_list_v2 pages to traceable HTML."""
+"""Convert MinerU content_list_v2 pages to a traceable HTML document.
+
+`build_html_from_content_list` 产出带 CSS 的完整 HTML 文档：前端 review /
+iframe 直接渲染，同时保留 h1-h6 / p / ul / ol / table 结构骨架，供
+file_extraction_agent 解析建树。
+"""
 
 from __future__ import annotations
 
@@ -8,21 +13,18 @@ import re
 from typing import Any
 
 
-
 def build_html_from_content_list(pages: list[list[dict[str, Any]]]) -> str:
-    """Build extraction HTML with stable ids and MinerU metadata."""
+    """Build a self-contained display HTML document from MinerU pages.
 
-    blocks = classify_markdown_blocks(markdown_blocks(pages))
-    return "\n".join(
+    产出带 CSS 的完整 HTML 文档：前端 review / iframe 直接渲染，同时保留
+    h1-h6 / p / ul / ol / table 结构骨架，供 file_extraction_agent 解析建树。
+    """
+
+    fragment = "\n".join(
         rendered
         for page_idx in range(len(pages))
-        if (rendered := render_page_from_markdown_blocks(blocks, page_idx))
+        if (rendered := render_page_from_markdown_blocks(classify_markdown_blocks(markdown_blocks(pages)), page_idx))
     )
-
-
-def build_display_html_from_content_list(pages: list[list[dict[str, Any]]]) -> str:
-    """Build a self-contained display HTML document from MinerU pages."""
-
     return f"""<!doctype html>
 <html lang="ja">
 <head>
@@ -54,71 +56,11 @@ td, th {{ border: 1px solid #737373; padding: 5px 7px; vertical-align: top; }}
 </head>
 <body>
 <main>
-{build_html_from_content_list(pages)}
+{fragment}
 </main>
 </body>
 </html>
 """
-
-
-def build_blocks_from_content_list(pages: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
-    """Build block-level evidence blocks using the same ids as rendered HTML.
-
-    只保留块级证据（paragraph / list / table 各一个 block），不再展开列表项
-    （Ixxx）或表格行（Rxxx）级子证据。
-    """
-
-    blocks: list[dict[str, Any]] = []
-    for page_idx, page in enumerate(pages):
-        page_no = page_idx + 1
-        for block_idx, block in enumerate(page):
-            if not should_render_block(block):
-                continue
-            block_id = f"p{page_no:03d}_b{block_idx:03d}"
-            block_type = str(block.get("type", "unknown"))
-            blocks.append(
-                {
-                    "block_id": block_id,
-                    "text": block_text(block),
-                    "page_no": page_no,
-                    "bbox": block.get("bbox"),
-                    "kind": normalize_block_kind(block_type),
-                    "meta_info": {"mineru_type": block_type},
-                }
-            )
-    return blocks
-
-
-def build_markdown_from_content_list(pages: list[list[dict[str, Any]]]) -> str:
-    """Build readable markdown from MinerU content_list_v2 pages."""
-
-    blocks = classify_markdown_blocks(markdown_blocks(pages))
-    if not blocks:
-        return ""
-
-    lines: list[str] = []
-    for block in blocks:
-        block_type = block["type"]
-        text = block["text"]
-        source = block["block"]
-        if block_type == "title":
-            if not markdown_heading_level(block):
-                lines.append(text)
-            else:
-                level = markdown_heading_level(block) or 2
-                lines.append(f"{'#' * level} {text}")
-        elif block_type == "paragraph" and markdown_is_body_subheading(block):
-            lines.append(text)
-        elif block_type in {"index", "list"}:
-            for item in text.splitlines():
-                if item.strip():
-                    lines.append(f"- {item.strip()}")
-        elif block_type == "table":
-            lines.append(source.get("content", {}).get("html") or text)
-        else:
-            lines.append(text)
-        lines.append("")
-    return "\n".join(lines).strip()
 
 
 def markdown_blocks(
@@ -553,20 +495,6 @@ def table_text(content: dict[str, Any]) -> str:
         flatten_text(content.get("table_footnote")),
     ]
     return "\n".join(part for part in parts if part)
-
-
-def normalize_block_kind(block_type: str) -> str:
-    if block_type == "title":
-        return "heading"
-    if block_type == "paragraph":
-        return "text"
-    if block_type in {"index", "list"}:
-        return "list"
-    if block_type == "table":
-        return "table"
-    if block_type == "page_footnote":
-        return "footnote"
-    return block_type
 
 
 def normalize_inline_space(text: str) -> str:

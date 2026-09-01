@@ -39,11 +39,8 @@ file_obj
   -> detect_file_type(...) -> "pdf"
   -> read_source_bytes(...)
   -> mineru_converter.convert_pdf_bytes_to_content_list(...)
-  -> mineru_html.build_blocks_from_content_list(...)
   -> mineru_html.build_html_from_content_list(...)
-  -> mineru_html.build_display_html_from_content_list(...)
-  -> mineru_html.build_markdown_from_content_list(...)
-  -> ProcessResult(filename, html, display_html, markdown, md_list, blocks, meta_info, warnings)
+  -> ProcessResult(filename, html)
 ```
 
 DOCX pipeline:
@@ -61,8 +58,8 @@ file_obj
   -> paragraph style 是 Heading 1/2/3... 时生成 heading block
   -> 普通 paragraph 保留原文顺序，生成 paragraph block
   -> table 保留原文顺序，生成 table block
-  -> 生成 html / display_html / markdown / md_list / blocks
-  -> ProcessResult(..., meta_info.engine="python-docx")
+  -> 生成带 CSS 的完整 HTML 文档
+  -> ProcessResult(filename, html)
 ```
 
 ## Files
@@ -145,13 +142,12 @@ docx_b002
 
 输出约束：
 
-- `html` 是供 QA agent 建真实文件树的 traceable fragment。
-- `display_html` 是带基础样式的完整 HTML，前端右侧 review iframe 直接使用。
-- `blocks` 的 `block_id` 与 HTML DOM id 一致，只到块级（不再有列表项 / 表格行子证据）。
+- `html` 是带 CSS 的完整 HTML 文档：前端 review / iframe 直接渲染，同时保留
+  h1-h6 / p / ul / ol / table 结构骨架，供 QA agent 解析建树。
+- `ProcessResult` 只保留 `filename` + `html`。
 - 没有 heading style 时不做启发式标题识别，所有非空段落都作为
   paragraph block 保留原顺序。
-- DOCX 没有稳定 page/bbox，`blocks[].page_no` 固定为 `None`，`meta_info`
-  标记 `engine=python-docx`。
+- DOCX 没有稳定 page/bbox，`html` 里 DOCX block id 形如 `docx_bNNN`。
 
 ## `mineru_converter.py`
 
@@ -170,19 +166,17 @@ MinerU errors are fail-fast. There is no fallback engine.
 
 ## `mineru_html.py`
 
-Owns conversion from MinerU pages to HTML.
+Owns conversion from MinerU pages to a single self-contained HTML document.
 
-- `build_html_from_content_list(...)`: extraction HTML fragment.
-- `build_display_html_from_content_list(...)`: full HTML document with CSS.
-- `build_blocks_from_content_list(...)`: backend block-level evidence blocks
-  using the same rendered ids as HTML (no list-item / table-row sub-evidence).
-- `build_markdown_from_content_list(...)`: markdown-like text for storage and
-  audit views. It keeps the rendered block order and separates true headings
-  from body-local subheadings.
+- `build_html_from_content_list(...)`: returns a complete HTML document with a
+  CSS shell (`<style>` with `dp-evidence-highlight` etc.), plus the
+  h1-h6 / p / ul / ol / table structure skeleton for tree building. It keeps
+  the block-level `id` / `data-page` / `data-bbox` metadata.
 
-不再生成 `semantic_document`（section/block/inline 三层语义结构）。引证粒度
-收敛到块级：paragraph/list/table 各是一个 evidence 单元，前端按块 id 高亮；
-没有句子 / 列表项 / 表格行级 selector。
+不再生成 `build_display_html_from_content_list` / `build_blocks_from_content_list`
+/ `build_markdown_from_content_list` / `semantic_document`（section/block/inline
+三层结构）。引证粒度收敛到块级：paragraph/list/table 各是一个 evidence 单元，
+前端按 HTML 里的块 id 高亮；没有句子 / 列表项 / 表格行级 selector。
 
 HTML fragment 的层级输出规则：
 
@@ -215,9 +209,9 @@ p001_b001_item_000
 ```
 
 The converter preserves page, type, title level, bbox, table HTML, captions,
-and footnotes for visible text/table content. `blocks` reuse the rendered HTML
-ids for paragraphs, headings, list items and table rows so backend can recover
-evidence text by id. Empty pages, image-only blocks, and source image debug
+and footnotes for visible text/table content. `html` keeps the rendered block
+ids for paragraphs, headings, list items and table rows so the frontend can
+locate evidence by id. Empty pages, image-only blocks, and source image debug
 paths are filtered out so replay HTML only shows content that the extraction
 agent can actually use. In generated HTML, level-2 titles define section
 wrappers, level-3 titles define subsection wrappers, and level-4 or deeper
@@ -225,23 +219,8 @@ titles stay at ordinary block level so downstream tools do not treat them as
 additional section scopes. The converter no longer runs layout clustering to
 infer chapter levels; only `目次`-page entries and body subheadings are demoted.
 
-Markdown 输出的层级规则：
-
-```text
-MinerU content_list_v2 pages
-  -> 过滤 page_header/page_number/page_footer/image 等不进入推理正文的 block
-  -> 按原始页序和页内顺序收集 title/paragraph/list/table
-  -> 先识别目录页，目录条目不参与 Markdown heading 或 HTML section
-  -> title 的 heading_level 与 HTML 共用同一份分类结果（目次条目 / 正文小标题降级）
-  -> 其余 title 直接信任 MinerU content.level 生成对应 Markdown heading
-  -> 以 `1）`、`【...】`、`<<..>>`、`(..)` 括号编号、单字母标号等样式识别正文小标题
-  -> 这些正文小标题不再当成 Markdown heading，统一降级为普通正文行
-  -> 真标题继续按 heading 输出，保持原文顺序和正文内容紧跟其后
-  -> paragraph/list/table 保持在原文顺序中，跟随对应标题输出
-```
-
 标题层级不再做聚类/特征推断，只做轻量过滤：MinerU 在部分 PDF 里会把 `1．`
-大章、`1）` 小节和 `【注意事項】` 都标成同一层；Markdown 会保留原文顺序，
+大章、`1）` 小节和 `【注意事項】` 都标成同一层；HTML 会保留原文顺序，
 但只把明显属于正文小标题的样式（`1）`、`【...】`、括号编号等）从 heading
 降级，避免把它们和真正的章节标题混在一起。不再根据版面 height/width/
 聚类选 h2 频带，也不删除日期/締切提示行或 ASCII 点后无空格的紧凑编号标题。

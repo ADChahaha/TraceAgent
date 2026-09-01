@@ -21,8 +21,8 @@ PDF 分支：
 file_obj
   -> read_source_bytes(...) 读取 bytes 并复位文件指针
   -> convert_pdf_bytes_to_content_list(...) 调用 MinerU pipeline
-  -> 复用 mineru_html 生成 html / display_html / markdown / blocks / semantic_document
-  -> ProcessResult(..., engine="mineru-pipeline")
+  -> build_html_from_content_list(...) 生成带 CSS 的完整 HTML 文档
+  -> ProcessResult(filename, html)
 ```
 
 DOCX 分支：
@@ -32,9 +32,9 @@ file_obj
   -> read_source_bytes(...) 读取 bytes 并复位文件指针
   -> python-docx Document(BytesIO(bytes)) 打开 Word 文档
   -> iter_block_items(...) 按 body 原始顺序遍历 paragraph/table
-  -> Word heading style 建 section stack；普通段落和表格不猜标题
-  -> 生成 html / display_html / markdown / md_list / blocks / semantic_document
-  -> ProcessResult(..., engine="python-docx")
+  -> Word heading style 生成 heading block；普通段落和表格不猜标题
+  -> build_display_html(build_html(blocks)) 生成带 CSS 的完整 HTML 文档
+  -> ProcessResult(filename, html)
 ```
 """
 
@@ -58,10 +58,7 @@ from service.document_processor.mineru_converter import (
     convert_pdf_bytes_to_content_list,
 )
 from service.document_processor.mineru_html import (
-    build_blocks_from_content_list,
-    build_display_html_from_content_list,
     build_html_from_content_list,
-    build_markdown_from_content_list,
 )
 from service.document_processor.schemas import ProcessResult
 
@@ -176,16 +173,9 @@ def _process_pdf(file_obj, filename: str) -> ProcessResult:
 
     source_bytes = read_source_bytes(file_obj)
     content_list = convert_pdf_bytes_to_content_list(source_bytes, filename)
-    blocks = build_blocks_from_content_list(content_list)
     return ProcessResult(
         filename=filename,
         html=build_html_from_content_list(content_list),
-        display_html=build_display_html_from_content_list(content_list),
-        markdown=build_markdown_from_content_list(content_list),
-        md_list=[block["text"] for block in blocks if block.get("text")],
-        blocks=blocks,
-        meta_info={"engine": "mineru-pipeline"},
-        warnings=[],
     )
 
 
@@ -210,16 +200,10 @@ def _process_docx(file_obj, filename: str) -> ProcessResult:
     source_bytes = read_source_bytes(file_obj)
     document = Document(BytesIO(source_bytes))
     blocks = build_docx_blocks(document)
-    html = build_html(blocks)
+    html = build_display_html(build_html(blocks))
     return ProcessResult(
         filename=filename,
         html=html,
-        display_html=build_display_html(html),
-        markdown=build_markdown(blocks),
-        md_list=[block.text for block in blocks if block.text],
-        blocks=[process_block_to_dict(block) for block in blocks],
-        meta_info={"engine": "python-docx"},
-        warnings=[],
     )
 
 
@@ -312,24 +296,6 @@ def table_rows(table: Table, block_id: str) -> list[dict[str, Any]]:
     return rows
 
 
-def process_block_to_dict(block: _DocxBlock) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "block_id": block.block_id,
-        "text": block.text,
-        "page_no": None,
-        "bbox": None,
-        "kind": block.kind,
-        "meta_info": {"source": "docx"},
-    }
-    if block.style_name:
-        payload["meta_info"]["style"] = block.style_name
-    if block.level is not None:
-        payload["meta_info"]["level"] = block.level
-    if block.rows:
-        payload["rows"] = block.rows
-    return payload
-
-
 def build_html(blocks: list[_DocxBlock]) -> str:
     lines: list[str] = []
     open_section_levels: list[int] = []
@@ -407,34 +373,6 @@ td, th {{ border: 1px solid #737373; padding: 6px 8px; vertical-align: top; }}
 </body>
 </html>
 """
-
-
-def build_markdown(blocks: list[_DocxBlock]) -> str:
-    lines: list[str] = []
-    for block in blocks:
-        if block.kind == "heading":
-            level = block.level or 1
-            lines.append(f"{'#' * level} {block.text}")
-        elif block.kind == "table":
-            lines.extend(table_markdown_lines(block))
-        else:
-            lines.append(block.text)
-        lines.append("")
-    return "\n".join(lines).strip()
-
-
-def table_markdown_lines(block: _DocxBlock) -> list[str]:
-    if not block.rows:
-        return []
-    lines = [markdown_row(block.rows[0]["cells"])]
-    lines.append(markdown_row(["---" for _ in block.rows[0]["cells"]]))
-    for row in block.rows[1:]:
-        lines.append(markdown_row(row["cells"]))
-    return lines
-
-
-def markdown_row(cells: list[str]) -> str:
-    return "| " + " | ".join(cell.replace("|", "\\|") for cell in cells) + " |"
 
 
 def normalize_text(text: str) -> str:

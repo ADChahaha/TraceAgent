@@ -7,7 +7,7 @@ from importlib import import_module
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 from starlette.concurrency import run_in_threadpool
 
 from service.document_processor.processor import (
@@ -49,12 +49,6 @@ class ProcessResponse(BaseModel):
 
     filename: str
     html: str
-    display_html: str | None = None
-    markdown: str = ""
-    md_list: list[str] = Field(default_factory=list)
-    blocks: list[dict[str, Any]] = Field(default_factory=list)
-    meta_info: dict[str, Any] = Field(default_factory=dict)
-    warnings: list[str] = Field(default_factory=list)
 
 
 @router.get("/healthz", response_model=HealthResponse)
@@ -124,10 +118,4 @@ def _build_process_response(result) -> ProcessResponse:
     return ProcessResponse(
         filename=result.filename,
         html=result.html,
-        display_html=result.display_html,
-        markdown=result.markdown,
-        md_list=result.md_list,
-        blocks=result.blocks,
-        meta_info=result.meta_info,
-        warnings=result.warnings,
     )

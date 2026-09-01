@@ -85,21 +85,18 @@ Response:
 ```json
 {
   "filename": "sample.pdf",
-  "html": "<section ...>...</section>",
-  "display_html": "<!doctype html>..."
+  "html": "<!doctype html><html>..."
 }
 ```
 
 Fields:
 
 - `filename`: source basename, or `document.pdf` / `document.docx`.
-- `html`: traceable extraction HTML fragment.
-- `display_html`: self-contained HTML document for user review.
-- `markdown`: markdown-like text for storage and audit views.
-- `md_list`: block text list.
-- `blocks`: block-level evidence blocks using rendered ids.
+- `html`: self-contained HTML document with CSS for display, plus the
+  h1-h6 / p / ul / ol / table structure skeleton for tree building.
 
-不再返回 `semantic_document`（section/block/inline 三层结构），引证粒度收敛到块级。
+不再返回 `display_html` / `markdown` / `md_list` / `blocks` / `semantic_document`
+/ `meta_info` / `warnings`。引证粒度收敛到块级（HTML 里的块 id）。
 
 DOCX 的生成链路：
 
@@ -108,8 +105,7 @@ python-docx Document
   -> 按 Word body 原始顺序读取 paragraph/table
   -> 仅 Word heading style 生成 heading block
   -> 无 heading style 时保持 flat paragraph/table blocks
-  -> blocks 只到块级，不再生成 {table_block_id}_tr_NNN 行级证据 id
-  -> blocks[].page_no 固定为 null
+  -> 输出带 CSS 的完整 HTML 文档
 ```
 
 ## HTML Contract

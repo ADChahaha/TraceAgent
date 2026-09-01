@@ -2,13 +2,7 @@
 
 Tests `service.document_processor.schemas.ProcessResult`.
 
-`ProcessResult` contains:
+`ProcessResult` contains only:
 
 - `filename`
 - `html`
-- `display_html`
-- `markdown`
-- `md_list`
-- `blocks`
-- `meta_info`
-- `warnings`

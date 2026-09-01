@@ -42,11 +42,6 @@ def test_document_processor_process_route_calls_business_processor(monkeypatch):
         return ProcessResult(
             filename="sample.pdf",
             html="<html><body>正文</body></html>",
-            markdown="正文",
-            md_list=["正文"],
-            blocks=[{"block_id": "p001_b000", "text": "正文", "page_no": 1, "kind": "text"}],
-            meta_info={"engine": "fake"},
-            warnings=["fake-warning"],
         )
 
     monkeypatch.setattr(processor_module, "process", fake_process)
@@ -65,19 +60,6 @@ def test_document_processor_process_route_calls_business_processor(monkeypatch):
     assert response.json() == {
         "filename": "sample.pdf",
         "html": "<html><body>正文</body></html>",
-        "display_html": None,
-        "markdown": "正文",
-        "md_list": ["正文"],
-        "blocks": [
-            {
-                "block_id": "p001_b000",
-                "text": "正文",
-                "page_no": 1,
-                "kind": "text",
-            }
-        ],
-        "meta_info": {"engine": "fake"},
-        "warnings": ["fake-warning"],
     }
 
 
@@ -93,19 +75,6 @@ def test_document_processor_docx_route_calls_unified_processor(monkeypatch):
         return ProcessResult(
             filename="sample.docx",
             html='<section id="docx_b001_section"><h1 id="docx_b001">Overview</h1></section>',
-            display_html='<html><body><h1 id="docx_b001">Overview</h1></body></html>',
-            markdown="# Overview",
-            md_list=["Overview"],
-            blocks=[
-                {
-                    "block_id": "docx_b001",
-                    "text": "Overview",
-                    "page_no": None,
-                    "kind": "heading",
-                }
-            ],
-            meta_info={"engine": "python-docx"},
-            warnings=[],
         )
 
     monkeypatch.setattr(processor_module, "process", fake_process)
@@ -129,17 +98,4 @@ def test_document_processor_docx_route_calls_unified_processor(monkeypatch):
     assert response.json() == {
         "filename": "sample.docx",
         "html": '<section id="docx_b001_section"><h1 id="docx_b001">Overview</h1></section>',
-        "display_html": '<html><body><h1 id="docx_b001">Overview</h1></body></html>',
-        "markdown": "# Overview",
-        "md_list": ["Overview"],
-        "blocks": [
-            {
-                "block_id": "docx_b001",
-                "text": "Overview",
-                "page_no": None,
-                "kind": "heading",
-            }
-        ],
-        "meta_info": {"engine": "python-docx"},
-        "warnings": [],
     }

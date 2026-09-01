@@ -1,8 +1,8 @@
 # Document Processor
 
-`service.document_processor` receives PDF or DOCX file objects and returns
-traceable HTML for extraction plus display HTML for inspection. PDF runs MinerU;
-DOCX is parsed from Word structure with `python-docx`.
+`service.document_processor` receives PDF or DOCX file objects and returns a
+single self-contained HTML document (`filename` + `html`) with CSS for display.
+PDF runs MinerU; DOCX is parsed from Word structure with `python-docx`.
 
 ## Supported Input
 
@@ -21,7 +21,6 @@ docx_result = process(docx_file_obj)
 
 print(pdf_result.filename)
 print(pdf_result.html)
-print(pdf_result.display_html)
 ```
 
 HTTP endpoints:
@@ -38,9 +37,8 @@ HTTP endpoints:
   -> detect_file_type(file_type, filename)  显式类型优先，否则看后缀
        ├─ pdf  -> MinerU pipeline CLI
        └─ docx -> python-docx Document(BytesIO(...))
-   -> traceable extraction HTML + self-contained display HTML
-  -> markdown, md_list, block-level evidence blocks, meta_info, warnings
-  -> ProcessResult(filename, html, display_html, markdown, md_list, blocks, meta_info, warnings)
+  -> 生成带 CSS 的完整 HTML 文档（含 h1-h6 / p / ul / ol / table 结构骨架）
+  -> ProcessResult(filename, html)
 ```
 
 DOCX 解析细节：
@@ -59,11 +57,10 @@ Source files:
 - `mineru_html.py`: MinerU content list to HTML conversion.
 - `schemas.py`: `ProcessResult`.
 
-`blocks` 使用和 HTML 一致的可追踪 id，只到块级。PDF 普通 block id 形如
-`p001_b000`。DOCX block id 形如 `docx_b001`。backend 会再补上自己的
-`document_id`，用于 replay/audit 展示和字段证据定位。不再生成列表项
-（`_item_000`）或表格行（`_tr_000`）级子证据（HTML 里仍保留列表项与表格行的
-id，但 `blocks` 不再展开成独立子 block）。
+`ProcessResult` 只保留 `filename` + `html`。`html` 是带 CSS 的完整文档：
+前端 review / iframe 直接渲染，同时保留 h1-h6 / p / ul / ol / table 结构骨架，
+供 `file_extraction_agent` 解析建树。不再返回 `display_html` / `markdown` /
+`md_list` / `blocks` / `semantic_document` / `meta_info` / `warnings`。
 
 ## Output HTML
 
@@ -91,7 +88,7 @@ paragraph/list/table -> 原生 p/ul/table block，block id 直接在该标签上
 ```
 
 Pages without visible text/table content are skipped. Image-only blocks and
-MinerU source image paths are not rendered in `html` or `display_html`.
+MinerU source image paths are not rendered in `html`.
 
 Continued-table merging is currently disabled. Table cells are kept from MinerU,
 while the outer table id is normalized to the block id and rows get deterministic

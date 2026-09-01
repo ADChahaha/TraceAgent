@@ -10,7 +10,7 @@
 
 ```text
 原始 PDF/DOCX
-  -> document_processor 标准化为 html / display_html / markdown / blocks
+  -> document_processor 标准化为带 CSS 的 HTML 文档（filename + html）
   -> backend 保存文档和对话状态
   -> file_extraction_agent 接收 documents + append-only messages
   -> agent 像 code agent 浏览代码仓库一样 ls/grep/read 文档
@@ -97,8 +97,8 @@ DOCX 公共入口。
 PDF UploadFile / file-like object
   -> processor.process(...) -> 校验 file-like、推断类型、分流
   -> 调用 MinerU 解析 PDF bytes
-  -> generate 语义 HTML、展示 HTML、markdown、md_list 和 blocks
-  -> 返回 ProcessResult(filename, html, display_html, markdown, md_list, blocks, meta_info, warnings)
+  -> 生成带 CSS 的完整 HTML 文档
+  -> 返回 ProcessResult(filename, html)
 ```
 
 ```text
@@ -107,8 +107,8 @@ DOCX UploadFile / file-like object
   -> python-docx 解析 DOCX bytes
   -> 按 Word body 原始顺序读取 paragraph/table
   -> 只用 Word heading style 建 section；无 heading style 时保持 flat blocks
-  -> 生成语义 HTML、展示 HTML、markdown、md_list 和 blocks
-  -> 返回 ProcessResult(filename, html, display_html, markdown, md_list, blocks, meta_info, warnings)
+  -> 生成带 CSS 的完整 HTML 文档
+  -> 返回 ProcessResult(filename, html)
 ```
 
 失败语义：

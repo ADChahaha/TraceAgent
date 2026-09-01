@@ -60,7 +60,6 @@ def test_process_routes_docx_file_path_via_public_interface(tmp_path):
         result = process(file_obj)
 
     assert result.filename == fixture_path.name
-    assert result.meta_info == {"engine": "python-docx"}
-    assert result.blocks[0]["block_id"] == "docx_b001"
-    assert result.blocks[0]["text"] == "Overview"
     assert '<h1 id="docx_b001"' in result.html
+    assert "Overview" in result.html
+    assert "Alpha paragraph." in result.html
