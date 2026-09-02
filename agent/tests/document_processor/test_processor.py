@@ -26,12 +26,12 @@ def test_process_validates_input_then_calls_pdf_pipeline(monkeypatch):
 
     seen_call: dict[str, object] = {}
 
-    def fake_convert(source_bytes: bytes, filename: str) -> list[list[dict]]:
+    def fake_convert(source_bytes: bytes, filename: str) -> str:
         seen_call["source_bytes"] = source_bytes
         seen_call["filename"] = filename
-        return [[{"type": "paragraph", "content": {"paragraph_content": [{"type": "text", "content": "正文"}]}}]]
+        return '<!doctype html><html><head><style>x</style></head><body><main><section class="page" id="page_001"><p id="p001_b000">正文</p></section></main></body></html>'
 
-    monkeypatch.setattr(processor_module, "convert_pdf_bytes_to_content_list", fake_convert)
+    monkeypatch.setattr(processor_module, "convert_pdf_to_html", fake_convert)
 
     file_obj = NamedBytesIO(b"%PDF-1.4", filename="/tmp/sample.PDF")
     result = processor_module.process(file_obj)
@@ -51,12 +51,12 @@ def test_process_uses_mineru_even_when_pdf_text_layer_is_readable(monkeypatch):
 
     seen_call: dict[str, object] = {}
 
-    def fake_convert(source_bytes: bytes, filename: str) -> list[list[dict]]:
+    def fake_convert(source_bytes: bytes, filename: str) -> str:
         seen_call["source_bytes"] = source_bytes
         seen_call["filename"] = filename
-        return [[{"type": "paragraph", "content": {"paragraph_content": [{"type": "text", "content": "MinerU正文"}]}}]]
+        return "<p>MinerU正文</p>"
 
-    monkeypatch.setattr(processor_module, "convert_pdf_bytes_to_content_list", fake_convert)
+    monkeypatch.setattr(processor_module, "convert_pdf_to_html", fake_convert)
 
     result = processor_module.process(NamedBytesIO(b"%PDF-1.4", filename="text.pdf"))
 
@@ -70,10 +70,8 @@ def test_process_accepts_explicit_pdf_type_without_filename_suffix(monkeypatch):
 
     monkeypatch.setattr(
         processor_module,
-        "convert_pdf_bytes_to_content_list",
-        lambda source_bytes, filename: [[
-            {"type": "paragraph", "content": {"paragraph_content": [{"type": "text", "content": "正文"}]}}
-        ]],
+        "convert_pdf_to_html",
+        lambda source_bytes, filename: '<p id="p001_b000">正文</p>',
     )
 
     result = processor_module.process(
@@ -152,13 +150,11 @@ def test_process_uses_default_pdf_filename_when_name_is_missing(monkeypatch):
 
     def fake_convert(source_bytes, filename):
         seen_call["filename"] = filename
-        return [[
-            {"type": "paragraph", "content": {"paragraph_content": [{"type": "text", "content": "正文"}]}}
-        ]]
+        return "<style>body{}</style>正文"
 
     monkeypatch.setattr(
         processor_module,
-        "convert_pdf_bytes_to_content_list",
+        "convert_pdf_to_html",
         fake_convert,
     )
 

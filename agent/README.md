@@ -11,9 +11,8 @@
 
 ```text
 backend 上传 PDF/DOCX bytes
-  -> PDF POST /v1/document-processor/process
-  -> DOCX POST /v1/document-processor/docx/process
-  -> document_processor 返回 html / display_html / markdown / md_list / blocks
+  -> POST /v1/document-processor/process（file_type 判定 pdf/docx）
+  -> document_processor 返回 filename + html
   -> backend 保存文档、对话 messages 和事件游标
   -> 用户提问时 backend 生成 completion_id
   -> POST /v1/document-qa/chat/completions
@@ -64,30 +63,19 @@ python -m uvicorn main:app --reload --host 127.0.0.1 --port 8001
 
 ```text
 POST /v1/document-processor/process
-POST /v1/document-processor/docx/process
-POST /v1/ocr/process
 ```
 
-接收 multipart PDF 或 DOCX 文件。`/v1/ocr/process` 是 PDF 兼容旧路径的同义入口。
+接收 multipart PDF 或 DOCX 文件（`file_type` 字段可选，缺省由文件名后缀判定）。
 
 ```text
-PDF UploadFile
+PDF / DOCX UploadFile
   -> route 层包装成可读 file-like 对象
-  -> service.document_processor.processor.process(file_obj, file_type)
-  -> 校验 PDF 类型和 file_obj.read()
-  -> MinerU 解析 PDF bytes
-  -> mineru_html 生成 html / display_html / markdown / md_list / blocks
-  -> 返回 ProcessResult
-```
-
-```text
-DOCX UploadFile
-  -> route 层包装成可读 file-like 对象
-  -> service.document_processor.docx_processor.process_docx(file_obj)
-  -> 校验 file_obj.read()
-  -> python-docx 解析 DOCX bytes
-  -> 按 Word body 原始顺序生成 html / display_html / markdown / md_list / blocks
-  -> 返回 ProcessResult
+  -> service.document_processor.processor.process(file_obj, file_type)  统一入口，file_type 分流
+  -> 校验 file_obj.read() 与目标类型
+  -> PDF 走 MinerU：pdf.convert_pdf_to_html(...)（内部 converter -> html）
+  -> DOCX 走 python-docx：Document(BytesIO(...)) 按 Word body 原始顺序遍历 paragraph/table
+  -> 生成带 CSS 的完整 HTML 文档
+  -> 返回 ProcessResult(filename, html)
 ```
 
 ### 多文档 QA chat completion

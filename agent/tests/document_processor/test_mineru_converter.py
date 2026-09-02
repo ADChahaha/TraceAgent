@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from service.document_processor.mineru_converter import (
+from service.document_processor.pdf.converter import (
     MinerUConversionError,
     find_content_list_v2,
     resolve_mineru_executable,
@@ -26,7 +26,7 @@ def test_resolve_mineru_executable_uses_env(monkeypatch):
 
 def test_resolve_mineru_executable_errors_when_missing(monkeypatch):
     monkeypatch.delenv("MINERU_BIN", raising=False)
-    monkeypatch.setattr("service.document_processor.mineru_converter.shutil.which", lambda name: None)
+    monkeypatch.setattr("service.document_processor.pdf.converter.shutil.which", lambda name: None)
 
     with pytest.raises(MinerUConversionError, match="MinerU executable not found"):
         resolve_mineru_executable()

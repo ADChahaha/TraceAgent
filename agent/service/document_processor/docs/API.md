@@ -58,27 +58,17 @@ GET /v1/ocr/capabilities
 }
 ```
 
-### Process PDF
+### Process PDF / DOCX
 
 ```text
 POST /v1/document-processor/process
-POST /v1/ocr/process
 ```
 
 `multipart/form-data` fields:
 
-- `file`: required PDF upload.
-- `file_type`: optional, `pdf` or `.pdf`.
-
-### Process DOCX
-
-```text
-POST /v1/document-processor/docx/process
-```
-
-`multipart/form-data` fields:
-
-- `file`: required DOCX upload.
+- `file`: required PDF or DOCX upload.
+- `file_type`: optional, `pdf`/`.pdf` or `docx`/`.docx`; when omitted, the
+  filename suffix decides (`.pdf` / `.docx`).
 
 Response:
 

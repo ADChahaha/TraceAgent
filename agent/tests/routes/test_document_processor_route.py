@@ -63,7 +63,7 @@ def test_document_processor_process_route_calls_business_processor(monkeypatch):
     }
 
 
-def test_document_processor_docx_route_calls_unified_processor(monkeypatch):
+def test_document_processor_docx_processes_via_general_route(monkeypatch):
     from service.document_processor import processor as processor_module
 
     seen_call: dict[str, object] = {}
@@ -81,7 +81,7 @@ def test_document_processor_docx_route_calls_unified_processor(monkeypatch):
 
     client = TestClient(create_app())
     response = client.post(
-        "/v1/document-processor/docx/process",
+        "/v1/document-processor/process",
         files={
             "file": (
                 "sample.docx",
@@ -89,6 +89,7 @@ def test_document_processor_docx_route_calls_unified_processor(monkeypatch):
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
         },
+        data={"file_type": "docx"},
     )
 
     assert response.status_code == 200
@@ -99,3 +100,32 @@ def test_document_processor_docx_route_calls_unified_processor(monkeypatch):
         "filename": "sample.docx",
         "html": '<section id="docx_b001_section"><h1 id="docx_b001">Overview</h1></section>',
     }
+
+
+def test_document_processor_dedicated_docx_route_is_removed():
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/v1/document-processor/docx/process",
+        files={"file": ("sample.docx", b"PK\x03\x04 fake", "application/octet-stream")},
+    )
+
+    assert response.status_code == 404
+
+
+def test_document_processor_legacy_ocr_process_route_is_removed(monkeypatch):
+    from service.document_processor import processor as processor_module
+
+    def fake_process(file_obj, file_type=None):
+        return ProcessResult(filename="sample.pdf", html="<p>x</p>")
+
+    monkeypatch.setattr(processor_module, "process", fake_process)
+
+    client = TestClient(create_app())
+    response = client.post(
+        "/v1/ocr/process",
+        files={"file": ("sample.pdf", b"%PDF-1.4", "application/pdf")},
+        data={"file_type": "pdf"},
+    )
+
+    assert response.status_code == 404

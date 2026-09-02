@@ -1,4 +1,19 @@
-last updated: 2026-09-01 12:00:00
+last updated: 2026-09-02
+
+## 2026-09-02 17:30:00
+
+### 已完成工作
+
+- 删除 agent routes 的专用 DOCX 端点 `POST /v1/document-processor/docx/process`，并移除了旧兼容路径 `POST /v1/ocr/process`；现在文档标准化只暴露单一 `POST /v1/document-processor/process`，由 `file_type`（可选，缺省看文件名后缀）分流 PDF/DOCX。
+- 同步更新 route 测试（DOCX 改走通用端点、新增「docx 专用端点已移除」和「旧 ocr 兼容端点已移除」两个 404 断言）、对应测试说明文档，以及 agent 顶层 README/API/DESIGN 和 `service/document_processor` 的 README/API 文档；`GET /v1/ocr/capabilities` 保留。
+
+### 当前进展
+
+- `tests/routes` 与 `tests/document_processor` 全量通过。
+
+### 下一步
+
+- backend `services/agent_client.py` 仍把 docx 路由到已移除的 `/v1/document-processor/docx/process`（本次按用户要求只改 agent 侧，backend 未同步）；需在 backend 侧把 docx 指向 `/v1/document-processor/process` 才能恢复 DOCX 处理。
 
 ## 2026-09-01 12:00:00
 

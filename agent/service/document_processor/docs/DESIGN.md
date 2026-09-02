@@ -2,9 +2,10 @@
 
 `service.document_processor` converts uploaded documents into HTML that is usable
 by the extraction agent and by the backend replay view. PDF and DOCX use separate
-HTTP routes and separate processor modules because their source structures are
-different: PDF goes through MinerU/OCR, while DOCX is parsed from Word's document
-structure.
+sub-packages (`pdf` / `docx`) because their source structures are different: PDF
+goes through MinerU/OCR, while DOCX is parsed from Word's document structure.
+Both are reached through the single HTTP entry `POST /v1/document-processor/process`
+and the single Python entry `processor.process(...)`.
 
 ## Scope
 
@@ -38,8 +39,9 @@ file_obj
   -> resolve_filename(...)
   -> detect_file_type(...) -> "pdf"
   -> read_source_bytes(...)
-  -> mineru_converter.convert_pdf_bytes_to_content_list(...)
-  -> mineru_html.build_html_from_content_list(...)
+  -> pdf.convert_pdf_to_html(source_bytes, filename)
+       ├─ pdf.converter.convert_pdf_bytes_to_content_list(...)
+       └─ pdf.html.build_html_from_content_list(...)
   -> ProcessResult(filename, html)
 ```
 
@@ -53,6 +55,7 @@ file_obj
    -> detect_file_type(...) -> "docx"
   -> _process_docx(file_obj, filename)
   -> read_source_bytes(...)
+  -> docx.convert_docx_to_html(source_bytes)
   -> python-docx Document(BytesIO(source_bytes))
   -> iter_block_items(document) 按 Word body 原始顺序遍历 paragraph/table
   -> paragraph style 是 Heading 1/2/3... 时生成 heading block
@@ -69,8 +72,13 @@ service/document_processor/
 ├── __init__.py
 ├── processor.py
 ├── schemas.py
-├── mineru_converter.py
-├── mineru_html.py
+├── pdf/
+│   ├── __init__.py
+│   ├── converter.py
+│   └── html.py
+├── docx/
+│   ├── __init__.py
+│   └── docx_processor.py
 ├── README.md
 └── docs/
     ├── API.md
@@ -81,8 +89,10 @@ service/document_processor/
 ## `processor.py`
 
 This is the single module that owns the public entry, the shared entry helpers,
-the PDF orchestration, and the DOCX parsing. Nothing else in the package is
-reachable from outside except `ProcessResult` (via `schemas.py`).
+and the dispatch to the `pdf` / `docx` sub-packages. It does not parse DOCX or
+drive MinerU directly; it only reads bytes and assembles `ProcessResult`.
+Nothing else in the package is reachable from outside except `ProcessResult`
+(via `schemas.py`).
 
 The shared entry helpers live here so there is no separate `common` module:
 - `InvalidFileObjectError`, `UnsupportedFileTypeError`: exceptions.
@@ -98,58 +108,33 @@ Public contract:
 - `process(file_obj, file_type=None)`: validates, resolves filename, and
   dispatches to PDF or DOCX by `detect_file_type(...)`.
 - `_process_pdf(file_obj, filename)`: internal PDF branch (reads bytes and
-  drives the MinerU pipeline).
+  delegates to `pdf.convert_pdf_to_html`).
 - `_process_docx(file_obj, filename)`: internal DOCX branch (reads bytes and
-  parses with python-docx).
+  delegates to `docx.convert_docx_to_html`).
 
 `processor.py` 的分流逻辑：
 
 ```text
 调用方传入 file_obj，可选传 file_type
   -> validate_file_obj(...)
-  -> resolve_filename（docx 缺省 document.docx，否则 document.pdf）
+  -> resolve_filename（显式 file_type 为 docx 时缺省 document.docx，否则 document.pdf）
   -> detect_file_type(file_type, filename)
-       ├─ docx -> _process_docx(...)，engine="python-docx"
-       └─ pdf  -> _process_pdf(...)，engine="mineru-pipeline"
+       ├─ docx -> _process_docx(...) -> docx.convert_docx_to_html(...)，engine="python-docx"
+       └─ pdf  -> _process_pdf(...) -> pdf.convert_pdf_to_html(...)，engine="mineru-pipeline"
 ```
 
-`_process_docx` deliberately does not guess headings from font size, bold text
-or manual formatting. Only explicit Word heading styles create heading blocks;
-documents without heading styles become a flat ordered set of paragraph/table
-blocks under the document root.
+Some paths are hardwired to one engine: a `docx` file never enters the MinerU
+pipeline and a `pdf` file never enters the python-docx parser. The type is
+decided once here, so the two sub-packages never need to resolve types
+themselves.
 
-DOCX block construction:
+## `pdf/`
 
-```text
-上传的 .docx file_obj
-  -> processor.process(...) 已完成 file-like 校验、文件名解析和类型分流
-  -> _process_docx(file_obj, filename) 读取 bytes 并复位文件指针
-  -> python-docx 打开 Document(BytesIO(bytes))
-  -> 按 document.element.body 原始顺序读取 paragraph/table
-  -> paragraph 文本为空则跳过
-  -> paragraph style.name 匹配 Heading N / 标题 N 时：生成 heading block
-  -> 非 heading paragraph：生成 docx_bNNN paragraph block 保留原顺序
-  -> table：生成 docx_bNNN table block 保留原顺序
-  -> 返回 ProcessResult
-```
+The `pdf` package publishes a single function `convert_pdf_to_html(source_bytes,
+filename)` (from `pdf/__init__.py`). It assembles `converter` + `html` so the
+caller never has to chain the two steps.
 
-DOCX block id 只表达文档内顺序，不表达页码或 bbox：
-
-```text
-docx_b001
-docx_b002
-```
-
-输出约束：
-
-- `html` 是带 CSS 的完整 HTML 文档：前端 review / iframe 直接渲染，同时保留
-  h1-h6 / p / ul / ol / table 结构骨架，供 QA agent 解析建树。
-- `ProcessResult` 只保留 `filename` + `html`。
-- 没有 heading style 时不做启发式标题识别，所有非空段落都作为
-  paragraph block 保留原顺序。
-- DOCX 没有稳定 page/bbox，`html` 里 DOCX block id 形如 `docx_bNNN`。
-
-## `mineru_converter.py`
+## `pdf/converter.py`
 
 Owns MinerU execution.
 
@@ -164,7 +149,7 @@ Owns MinerU execution.
 
 MinerU errors are fail-fast. There is no fallback engine.
 
-## `mineru_html.py`
+## `pdf/html.py`
 
 Owns conversion from MinerU pages to a single self-contained HTML document.
 
@@ -224,6 +209,46 @@ infer chapter levels; only `目次`-page entries and body subheadings are demote
 但只把明显属于正文小标题的样式（`1）`、`【...】`、括号编号等）从 heading
 降级，避免把它们和真正的章节标题混在一起。不再根据版面 height/width/
 聚类选 h2 频带，也不删除日期/締切提示行或 ASCII 点后无空格的紧凑编号标题。
+
+## `docx/`
+
+The `docx` package publishes a single function `convert_docx_to_html(source_bytes)`
+(from `docx/docx_processor.py`). It deliberately does not guess headings from
+font size, bold text or manual formatting. Only explicit Word heading styles
+create heading blocks; documents without heading styles become a flat ordered
+set of paragraph/table blocks under the document root.
+
+DOCX block construction:
+
+```text
+上传的 .docx file_obj
+  -> processor.process(...) 已完成 file-like 校验、文件名解析和类型分流
+  -> _process_docx(file_obj, filename) 读取 bytes 并复位文件指针
+  -> docx.convert_docx_to_html(source_bytes)
+  -> python-docx 打开 Document(BytesIO(bytes))
+  -> 按 document.element.body 原始顺序读取 paragraph/table
+  -> paragraph 文本为空则跳过
+  -> paragraph style.name 匹配 Heading N / 标题 N / 見出し N 时：生成 heading block
+  -> 非 heading paragraph：生成 docx_bNNN paragraph block 保留原顺序
+  -> table：生成 docx_bNNN table block 保留原顺序
+  -> 返回 ProcessResult
+```
+
+DOCX block id 只表达文档内顺序，不表达页码或 bbox：
+
+```text
+docx_b001
+docx_b002
+```
+
+输出约束：
+
+- `html` 是带 CSS 的完整 HTML 文档：前端 review / iframe 直接渲染，同时保留
+  h1-h6 / p / ul / ol / table 结构骨架，供 QA agent 解析建树。
+- `ProcessResult` 只保留 `filename` + `html`。
+- 没有 heading style 时不做启发式标题识别，所有非空段落都作为
+  paragraph block 保留原顺序。
+- DOCX 没有稳定 page/bbox，`html` 里 DOCX block id 形如 `docx_bNNN`。
 
 ## Table Handling
 

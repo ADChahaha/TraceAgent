@@ -6,8 +6,7 @@
 
 ```text
 backend 持有原始 PDF/DOCX
-  -> PDF POST /v1/document-processor/process
-  -> DOCX POST /v1/document-processor/docx/process
+  -> POST /v1/document-processor/process（file_type 判定 pdf/docx）
   -> 得到 filename + html
   -> backend 保存文档和对话状态
 
@@ -56,43 +55,23 @@ GET /healthz
 
 ```text
 POST /v1/document-processor/process
-POST /v1/document-processor/docx/process
-POST /v1/ocr/process
 ```
-
-`/v1/ocr/process` 是 PDF 兼容旧路径的新旧同义入口。
 
 请求类型：`multipart/form-data`
 
 字段：
 
-- PDF endpoint 的 `file`：必填，上传的 PDF 文件。
-- PDF endpoint 的 `file_type`：可选，传 `pdf` 或 `.pdf`；不传时由文件名后缀确认。
-- DOCX endpoint 的 `file`：必填，上传的 DOCX 文件。
+- `file`：必填，上传的 PDF 或 DOCX 文件。
+- `file_type`：可选，传 `pdf`/`.pdf` 或 `docx`/`.docx`；不传时由文件名后缀确认。
 
 处理流程：
 
 ```text
-PDF UploadFile
+PDF/DOCX UploadFile
   -> route 层包装成可读 file-like 对象
-  -> process(file_obj, file_type)
-  -> 校验 PDF 类型
-  -> convert_pdf_bytes_to_content_list(source_bytes, filename)
-  -> build_html_from_content_list(content_list)  生成带 CSS 的完整 HTML
-  -> ProcessResult(filename, html)
-  -> route 层返回 JSON
-```
-
-DOCX 处理流程：
-
-```text
-DOCX UploadFile
-  -> route 层包装成可读 file-like 对象
-  -> process(file_obj, "docx")  统一入口，分流到 DOCX
-  -> python-docx Document(BytesIO(...))
-  -> 按 Word body 原始顺序遍历 paragraph/table
-  -> 只用 Word heading style 生成 section
-  -> 无 heading style 时保持 flat paragraph/table blocks
+  -> process(file_obj, file_type)  统一入口，file_type 分流（缺省看后缀）
+  -> PDF 走 MinerU：pdf.convert_pdf_to_html(...)（内部 converter -> html）
+  -> DOCX 走 python-docx：Document(BytesIO(...)) 按 body 顺序遍历 paragraph/table
   -> 生成带 CSS 的完整 HTML 文档
   -> ProcessResult(filename, html)
   -> route 层返回 JSON

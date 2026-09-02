@@ -26,21 +26,12 @@ def test_process_handles_pdf_file_path_via_public_interface(monkeypatch, tmp_pat
     fixture_path.write_bytes(MINIMAL_PDF_BYTES)
     seen_call: dict[str, object] = {}
 
-    def fake_convert(source_bytes: bytes, filename: str) -> list[list[dict]]:
+    def fake_convert(source_bytes: bytes, filename: str) -> str:
         seen_call["source_prefix"] = source_bytes[:4]
         seen_call["filename"] = filename
-        return [[
-            {
-                "type": "paragraph",
-                "content": {
-                    "paragraph_content": [
-                        {"type": "text", "content": "合成 PDF fixture"}
-                    ]
-                },
-            }
-        ]]
+        return '<section class="page" id="page_001"><p id="p001_b000">合成 PDF fixture</p></section>'
 
-    monkeypatch.setattr(processor_module, "convert_pdf_bytes_to_content_list", fake_convert)
+    monkeypatch.setattr(processor_module, "convert_pdf_to_html", fake_convert)
 
     with fixture_path.open("rb") as file_obj:
         result = process(file_obj)

@@ -1,4 +1,26 @@
-last updated: 2026-09-01 14:00:00 CST
+last updated: 2026-09-02 18:00:00 CST
+
+## 2026-09-02 18:00:00 CST
+- completed work:
+  - 把 PDF（MinerU）拆成 `pdf/` 子包（`pdf/converter.py` 由 `mineru_converter.py` 改名、`pdf/html.py` 由 `mineru_html.py` 改名），并把 DOCX 解析从 `processor.py` 整体抽到 `docx/docx_processor.py`。
+  - `pdf` / `docx` 子包各只对外暴露一个函数：`pdf.convert_pdf_to_html(source_bytes, filename)`、`docx.convert_docx_to_html(source_bytes)`；`processor._process_pdf/_process_docx` 只做 `read_source_bytes` + 调子包函数 + 拼 `ProcessResult`，不再自己串 converter/html。
+  - 删除 `pdf/html.py` 里 4 个未被调用的函数（`render_page` / `is_section_heading` / `is_subsection_heading` / `heading_level_from_block`）。
+  - 清掉顶层 `__pycache__` 里已无源码的 `common` / `docx_processor` / `mineru_converter` / `mineru_html` 陈旧缓存。
+  - 同步更新 DESIGN.md / README.md / API 与测试文档、测试 import 与打桩路径，以及 CI 里 `service.document_processor.mineru_converter` 的 import。
+- current progress:
+  - `tests/document_processor` 与 `tests/routes` 全量通过（42 项）。
+- next step:
+  - 无。
+
+## 2026-09-02 16:00:00 CST
+- completed work:
+  - 校正 `docs/DESIGN.md` 与代码不一致的两处描述：
+    - `resolve_filename` 缺省文件名的说明改为「显式 `file_type` 为 docx 时才缺省 `document.docx`，否则 `document.pdf`」，对齐 `processor.py` 里 `fallback = "document.docx" if explicit == "docx" else "document.pdf"` 的实际行为。
+    - DOCX heading style 识别补充 `見出し N`，对齐 `processor.py` 中 `r"^(?:Heading|标题|見出し)\s+([1-9])$"` 的正则（原设计文档只写了 `Heading N / 标题 N`）。
+- current progress:
+  - 纯文档改动，无行为变化，无需 TDD。
+- next step:
+  - 无。
 
 ## 2026-09-01 14:00:00 CST
 - completed work:

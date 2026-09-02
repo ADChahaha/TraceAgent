@@ -38,7 +38,7 @@ jobs:
           import openai
           import torch
           import transformers
-          from service.document_processor.mineru_converter import resolve_mineru_lang
+          from service.document_processor.pdf.converter import resolve_mineru_lang
 
           importlib.metadata.version("mineru")
           assert resolve_mineru_lang() == "japan"

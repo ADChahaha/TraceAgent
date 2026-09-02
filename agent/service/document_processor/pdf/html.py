@@ -192,14 +192,6 @@ def markdown_layout_features(block: dict[str, Any], text: str) -> list[int]:
     line_count = max(1, text.count("\n") + 1)
     return [y1 - y0, x1 - x0, chars, line_count, x0, y0]
 
-def render_page(blocks: list[dict[str, Any]], page_idx: int) -> str:
-    page_blocks = [
-        markdown_block_from_source(block, page_idx + 1, block_idx)
-        for block_idx, block in enumerate(blocks)
-        if should_render_block(block)
-    ]
-    return render_page_from_markdown_blocks(classify_markdown_blocks(page_blocks), page_idx)
-
 
 def render_page_from_markdown_blocks(
     blocks: list[dict[str, Any]], page_idx: int
@@ -261,20 +253,6 @@ def render_markdown_block(markdown_block: dict[str, Any], page_idx: int) -> str:
         int(markdown_block["block_idx"]),
         markdown_block=markdown_block,
     )
-
-
-def is_section_heading(block: dict[str, Any]) -> bool:
-    return heading_level_from_block(block) == 2
-
-
-def is_subsection_heading(block: dict[str, Any]) -> bool:
-    return heading_level_from_block(block) == 3
-
-
-def heading_level_from_block(block: dict[str, Any]) -> int | None:
-    if block.get("type") != "title":
-        return None
-    return int(block.get("content", {}).get("level") or 2)
 
 
 def render_block(

@@ -66,7 +66,6 @@ async def get_capabilities() -> CapabilitiesResponse:
 
 
 @router.post("/v1/document-processor/process", response_model=ProcessResponse)
-@router.post("/v1/ocr/process", response_model=ProcessResponse)
 async def process_document(
     file: UploadFile = File(...),
     file_type: str | None = Form(default=None),
@@ -79,27 +78,6 @@ async def process_document(
     )
     try:
         result = await run_in_threadpool(_process_document, file_proxy, file_type)
-    except (InvalidFileObjectError, UnsupportedFileTypeError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=str(exc),
-        ) from exc
-
-    return _build_process_response(result)
-
-
-@router.post("/v1/document-processor/docx/process", response_model=ProcessResponse)
-async def process_docx_document(
-    file: UploadFile = File(...),
-) -> ProcessResponse:
-    await file.seek(0)
-    file_proxy = UploadFileProxy(
-        filename=file.filename,
-        content_type=file.content_type,
-        file=file.file,
-    )
-    try:
-        result = await run_in_threadpool(_process_document, file_proxy, "docx")
     except (InvalidFileObjectError, UnsupportedFileTypeError) as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,

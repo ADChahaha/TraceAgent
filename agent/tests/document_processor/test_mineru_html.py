@@ -1,4 +1,4 @@
-from service.document_processor.mineru_html import build_html_from_content_list
+from service.document_processor.pdf.html import build_html_from_content_list
 
 
 def test_build_html_from_content_list_preserves_ids_metadata_and_tables():

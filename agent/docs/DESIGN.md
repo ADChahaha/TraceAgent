@@ -25,9 +25,8 @@
 
 ```text
 backend 读取上传 PDF/DOCX bytes
-  -> PDF 调用 POST /v1/document-processor/process
-  -> DOCX 调用 POST /v1/document-processor/docx/process
-  -> 拿到 filename + html + display_html + markdown + blocks
+  -> 调用 POST /v1/document-processor/process（file_type 判定 pdf/docx）
+  -> 拿到 filename + html
   -> backend 保存 task documents、messages 和事件游标
   -> 用户每次提问时，backend 生成 completion_id
   -> 调用 POST /v1/document-qa/chat/completions
@@ -156,14 +155,12 @@ raw PDF/DOCX
 ```text
 GET  /healthz
 POST /v1/document-processor/process
-POST /v1/document-processor/docx/process
-POST /v1/ocr/process
 POST /v1/document-qa/chat/completions
 GET  /v1/document-qa/chat/completions/{completion_id}
 POST /v1/document-qa/chat/completions/{completion_id}/cancel
 ```
 
-`/v1/ocr/process` 只是 PDF `document_processor` 的兼容旧路径。旧字段抽取路径 `/v1/file-extraction-agent/extract/stream` 在本分支已删除。
+旧字段抽取路径 `/v1/file-extraction-agent/extract/stream` 在本分支已删除。
 
 ## 7. 运行时环境
 

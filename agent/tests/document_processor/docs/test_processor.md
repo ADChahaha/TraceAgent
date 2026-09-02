@@ -11,8 +11,8 @@ handling, byte reading, and the generated HTML document.
 file_obj
   -> validate_file_obj(...)
   -> detect_file_type(file_type, filename)  显式类型优先，否则看后缀
-       ├─ "docx" -> 内部 _process_docx，engine=python-docx
-       └─ "pdf"  -> 调用 convert_pdf_bytes_to_content_list(...)，engine=mineru-pipeline
+       ├─ "docx" -> docx.convert_docx_to_html(...)，engine=python-docx
+       └─ "pdf"  -> pdf.convert_pdf_to_html(...)，engine=mineru-pipeline
   -> 生成带 CSS 的完整 HTML 文档作为 ProcessResult.html
 ```
 

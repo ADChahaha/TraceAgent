@@ -25,9 +25,7 @@ print(pdf_result.html)
 
 HTTP endpoints:
 
-- `POST /v1/document-processor/process`
-- legacy alias: `POST /v1/ocr/process`
-- `POST /v1/document-processor/docx/process`
+- `POST /v1/document-processor/process` (PDF/DOCX, dispatched by `file_type` or filename suffix)
 
 ## Pipeline
 
@@ -52,9 +50,12 @@ python-docx Document
 
 Source files:
 
-- `processor.py`: 唯一公共入口 `process(...)`，内含类型分流、PDF 编排和 DOCX 解析。
-- `mineru_converter.py`: MinerU CLI invocation and `content_list_v2` loading.
-- `mineru_html.py`: MinerU content list to HTML conversion.
+- `processor.py`: 唯一公共入口 `process(...)`，只做类型分流、字节读取和结果拼接。
+- `pdf/converter.py`: MinerU CLI invocation and `content_list_v2` loading.
+- `pdf/html.py`: MinerU content list to HTML conversion.
+- `pdf/__init__.py`: 组装 `convert_pdf_to_html(...)` 作为 PDF 子包唯一公共函数。
+- `docx/docx_processor.py`: python-docx 解析 DOCX 为 HTML。
+- `docx/__init__.py`: 暴露 `convert_docx_to_html(...)` 作为 DOCX 子包唯一公共函数。
 - `schemas.py`: `ProcessResult`.
 
 `ProcessResult` 只保留 `filename` + `html`。`html` 是带 CSS 的完整文档：
