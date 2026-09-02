@@ -12,8 +12,8 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import MessagesState
 from langgraph.prebuilt import ToolNode
 
-from service.file_extraction_agent.impl.html_tools import build_tools
-from service.file_extraction_agent.impl.model_factory import ChatModelFallbackChain
+from service.file_extraction_agent.core.tools import build_tools
+from service.file_extraction_agent.core.model import ChatModelFallbackChain
 
 
 PROVIDER_ATTEMPT_LIMIT = 5

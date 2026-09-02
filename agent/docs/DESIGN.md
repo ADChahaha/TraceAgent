@@ -69,13 +69,12 @@ agent/
     └── file_extraction_agent/
         ├── manager.py
         ├── schemas.py
-        ├── impl/
+        ├── core/
         │   ├── graph.py
-        │   ├── html_index.py
-        │   ├── html_state.py
-        │   ├── html_tools.py
-        │   ├── model_factory.py
-        │   └── resolution_new.py
+        │   ├── documents.py
+        │   ├── tools.py
+        │   ├── model.py
+        │   └── loop.py
         └── docs/
             └── DESIGN.md
 ```
@@ -121,18 +120,17 @@ DOCX UploadFile / file-like object
 ```text
 POST /v1/document-qa/chat/completions
   -> route 解析 ChatCompletionRequest
-  -> manager.create_completion_stream(...)
-  -> manager.prepare_completion_state 校验 completion_id/documents/messages/run_options
-  -> html_index 把多份 HTML 落盘成真实文件树（DocumentFileTree）
+  -> completion_manager.create(...)（内含 prepare_completion_state 校验 completion_id/documents/messages/run_options）
+  -> documents 把多份 HTML 落盘成真实文件树（DocumentFileTree）
   -> graph 输出 completion.created 和 source_indexed（workspace_root + tree）
-  -> resolution_new 让模型通过 ls / grep / read 浏览文档
-  -> html_tools 把每次工具调用写成 tool_started/tool_completed/tool_failed
+  -> loop 让模型通过 ls / grep / read 浏览文档
+  -> tools 把每次工具调用写成 tool_started/tool_completed/tool_failed
   -> 过程 model_message 在阅读过程中内嵌真实 .md 文件路径 Markdown link
   -> 最终 model_message 带 is_final=true，在被支撑句子后紧跟数字 evidence citation
   -> completion.completed / completion.cancelled / completion.failed 收口 SSE
 ```
 
-`file_extraction_agent` 第一版只在内存 `_ACTIVE_COMPLETIONS` 保存 active runtime，用于取消正在运行的 completion。它不保存历史 completion，也不支持多 worker 进程共享 cancel 状态。
+`file_extraction_agent` 第一版只在内存 `CompletionManager` 注册表保存 active runtime，用于取消正在运行的 completion。它不保存历史 completion，也不支持多 worker 进程共享 cancel 状态。
 
 ## 5. 主链路
 
@@ -188,4 +186,4 @@ POST /v1/document-qa/chat/completions/{completion_id}/cancel
 - QA completion 当前总是以 SSE 返回；非流式 chat completion 还没有实现。
 - `GET /v1/document-qa/chat/completions/{completion_id}` 当前是占位调试接口。
 - cancellation 是本地 completion 级取消：SSE consumer 检查 cancel flag 后立即输出 `completion.cancelled` 并关闭响应；producer 若仍阻塞在 provider stream，会依赖有限 request timeout 回收，迟到事件会被丢弃。
-- 第一版要求单进程/单 worker 部署；多 uvicorn worker 会让内存 `_ACTIVE_COMPLETIONS` 不共享，导致 cancel 可能找不到目标 completion。
+- 第一版要求单进程/单 worker 部署；多 uvicorn worker 会让内存 `CompletionManager` 注册表不共享，导致 cancel 可能找不到目标 completion。

@@ -128,11 +128,11 @@ POST /v1/document-qa/chat/completions
 ```text
 ChatCompletionRequest
   -> route 层解析 JSON，禁止未知字段
-  -> manager.create_completion_stream(...)
-  -> manager.prepare_completion_state 校验 completion_id/documents/messages/run_options
-  -> html_index 把多份 HTML 落盘成真实文件树（DocumentFileTree）
+  -> completion_manager.create(...)（同 manager.prepare_completion_state 校验）
+         -> prepare_completion_state 校验 completion_id/documents/messages/run_options
+  -> documents 把多份 HTML 落盘成真实文件树（DocumentFileTree）
   -> graph 先输出 completion.created 和 source_indexed（workspace_root + tree）
-  -> resolution_new 构建 QA prompt，暴露 ls / grep / read
+  -> loop 构建 QA prompt，暴露 ls / grep / read
   -> 模型边回答边调用工具，过程消息用真实 .md 文件路径 Markdown link 引用证据
   -> 无 tool_calls 且 provider terminal stop signal 的 model_message 带 is_final=true
   -> graph 输出 completion.completed / completion.failed
@@ -202,10 +202,10 @@ POST /v1/document-qa/chat/completions/{completion_id}/cancel
 
 ```text
 completion_id
-  -> manager.cancel_completion(completion_id)
+  -> completion_manager.terminate(completion_id)
   -> 在 CompletionManager 注册表中查找 active runtime
   -> 找到则设置 cancel_requested=true、status=cancelling
-  -> create_completion_stream 的 SSE consumer 立即输出 completion.cancelled 并关闭 SSE
+  -> completion_manager.create 的 SSE consumer 立即输出 completion.cancelled 并关闭 SSE
   -> producer 若稍后从 provider 返回事件，会在 runtime 已关闭时丢弃
   -> 找不到则返回 not_found
 ```

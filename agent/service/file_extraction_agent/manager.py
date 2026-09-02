@@ -1,15 +1,15 @@
 """Completion lifecycle manager for document-QA chat completions.
 
-`CompletionManager` 用 create / terminate 统一管理一个 completion 的完整生命
-周期：入参准备（`prepare_completion_state`）、注册 runtime、启动 producer、对
-外产出 SSE 流、取消与收尾。真正的 agent loop 在 `impl/graph.py`，本模块只是
-生命周期调度层。模块级 `create_completion_stream` / `cancel_completion` 是对
-进程内单例 `completion_manager` 的薄委托，供 HTTP 路由和既有调用方使用。
+`ActiveCompletion` 是单个 completion 的完整运行时：持有该 completion 专属的
+state（GraphState）、resolution_model、事件通道 queue 与同步锁，并自己启动
+producer 线程、消费队列产出 SSE、决定唯一终态、清理落盘目录。`CompletionManager`
+只负责多个 completion 的注册表与 create/terminate/status 转发。公开入口是进程内
+单例 `completion_manager`，HTTP 路由等调用方直接 `completion_manager.create(...)` /
+`completion_manager.terminate(...)`。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
 from pathlib import Path
 import queue
@@ -17,10 +17,9 @@ import shutil
 import threading
 from typing import Any, Iterable
 
-from service.file_extraction_agent.impl.graph import run_completion_graph_stream
-from service.file_extraction_agent.impl.html_index import materialize_tree
-from service.file_extraction_agent.impl.html_state import GraphState, build_graph_state
-from service.file_extraction_agent.impl.model_factory import ChatModelFallbackChain, build_resolution_model
+from service.file_extraction_agent.core.documents import materialize_tree
+from service.file_extraction_agent.core.graph import GraphState, build_graph_state, run_completion_graph_stream
+from service.file_extraction_agent.core.model import ChatModelFallbackChain, build_resolution_model
 from service.file_extraction_agent.schemas import DocumentQaMessage, InputDocument, ModelConfig, RunOptions
 
 
@@ -31,75 +30,6 @@ DEFAULT_WORKSPACE_ROOT = os.getenv(
     "FILE_EXTRACTION_AGENT_WORKSPACE_ROOT",
     str(Path(__file__).resolve().parents[2] / "data" / "qa_workspace"),
 )
-
-
-@dataclass
-class ActiveCompletion:
-    completion_id: str
-    status: str = "in_progress"
-    cancel_requested: bool = False
-    closed: bool = False
-    terminal_committed: bool = False
-
-    def __post_init__(self) -> None:
-        self._lock = threading.Lock()
-        self.queue: queue.Queue[str | object] = queue.Queue()
-
-    def commit_events(self, events: Iterable[str]) -> bool:
-        with self._lock:
-            if self.cancel_requested or self.closed or self.terminal_committed:
-                return False
-            for event in events:
-                self.queue.put(event)
-            return True
-
-    def commit_event(self, event: str) -> bool:
-        return self.commit_events([event])
-
-    def commit_terminal_event(self, event: str, status: str) -> bool:
-        with self._lock:
-            if self.cancel_requested or self.closed or self.terminal_committed:
-                return False
-            self.terminal_committed = True
-            self.status = status
-            self.queue.put(event)
-            return True
-
-    def commit_done(self) -> bool:
-        with self._lock:
-            if self.cancel_requested or self.closed or self.terminal_committed:
-                return False
-            self.terminal_committed = True
-            self.status = "completed"
-            self.queue.put(_QUEUE_DONE)
-            return True
-
-    def request_cancel(self) -> str:
-        with self._lock:
-            if self.closed or self.terminal_committed:
-                return self.status
-            if self.cancel_requested:
-                return self.status
-            self.cancel_requested = True
-            self.status = "cancelling"
-            self.queue.put(_QUEUE_CANCEL)
-            return self.status
-
-    def should_cancel(self) -> bool:
-        with self._lock:
-            return self.cancel_requested and not self.closed
-
-    def is_closed(self) -> bool:
-        with self._lock:
-            return self.closed
-
-    def close_once(self, status: str) -> bool:
-        with self._lock:
-            if self.closed:
-                return False
-            self.closed = True
-            self.status = status
-            return True
 
 
 def prepare_completion_state(
@@ -163,34 +93,160 @@ def _resolve_workspace_root(explicit: str | Path | None, run_options: RunOptions
     return Path(DEFAULT_WORKSPACE_ROOT)
 
 
+class ActiveCompletion:
+    """单个 document-QA chat completion 的运行时。
+
+    持有该 completion 专属的 state、resolution_model、事件通道 queue 与同步锁。
+    它自己完成生产、消费与收尾：
+
+    stream()
+      -> 首次迭代时启动 producer 线程（target=_produce）
+      -> 循环 queue.get() 取事件：普通事件 yield；_QUEUE_CANCEL/_QUEUE_DONE/终态事件
+         则 close_once 后收口并结束
+      -> finally 确保终态唯一并清理 workspace（注册表移除由 CompletionManager 托管）
+
+    _produce()
+      -> 后台线程目标，循环 run_completion_graph_stream(state, model) 产 SSE 事件
+      -> 用 commit_* / commit_terminal_event 投进 queue；异常投 completion.failed；
+         兜底 commit_done
+
+    terminate() / get_status()：取消 / 查询状态。
+
+    事件通道 + 终态裁定由 _lock 线性化：cancel 前已提交的事件按 FIFO 先发，cancel
+    之后的新事件被拒收；terminal 只提交一次；close_once 保证终态唯一。
+    """
+
+    def __init__(self, completion_id: str, state: GraphState, resolution_model: ChatModelFallbackChain) -> None:
+        self.completion_id = completion_id
+        self.state = state
+        self.model = resolution_model
+        self.status: str = "in_progress"
+        self.cancel_requested = False
+        self.closed = False
+        self.terminal_committed = False
+        self._lock = threading.Lock()
+        self.queue: queue.Queue[str | object] = queue.Queue()
+
+    def stream(self) -> Iterable[str]:
+        def run() -> Iterable[str]:
+            if not self.should_cancel():
+                producer = threading.Thread(
+                    target=self._produce,
+                    name=f"qa-completion-{self.completion_id}",
+                    daemon=True,
+                )
+                producer.start()
+            try:
+                while True:
+                    event = self.queue.get()
+                    if event is _QUEUE_CANCEL:
+                        if self.close_once("cancelled"):
+                            yield _completion_cancelled_event(self.completion_id)
+                        return
+                    if event is _QUEUE_DONE:
+                        if self.close_once("completed"):
+                            yield _completion_completed_event(self.completion_id)
+                        return
+                    if not isinstance(event, str):
+                        continue
+                    if _is_terminal_event(event):
+                        if self.close_once(_terminal_status(event)):
+                            yield event
+                        return
+                    yield event
+            finally:
+                if not self.is_closed():
+                    self.close_once("cancelled")
+                _cleanup_workspace(self.state)
+
+        return run()
+
+    def _produce(self) -> None:
+        terminal_committed = False
+        try:
+            for event in run_completion_graph_stream(self.state, self.model):
+                if _is_terminal_event(event):
+                    status = _terminal_status(event)
+                    terminal_committed = self.commit_terminal_event(event, status)
+                    return
+                if not self.commit_event(event):
+                    return
+        except Exception as exc:
+            terminal_committed = self.commit_terminal_event(
+                _completion_failed_event(self.completion_id, str(exc)),
+                "failed",
+            )
+        finally:
+            if not terminal_committed:
+                self.commit_done()
+
+    def terminate(self) -> str:
+        with self._lock:
+            if self.closed or self.terminal_committed:
+                return self.status
+            if self.cancel_requested:
+                return self.status
+            self.cancel_requested = True
+            self.status = "cancelling"
+            self.queue.put(_QUEUE_CANCEL)
+            return self.status
+
+    def get_status(self) -> str:
+        return self.status
+
+    def commit_events(self, events: Iterable[str]) -> bool:
+        with self._lock:
+            if self.cancel_requested or self.closed or self.terminal_committed:
+                return False
+            for event in events:
+                self.queue.put(event)
+            return True
+
+    def commit_event(self, event: str) -> bool:
+        return self.commit_events([event])
+
+    def commit_terminal_event(self, event: str, status: str) -> bool:
+        with self._lock:
+            if self.cancel_requested or self.closed or self.terminal_committed:
+                return False
+            self.terminal_committed = True
+            self.status = status
+            self.queue.put(event)
+            return True
+
+    def commit_done(self) -> bool:
+        with self._lock:
+            if self.cancel_requested or self.closed or self.terminal_committed:
+                return False
+            self.terminal_committed = True
+            self.status = "completed"
+            self.queue.put(_QUEUE_DONE)
+            return True
+
+    def should_cancel(self) -> bool:
+        with self._lock:
+            return self.cancel_requested and not self.closed
+
+    def is_closed(self) -> bool:
+        with self._lock:
+            return self.closed
+
+    def close_once(self, status: str) -> bool:
+        with self._lock:
+            if self.closed:
+                return False
+            self.closed = True
+            self.status = status
+            return True
+
+
 class CompletionManager:
-    """进程内管理 document-QA chat completion 生命周期。
+    """进程内多个 document-QA chat completion 的注册表与协调。
 
-    create(...) 校验强类型入参、落盘文件树、注册 runtime，启动 producer 线程并
-    返回 SSE 流；terminate(completion_id) 设置取消状态并唤醒 consumer；
-    get_status(...) 查询当前状态。单个实例持有本进程内的 completion 注册表，
-    因此应按单进程单实例部署（多 uvicorn worker 不同进程间不共享 cancel 状态）。
-
-    生命周期分为 producer / consumer 两半，靠 `ActiveCompletion.queue` + 锁协作：
-
-    create(completion_id + documents + messages + model_config + run_options)
-      -> prepare_completion_state(...)（校验失败抛 ValueError）
-      -> build_resolution_model(model_config) -> ChatModelFallbackChain
-      -> 注册 ActiveCompletion 到 _completions
-      -> 返回 _stream(...) SSE 迭代器（首次迭代才启动 producer）
-
-    _produce（后台线程）
-      -> 循环 run_completion_graph_stream(state, model) 产 SSE event
-      -> 每条用 runtime.commit_event / commit_terminal_event 投进 queue
-
-    _stream（consumer）
-      -> 首次迭代启动 producer；每次 next() = queue.get() 取一个事件 yield
-      -> 收到 _QUEUE_CANCEL / _QUEUE_DONE / 终态事件时 close_once 后收口
-      -> finally 关闭 runtime、从注册表移除、清理 workspace
-
-    terminate(completion_id)
-      -> request_cancel() 设置取消状态并放入 cancel sentinel
-      -> 找不到返回 {"status": "not_found"}
+    create(...) 装配 state + model，构造一个 ActiveCompletion（单 completion 的
+    运行时）并注册，返回其 stream() 产出的 SSE 流；terminate / get_status 转发到
+    对应 runtime；stream 结束后由托管包装从注册表移除。单实例持有注册表 + 锁，
+    应按单进程单实例部署（多 uvicorn worker 不同进程间不共享 cancel 状态）。
     """
 
     def __init__(self) -> None:
@@ -213,17 +269,17 @@ class CompletionManager:
             run_options=run_options,
         )
         resolution_model = build_resolution_model(model_config)
-        runtime = ActiveCompletion(completion_id=completion_id)
+        runtime = ActiveCompletion(completion_id, state, resolution_model)
         with self._lock:
             self._completions[completion_id] = runtime
-        return self._stream(state=state, resolution_model=resolution_model, runtime=runtime)
+        return self._managed_stream(runtime)
 
     def terminate(self, completion_id: str) -> dict[str, Any]:
         with self._lock:
             runtime = self._completions.get(completion_id)
         if runtime is None:
             return {"id": completion_id, "status": "not_found"}
-        status = runtime.request_cancel()
+        status = runtime.terminate()
         return {"id": completion_id, "status": status}
 
     def get_status(self, completion_id: str) -> dict[str, Any] | None:
@@ -231,104 +287,21 @@ class CompletionManager:
             runtime = self._completions.get(completion_id)
         if runtime is None:
             return None
-        return {"id": completion_id, "status": runtime.status}
+        return {"id": completion_id, "status": runtime.get_status()}
 
-    def _stream(
-        self,
-        *,
-        state: GraphState,
-        resolution_model: ChatModelFallbackChain,
-        runtime: ActiveCompletion,
-    ) -> Iterable[str]:
-        def stream() -> Iterable[str]:
-            if not runtime.should_cancel():
-                producer = threading.Thread(
-                    target=self._produce,
-                    kwargs={
-                        "state": state,
-                        "resolution_model": resolution_model,
-                        "runtime": runtime,
-                    },
-                    name=f"qa-completion-{runtime.completion_id}",
-                    daemon=True,
-                )
-                producer.start()
+    def _managed_stream(self, runtime: ActiveCompletion) -> Iterable[str]:
+        def run() -> Iterable[str]:
             try:
-                while True:
-                    event = runtime.queue.get()
-                    if event is _QUEUE_CANCEL:
-                        if runtime.close_once("cancelled"):
-                            yield _completion_cancelled_event(runtime.completion_id)
-                        return
-                    if event is _QUEUE_DONE:
-                        if runtime.close_once("completed"):
-                            yield _completion_completed_event(runtime.completion_id)
-                        return
-                    if not isinstance(event, str):
-                        continue
-                    if _is_terminal_event(event):
-                        if runtime.close_once(_terminal_status(event)):
-                            yield event
-                        return
-                    yield event
+                yield from runtime.stream()
             finally:
-                if not runtime.is_closed():
-                    runtime.close_once("cancelled")
                 with self._lock:
                     if self._completions.get(runtime.completion_id) is runtime:
                         self._completions.pop(runtime.completion_id, None)
-                _cleanup_workspace(state)
 
-        return stream()
-
-    def _produce(
-        self,
-        *,
-        state: GraphState,
-        resolution_model: ChatModelFallbackChain,
-        runtime: ActiveCompletion,
-    ) -> None:
-        terminal_committed = False
-        try:
-            for event in run_completion_graph_stream(state, resolution_model):
-                if _is_terminal_event(event):
-                    status = _terminal_status(event)
-                    terminal_committed = runtime.commit_terminal_event(event, status)
-                    return
-                if not runtime.commit_event(event):
-                    return
-        except Exception as exc:
-            terminal_committed = runtime.commit_terminal_event(
-                _completion_failed_event(runtime.completion_id, str(exc)),
-                "failed",
-            )
-        finally:
-            if not terminal_committed:
-                runtime.commit_done()
+        return run()
 
 
 completion_manager = CompletionManager()
-
-
-def create_completion_stream(
-    *,
-    completion_id: str,
-    documents: list[InputDocument],
-    messages: list[DocumentQaMessage],
-    model_config: ModelConfig | None = None,
-    run_options: RunOptions | None = None,
-) -> Iterable[str]:
-    return completion_manager.create(
-        completion_id=completion_id,
-        documents=documents,
-        messages=messages,
-        model_config=model_config,
-        run_options=run_options,
-    )
-
-
-def cancel_completion(completion_id: str) -> dict[str, Any]:
-    return completion_manager.terminate(completion_id)
 
 
 def _cleanup_workspace(state: GraphState) -> None:
@@ -375,9 +348,8 @@ def _terminal_status(event: str) -> str:
 
 
 __all__ = [
+    "ActiveCompletion",
     "CompletionManager",
     "completion_manager",
-    "create_completion_stream",
-    "cancel_completion",
     "prepare_completion_state",
 ]

@@ -16,21 +16,19 @@
 
 ```text
 completion_id + documents + messages + run_options
-  -> processor.prepare_completion_state 校验 completion_id 非空
-  -> processor.prepare_completion_state 校验 documents 非空、每个 document 有 filename/html
-  -> processor.prepare_completion_state 校验 messages 非空、每条 message.content 非空
-  -> processor.prepare_completion_state 归一化 run_options(max_tool_calls > 0)
-  -> html_index 解析 HTML，materialize_tree 落盘真实文件树（DocumentFileTree）
-  -> processor 创建 ActiveCompletion，写入 _ACTIVE_COMPLETIONS
+  -> completion_manager.create / manager.prepare_completion_state 校验 completion_id 非空
+  -> manager.prepare_completion_state 校验 documents 非空、每个 document 有 filename/html
+  -> manager.prepare_completion_state 校验 messages 非空、每条 message.content 非空
+  -> manager.prepare_completion_state 归一化 run_options(max_tool_calls > 0)
+  -> documents.materialize_tree 解析 HTML，落盘真实文件树（DocumentFileTree）
+  -> ActiveCompletion(completion_id, state, model) 注册进 CompletionManager
   -> graph 输出 completion.created 和 source_indexed(workspace_root + tree)
-  -> resolution_new 构建 QA prompt，并挂载 ls/grep/read
+  -> loop 构建 QA prompt，并挂载 ls/grep/read
   -> 模型输出 model_message；如需继续阅读，就单轮调用一个工具
-  -> html_tools 把工具调用写成 tool_started/tool_completed/tool_failed 事件
-  -> inspect 把关键 block 展开成 Sxxx/Ixxx/Rxxx inline evidence
+  -> tools 把工具调用写成 tool_started/tool_completed/tool_failed 事件
   -> model_message 在阅读过程中用 Markdown evidence link 说明事实和答案
   -> graph 输出 completion.completed 或 completion.failed
-  -> processor 若检测到 cancel_requested，则输出 completion.cancelled
-  -> processor 清理 _ACTIVE_COMPLETIONS[completion_id]
+  -> manager 若检测到 cancel_requested，则输出 completion.cancelled
 ```
 
 输出是 `text/event-stream` 字符串迭代器；backend 负责消费、入库和转发给前端。
@@ -121,15 +119,15 @@ inspect(locator="evidence://0001.0003.0001")
 
 ## 公共入口
 
-completion 生命周期由 `CompletionManager` 统一管理：`create(...)` 校验强类型
-入参、落盘文件树、注册 runtime 并返回 SSE 迭代器；`terminate(completion_id)`
-取消。进程内单例 `completion_manager` 持有注册表，模块级
-`create_completion_stream` / `cancel_completion` 是对它的薄委托。
+completion 生命周期由 `CompletionManager` 统一管理。公开入口是**进程内单例
+`completion_manager`**：`create(...)` 校验强类型入参、落盘文件树、构造
+`ActiveCompletion` 并注册，返回 SSE 迭代器；`terminate(completion_id)` 取消；
+`get_status(completion_id)` 查询。HTTP 路由直接调用该单例。
 
 ```python
-from service.file_extraction_agent.manager import create_completion_stream
+from service.file_extraction_agent.manager import completion_manager
 
-stream = create_completion_stream(
+stream = completion_manager.create(
     completion_id="cmp_001",
     documents=[
         {
@@ -156,14 +154,13 @@ HTTP 入口是 `POST /v1/document-qa/chat/completions`，返回 `text/event-stre
 取消入口：
 
 ```python
-from service.file_extraction_agent.manager import CompletionManager, cancel_completion
+from service.file_extraction_agent.manager import completion_manager
 
-cancel_completion("cmp_001")
+completion_manager.terminate("cmp_001")
 # {"id": "cmp_001", "status": "cancelling"} 或 {"id": "cmp_001", "status": "not_found"}
 
-manager = CompletionManager()
-manager.terminate("cmp_001")   # 与 cancel_completion 等价
-manager.get_status("cmp_001")  # {"id": "...", "status": "..."} 或 None
+completion_manager.get_status("cmp_001")
+# {"id": "...", "status": "..."} 或 None
 ```
 
 取消是本地 completion 级取消：SSE consumer 在 runtime 取消状态触发后立即输出

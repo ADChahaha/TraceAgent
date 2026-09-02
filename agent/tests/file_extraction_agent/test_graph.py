@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from service.file_extraction_agent.impl.graph import run_completion_graph_stream
+from service.file_extraction_agent.core.graph import run_completion_graph_stream
 from service.file_extraction_agent.manager import prepare_completion_state
 from service.file_extraction_agent.schemas import DocumentQaMessage, InputDocument
 

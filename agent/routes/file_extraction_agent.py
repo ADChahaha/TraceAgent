@@ -63,13 +63,13 @@ async def get_chat_completion(completion_id: str) -> dict[str, Any]:
 
 @router.post("/v1/document-qa/chat/completions/{completion_id}/cancel")
 async def cancel_chat_completion(completion_id: str) -> dict[str, Any]:
-    cancel_completion = import_module("service.file_extraction_agent.manager").cancel_completion
-    return cancel_completion(completion_id)
+    completion_manager = import_module("service.file_extraction_agent.manager").completion_manager
+    return completion_manager.terminate(completion_id)
 
 
 def _create_chat_completion_stream(request: ChatCompletionRequest):
-    create_completion_stream = import_module("service.file_extraction_agent.manager").create_completion_stream
-    return create_completion_stream(
+    completion_manager = import_module("service.file_extraction_agent.manager").completion_manager
+    return completion_manager.create(
         completion_id=request.completion_id,
         documents=request.documents,
         messages=request.messages,

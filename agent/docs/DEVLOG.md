@@ -1,5 +1,37 @@
 last updated: 2026-09-02
 
+## 2026-09-02 16:31:42
+
+### 已完成工作
+
+- 将 `impl/` 改为 `core/` 并按职责重命名：`html_index→documents`、`html_tools→tools`、`model_factory→model`、`resolution_new→loop`；`html_state` 的 `GraphState/build_graph_state` 并入 `graph.py`。
+- 测试同步改名（`test_html_index_new→test_documents`、`test_html_tools_new→test_tools`、`test_resolution_new→test_loop`），import 全部迁到 `core.*`。
+- 同步 `service/file_extraction_agent` 的 README/DESIGN/`__init__`、`core/__init__` 边界与父级 README/DESIGN/API，测试文档；清理 `_ACTIVE_COMPLETIONS` 引用；修复 documents.py 的 `\<` 转义警告。
+
+### 当前进展
+
+- `tests` 全量 `106 passed`（`agent/.venv`，UTF-8 模式）。
+
+### 下一步
+
+- 可选：整体同步 `file_extraction_agent/README.md` 其余过时描述。
+
+## 2026-09-02 15:36:33
+
+### 已完成工作
+
+- 把单 completion 的完整运行收进 `ActiveCompletion`：构造时注入 state（GraphState）与 resolution_model，由它自行保有 queue + 锁、stream()（起 producer 线程 + 消费队列产 SSE + finally 清理 workspace）、_produce()（跑 impl/graph.run_completion_graph_stream 投事件）、terminate()/get_status()。
+- `CompletionManager` 退化为薄协调者：只做多 completion 的注册表 + create 装配（state+model -> ActiveCompletion -> 注册 -> 返回 stream）+ terminate/status 转发 + _managed_stream 收尾移除注册表。
+- 新增 `test_active_completion_owns_terminate_get_status_and_terminal_uniqueness`；同步 `service/file_extraction_agent/docs/DESIGN.md` 与测试文档。
+
+### 当前进展
+
+- `tests` 全量 `106 passed`（`agent/.venv`，UTF-8 模式）。
+
+### 下一步
+
+- 可选：整体同步 `file_extraction_agent/README.md` 其余过时的 `inspect` / `evidence://` / 虚拟树描述。
+
 ## 2026-09-02 15:15:43
 
 ### 已完成工作

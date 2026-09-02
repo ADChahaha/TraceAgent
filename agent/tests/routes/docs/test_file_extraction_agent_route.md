@@ -1,17 +1,17 @@
 # test_file_extraction_agent_route.py
 
-这份测试覆盖 `document-qa chat/completions` 的 HTTP 出口。route 层接收 backend 传来的 `completion_id + documents + append-only messages`，调用业务层 `create_completion_stream(...)`，并用 SSE 返回 QA agent 的过程事件。
+这份测试覆盖 `document-qa chat/completions` 的 HTTP 出口。route 层接收 backend 传来的 `completion_id + documents + append-only messages`，调用业务层 `completion_manager.create(...)`，并用 SSE 返回 QA agent 的过程事件。
 
 实现链路：
 
 ```text
 HTTP POST /v1/document-qa/chat/completions
   -> route 层解析 documents、messages、run_options、model_config
-  -> 调用 service.file_extraction_agent.manager.create_completion_stream(...)
+  -> 调用 service.file_extraction_agent.manager.completion_manager.create(...)
   -> StreamingResponse(text/event-stream)
 
 HTTP POST /v1/document-qa/chat/completions/{completion_id}/cancel
-  -> route 层调用 service.file_extraction_agent.manager.cancel_completion(...)
+  -> route 层调用 service.file_extraction_agent.manager.completion_manager.terminate(...)
   -> 返回 completion 当前取消状态
 ```
 

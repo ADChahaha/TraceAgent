@@ -1,17 +1,18 @@
 from __future__ import annotations
 
+from pathlib import Path
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
-from service.file_extraction_agent.impl import model_factory as model_factory_module
-from service.file_extraction_agent.impl.model_factory import build_chat_model, normalize_model_config
+from service.file_extraction_agent.core import model as model_module
+from service.file_extraction_agent.core.model import build_chat_model, normalize_model_config
 from service.file_extraction_agent import manager as manager_module
 from service.file_extraction_agent.manager import (
+    ActiveCompletion,
     CompletionManager,
-    cancel_completion,
-    create_completion_stream,
     prepare_completion_state,
 )
 from service.file_extraction_agent.schemas import DocumentQaMessage, InputDocument, ModelConfig, RunOptions
@@ -34,8 +35,9 @@ def test_create_completion_stream_builds_completion_input_and_runs_graph(monkeyp
     monkeypatch.setattr("service.file_extraction_agent.manager.build_resolution_model", fake_build_resolution_model)
     monkeypatch.setattr("service.file_extraction_agent.manager.run_completion_graph_stream", fake_run_completion_graph_stream)
 
+    manager = CompletionManager()
     events = list(
-        create_completion_stream(
+        manager.create(
             completion_id="cmp_123",
             documents=[InputDocument(filename="notice.html", html='<p id="p1">通知</p>')],
             messages=[DocumentQaMessage(role="user", content="问题")],
@@ -60,8 +62,9 @@ def test_create_completion_stream_validates_input_before_iteration(monkeypatch):
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_resolution_model", fake_build_resolution_model)
 
+    manager = CompletionManager()
     with pytest.raises(ValueError, match="documents"):
-        create_completion_stream(
+        manager.create(
             completion_id="cmp_123",
             documents=[],
             messages=[DocumentQaMessage(role="user", content="问题")],
@@ -85,19 +88,20 @@ def test_create_completion_stream_registers_active_completion_before_iteration(m
     monkeypatch.setattr("service.file_extraction_agent.manager.build_resolution_model", fake_build_resolution_model)
     monkeypatch.setattr("service.file_extraction_agent.manager.run_completion_graph_stream", fake_run_completion_graph_stream)
 
-    stream = create_completion_stream(
+    manager = CompletionManager()
+    stream = manager.create(
         completion_id="cmp_early_cancel",
         documents=[InputDocument(filename="notice.html", html='<p id="p1">通知</p>')],
         messages=[DocumentQaMessage(role="user", content="问题")],
         model_config=ModelConfig(model_name="resolution"),
     )
 
-    assert cancel_completion("cmp_early_cancel") == {"id": "cmp_early_cancel", "status": "cancelling"}
+    assert manager.terminate("cmp_early_cancel") == {"id": "cmp_early_cancel", "status": "cancelling"}
     assert list(stream) == [
         'event: completion.cancelled\ndata: {"id":"cmp_early_cancel","type":"completion.cancelled","status":"cancelled"}\n\n'
     ]
     assert not graph_called.is_set()
-    assert cancel_completion("cmp_early_cancel") == {"id": "cmp_early_cancel", "status": "not_found"}
+    assert manager.terminate("cmp_early_cancel") == {"id": "cmp_early_cancel", "status": "not_found"}
 
 
 def test_create_completion_stream_cancel_does_not_wait_for_blocked_graph(monkeypatch):
@@ -118,7 +122,8 @@ def test_create_completion_stream_cancel_does_not_wait_for_blocked_graph(monkeyp
     monkeypatch.setattr("service.file_extraction_agent.manager.build_resolution_model", fake_build_resolution_model)
     monkeypatch.setattr("service.file_extraction_agent.manager.run_completion_graph_stream", fake_run_completion_graph_stream)
 
-    stream = create_completion_stream(
+    manager = CompletionManager()
+    stream = manager.create(
         completion_id="cmp_blocked",
         documents=[InputDocument(filename="notice.html", html='<p id="p1">通知</p>')],
         messages=[DocumentQaMessage(role="user", content="问题")],
@@ -135,7 +140,7 @@ def test_create_completion_stream_cancel_does_not_wait_for_blocked_graph(monkeyp
     consumer_thread.start()
 
     assert graph_started.wait(timeout=0.5)
-    assert cancel_completion("cmp_blocked") == {"id": "cmp_blocked", "status": "cancelling"}
+    assert manager.terminate("cmp_blocked") == {"id": "cmp_blocked", "status": "cancelling"}
     started_at = time.monotonic()
     try:
         assert stream_done.wait(timeout=0.25)
@@ -147,7 +152,7 @@ def test_create_completion_stream_cancel_does_not_wait_for_blocked_graph(monkeyp
     assert events == [
         'event: completion.cancelled\ndata: {"id":"cmp_blocked","type":"completion.cancelled","status":"cancelled"}\n\n'
     ]
-    assert cancel_completion("cmp_blocked") == {"id": "cmp_blocked", "status": "not_found"}
+    assert manager.terminate("cmp_blocked") == {"id": "cmp_blocked", "status": "not_found"}
 
 
 def test_create_completion_stream_flushes_committed_events_before_cancel(monkeypatch):
@@ -169,8 +174,9 @@ def test_create_completion_stream_flushes_committed_events_before_cancel(monkeyp
     monkeypatch.setattr("service.file_extraction_agent.manager.build_resolution_model", fake_build_resolution_model)
     monkeypatch.setattr("service.file_extraction_agent.manager.run_completion_graph_stream", fake_run_completion_graph_stream)
 
+    manager = CompletionManager()
     stream = iter(
-        create_completion_stream(
+        manager.create(
             completion_id="cmp_flush",
             documents=[InputDocument(filename="notice.html", html='<p id="p1">通知</p>')],
             messages=[DocumentQaMessage(role="user", content="问题")],
@@ -181,7 +187,7 @@ def test_create_completion_stream_flushes_committed_events_before_cancel(monkeyp
     first_event = next(stream)
     assert second_event_reached_graph.wait(timeout=0.5)
     time.sleep(0.02)
-    assert cancel_completion("cmp_flush") == {"id": "cmp_flush", "status": "cancelling"}
+    assert manager.terminate("cmp_flush") == {"id": "cmp_flush", "status": "cancelling"}
     try:
         remaining_events = list(stream)
     finally:
@@ -192,7 +198,7 @@ def test_create_completion_stream_flushes_committed_events_before_cancel(monkeyp
         'event: tool_completed\ndata: {"type":"tool_completed","tool":"read"}\n\n',
         'event: completion.cancelled\ndata: {"id":"cmp_flush","type":"completion.cancelled","status":"cancelled"}\n\n',
     ]
-    assert cancel_completion("cmp_flush") == {"id": "cmp_flush", "status": "not_found"}
+    assert manager.terminate("cmp_flush") == {"id": "cmp_flush", "status": "not_found"}
 
 
 def test_create_completion_stream_emits_only_one_terminal_event_when_cancel_races_completed(monkeypatch):
@@ -210,14 +216,15 @@ def test_create_completion_stream_emits_only_one_terminal_event_when_cancel_race
     monkeypatch.setattr("service.file_extraction_agent.manager.build_resolution_model", fake_build_resolution_model)
     monkeypatch.setattr("service.file_extraction_agent.manager.run_completion_graph_stream", fake_run_completion_graph_stream)
 
-    stream = create_completion_stream(
+    manager = CompletionManager()
+    stream = manager.create(
         completion_id="cmp_race",
         documents=[InputDocument(filename="notice.html", html='<p id="p1">通知</p>')],
         messages=[DocumentQaMessage(role="user", content="问题")],
         model_config=ModelConfig(model_name="resolution"),
     )
 
-    assert cancel_completion("cmp_race") == {"id": "cmp_race", "status": "cancelling"}
+    assert manager.terminate("cmp_race") == {"id": "cmp_race", "status": "cancelling"}
     graph_can_complete.set()
     events = list(stream)
 
@@ -246,7 +253,7 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(model_factory_module, "_candidate_env_paths", lambda: [env_path])
+    monkeypatch.setattr(model_module, "_candidate_env_paths", lambda: [env_path])
     missing_cwd = tmp_path / "missing"
     missing_cwd.mkdir()
     monkeypatch.chdir(missing_cwd)
@@ -286,7 +293,7 @@ def test_build_chat_model_builds_responses_transport_by_default(monkeypatch):
         def __init__(self, **kwargs):
             captured.append(kwargs)
 
-    monkeypatch.setattr(model_factory_module, "ChatOpenAI", FakeChatOpenAI)
+    monkeypatch.setattr(model_module, "ChatOpenAI", FakeChatOpenAI)
 
     model = build_chat_model(
         ModelConfig(
@@ -315,7 +322,7 @@ def test_build_chat_model_builds_chat_completions_transport_when_configured(monk
         def __init__(self, **kwargs):
             captured.append(kwargs)
 
-    monkeypatch.setattr(model_factory_module, "ChatOpenAI", FakeChatOpenAI)
+    monkeypatch.setattr(model_module, "ChatOpenAI", FakeChatOpenAI)
 
     model = build_chat_model(
         ModelConfig(
@@ -490,3 +497,21 @@ def test_completion_manager_terminate_returns_not_found_for_unknown():
 def test_completion_manager_get_status_returns_none_for_unknown():
     manager = CompletionManager()
     assert manager.get_status("cmp_missing") is None
+
+
+def test_active_completion_owns_terminate_get_status_and_terminal_uniqueness():
+    state = SimpleNamespace(
+        completion_id="cmp_ac",
+        document=SimpleNamespace(root=Path(".") / "nonexistent"),
+        messages=[],
+        run_options=RunOptions(),
+    )
+    runtime = ActiveCompletion("cmp_ac", state, object())
+
+    assert runtime.get_status() == "in_progress"
+    assert runtime.terminate() == "cancelling"
+    assert runtime.get_status() == "cancelling"
+    assert runtime.terminate() == "cancelling"
+    assert runtime.close_once("cancelled") is True
+    assert runtime.get_status() == "cancelled"
+    assert runtime.close_once("completed") is False

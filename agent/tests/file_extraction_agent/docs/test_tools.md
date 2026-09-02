@@ -1,4 +1,4 @@
-# test_html_tools_new.py
+# test_tools.py
 
 这份测试覆盖 QA completion 的模型工具集合。工具不再写字段，也不再用
 `evidence://` / `path_id` / `inspect`，而是让模型在真实文件树（`DocumentFileTree`）

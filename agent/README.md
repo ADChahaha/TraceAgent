@@ -50,7 +50,7 @@ export DOCUMENT_PROCESSOR_MINERU_LANG="japan"
 python -m uvicorn main:app --reload --host 127.0.0.1 --port 8001
 ```
 
-第一版 QA cancel 依赖单进程内存 `_ACTIVE_COMPLETIONS`，不要使用多个 uvicorn worker。
+第一版 QA cancel 依赖单进程内存 `CompletionManager` 注册表，不要使用多个 uvicorn worker。
 
 启动后可访问：
 
@@ -91,11 +91,11 @@ POST /v1/document-qa/chat/completions/{completion_id}/cancel
 ```text
 completion_id + documents + messages
   -> manager.prepare_completion_state 校验 completion_id、documents、messages 和 max_tool_calls
-  -> html_index 构建只读 semantic virtual tree
+  -> documents 把多份 HTML 落盘成真实文件树
   -> graph 输出 completion.created + source_indexed
-  -> resolution_new 构建 QA prompt 并调用模型
-  -> html_tools 提供 ls / grep / read / inspect
-  -> model_message 在过程中引用 evidence:// link
+  -> loop 构建 QA prompt 并调用模型
+  -> tools 提供 ls / grep / read
+  -> model_message 在过程中引用真实 .md 路径
   -> graph/manager 输出 completion.completed / completion.cancelled / completion.failed
 ```
 

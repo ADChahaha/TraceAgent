@@ -1,22 +1,28 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from fastapi.testclient import TestClient
 
 from main import create_app
 from service.file_extraction_agent.schemas import RunOptions
 
 
-def test_document_qa_chat_completion_route_calls_completion_stream(monkeypatch):
+def test_document_qa_chat_completion_route_calls_completion_manager(monkeypatch):
     from service.file_extraction_agent import manager as manager_module
 
     seen_call: dict[str, object] = {}
 
-    def fake_create_completion_stream(**kwargs):
+    def fake_create(**kwargs):
         seen_call.update(kwargs)
         yield 'event: completion.created\ndata: {"id":"cmp_123"}\n\n'
         yield 'event: completion.completed\ndata: {"id":"cmp_123"}\n\n'
 
-    monkeypatch.setattr(manager_module, "create_completion_stream", fake_create_completion_stream)
+    monkeypatch.setattr(
+        manager_module,
+        "completion_manager",
+        SimpleNamespace(create=fake_create, terminate=lambda completion_id: {"id": completion_id, "status": "cancelling"}),
+    )
 
     client = TestClient(create_app())
     with client.stream(
@@ -63,11 +69,15 @@ def test_document_qa_chat_completion_route_passes_run_options(monkeypatch):
 
     seen_call: dict[str, object] = {}
 
-    def fake_create_completion_stream(**kwargs):
+    def fake_create(**kwargs):
         seen_call.update(kwargs)
         yield 'event: completion.completed\ndata: {}\n\n'
 
-    monkeypatch.setattr(manager_module, "create_completion_stream", fake_create_completion_stream)
+    monkeypatch.setattr(
+        manager_module,
+        "completion_manager",
+        SimpleNamespace(create=fake_create, terminate=lambda completion_id: {"id": completion_id, "status": "cancelling"}),
+    )
 
     client = TestClient(create_app())
     response = client.post(
@@ -89,11 +99,15 @@ def test_document_qa_chat_completion_route_passes_model_overrides(monkeypatch):
 
     seen_call: dict[str, object] = {}
 
-    def fake_create_completion_stream(**kwargs):
+    def fake_create(**kwargs):
         seen_call.update(kwargs)
         yield 'event: completion.completed\ndata: {}\n\n'
 
-    monkeypatch.setattr(manager_module, "create_completion_stream", fake_create_completion_stream)
+    monkeypatch.setattr(
+        manager_module,
+        "completion_manager",
+        SimpleNamespace(create=fake_create, terminate=lambda completion_id: {"id": completion_id, "status": "cancelling"}),
+    )
 
     client = TestClient(create_app())
     response = client.post(
@@ -128,11 +142,15 @@ def test_document_qa_completion_cancel_route_calls_manager(monkeypatch):
 
     seen_call: dict[str, object] = {}
 
-    def fake_cancel_completion(completion_id):
+    def fake_terminate(completion_id):
         seen_call["completion_id"] = completion_id
         return {"id": completion_id, "status": "cancelling"}
 
-    monkeypatch.setattr(manager_module, "cancel_completion", fake_cancel_completion)
+    monkeypatch.setattr(
+        manager_module,
+        "completion_manager",
+        SimpleNamespace(create=lambda **kwargs: iter(()), terminate=fake_terminate),
+    )
 
     client = TestClient(create_app())
     response = client.post("/v1/document-qa/chat/completions/cmp_123/cancel")

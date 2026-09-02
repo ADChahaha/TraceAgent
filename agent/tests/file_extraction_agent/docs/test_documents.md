@@ -1,4 +1,4 @@
-# test_html_index_new.py
+# test_documents.py
 
 这份测试覆盖新的「真实文件树」materialization。输入是多个带文件名的 HTML
 文档，输出是落盘的真实目录树（`DocumentFileTree`），每个 paragraph / list /

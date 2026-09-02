@@ -27,23 +27,23 @@ backend 持久化 task / messages / documents / events
 
 ## 2. 输入、输出和运行步骤
 
-Python 入口是 `manager.create_completion_stream(...)`：
+Python 入口是 `completion_manager.create(...)`（`manager.CompletionManager` 的进程单例）：
 
 ```text
 completion_id + documents + messages + run_options + model_config
-  -> manager.prepare_completion_state(...)（校验函数，失败抛 ValueError）
+  -> completion_manager.create / manager.prepare_completion_state(...)（校验函数，失败抛 ValueError）
        -> 校验 completion_id 非空
        -> 校验 documents 是非空 list，且每个 InputDocument 有 filename/html
        -> 校验 messages 是非空 list，支持 OpenAI 风格 user/assistant/tool 消息
        -> run_options 缺省补成 RunOptions(max_tool_calls=200)，并要求 max_tool_calls > 0
-       -> html_index.materialize_tree(documents, workspace_root/<completion_id>) 落盘真实文件树
+       -> documents.materialize_tree(documents, workspace_root/<completion_id>) 落盘真实文件树
        -> build_graph_state(...) 产出 GraphState（不再有 DocumentQaCompletionInput 包装对象）
-  -> manager.CompletionManager.create 创建 ActiveCompletion 并放入其注册表
-  -> model_factory.build_resolution_model(model_config) 构建 LangChain chat model
+  -> 构造 ActiveCompletion(completion_id, state, model) 并放入注册表
+  -> model.build_resolution_model(model_config) 构建 LangChain chat model
   -> manager 启动 producer 线程运行 graph.run_completion_graph_stream(...)
        -> 输出 completion.created
        -> 输出 source_indexed(workspace_root + tree)
-       -> resolution_new.run_resolution_stream(...)
+       -> loop.run_resolution_stream(...)
             -> build_resolution_messages，把历史 OpenAI messages 原样转成 chat/tool messages
                并保持最新真实用户消息为最后一条 human message
             -> build_tools(state) 暴露 ls / grep / read
@@ -61,7 +61,7 @@ completion_id + documents + messages + run_options + model_config
   -> finally 从 CompletionManager 注册表移除本轮 completion
 ```
 
-公开边界全部强类型化：`create_completion_stream` 的 `documents` 只接收
+公开边界全部强类型化：`completion_manager.create(...)` 的 `documents` 只接收
 `list[InputDocument]`、`messages` 只接收 `list[DocumentQaMessage]`、
 `model_config` 只接收 `ModelConfig | None`、`run_options` 只接收
 `RunOptions | None`；不再接收 `list[Any]` / `dict` / duck-typed object。
@@ -77,17 +77,17 @@ completion_id + documents + messages + run_options + model_config
 flowchart TD
     A["completion_id + documents + messages + run_options + model_config"]
     B["manager.prepare_completion_state<br/>校验 completion_id / documents / messages<br/>归一化 RunOptions<br/>materialize_tree 落盘"]
-    C["html_index.materialize_tree<br/>HTML -> DocumentFileTree<br/>落盘真实文件仓库"]
-    D["html_state.build_graph_state<br/>生成 GraphState"]
+    C["documents.materialize_tree<br/>HTML -> DocumentFileTree<br/>落盘真实文件仓库"]
+    D["graph.build_graph_state<br/>生成 GraphState"]
     E["graph.run_completion_graph_stream<br/>组织本轮 completion 事件"]
     F["completion.created"]
     G["source_indexed<br/>workspace_root + tree"]
-    H["resolution_new.run_resolution_stream<br/>构建 prompt / 历史消息 / tools"]
+    H["loop.run_resolution_stream<br/>构建 prompt / 历史消息 / tools"]
     I["build_tools(state)<br/>ls / grep / read"]
     J["模型输出 model_message"]
     K{"是否有 tool_calls?"}
     L["ToolNode 执行工具"]
-    M["html_tools<br/>记录 tool_started / tool_completed / tool_failed"]
+    M["tools<br/>记录 tool_started / tool_completed / tool_failed"]
     N["ls<br/>看真实文件树当前层"]
     O["grep<br/>rg 搜索候选 .md block"]
     P["read<br/>读取一个 .md block 文件"]
@@ -177,19 +177,21 @@ runtime.cancel_requested=false
 线程安全约束：
 
 ```text
-ActiveCompletion
-  -> 内部持有 threading.Lock
-  -> 持有本 completion 专属 runtime queue，queue 不与其他 completion 共享
+ActiveCompletion（单 completion 的运行时）
+  -> 持有 state + resolution_model + 本 completion 专属 queue + threading.Lock
+  -> stream() 首次迭代启动 producer 线程并消费队列产 SSE；finally 清理 workspace
+  -> _produce() 后台线程目标，跑 core/graph.run_completion_graph_stream(state, model) 并投事件
+  -> terminate()/get_status()：取消 / 查询状态
   -> cancel_requested/status/closed 只能通过方法读写
   -> 状态检查、状态变更和 queue.put 必须在同一个 runtime lock 临界区里完成
-  -> request_cancel() 标记取消意图，并向 runtime queue 放入 cancel sentinel 唤醒 consumer
+  -> terminate() 标记取消意图，并向 runtime queue 放入 cancel sentinel 唤醒 consumer
   -> close_once(status) 原子决定唯一终态
 
 CompletionManager._completions
   -> 所有 get/set/pop 都必须持有自身的 registry lock
-  -> CompletionManager.create(...) 注册 runtime 后才能返回 SSE iterator
+  -> create(...) 装配 state + model，构造 ActiveCompletion 并注册后才返回 stream()
+  -> _managed_stream(...) 包装 stream()，结束后从 registry 移除 runtime
   -> registry 只保存 completion_id -> runtime 的索引；queue 是 runtime 私有字段，不存在全局共享 queue
-  -> runtime close 后从 registry 移除
 
 producer -> consumer event queue
   -> 如果 consumer 是 async generator，producer 线程只能通过 loop.call_soon_threadsafe(...) 投递事件
@@ -427,7 +429,7 @@ POST /v1/document-qa/chat/completions/{completion_id}/cancel
 POST /v1/document-qa/chat/completions/{completion_id}/cancel
   -> completion_manager.terminate(completion_id)
   -> 如果 completion 在 CompletionManager 注册表中，设置 cancel_requested=true、status=cancelling
-  -> create_completion_stream 的 SSE consumer 被 cancel sentinel 唤醒
+  -> completion_manager.create 的 SSE consumer 被 cancel sentinel 唤醒
   -> consumer 先 flush sentinel 前已提交的普通 event，再输出 completion.cancelled 并关闭 SSE
   -> producer 若稍后从 provider 返回事件，会在 runtime 已关闭时丢弃
   -> 如果找不到 active completion，返回 status=not_found
@@ -449,10 +451,10 @@ SSE 事件按 `seq` 递增，常见类型如下：
 | --- | --- | --- |
 | `completion.created` | graph | 标记本轮 completion 开始。 |
 | `source_indexed` | graph | 暴露本轮 `workspace_root` 和逐层 `tree` 清单。 |
-| `model_message` | resolution | 模型面向用户的过程说明或最终回答；过程事实应内嵌带可读 label 的 evidence link，最终回答带 `is_final=true` 和 `stop_signal`，并把数字 evidence citation 放在被支撑句子后面。 |
-| `tool_started` | html_tools | 记录工具开始及参数。 |
-| `tool_completed` | html_tools | 记录工具成功结果。 |
-| `tool_failed` | html_tools / graph | 记录工具或 resolution 失败。 |
+| `model_message` | loop | 模型面向用户的过程说明或最终回答；过程事实应内嵌带可读 label 的 evidence link，最终回答带 `is_final=true` 和 `stop_signal`，并把数字 evidence citation 放在被支撑句子后面。 |
+| `tool_started` | tools | 记录工具开始及参数。 |
+| `tool_completed` | tools | 记录工具成功结果。 |
+| `tool_failed` | tools / graph | 记录工具或 resolution 失败。 |
 | `completion.completed` | graph | 正常结束。 |
 | `completion.cancelled` | manager | 后端请求取消后结束。 |
 | `completion.failed` | graph | resolution 失败后结束。 |
@@ -465,39 +467,41 @@ backend 应把这些事件作为事实流持久化；前端断线续传和历史
 schemas.py
   -> 定义 InputDocument / DocumentQaMessage / DocumentQaCompletionRequest / ModelConfig / RunOptions
 
-impl/html_index.py
+core/documents.py
   -> 解析语义 HTML
   -> 构建 DocumentFileTree（真实目录 + .md 文件）
   -> 提供 entries / read / scope_path；不再有 path_id / source_selectors / 句行级 selector
 
-impl/html_state.py
-  -> 定义 GraphState
-  -> 保存本轮 completion_id、DocumentFileTree、messages、run_options、events、actions、next_seq
+core/graph.py
+  -> 定义 GraphState 与 build_graph_state
+  -> 组装 completion.created/source_indexed/resolution/terminal event
+  -> 把事件序列化成 SSE 字符串
 
-impl/html_tools.py
+core/tools.py
   -> 构建 ls / grep / read
   -> 每次工具调用写入 tool_started/tool_completed/tool_failed 事件
   -> grep 用真实 rg 子进程返回原样 stdout；引用证据用真实 .md 文件路径
 
-impl/resolution_new.py
+core/loop.py
   -> 构建 QA system prompt，并保留 backend 传入的真实 chat/tool messages
   -> 用 LangGraph 运行 model/tool loop
   -> 记录 model_message
   -> 保留 provider 返回的一个或多个 tool call，并由 ToolNode 执行
 
-impl/graph.py
-  -> 组装 completion.created/source_indexed/resolution/terminal event
-  -> 把事件序列化成 SSE 字符串
+core/model.py
+  -> build_resolution_model / normalize_model_config / build_chat_model
+  -> 产出 ChatModelFallbackChain（按 transport 排 stream -> invoke 两级 attempt）
 
 manager.py
   -> prepare_completion_state(...) 做入口校验（非空、filename/html 非空、max_tool_calls > 0）、
      派生 workspace_root、触发 materialize_tree 落盘并产出 GraphState（失败抛 ValueError）
-  -> CompletionManager 类统一管理 completion 生命周期：create(...)（校验/落盘/注册/起 producer/返回 SSE）、
-     terminate(completion_id)（取消）、get_status(completion_id)（查询状态）；内部持有注册表 + 锁
-  -> 生命周期分 producer/consumer 两半，靠 ActiveCompletion.queue + 锁协作；
-     producer 直接调 impl/graph.run_completion_graph_stream 产出事件
-  -> 进程内单例 completion_manager；模块级 create_completion_stream / cancel_completion
-     是到单例的薄委托，供路由与既有调用方使用
+  -> ActiveCompletion：单 completion 的运行时，持有 state + resolution_model + 专属 queue + 锁；
+     stream()（起 producer 线程 + 消费队列产 SSE + finally 清理）、_produce()（跑 agent loop 投事件）、
+     terminate()/get_status()；事件通道与终态由锁线性化
+  -> CompletionManager：多 completion 的注册表 + create 装配（state+model -> ActiveCompletion -> 注册 ->
+     返回 stream）+ terminate/status 转发 + _managed_stream 收尾移除注册表
+  -> 进程内单例 completion_manager 是公开入口，HTTP 路由直接 completion_manager.create(...) /
+     completion_manager.terminate(...)
 ```
 
 ## 9. 已删除的旧语义

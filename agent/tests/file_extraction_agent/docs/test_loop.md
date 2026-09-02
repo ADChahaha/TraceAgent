@@ -1,4 +1,4 @@
-# test_resolution_new.py
+# test_loop.py
 
 这份测试覆盖 QA completion 的 resolution loop。resolution 不再围绕 `task_spec`
 和字段写入，而是围绕 `ls/grep/read` 工具和用户可见的 evidence-bearing model

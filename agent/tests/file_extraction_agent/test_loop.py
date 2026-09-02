@@ -7,14 +7,14 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
-from service.file_extraction_agent.impl import resolution_new as resolution_module
-from service.file_extraction_agent.impl.html_tools import build_tools
-from service.file_extraction_agent.impl.resolution_new import (
+from service.file_extraction_agent.core import loop as resolution_module
+from service.file_extraction_agent.core.loop import (
     _invoke_model_message,
     _record_model_message,
     build_resolution_graph,
     build_resolution_messages,
 )
+from service.file_extraction_agent.core.tools import build_tools
 from service.file_extraction_agent.manager import prepare_completion_state
 from service.file_extraction_agent.schemas import DocumentQaMessage, InputDocument
 

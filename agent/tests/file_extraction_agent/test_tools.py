@@ -4,8 +4,8 @@ import inspect
 
 import pytest
 
-from service.file_extraction_agent.impl.html_tools import (
-    __all__ as html_tools_all,
+from service.file_extraction_agent.core.tools import (
+    __all__ as tools_all,
     _grep,
     _ls,
     _read,
@@ -70,15 +70,15 @@ def test_build_tools_exposes_qa_navigation_tools_only(tmp_path):
 
 
 def test_module_exports_qa_helpers_only():
-    assert "_ls" in html_tools_all
-    assert "_tree" not in html_tools_all
-    assert "_grep" in html_tools_all
-    assert "_read" in html_tools_all
-    assert "_inspect" not in html_tools_all
-    assert "_add_candidate_evidence" not in html_tools_all
-    assert "_review_evidences" not in html_tools_all
-    assert "_write_field" not in html_tools_all
-    assert "_submit_result" not in html_tools_all
+    assert "_ls" in tools_all
+    assert "_tree" not in tools_all
+    assert "_grep" in tools_all
+    assert "_read" in tools_all
+    assert "_inspect" not in tools_all
+    assert "_add_candidate_evidence" not in tools_all
+    assert "_review_evidences" not in tools_all
+    assert "_write_field" not in tools_all
+    assert "_submit_result" not in tools_all
 
 
 def test_internal_tool_helpers_do_not_accept_reason_parameter(tmp_path):
@@ -113,7 +113,7 @@ def test_ls_lists_only_the_current_tree_level(tmp_path):
 def test_grep_returns_candidate_blocks_but_not_inline_evidence(tmp_path, monkeypatch):
     state = _state(tmp_path)
     monkeypatch.setattr(
-        "service.file_extraction_agent.impl.html_tools._run_ripgrep",
+        "service.file_extraction_agent.core.tools._run_ripgrep",
         lambda query, scope_dir, max_results: "001-something.md:Either party may terminate\n",
     )
 
@@ -143,7 +143,7 @@ def test_grep_can_scope_to_directory(tmp_path, monkeypatch):
         if sub.kind == "dir"
     )
     monkeypatch.setattr(
-        "service.file_extraction_agent.impl.html_tools._run_ripgrep",
+        "service.file_extraction_agent.core.tools._run_ripgrep",
         lambda query, scope_dir, max_results: "001-section.md:notice\n",
     )
 
@@ -155,7 +155,7 @@ def test_grep_can_scope_to_directory(tmp_path, monkeypatch):
 
 def test_grep_fails_gracefully_when_ripgrep_missing(tmp_path, monkeypatch):
     state = _state(tmp_path)
-    monkeypatch.setattr("service.file_extraction_agent.impl.html_tools._run_ripgrep", lambda *a, **k: None)
+    monkeypatch.setattr("service.file_extraction_agent.core.tools._run_ripgrep", lambda *a, **k: None)
 
     result = _grep(state, query="terminate", scope="", max_results=5)
 
