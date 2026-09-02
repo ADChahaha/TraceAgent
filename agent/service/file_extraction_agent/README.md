@@ -1,6 +1,6 @@
 # file_extraction_agent
 
-`file_extraction_agent` 当前是多文档 QA chat completion agent。它接收 backend 每轮传入的 `completion_id + documents(filename + html) + append-only messages`，把多份语义 HTML 虚拟成只读文档仓库，再让模型用 `ls / grep / read / inspect` 像 code agent 看项目一样浏览材料，并通过 SSE 持续输出带 evidence link 的过程消息。
+`file_extraction_agent` 当前是多文档 QA chat completion agent。它接收 backend 每轮传入的 `completion_id + documents(filename + html) + append-only messages`，把多份语义 HTML 落盘成真实文件树，让模型用 `ls / grep / read` 像 code agent 看项目一样浏览材料，并通过 SSE 持续输出带 evidence link 的过程消息。
 
 包名仍沿用历史 `file_extraction_agent`，但本分支不再做 `task_spec` 字段抽取。
 
@@ -10,7 +10,7 @@
 
 - [docs/flowchart.md](docs/flowchart.md)：用流程图描述 chat completions、cancel 和 agent loop 线程/队列关系。
 - [docs/agent_loop.md](docs/agent_loop.md)：用伪代码描述 Iterable consumer 和 agent loop 的协作式 `cancel_flag` 检查模型。
-- [docs/tools.md](docs/tools.md)：记录模型可用工具和计划中的 `fuzzy_search`；其中 `fuzzy_search` 当前仍是未实现设想。
+- [docs/tools.md](docs/tools.md)：记录 `ls / grep / read` 三个模型工具表面。
 
 ## 工作链路
 
@@ -33,30 +33,39 @@ completion_id + documents + messages + run_options
 
 输出是 `text/event-stream` 字符串迭代器；backend 负责消费、入库和转发给前端。
 
-## 虚拟文件树
+## 真实文件树
 
-虚拟树不会落盘。raw virtual path 只作为内部索引和调试信息使用；模型看到和提交的 locator 是 `evidence://0001.0000.0001` 这种 evidence link。根目录只在 `ls(path_id="")` 或 `ls(path_id="/")` 里表示。
+多文档语料不会被做成虚拟树，而是落盘成真实文件树（`core/documents.py` 的 `materialize_tree`）。模型像 code agent 看项目一样，用真实 `.md` 路径浏览。
+
+```text
+/workspace/<completion_id>/
+    └── 0001-contract-Agreement/
+        └── 0001-Agreement/
+            ├── 0001-Termination/
+            │   ├── 0001-Either party may terminate.md
+            │   └── 0002-Notice period.md
+            └── 0002-Notices/
+                └── 0001-Written notice must be sent.md
+```
 
 建树规则：
 
-- 根目录固定为 `/`。
-- 每个输入文件是根目录下的文档目录，locator 如 `evidence://0001`。
-- section header 是目录。
-- paragraph 是 `.md` 文件。
-- list 是 `.list` 文件，最终 inline item selector 为 `I001`。
-- table 是 `.table` 文件，最终 inline row selector 为 `R001`。
-- 同级节点按原文顺序编号，编号保证排序和消除同名冲突。
-
-paragraph/list/table 文件名只是预览，不代表截断正文。完整正文由 `read(locator)` 返回；句子、列表项和表格行编号由 `inspect(locator)` 展开。
+- 每个输入 HTML 是 workspace 根下的文档目录，编号按文档顺序递增。
+- `h1` 到 `h6` 按层级生成 section 目录（`h1` 也会进入树，不因参与文档命名而被跳过）。
+- paragraph / list / table 各写成一个 `.md` 文件（列表、表格整表一个文件）。
+- 目录/文件排序靠数字前缀（`0001-` / `0002-`），不靠 `os.listdir`。
+- 没有 `path_id` / `evidence://`；模型看到和引用的都是真实 `.md` 路径。
+- `source_indexed` 事件暴露 `workspace_root` 和逐层 `tree` 清单。
 
 ## 工具
 
+只暴露三个模型工具（`core/tools.py`）：
+
 | Tool | 作用 |
 | --- | --- |
-| `ls(path_id)` | 列出 root、文档目录或 section 当前层，返回模型可复制的 `evidence://` locator。 |
-| `grep(query, scope, kind, max_results)` | 在可读 block 中做候选搜索，返回 locator、document、section、preview 和 match_spans。 |
-| `read(locator)` | 读取一个 paragraph/list/table block，或读取同一 section 下相邻 block range。 |
-| `inspect(locator)` | 把一个可读 block 展开成 paragraph sentence、list item 或 table row 的 inline evidence link。 |
+| `ls(path="")` | 列出 root、文档目录或 section 的当前层，返回真实路径。 |
+| `grep(query, scope="", max_results=20)` | 在 scope 目录（默认整个 workspace 根）跑 ripgrep，返回原样 stdout；只定位候选，不产生最终证据。 |
+| `read(path)` | 读取一个 `.md` block 文件的 markdown 内容。 |
 
 工具职责顺序通常是：
 
@@ -65,56 +74,25 @@ paragraph/list/table 文件名只是预览，不代表截断正文。完整正�
   -> ls 分层理解文档结构
   -> grep 定位候选 block
   -> read 打开上下文
-  -> inspect 展开精确 evidence
-  -> model_message 用 evidence link 回答或说明下一步
+  -> model_message 用真实 .md 路径回答或说明下一步
 ```
 
-`grep` 只负责定位候选，不产生最终证据。`read` 负责理解上下文。`inspect` 负责把 block 升级成可以支撑具体事实的 `Sxxx/Ixxx/Rxxx` evidence。
+`grep` 只负责定位候选，不产生最终证据；`read` 负责理解上下文；模型最终引用真实文件路径。
 
-## 读取与证据
-
-paragraph：
-
-```text
-ls(path_id="")
-  -> 显示 evidence://0001.0001.0001 公司成立于2020年.md
-read(locator="evidence://0001.0001.0001")
-  -> 返回完整 paragraph 正文
-inspect(locator="evidence://0001.0001.0001")
-  -> 返回 evidence://0001.0001.0001/S001 等句子级链接
-model_message
-  -> “公司成立于 2020 年。[成立时间](evidence://0001.0001.0001/S001)”
-```
-
-list：
-
-```text
-read(locator="evidence://0001.0002.0001")
-  -> 返回 Markdown list
-inspect(locator="evidence://0001.0002.0001")
-  -> 返回 evidence://0001.0002.0001/I001 等列表项链接
-```
-
-table：
-
-```text
-read(locator="evidence://0001.0003.0001")
-  -> 返回 Markdown table
-inspect(locator="evidence://0001.0003.0001")
-  -> 返回 evidence://0001.0003.0001/R001 等表格行链接
-```
-
-证据规则：
+## 证据规则
 
 ```text
 检索策略、下一步行动说明
   -> 不需要 evidence
 
 文档结构、section 主题、读了哪些 block
-  -> 可以引用 section 或 block evidence
+  -> 可以引用 section 或 block 文件路径
 
-日期、金额、义务、条件、例外、冲突、最终结论
-  -> 应引用 inspect 后的 inline evidence
+过程中首次陈述的文档事实（日期、金额、义务、条件等）
+  -> 用 Markdown link 引用真实 .md 路径
+
+最终回答正文里的文档事实
+  -> 把 [1](/abs/path/xxx.md) 这类数字 citation 紧跟在被支撑句子后面，不汇总成总 Sources 区
 ```
 
 ## 公共入口

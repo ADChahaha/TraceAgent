@@ -23,7 +23,7 @@ backend 持久化 task / messages / documents / events
 
 - [flowchart.md](flowchart.md)：描述 chat completions、cancel 和 agent loop 的高层流程。
 - [agent_loop.md](agent_loop.md)：描述更轻量的协作式 cancel 伪代码；在 backend 作为事实来源时，agent 只需要在安全点检查 `cancel_flag` 并尽快停止。
-- [tools.md](tools.md)：描述 `ls/read/inspect/grep` 等工具表面，以及尚未实现的 `fuzzy_search` 设想。
+- [tools.md](tools.md)：描述 `ls / grep / read` 三个工具的表面。
 
 ## 2. 输入、输出和运行步骤
 

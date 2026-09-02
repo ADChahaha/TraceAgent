@@ -117,7 +117,7 @@ def test_resolution_messages_preserve_openai_tool_history(tmp_path):
                         "type": "function",
                         "function": {
                             "name": "read",
-                            "arguments": "{\"locator\":\"evidence://0001.0001.0001\"}",
+                            "arguments": "{\"path\":\"/abs/0001-contract/0001-section/0001-block.md\"}",
                         },
                     }
                 ],
@@ -226,7 +226,7 @@ def test_resolution_uses_responses_api_stream_and_merges_content_with_tool_calls
             yield AIMessageChunk(
                 content="",
                 tool_call_chunks=[
-                    {"type": "tool_call_chunk", "args": '{"path_id":""', "index": 1}
+                    {"type": "tool_call_chunk", "args": '{"path":""', "index": 1}
                 ],
             )
             yield AIMessageChunk(content="", tool_call_chunks=[{"type": "tool_call_chunk", "args": "}", "index": 1}])
@@ -246,7 +246,7 @@ def test_resolution_uses_responses_api_stream_and_merges_content_with_tool_calls
     assert message.tool_calls == [
         {
             "name": "ls",
-            "args": {"path_id": ""},
+            "args": {"path": ""},
             "id": "call-1",
             "type": "tool_call",
         }
@@ -276,7 +276,7 @@ def test_resolution_falls_back_from_stream_to_invoke_within_configured_transport
                     {
                         "id": "call-1",
                         "name": "ls",
-                        "args": {"path_id": ""},
+                        "args": {"path": ""},
                     }
                 ],
             )
@@ -321,7 +321,7 @@ def test_resolution_uses_ethernet_backoff_between_failed_provider_attempts(monke
                     {
                         "id": "call-1",
                         "name": "ls",
-                        "args": {"path_id": ""},
+                        "args": {"path": ""},
                     }
                 ],
             )
@@ -376,13 +376,13 @@ def test_resolution_records_text_from_responses_api_content_blocks(tmp_path):
         content=[
             {"type": "reasoning", "summary": []},
             {"type": "text", "text": "I will inspect root. "},
-            {"type": "function_call", "name": "ls", "arguments": '{"path_id":""}'},
+            {"type": "function_call", "name": "ls", "arguments": '{"path":""}'},
         ],
         tool_calls=[
             {
                 "id": "call-1",
                 "name": "ls",
-                "args": {"path_id": ""},
+                "args": {"path": ""},
             }
         ],
     )
@@ -417,7 +417,7 @@ def test_resolution_retries_transport_when_provider_stop_signal_requires_missing
                     {
                         "id": "call-1",
                         "name": "ls",
-                        "args": {"path_id": ""},
+                        "args": {"path": ""},
                     }
                 ],
                 response_metadata={"finish_reason": "tool_calls"},
@@ -495,7 +495,7 @@ def test_resolution_records_model_message_content_and_tool_calls_without_reasoni
             {
                 "id": "call-1",
                 "name": "ls",
-                "args": {"path_id": ""},
+                "args": {"path": ""},
             }
         ],
     )
@@ -507,6 +507,6 @@ def test_resolution_records_model_message_content_and_tool_calls_without_reasoni
         "type": "model_message",
         "content": "I will inspect the root listing while calling a tool.",
         "tool_call_count": 1,
-        "tool_calls": [{"id": "call-1", "name": "ls", "args": {"path_id": ""}}],
+        "tool_calls": [{"id": "call-1", "name": "ls", "args": {"path": ""}}],
         "is_final": False,
     }

@@ -54,7 +54,7 @@ def test_completion_request_accepts_openai_tool_messages():
                         "type": "function",
                         "function": {
                             "name": "read",
-                            "arguments": "{\"locator\":\"evidence://0001.0001.0001\"}",
+                            "arguments": "{\"path\":\"/abs/0001-contract/0001-section/0001-block.md\"}",
                         },
                     }
                 ],

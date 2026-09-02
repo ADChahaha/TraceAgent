@@ -1,64 +1,46 @@
-Iterable伪代码如下:
-```python
-while True:
-    event = await message_queue.get()  # 从agent_loop的队列里取出内容
-    if cancel_flag.is_set():  # 检查是否收到取消信号
-        break
-    yield event  # 将事件yield给SSE next()
+# Agent Loop
 
-```
+本轮 completion 的 agent loop 由 `core/loop.py`（LangGraph）驱动，被
+`manager.py` 的 `ActiveCompletion._produce` 在后台线程里跑。协作式取消走
+`ActiveCompletion` 的提交门（commit_*），见 `docs/DESIGN.md`。
 
-Agent Loop 伪代码如下:
-```python
-history = [] # 存储历史消息
-# 构造system prompt
-system_prompt = build_system_prompt()
-history.append({"role": "system", "content": system_prompt})
-# 构建history messages
-for message in messages:
-    history.append(message)
-while True:
-    if cancel_flag.is_set():  # 检查是否收到取消信号
-        break
-
-    response = await client.chat.completions.create(
-        model=model_config,
-        messages=history,
-        tools=tools,
-        run_options=run_options,
-    )
-    # 将新消息放到queue
-    await message_queue.put(response)
-    # 加入history
-    history.append({"role": "assistant", "content": response.choices[0].message.content})
-    # 判断是否结束
-    if response.choices[0].finish_reason == "stop":
-        break
-    # 判断是否是 tool 调用
-    if response.choices[0].finish_reason == "tool_call":
-        tool_response = call_tool(response.choices[0].message.tool_calls[0])
-        if cancel_flag.is_set():  # 再次检查是否收到取消信号
-            break
-        history.append({"role": "tool", "content": tool_response})
-        message_queue.put(tool_response)
-
-```
-
-Agent读取文档示意图
 ```mermaid
 sequenceDiagram
-    participant A as Agent Loop
-    participant D as Document
+    participant M as ActiveCompletion
+    participant G as core/graph (run_completion_graph_stream)
+    participant L as core/loop (LangGraph)
+    participant C as consumer (SSE)
 
-    A->>D: fuzzy_search 检索有哪些符合内容的文件(未实现)
-    D->>A: 返回符合条件的文件列表
-    A->>D: ls文件，看看有哪些section
-    D->>A: 返回section列表
-    A->>D: read模型想要read的paragraph、table和list等内容
-    D->>A: 返回对应内容
-    A->>D: grep范围内搜索，输入关键词
-    D->>A: 返回匹配行（rg 原样 stdout）
-    A->>D: read一个 .md block 文件
-    D->>A: 返回文件 markdown 内容
-    A->>A: 模型输出结果，引用了 .md 文件路径作为证据
+    M->>G: 启动 producer 线程（_produce 调 run_completion_graph_stream）
+    G->>L: run_resolution_stream(state, model)
+    loop 每轮 agent 节点
+        L->>L: _invoke_model_message(model, messages) -> AIMessage
+        L->>M: commit_event(model_message 事件)
+    end
+    L->>M: 事件进入 runtime queue（含 tool_started/tool_completed/final）
+    M->>C: queue.get() -> yield SSE（每次 next() 取一条事件）
 ```
+
+## 驱动与停止
+
+- producer：`ActiveCompletion._produce` 循环 `run_completion_graph_stream`，
+  用 `commit_event` / `commit_terminal_event` 把每条事件投进 `runtime.queue`。
+  停止点在"提交门前"：若 `cancel_requested` / `closed` / `terminal_committed` 命中，
+  提交返回 `False`，producer 立即停止，已提交事件按 FIFO 保留。
+- consumer：`ActiveCompletion.stream()` 返回的生成器，`queue.get()` 阻塞取事件；
+  遇到 `_QUEUE_CANCEL` / `_QUEUE_DONE` / 终态事件时 `close_once` 收口。
+- cancel：`completion_manager.terminate(id)` -> `runtime.terminate()`，在锁内置
+  `cancel_requested=true` 并放 `_QUEUE_CANCEL` 哨兵唤醒 consumer。
+
+## LangGraph 环（core/loop.py）
+
+```text
+agent 节点: _invoke_model_message -> _record_model_message(state, msg)
+  -> should_continue: state.actions >= max_tool_calls -> END
+                     最后一条消息有 tool_calls -> tools
+                     否则 -> END
+tools 节点: ToolNode 在 DocumentFileTree 上执行 ls / grep / read
+  -> 回到 agent
+```
+
+取消是协作式的：producer 只在每次提交时检查状态位，不在 provider 内部强制终止。

@@ -105,7 +105,6 @@ def test_create_completion_stream_registers_active_completion_before_iteration(m
 
 
 def test_create_completion_stream_cancel_does_not_wait_for_blocked_graph(monkeypatch):
-    monkeypatch.setattr(manager_module, "_QUEUE_TIMEOUT_SECONDS", 10.0, raising=False)
     graph_started = threading.Event()
     release_graph = threading.Event()
 

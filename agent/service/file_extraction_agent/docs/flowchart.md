@@ -1,25 +1,33 @@
 # file_extraction_agent 流程图
 
-## chat/compltions
+## chat completions
+
 ```mermaid
 flowchart TD
-    C[input] --> E[校验document，messages，run_options, model_config等参数]
-    C --> F[创建document数据结构]
-    C --> G["动态创建tool，给tool传入document并做包装，返回无document参数的tool供agent使用"]
-    C --> H["将runtime注册到全局注册表"]
-    C --> I["将runtime传入(让agent_loop可以自己控制什么时候停止)，返回Iterable对象实现agent_loop，作为SSE next()的内容"]
-    I --> J["agent_loop内部开一个线程，跑真正的agent逻辑"]
-    I --> K["while死循环从agent_loop的队列里取出内容，然后yield给SSE next()。"]
-
+    A[HTTP POST /v1/document-qa/chat/completions]
+    A --> B["route 解析 ChatCompletionRequest<br/>Pydantic 强类型"]
+    B --> C["completion_manager.create<br/>prepare_completion_state 校验 + materialize_tree 落盘 -> GraphState"]
+    C --> D["build_resolution_model(model_config)<br/>-> ChatModelFallbackChain"]
+    D --> E["构造 ActiveCompletion(completion_id, state, model)<br/>并注册进注册表"]
+    E --> F["ActiveCompletion.stream()<br/>返回 SSE 生成器（首次 next 才启动 producer 线程）"]
+    F --> G["producer 线程: _produce()<br/>run_completion_graph_stream(state, model)"]
+    G --> H["core/graph: completion.created -> source_indexed -> loop.run_resolution_stream"]
+    H --> I["core/loop (LangGraph): agent ⇄ tools"]
+    I --> J["_produce 用 commit_event / commit_terminal_event 投事件到 queue"]
+    J --> K["consumer: queue.get() -> yield SSE（每次 next() 取一条事件）"]
 ```
 
 ## cancel
+
 ```mermaid
 flowchart TD
-    input --> B{校验参数}
-    B -- 校验成功 --> C["cancel_agent_loop()"]
-    B -- 校验失败 --> D[RETURN HTTP ERROR]
-    C --> E["在全局注册表中找到对应id的runtime，设置停止flag"]
-
+    A[HTTP POST /v1/document-qa/chat/completions/{id}/cancel]
+    A --> B["completion_manager.terminate(id)"]
+    B --> C{"在注册表找到 runtime?"}
+    C -- 否 --> D["返回 not_found"]
+    C -- 是 --> E["ActiveCompletion.terminate()<br/>锁内置 cancel_requested=true + 放 _QUEUE_CANCEL 哨兵"]
+    E --> F["consumer 被唤醒 -> close_once('cancelled') -> 输出 completion.cancelled"]
+    E --> G["producer 后续 commit 全部被拒，停止"]
 ```
 
+> 注：本图描述高层线程/队列关系，实现细节以 `docs/DESIGN.md` 为准；`agent_loop.md` 见协作式取消与 LangGraph 环。
