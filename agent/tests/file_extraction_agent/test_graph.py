@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 
 from service.file_extraction_agent.impl.graph import run_completion_graph_stream
-from service.file_extraction_agent.input_adapter import build_completion_input
+from service.file_extraction_agent.manager import prepare_completion_state
+from service.file_extraction_agent.schemas import DocumentQaMessage, InputDocument
 
 
 class FakeStreamingModel:
@@ -35,19 +36,19 @@ class FakeStreamingModel:
 
 
 def _input(tmp_path):
-    return build_completion_input(
+    return prepare_completion_state(
         completion_id="cmp_123",
         documents=[
-            {
-                "filename": "contract.html",
-                "html": """
+            InputDocument(
+                filename="contract.html",
+                html="""
                 <h1 id="title">合同</h1>
                 <h2 id="term">Termination</h2>
                 <p id="p1">Either party may terminate this Agreement with 30 days written notice.</p>
                 """,
-            }
+            )
         ],
-        messages=[{"role": "user", "content": "Can this contract be terminated early?"}],
+        messages=[DocumentQaMessage(role="user", content="Can this contract be terminated early?")],
         workspace_root=tmp_path,
     )
 

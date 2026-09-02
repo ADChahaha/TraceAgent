@@ -4,7 +4,6 @@ import inspect
 
 import pytest
 
-from service.file_extraction_agent.impl.html_state import build_graph_state
 from service.file_extraction_agent.impl.html_tools import (
     __all__ as html_tools_all,
     _grep,
@@ -12,16 +11,17 @@ from service.file_extraction_agent.impl.html_tools import (
     _read,
     build_tools,
 )
-from service.file_extraction_agent.input_adapter import build_completion_input
+from service.file_extraction_agent.manager import prepare_completion_state
+from service.file_extraction_agent.schemas import DocumentQaMessage, InputDocument
 
 
 def _state(tmp_path):
-    completion_input = build_completion_input(
+    return prepare_completion_state(
         completion_id="cmp_123",
         documents=[
-            {
-                "filename": "contract.html",
-                "html": """
+            InputDocument(
+                filename="contract.html",
+                html="""
                 <h1 id="title">服务合同</h1>
                 <h2 id="term">Term</h2>
                 <p id="p1">Either party may terminate this Agreement with 30 days written notice.</p>
@@ -32,12 +32,11 @@ def _state(tmp_path):
                 <h2 id="notice">Notice</h2>
                 <p id="p2">All notices must be delivered by email or courier.</p>
                 """,
-            }
+            )
         ],
-        messages=[{"role": "user", "content": "Can the contract be terminated early?"}],
+        messages=[DocumentQaMessage(role="user", content="Can the contract be terminated early?")],
         workspace_root=tmp_path,
     )
-    return build_graph_state(completion_input)
 
 
 def _all_md_entries(state):

@@ -11,5 +11,5 @@
 
 - 不直接作为调用方入口。
 - 不访问数据库、backend storage 或人工审核。
-- 不重新承担 input_adapter.py 已经完成的入口契约校验。
+- 不重新承担 manager.prepare_completion_state 已经完成的入口契约校验。
 """

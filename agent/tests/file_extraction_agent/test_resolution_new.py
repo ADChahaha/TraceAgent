@@ -8,7 +8,6 @@ import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
 from service.file_extraction_agent.impl import resolution_new as resolution_module
-from service.file_extraction_agent.impl.html_state import build_graph_state
 from service.file_extraction_agent.impl.html_tools import build_tools
 from service.file_extraction_agent.impl.resolution_new import (
     _invoke_model_message,
@@ -16,7 +15,8 @@ from service.file_extraction_agent.impl.resolution_new import (
     build_resolution_graph,
     build_resolution_messages,
 )
-from service.file_extraction_agent.input_adapter import build_completion_input
+from service.file_extraction_agent.manager import prepare_completion_state
+from service.file_extraction_agent.schemas import DocumentQaMessage, InputDocument
 
 
 def _company_paragraph_path(state):
@@ -39,24 +39,23 @@ def _company_paragraph_path(state):
 
 
 def _state(tmp_path):
-    completion_input = build_completion_input(
+    return prepare_completion_state(
         completion_id="cmp_123",
         documents=[
-            {
-                "filename": "company.html",
-                "html": """
+            InputDocument(
+                filename="company.html",
+                html="""
                 <h1 id="title">公司资料</h1>
                 <h2 id="summary">概况</h2>
                 <p id="p1">公司成立于2020年。</p>
                 """,
-            }
+            )
         ],
         messages=[
-            {"role": "user", "content": "公司什么时候成立？"},
+            DocumentQaMessage(role="user", content="公司什么时候成立？"),
         ],
         workspace_root=tmp_path,
     )
-    return build_graph_state(completion_input)
 
 
 def test_resolution_messages_describe_qa_investigation_not_field_extraction(tmp_path):
@@ -99,20 +98,20 @@ def test_resolution_prompt_allows_direct_answers_without_forced_document_search(
 
 
 def test_resolution_messages_preserve_openai_tool_history(tmp_path):
-    completion_input = build_completion_input(
+    state = prepare_completion_state(
         completion_id="cmp_123",
         documents=[
-            {
-                "filename": "company.html",
-                "html": '<h1 id="title">公司资料</h1><p id="p1">公司成立于2020年。</p>',
-            }
+            InputDocument(
+                filename="company.html",
+                html='<h1 id="title">公司资料</h1><p id="p1">公司成立于2020年。</p>',
+            )
         ],
         messages=[
-            {"role": "user", "content": "查成立时间"},
-            {
-                "role": "assistant",
-                "content": "我先读公司概况。",
-                "tool_calls": [
+            DocumentQaMessage(role="user", content="查成立时间"),
+            DocumentQaMessage(
+                role="assistant",
+                content="我先读公司概况。",
+                tool_calls=[
                     {
                         "id": "call_read_company",
                         "type": "function",
@@ -122,18 +121,18 @@ def test_resolution_messages_preserve_openai_tool_history(tmp_path):
                         },
                     }
                 ],
-            },
-            {
-                "role": "tool",
-                "tool_call_id": "call_read_company",
-                "name": "read",
-                "content": "{\"ok\":true,\"text\":\"公司成立于2020年。\"}",
-            },
-            {"role": "user", "content": "所以是哪一年？"},
+            ),
+            DocumentQaMessage(
+                role="tool",
+                tool_call_id="call_read_company",
+                name="read",
+                content="{\"ok\":true,\"text\":\"公司成立于2020年。\"}",
+            ),
+            DocumentQaMessage(role="user", content="所以是哪一年？"),
         ],
         workspace_root=tmp_path,
     )
-    messages = build_resolution_messages(build_graph_state(completion_input))
+    messages = build_resolution_messages(state)
 
     assert messages[1].type == "human"
     assert messages[2].type == "ai"

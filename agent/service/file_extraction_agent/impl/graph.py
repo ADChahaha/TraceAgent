@@ -6,15 +6,15 @@ import json
 from dataclasses import asdict, is_dataclass
 from typing import Any, Iterable
 
-from service.file_extraction_agent.impl.html_state import DocumentQaCompletionInput, GraphState, build_graph_state
+from service.file_extraction_agent.impl.html_state import GraphState
+from service.file_extraction_agent.impl.model_factory import ChatModelFallbackChain
 from service.file_extraction_agent.impl.resolution_new import run_resolution_stream
 
 
 def run_completion_graph_stream(
-    completion_input: DocumentQaCompletionInput,
-    resolution_model: Any = None,
+    state: GraphState,
+    resolution_model: ChatModelFallbackChain | None = None,
 ) -> Iterable[str]:
-    state = build_graph_state(completion_input)
     emitted = 0
     _append_completion_event(state, "completion.created", status="in_progress")
     _append_source_index_event(state)

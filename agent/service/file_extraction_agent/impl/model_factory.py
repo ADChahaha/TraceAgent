@@ -16,29 +16,20 @@ from service.file_extraction_agent.schemas import ModelConfig
 DEFAULT_MODEL_REQUEST_TIMEOUT_SECONDS = 8.0
 
 
-def build_resolution_model(config: ModelConfig | dict | None) -> Any:
+def build_resolution_model(config: ModelConfig | None) -> "ChatModelFallbackChain":
     normalized = normalize_model_config(config)
     return build_chat_model(normalized, normalized.model_name)
 
 
-def normalize_model_config(config: ModelConfig | dict | None) -> ModelConfig:
+def normalize_model_config(config: ModelConfig | None) -> ModelConfig:
     if config is None:
         return _model_config_from_env()
     if isinstance(config, ModelConfig):
         return config
-    return ModelConfig(**_normalize_model_config_dict(config))
+    raise TypeError(f"unexpected model config type: {type(config).__name__}")
 
 
-def _normalize_model_config_dict(config: dict) -> dict[str, Any]:
-    normalized = dict(config)
-    if "model" in normalized:
-        if "model_name" in normalized and normalized["model_name"] != normalized["model"]:
-            raise ValueError("model and model_name must match when both are provided")
-        normalized["model_name"] = normalized.pop("model")
-    return normalized
-
-
-def build_chat_model(config: ModelConfig, model_name: str) -> Any:
+def build_chat_model(config: ModelConfig, model_name: str) -> "ChatModelFallbackChain":
     if config.provider != "openai":
         raise ValueError(f"unsupported provider: {config.provider}")
     if not model_name:

@@ -13,6 +13,7 @@ from langgraph.graph.message import MessagesState
 from langgraph.prebuilt import ToolNode
 
 from service.file_extraction_agent.impl.html_tools import build_tools
+from service.file_extraction_agent.impl.model_factory import ChatModelFallbackChain
 
 
 PROVIDER_ATTEMPT_LIMIT = 5
@@ -106,7 +107,10 @@ def build_resolution_messages(state: Any) -> list[Any]:
     return messages
 
 
-def run_resolution_stream(state: Any, resolution_model: Any) -> Iterable[dict[str, Any]]:
+def run_resolution_stream(
+    state: Any,
+    resolution_model: ChatModelFallbackChain | None,
+) -> Iterable[dict[str, Any]]:
     tools = build_tools(state)
     messages = build_resolution_messages(state)
     if _supports_bind_tools(resolution_model):
@@ -122,7 +126,11 @@ def run_resolution_stream(state: Any, resolution_model: Any) -> Iterable[dict[st
     yield from _run_fake_model_loop_stream(state, resolution_model, messages, tools)
 
 
-def build_resolution_graph(resolution_model: Any, tools: list[Any], state: Any):
+def build_resolution_graph(
+    resolution_model: ChatModelFallbackChain | None,
+    tools: list[Any],
+    state: Any,
+):
     model = _bind_tools(resolution_model, tools)
     tool_node = ToolNode(tools)
 

@@ -28,8 +28,8 @@ class ChatCompletionRequest(BaseModel):
     messages: list[DocumentQaMessage]
     stream: bool = True
     metadata: dict[str, Any] = Field(default_factory=dict)
-    run_options: RunOptions | dict[str, Any] | None = None
-    model_config_override: ModelConfig | dict[str, Any] | None = Field(
+    run_options: RunOptions | None = None
+    model_config_override: ModelConfig | None = Field(
         default=None,
         alias="model_config",
     )
@@ -63,12 +63,12 @@ async def get_chat_completion(completion_id: str) -> dict[str, Any]:
 
 @router.post("/v1/document-qa/chat/completions/{completion_id}/cancel")
 async def cancel_chat_completion(completion_id: str) -> dict[str, Any]:
-    cancel_completion = import_module("service.file_extraction_agent.processor").cancel_completion
+    cancel_completion = import_module("service.file_extraction_agent.manager").cancel_completion
     return cancel_completion(completion_id)
 
 
 def _create_chat_completion_stream(request: ChatCompletionRequest):
-    create_completion_stream = import_module("service.file_extraction_agent.processor").create_completion_stream
+    create_completion_stream = import_module("service.file_extraction_agent.manager").create_completion_stream
     return create_completion_stream(
         completion_id=request.completion_id,
         documents=request.documents,
@@ -78,7 +78,7 @@ def _create_chat_completion_stream(request: ChatCompletionRequest):
     )
 
 
-def _model_config(request: ChatCompletionRequest) -> ModelConfig | dict[str, Any] | None:
+def _model_config(request: ChatCompletionRequest) -> ModelConfig | None:
     if request.model_config_override is not None:
         return request.model_config_override
 
@@ -97,12 +97,12 @@ def _model_config(request: ChatCompletionRequest) -> ModelConfig | dict[str, Any
     ):
         return None
 
-    return {
-        "base_url": request.base_url,
-        "api_key": request.api_key or request.openai_api_key,
-        "model_name": request.model or "",
-        "api_transport": request.api_transport or "responses",
-        "temperature": request.temperature if request.temperature is not None else 0.0,
-        "top_p": request.top_p,
-        "top_k": request.top_k,
-    }
+    return ModelConfig(
+        base_url=request.base_url,
+        api_key=request.api_key or request.openai_api_key,
+        model_name=request.model or "",
+        api_transport=request.api_transport or "responses",
+        temperature=request.temperature if request.temperature is not None else 0.0,
+        top_p=request.top_p,
+        top_k=request.top_k,
+    )

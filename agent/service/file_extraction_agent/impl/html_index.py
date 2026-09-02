@@ -32,6 +32,8 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
+from service.file_extraction_agent.schemas import InputDocument
+
 HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 BLOCK_TAGS = {"p", "ul", "ol", "table"}
 DEFAULT_SNIPPET_CHARS = 24
@@ -158,7 +160,7 @@ class _Parser(HTMLParser):
             self.stack[-1].children.append(node)
 
 
-def materialize_tree(documents: Any, workspace_root: Path) -> DocumentFileTree:
+def materialize_tree(documents: list[InputDocument], workspace_root: Path) -> DocumentFileTree:
     """Write documents to an on-disk file tree and return its accessor."""
 
     source_documents = normalize_documents(documents)
@@ -181,18 +183,16 @@ def materialize_tree(documents: Any, workspace_root: Path) -> DocumentFileTree:
     return DocumentFileTree(root=root)
 
 
-def normalize_documents(documents: Any) -> list[SourceDocument]:
-    if not isinstance(documents, list) or not documents:
+def normalize_documents(documents: list[InputDocument]) -> list[SourceDocument]:
+    if not documents:
         raise ValueError("documents must be a non-empty list")
     normalized: list[SourceDocument] = []
-    for index, item in enumerate(documents, start=1):
-        filename = item.get("filename") if isinstance(item, dict) else getattr(item, "filename", None)
-        html = item.get("html") if isinstance(item, dict) else getattr(item, "html", None)
-        if not isinstance(filename, str) or not filename.strip():
+    for index, document in enumerate(documents, start=1):
+        if not document.filename.strip():
             raise ValueError(f"documents[{index}].filename is required")
-        if not isinstance(html, str) or not html.strip():
+        if not document.html.strip():
             raise ValueError(f"documents[{index}].html must be a non-empty string")
-        normalized.append(SourceDocument(filename=filename.strip(), html=html))
+        normalized.append(SourceDocument(filename=document.filename.strip(), html=document.html))
     return normalized
 
 

@@ -23,7 +23,8 @@ GraphState(messages + DocumentFileTree)
 ```
 
 说明：`inspect`、`evidence://range`、`path_id` 和句/行级 selector 已全部删除；
-模型只通过真实文件路径引用 block。
+模型只通过真实文件路径引用 block。测试里的 `prepare_completion_state` 输入已全部
+强类型化（`list[InputDocument]` / `list[DocumentQaMessage]`），并直接产出 `GraphState`。
 
 ## 测试函数
 

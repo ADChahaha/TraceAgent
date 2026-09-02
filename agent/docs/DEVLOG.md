@@ -1,5 +1,74 @@
 last updated: 2026-09-02
 
+## 2026-09-02 15:15:43
+
+### 已完成工作
+
+- 将 `processor.py` 改名为 `manager.py` 并重整职责：`CompletionManager` 类统一管理 completion 生命周期（create/terminate/get_status + 注册表 + producer/consumer + 取消清理），`prepare_completion_state` 入参准备保留在同一模块；`_produce` 直接调 `impl/graph.run_completion_graph_stream`，去除原先的模块级 passthrough。
+- 删除 `processor.py`；公开 API `create_completion_stream` / `cancel_completion` 移到 `manager`，`routes` 与测试的 import / monkeypatch 目标同步改为 `manager`。
+- 测试 `test_processor.py` 改名 `test_manager.py`，校验测试与 `CompletionManager` 测试一并迁入；同步 `service/file_extraction_agent/docs/DESIGN.md`、README、`__init__/impl` 边界、父级 `agent/README.md` / `agent/docs/DESIGN.md` / `agent/docs/API.md` 与 route 测试文档。
+
+### 当前进展
+
+- `tests` 全量 `105 passed`（`agent/.venv`，UTF-8 模式）。
+
+### 下一步
+
+- 可选：整体同步 `file_extraction_agent/README.md` 其余过时的 `inspect` / `evidence://` / 虚拟树描述。
+
+## 2026-09-02 14:53:24
+
+### 已完成工作
+
+- 把 document-QA chat completion 生命周期收进 `processor.CompletionManager` 类，提供 `create(...)`（校验强类型入参、落盘文件树、注册 runtime、启动 producer、返回 SSE 流）、`terminate(completion_id)`（取消）、`get_status(completion_id)`（查询状态）三个方法，内部持有本进程注册表 + 锁；替换掉原先散落的模块级 `_ACTIVE_COMPLETIONS` 注册表。
+- 模块级 `create_completion_stream` / `cancel_completion` 变为到进程内单例 `completion_manager` 的薄委托，HTTP 路由与既有调用方不变。
+- 新增 `test_completion_manager_*`（create 返回 SSE、create 先注册再 terminate 收口、terminate not_found、get_status None）并同步 `test_manager.md`；全量 `105 passed`。
+
+### 当前进展
+
+- `tests` 全量 `105 passed`（`agent/.venv`，UTF-8 模式）。
+
+### 下一步
+
+- 可选：整体同步 `file_extraction_agent/README.md` 其余过时的 `inspect` / `evidence://` / 虚拟树描述。
+
+## 2026-09-02 14:46:02
+
+### 已完成工作
+
+- 移除 `DocumentQaCompletionInput` 包装对象与 `input_adapter.py`，把入口校验、workspace 派生和 `materialize_tree` 落盘折叠进 `processor.prepare_completion_state(...)`，由它直接构建 `GraphState`（校验失败抛 `ValueError`，HTTP 映射 422）。
+- `impl/html_state.py` 只保留 `GraphState`，去掉 `completion_input` 字段；`impl/graph.py` 的 `run_completion_graph_stream` 改为直接接收 `GraphState`。
+- `processor` 生命周期/取消改为传递 `state: GraphState`，`_cleanup_workspace` 从 `state.document` 清理；`create_completion_stream` / `_produce_completion_events` / `run_completion_graph_stream` 一并收紧。
+- 折叠 `test_input_adapter` 的校验测试进 `test_processor`（改用 `prepare_completion_state`），删除 `test_input_adapter.py` 及其文档；`test_graph` / `test_resolution_new` / `test_html_tools_new` 改用 `prepare_completion_state` 直接产出状态。
+- 同步 `service/file_extraction_agent/docs/DESIGN.md`、`impl/__init__.py`、`file_extraction_agent/README.md` 与父级 `agent/README.md` / `agent/docs/DESIGN.md` / `agent/docs/API.md` 中的 `input_adapter` 引用。
+
+### 当前进展
+
+- `tests` 全量 `101 passed`（`agent/.venv`，UTF-8 模式）。
+
+### 下一步
+
+- 可选：整体同步 `file_extraction_agent/README.md` 中其余过时的 `inspect` / `evidence://` / 虚拟树描述。
+
+## 2026-09-02 14:21:12
+
+### 已完成工作
+
+- 将 `file_extraction_agent` 与 `routes/file_extraction_agent` 的公开输入边界全部强类型化：`create_completion_stream` 只接收 `list[InputDocument]` / `list[DocumentQaMessage]` / `ModelConfig | None` / `RunOptions | None`；`build_completion_input` 同构收紧。
+- 移除 `input_adapter` / `html_index` / `model_factory` 中对 dict / duck-typed object 的归一化接受，错误输入在 Pydantic 构造或语义校验时即被拒收。
+- `html_index.materialize_tree` 改为接受 `list[InputDocument]`；`model_factory` 的 `build_resolution_model` / `build_chat_model` / `normalize_model_config` 与 `graph` / `resolution_new` 的 resolution model 类型收口到 `ChatModelFallbackChain`。
+- HTTP 层 `_model_config` 改为构造 `ModelConfig` 对象（不再返回 dict）；`ChatCompletionRequest.run_options` / `model_config` 收紧为强类型。
+- 同步更新受影响的测试与各 `tests/docs/*.md`、`docs/DESIGN.md`，测试全部改用强类型构造。
+
+### 当前进展
+
+- `tests` 全量 `101 passed`（`agent/.venv`，UTF-8 模式）。
+- 目标系统无 conda，使用项目自带 `.venv`。
+
+### 下一步
+
+- 可选：同步 `file_extraction_agent/README.md` 中过时的 `inspect` / `evidence://` / dict 输入示例。
+
 ## 2026-09-02 17:30:00
 
 ### 已完成工作

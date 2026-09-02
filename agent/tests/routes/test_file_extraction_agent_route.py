@@ -7,7 +7,7 @@ from service.file_extraction_agent.schemas import RunOptions
 
 
 def test_document_qa_chat_completion_route_calls_completion_stream(monkeypatch):
-    from service.file_extraction_agent import processor as processor_module
+    from service.file_extraction_agent import manager as manager_module
 
     seen_call: dict[str, object] = {}
 
@@ -16,7 +16,7 @@ def test_document_qa_chat_completion_route_calls_completion_stream(monkeypatch):
         yield 'event: completion.created\ndata: {"id":"cmp_123"}\n\n'
         yield 'event: completion.completed\ndata: {"id":"cmp_123"}\n\n'
 
-    monkeypatch.setattr(processor_module, "create_completion_stream", fake_create_completion_stream)
+    monkeypatch.setattr(manager_module, "create_completion_stream", fake_create_completion_stream)
 
     client = TestClient(create_app())
     with client.stream(
@@ -59,7 +59,7 @@ def test_document_qa_chat_completion_route_rejects_memory_field():
 
 
 def test_document_qa_chat_completion_route_passes_run_options(monkeypatch):
-    from service.file_extraction_agent import processor as processor_module
+    from service.file_extraction_agent import manager as manager_module
 
     seen_call: dict[str, object] = {}
 
@@ -67,7 +67,7 @@ def test_document_qa_chat_completion_route_passes_run_options(monkeypatch):
         seen_call.update(kwargs)
         yield 'event: completion.completed\ndata: {}\n\n'
 
-    monkeypatch.setattr(processor_module, "create_completion_stream", fake_create_completion_stream)
+    monkeypatch.setattr(manager_module, "create_completion_stream", fake_create_completion_stream)
 
     client = TestClient(create_app())
     response = client.post(
@@ -85,7 +85,7 @@ def test_document_qa_chat_completion_route_passes_run_options(monkeypatch):
 
 
 def test_document_qa_chat_completion_route_passes_model_overrides(monkeypatch):
-    from service.file_extraction_agent import processor as processor_module
+    from service.file_extraction_agent import manager as manager_module
 
     seen_call: dict[str, object] = {}
 
@@ -93,7 +93,7 @@ def test_document_qa_chat_completion_route_passes_model_overrides(monkeypatch):
         seen_call.update(kwargs)
         yield 'event: completion.completed\ndata: {}\n\n'
 
-    monkeypatch.setattr(processor_module, "create_completion_stream", fake_create_completion_stream)
+    monkeypatch.setattr(manager_module, "create_completion_stream", fake_create_completion_stream)
 
     client = TestClient(create_app())
     response = client.post(
@@ -114,17 +114,17 @@ def test_document_qa_chat_completion_route_passes_model_overrides(monkeypatch):
 
     assert response.status_code == 200
     config = seen_call["model_config"]
-    assert config["base_url"] == "https://example.com/v1"
-    assert config["api_key"] == "key"
-    assert config["model_name"] == "resolution"
-    assert config["api_transport"] == "chat_completions"
-    assert config["temperature"] == 0.2
-    assert config["top_p"] == 0.9
-    assert config["top_k"] == 40
+    assert config.base_url == "https://example.com/v1"
+    assert config.api_key == "key"
+    assert config.model_name == "resolution"
+    assert config.api_transport == "chat_completions"
+    assert config.temperature == 0.2
+    assert config.top_p == 0.9
+    assert config.top_k == 40
 
 
-def test_document_qa_completion_cancel_route_calls_processor(monkeypatch):
-    from service.file_extraction_agent import processor as processor_module
+def test_document_qa_completion_cancel_route_calls_manager(monkeypatch):
+    from service.file_extraction_agent import manager as manager_module
 
     seen_call: dict[str, object] = {}
 
@@ -132,7 +132,7 @@ def test_document_qa_completion_cancel_route_calls_processor(monkeypatch):
         seen_call["completion_id"] = completion_id
         return {"id": completion_id, "status": "cancelling"}
 
-    monkeypatch.setattr(processor_module, "cancel_completion", fake_cancel_completion)
+    monkeypatch.setattr(manager_module, "cancel_completion", fake_cancel_completion)
 
     client = TestClient(create_app())
     response = client.post("/v1/document-qa/chat/completions/cmp_123/cancel")

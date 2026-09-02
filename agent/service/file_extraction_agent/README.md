@@ -16,14 +16,14 @@
 
 ```text
 completion_id + documents + messages + run_options
-  -> input_adapter 校验 completion_id 非空
-  -> input_adapter 校验 documents 非空、每个 document 有 filename/html
-  -> input_adapter 校验 messages 非空、每条 message.content 非空
-  -> input_adapter 归一化 run_options(max_tool_calls > 0)
-  -> html_index 解析 HTML，生成 HtmlDocument、path_id 索引和 source_selectors
+  -> processor.prepare_completion_state 校验 completion_id 非空
+  -> processor.prepare_completion_state 校验 documents 非空、每个 document 有 filename/html
+  -> processor.prepare_completion_state 校验 messages 非空、每条 message.content 非空
+  -> processor.prepare_completion_state 归一化 run_options(max_tool_calls > 0)
+  -> html_index 解析 HTML，materialize_tree 落盘真实文件树（DocumentFileTree）
   -> processor 创建 ActiveCompletion，写入 _ACTIVE_COMPLETIONS
-  -> graph 输出 completion.created 和 source_indexed
-  -> resolution_new 构建 QA prompt，并挂载 ls/grep/read/inspect
+  -> graph 输出 completion.created 和 source_indexed(workspace_root + tree)
+  -> resolution_new 构建 QA prompt，并挂载 ls/grep/read
   -> 模型输出 model_message；如需继续阅读，就单轮调用一个工具
   -> html_tools 把工具调用写成 tool_started/tool_completed/tool_failed 事件
   -> inspect 把关键 block 展开成 Sxxx/Ixxx/Rxxx inline evidence
@@ -121,10 +121,13 @@ inspect(locator="evidence://0001.0003.0001")
 
 ## 公共入口
 
-Python 入口返回 SSE 字符串迭代器：
+completion 生命周期由 `CompletionManager` 统一管理：`create(...)` 校验强类型
+入参、落盘文件树、注册 runtime 并返回 SSE 迭代器；`terminate(completion_id)`
+取消。进程内单例 `completion_manager` 持有注册表，模块级
+`create_completion_stream` / `cancel_completion` 是对它的薄委托。
 
 ```python
-from service.file_extraction_agent.processor import create_completion_stream
+from service.file_extraction_agent.manager import create_completion_stream
 
 stream = create_completion_stream(
     completion_id="cmp_001",
@@ -153,13 +156,21 @@ HTTP 入口是 `POST /v1/document-qa/chat/completions`，返回 `text/event-stre
 取消入口：
 
 ```python
-from service.file_extraction_agent.processor import cancel_completion
+from service.file_extraction_agent.manager import CompletionManager, cancel_completion
 
 cancel_completion("cmp_001")
 # {"id": "cmp_001", "status": "cancelling"} 或 {"id": "cmp_001", "status": "not_found"}
+
+manager = CompletionManager()
+manager.terminate("cmp_001")   # 与 cancel_completion 等价
+manager.get_status("cmp_001")  # {"id": "...", "status": "..."} 或 None
 ```
 
-取消是本地 completion 级取消：`processor` 的 SSE consumer 看到 `cancel_requested` 后立即输出 `completion.cancelled` 并关闭响应，不等待 provider 下一个 chunk。它不会强杀正在进行中的同步 provider 请求；残留 producer 依赖有限 request timeout 回收，迟到事件会被丢弃。第一版只支持单进程内存 runtime，不支持多 uvicorn worker 共享取消状态。
+取消是本地 completion 级取消：SSE consumer 在 runtime 取消状态触发后立即输出
+`completion.cancelled` 并关闭响应，不等待 provider 下一个 chunk。它不会强杀正在
+进行中的同步 provider 请求；残留 producer 依赖有限 request timeout 回收，迟到
+事件会被丢弃。第一版只支持单进程内存 runtime，不支持多 uvicorn worker 共享取消
+状态。
 
 ## 已删除旧语义
 

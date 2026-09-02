@@ -27,20 +27,20 @@ backend 持久化 task / messages / documents / events
 
 ## 2. 输入、输出和运行步骤
 
-Python 入口是 `processor.create_completion_stream(...)`：
+Python 入口是 `manager.create_completion_stream(...)`：
 
 ```text
 completion_id + documents + messages + run_options + model_config
-  -> input_adapter.build_completion_input(...)
+  -> manager.prepare_completion_state(...)（校验函数，失败抛 ValueError）
        -> 校验 completion_id 非空
        -> 校验 documents 是非空 list，且每个 InputDocument 有 filename/html
        -> 校验 messages 是非空 list，支持 OpenAI 风格 user/assistant/tool 消息
        -> run_options 缺省补成 RunOptions(max_tool_calls=200)，并要求 max_tool_calls > 0
        -> html_index.materialize_tree(documents, workspace_root/<completion_id>) 落盘真实文件树
-  -> processor 创建 ActiveCompletion 并放入 _ACTIVE_COMPLETIONS[completion_id]
+       -> build_graph_state(...) 产出 GraphState（不再有 DocumentQaCompletionInput 包装对象）
+  -> manager.CompletionManager.create 创建 ActiveCompletion 并放入其注册表
   -> model_factory.build_resolution_model(model_config) 构建 LangChain chat model
-  -> processor 启动 producer 线程运行 graph.run_completion_graph_stream(...)
-       -> build_graph_state(...)
+  -> manager 启动 producer 线程运行 graph.run_completion_graph_stream(...)
        -> 输出 completion.created
        -> 输出 source_indexed(workspace_root + tree)
        -> resolution_new.run_resolution_stream(...)
@@ -52,21 +52,31 @@ completion_id + documents + messages + run_options + model_config
        -> resolution 正常结束输出 completion.completed
        -> resolution 异常输出 tool_failed(resolution) + completion.failed
        -> producer 把每条 SSE event 放入 runtime queue
-  -> processor 的 SSE consumer 从 runtime queue 取 event 并向 HTTP response yield
+  -> manager 的 SSE consumer 从 runtime queue 取 event 并向 HTTP response yield
        -> 无事件时阻塞等待 runtime queue
        -> cancel endpoint 通过 runtime 往 queue 放入 cancel sentinel，主动唤醒 consumer
        -> consumer 按 FIFO 先发出 cancel sentinel 之前已提交的普通 event
        -> consumer 收到 cancel sentinel 后输出 completion.cancelled 并结束 stream，不等待 provider 下一个 chunk
        -> producer 后续若从 provider 返回更多 event，看到 runtime 已结束后丢弃
-  -> finally 从 _ACTIVE_COMPLETIONS 移除本轮 completion
+  -> finally 从 CompletionManager 注册表移除本轮 completion
 ```
+
+公开边界全部强类型化：`create_completion_stream` 的 `documents` 只接收
+`list[InputDocument]`、`messages` 只接收 `list[DocumentQaMessage]`、
+`model_config` 只接收 `ModelConfig | None`、`run_options` 只接收
+`RunOptions | None`；不再接收 `list[Any]` / `dict` / duck-typed object。
+不存在独立的 `DocumentQaCompletionInput` 包装对象或 `input_adapter` 模块：
+校验、派生 `workspace_root` 和触发 `materialize_tree` 落盘都收进
+`manager.prepare_completion_state(...)`，它直接产出 `GraphState`。
+`routes` 层通过 Pydantic `ChatCompletionRequest` 把 JSON 转成强类型对象后
+（含 `RunOptions`/`ModelConfig`）再交给 entry。
 
 整体流程图：
 
 ```mermaid
 flowchart TD
     A["completion_id + documents + messages + run_options + model_config"]
-    B["input_adapter.build_completion_input<br/>校验 completion_id / documents / messages<br/>归一化 RunOptions"]
+    B["manager.prepare_completion_state<br/>校验 completion_id / documents / messages<br/>归一化 RunOptions<br/>materialize_tree 落盘"]
     C["html_index.materialize_tree<br/>HTML -> DocumentFileTree<br/>落盘真实文件仓库"]
     D["html_state.build_graph_state<br/>生成 GraphState"]
     E["graph.run_completion_graph_stream<br/>组织本轮 completion 事件"]
@@ -112,7 +122,7 @@ data: {"seq":4,"type":"model_message","content":"..."}
 
 失败时主要有两类：
 
-- 入参校验失败：`build_completion_input` 或 Pydantic schema 抛出 `ValueError`，HTTP route 映射为 422。
+- 入参校验失败：`manager.prepare_completion_state(...)` 或 Pydantic schema 抛出 `ValueError`，HTTP route 映射为 422。
 - resolution 运行失败：`graph` 捕获异常，先输出 `tool_failed`，再用 `completion.failed` 收口。
 
 ## 3. Cancel 和 Provider Stream 边界
@@ -175,9 +185,9 @@ ActiveCompletion
   -> request_cancel() 标记取消意图，并向 runtime queue 放入 cancel sentinel 唤醒 consumer
   -> close_once(status) 原子决定唯一终态
 
-_ACTIVE_COMPLETIONS
-  -> 所有 get/set/pop 都必须持有 registry lock
-  -> create_completion_stream 注册 runtime 后才能返回 SSE iterator
+CompletionManager._completions
+  -> 所有 get/set/pop 都必须持有自身的 registry lock
+  -> CompletionManager.create(...) 注册 runtime 后才能返回 SSE iterator
   -> registry 只保存 completion_id -> runtime 的索引；queue 是 runtime 私有字段，不存在全局共享 queue
   -> runtime close 后从 registry 移除
 
@@ -415,8 +425,8 @@ POST /v1/document-qa/chat/completions/{completion_id}/cancel
 
 ```text
 POST /v1/document-qa/chat/completions/{completion_id}/cancel
-  -> processor.cancel_completion(completion_id)
-  -> 如果 completion 在 _ACTIVE_COMPLETIONS 中，设置 cancel_requested=true、status=cancelling
+  -> completion_manager.terminate(completion_id)
+  -> 如果 completion 在 CompletionManager 注册表中，设置 cancel_requested=true、status=cancelling
   -> create_completion_stream 的 SSE consumer 被 cancel sentinel 唤醒
   -> consumer 先 flush sentinel 前已提交的普通 event，再输出 completion.cancelled 并关闭 SSE
   -> producer 若稍后从 provider 返回事件，会在 runtime 已关闭时丢弃
@@ -444,7 +454,7 @@ SSE 事件按 `seq` 递增，常见类型如下：
 | `tool_completed` | html_tools | 记录工具成功结果。 |
 | `tool_failed` | html_tools / graph | 记录工具或 resolution 失败。 |
 | `completion.completed` | graph | 正常结束。 |
-| `completion.cancelled` | processor | 后端请求取消后结束。 |
+| `completion.cancelled` | manager | 后端请求取消后结束。 |
 | `completion.failed` | graph | resolution 失败后结束。 |
 
 backend 应把这些事件作为事实流持久化；前端断线续传和历史回放应读取 backend 数据库，而不是依赖 agent 仍保留 runtime。
@@ -455,19 +465,14 @@ backend 应把这些事件作为事实流持久化；前端断线续传和历史
 schemas.py
   -> 定义 InputDocument / DocumentQaMessage / DocumentQaCompletionRequest / ModelConfig / RunOptions
 
-input_adapter.py
-  -> 归一化 public input
-  -> 构建 DocumentQaCompletionInput
-  -> 把 documents 交给 html_index.materialize_tree 落盘真实文件树
-
 impl/html_index.py
   -> 解析语义 HTML
   -> 构建 DocumentFileTree（真实目录 + .md 文件）
   -> 提供 entries / read / scope_path；不再有 path_id / source_selectors / 句行级 selector
 
 impl/html_state.py
-  -> 定义 DocumentQaCompletionInput 和 GraphState
-  -> 保存本轮 completion_id、DocumentFileTree、messages、events、actions、next_seq
+  -> 定义 GraphState
+  -> 保存本轮 completion_id、DocumentFileTree、messages、run_options、events、actions、next_seq
 
 impl/html_tools.py
   -> 构建 ls / grep / read
@@ -484,9 +489,15 @@ impl/graph.py
   -> 组装 completion.created/source_indexed/resolution/terminal event
   -> 把事件序列化成 SSE 字符串
 
-processor.py
-  -> 对外提供 create_completion_stream / cancel_completion / run_completion_graph_stream
-  -> 管理 _ACTIVE_COMPLETIONS 内存注册表、producer/consumer 和本地 completion 级取消
+manager.py
+  -> prepare_completion_state(...) 做入口校验（非空、filename/html 非空、max_tool_calls > 0）、
+     派生 workspace_root、触发 materialize_tree 落盘并产出 GraphState（失败抛 ValueError）
+  -> CompletionManager 类统一管理 completion 生命周期：create(...)（校验/落盘/注册/起 producer/返回 SSE）、
+     terminate(completion_id)（取消）、get_status(completion_id)（查询状态）；内部持有注册表 + 锁
+  -> 生命周期分 producer/consumer 两半，靠 ActiveCompletion.queue + 锁协作；
+     producer 直接调 impl/graph.run_completion_graph_stream 产出事件
+  -> 进程内单例 completion_manager；模块级 create_completion_stream / cancel_completion
+     是到单例的薄委托，供路由与既有调用方使用
 ```
 
 ## 9. 已删除的旧语义

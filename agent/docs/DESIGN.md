@@ -67,9 +67,8 @@ agent/
     │       ├── API.md
     │       └── DESIGN.md
     └── file_extraction_agent/
-        ├── processor.py
+        ├── manager.py
         ├── schemas.py
-        ├── input_adapter.py
         ├── impl/
         │   ├── graph.py
         │   ├── html_index.py
@@ -122,8 +121,8 @@ DOCX UploadFile / file-like object
 ```text
 POST /v1/document-qa/chat/completions
   -> route 解析 ChatCompletionRequest
-  -> processor.create_completion_stream(...)
-  -> input_adapter 校验 completion_id/documents/messages/run_options
+  -> manager.create_completion_stream(...)
+  -> manager.prepare_completion_state 校验 completion_id/documents/messages/run_options
   -> html_index 把多份 HTML 落盘成真实文件树（DocumentFileTree）
   -> graph 输出 completion.created 和 source_indexed（workspace_root + tree）
   -> resolution_new 让模型通过 ls / grep / read 浏览文档

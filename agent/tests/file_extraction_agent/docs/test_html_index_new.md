@@ -5,10 +5,14 @@
 table 都写成一个 `.md` 文件，供 `ls` / `grep`(rg) / `read` 工具在真实文件
 系统上操作。
 
+边界已强类型化：`materialize_tree` 只接受
+`documents: list[InputDocument]`，不再接受 dict / duck-typed object；
+缺文件名或空 HTML 的语义校验仍会在 `normalize_documents` 抛出 `ValueError`。
+
 实现链路：
 
 ```text
-documents(filename + html)
+list[InputDocument](filename + html)
   -> materialize_tree(documents, workspace_root)
   -> 每个 document 生成 <workspace_root>/001-<filename>-<title> 目录
   -> 按 h1-h6 层级建 section 子目录

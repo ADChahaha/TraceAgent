@@ -55,7 +55,7 @@ class DocumentQaCompletionRequest(BaseModel):
     messages: list[DocumentQaMessage]
     stream: bool = True
     metadata: dict[str, Any] = Field(default_factory=dict)
-    run_options: "RunOptions | dict[str, Any] | None" = None
+    run_options: "RunOptions | None" = None
 
     @model_validator(mode="after")
     def validate_request(self) -> "DocumentQaCompletionRequest":

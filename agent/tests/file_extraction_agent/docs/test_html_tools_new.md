@@ -7,13 +7,15 @@
 实现链路：
 
 ```text
-DocumentQaCompletionInput
-  -> GraphState 持有 DocumentFileTree
+GraphState 持有 DocumentFileTree
   -> build_tools(state) 暴露 ls/grep/read（inspect 已删）
   -> ls 只列出当前目录层的一个层级子项
   -> grep 用 ripgrep 在 scope 目录（默认根）跑，输出原样 stdout
   -> read 读取一个 .md 文件的 markdown 内容
 ```
+
+说明：测试通过 `prepare_completion_state` 用 `list[InputDocument]` 与
+`list[DocumentQaMessage]` 构造强类型输入，直接产出 `GraphState`。
 
 ## 测试函数
 

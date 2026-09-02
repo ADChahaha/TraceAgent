@@ -90,13 +90,13 @@ POST /v1/document-qa/chat/completions/{completion_id}/cancel
 
 ```text
 completion_id + documents + messages
-  -> input_adapter 校验 completion_id、documents、messages 和 max_tool_calls
+  -> manager.prepare_completion_state 校验 completion_id、documents、messages 和 max_tool_calls
   -> html_index 构建只读 semantic virtual tree
   -> graph 输出 completion.created + source_indexed
   -> resolution_new 构建 QA prompt 并调用模型
   -> html_tools 提供 ls / grep / read / inspect
   -> model_message 在过程中引用 evidence:// link
-  -> graph/processor 输出 completion.completed / completion.cancelled / completion.failed
+  -> graph/manager 输出 completion.completed / completion.cancelled / completion.failed
 ```
 
 ### QA 工具和 stream 粒度

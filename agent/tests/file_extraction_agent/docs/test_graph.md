@@ -6,7 +6,7 @@ source index、模型消息、工具调用和终态完成事件按顺序写出�
 实现链路：
 
 ```text
-DocumentQaCompletionInput + resolution_model
+GraphState + resolution_model
   -> run_completion_graph_stream
   -> completion.created
   -> source_indexed(workspace_root + tree，其中 workspace_root 是每个 completion 的文件树根，
@@ -16,7 +16,8 @@ DocumentQaCompletionInput + resolution_model
 ```
 
 说明：`source_indexed` 不再带 `source_selectors`（旧 `path_id -> 原始 DOM id`
-映射已删除），改为暴露文件树根目录路径和逐层清单。
+映射已删除），改为暴露文件树根目录路径和逐层清单。测试里的 `prepare_completion_state`
+输入已全部强类型化（`list[InputDocument]` / `list[DocumentQaMessage]`），直接产出 `GraphState`。
 
 ## 测试函数
 
