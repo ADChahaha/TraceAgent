@@ -81,8 +81,12 @@ completion_id + documents + messages + run_options + model_config
       tool_batch_active 即置位，直到该批工具全部执行完（含各自 tool_execution_timeout 超时
       产出的 timeout 占位结果）才复位；超时结果同样是合法 tool 结果，保证 OpenAI 格式完整
   -> cancel 到达时：若当前无运行中的「消息+批次」单元，立即放 cancel sentinel 收口；
-      若正在执行该单元，则标记 deferred cancel，等整批工具跑完（或超时）后，
-      完整写入工具事件再以 completion.cancelled 收口
+       若正在执行该单元，则标记 deferred cancel，等整批工具跑完（或超时）后，
+       完整写入工具事件再以 completion.cancelled 收口
+  -> should_stop 触发时（run_completion_graph_stream 的每步间检查）：若最后产出的 provider
+       消息带有尚未执行的 tool_calls，先由 _backfill_pending_tool_cancels 为每个未配对
+       tool 补一条 ok:false / "tool execution cancelled" 的 tool_completed 回复，再以
+       completion.cancelled 收口，避免悬垂 tool_call；已跑成功的 tool 不会被重复追加
 ```
 
 公开边界全部强类型化：`completion_manager.create(...)` 的 `documents` 只接收

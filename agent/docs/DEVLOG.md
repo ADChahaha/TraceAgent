@@ -1,5 +1,21 @@
 last updated: 2026-09-03
 
+## 2026-09-03 18:23:45
+
+### 已完成工作
+
+- `run_completion_graph_stream` 在 `should_stop` 触发时（外部取消），若最后产出的 provider 消息带尚未执行的 `tool_calls`，由新增 `_backfill_pending_tool_cancels` 为每个未配对 tool 补一条 `ok:false` / "tool execution cancelled" 的 `tool_completed` 回复，再以 `completion.cancelled` 收口，避免悬垂 tool_call；已跑成功的 tool 不被重复追加。
+- 新增测试：`test_should_stop_backfills_cancel_tool_replies_for_pending_tool_calls`（补取消占位）、`test_should_stop_after_fulfilled_batch_does_not_duplicate_tool_replies`（不重复追加已成功 tool）。
+- 同步 `service/file_extraction_agent/docs/DESIGN.md`、`agent_loop.md` 及 `tests/file_extraction_agent/docs/test_graph.md`。
+
+### 当前进展
+
+- `tests/file_extraction_agent` + `routes/test_file_extraction_agent_route.py` 全量 `88 passed`（agent/.venv）。
+
+### 下一步
+
+- 评估 backend 侧对「并行 tool_calls 事件顺序乱序」的适配（本轮未处理残缺 tool_calls）。
+
 ## 2026-09-03 17:54:48
 
 ### 已完成工作

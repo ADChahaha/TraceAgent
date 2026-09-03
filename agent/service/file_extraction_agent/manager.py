@@ -63,6 +63,9 @@ def run_completion_graph_stream(
         _append_failure_event(state, exc)
         outcome = {"ok": False, "errors": [{"message": str(exc)}]}
 
+    if stopped:
+        _backfill_pending_tool_cancels(state)
+
     while emitted < len(state.events):
         yield _sse(state.events[emitted])
         emitted += 1
@@ -74,6 +77,37 @@ def run_completion_graph_stream(
     else:
         _append_completion_event(state, "completion.completed", status="completed")
     yield _sse(state.events[-1])
+
+
+def _backfill_pending_tool_cancels(state: GraphState) -> None:
+    latest_model_tool_calls: list[dict[str, Any]] = []
+    for event in state.events:
+        if event.get("type") == "model_message":
+            tool_calls = event.get("tool_calls")
+            if isinstance(tool_calls, list) and tool_calls:
+                latest_model_tool_calls = tool_calls
+    if not latest_model_tool_calls:
+        return
+    fulfilled_tool_refs: set[str] = set()
+    for event in state.events:
+        if event.get("type") in {"tool_completed", "tool_failed"}:
+            tool = event.get("tool")
+            if tool is not None:
+                fulfilled_tool_refs.add(str(tool))
+    for call in latest_model_tool_calls:
+        name = str(call.get("name") or "")
+        if name and name in fulfilled_tool_refs:
+            continue
+        state.events.append(
+            {
+                "seq": state.next_seq,
+                "type": "tool_completed",
+                "tool": name,
+                "args": call.get("args") or {},
+                "result": {"ok": False, "errors": [{"message": "tool execution cancelled"}]},
+            }
+        )
+        state.next_seq += 1
 
 
 def _append_completion_event(

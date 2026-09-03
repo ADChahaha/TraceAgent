@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+from langchain_core.messages import AIMessageChunk
+
 from service.file_extraction_agent.manager import prepare_completion_state, run_completion_graph_stream
 from service.file_extraction_agent.schemas import DocumentQaMessage, InputDocument
 
@@ -136,3 +138,77 @@ def test_run_completion_graph_stream_honors_external_should_stop(tmp_path):
     )
     payloads2 = _sse_payloads(events2)
     assert payloads2[-1]["type"] == "completion.cancelled"
+
+
+def test_should_stop_backfills_cancel_tool_replies_for_pending_tool_calls(tmp_path):
+    class PendingToolModel:
+        def __init__(self):
+            self.calls = 0
+
+        def bind_tools(self, tools, **kwargs):
+            del tools, kwargs
+            return self
+
+        def stream(self, messages):
+            del messages
+            self.calls += 1
+            yield AIMessageChunk(
+                content="我先读文件。",
+                tool_call_chunks=[
+                    {"type": "tool_call_chunk", "name": "read", "args": '{"path":"/abs/0001-section/0001-block.md"}', "id": "call-read", "index": 0},
+                ],
+            )
+
+    stop_after = {"value": True}
+    state = _input(tmp_path)
+    events = list(
+        run_completion_graph_stream(
+            state,
+            PendingToolModel(),
+            should_stop=lambda: stop_after["value"],
+        )
+    )
+    payloads = _sse_payloads(events)
+    cancel_replies = [p for p in payloads if p.get("type") == "tool_completed" and p.get("tool") == "read"]
+    assert len(cancel_replies) >= 1
+    result = cancel_replies[0].get("result", {})
+    assert result.get("ok") is False
+    assert "cancel" in str(result).lower()
+    assert payloads[-1]["type"] == "completion.cancelled"
+
+
+def test_should_stop_after_fulfilled_batch_does_not_duplicate_tool_replies(tmp_path):
+    from service.file_extraction_agent.manager import _backfill_pending_tool_cancels
+
+    state = _input(tmp_path)
+    state.events.append(
+        {
+            "seq": state.next_seq,
+            "type": "model_message",
+            "content": "我先看结构。",
+            "tool_calls": [{"id": "call-1", "name": "ls", "args": {"path": ""}}, {"id": "call-2", "name": "read", "args": {"path": "/x"}}],
+            "is_final": False,
+        }
+    )
+    state.next_seq += 1
+    state.events.append(
+        {
+            "seq": state.next_seq,
+            "type": "tool_completed",
+            "tool": "ls",
+            "args": {"path": ""},
+            "result": {"ok": True, "text": "root"},
+        }
+    )
+    state.next_seq += 1
+
+    _backfill_pending_tool_cancels(state)
+
+    tool_events = [e for e in state.events if e.get("type") == "tool_completed"]
+    ls_count = sum(1 for e in tool_events if e.get("tool") == "ls")
+    read_count = sum(1 for e in tool_events if e.get("tool") == "read")
+    assert ls_count == 1
+    assert read_count == 1
+    read_event = next(e for e in tool_events if e.get("tool") == "read")
+    assert read_event["result"]["ok"] is False
+    assert "cancel" in str(read_event["result"]).lower()

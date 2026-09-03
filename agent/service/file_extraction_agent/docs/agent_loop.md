@@ -46,4 +46,6 @@ tools 节点: _execute_tools_parallel 并发执行同批多个 tool_calls（ls /
 loop 本身不读 `cancel_requested`，是纯 model/tool 循环。取消信号由 manager 通过
 `should_stop` 注入到 `run_completion_graph_stream`，在每一步（每次 `graph.stream` 产出）
 之间检查；取消到达时若正在执行工具批次，会让该批次跑完（或超时）后再以
-`completion.cancelled` 收口，保证 tool 结果完整。
+`completion.cancelled` 收口，保证 tool 结果完整。若最后产出的 provider 消息带有尚未执行
+的 `tool_calls`，则先由 `_backfill_pending_tool_cancels` 补一条取消占位的 `tool_completed`
+回复，再收口，避免悬垂 tool_call。
