@@ -1,5 +1,21 @@
 last updated: 2026-09-03
 
+## 2026-09-03 17:54:48
+
+### 已完成工作
+
+- 把 `run_completion_graph_stream` 及其私有辅助（`_append_completion_event` / `_append_failure_event` / `_append_source_index_event` / `_file_tree_lines` / `_resolution_failed` / `_failure_reason` / `_sse` / `_plain`）从 `core/graph.py` 平移到 `manager.py`；`core/graph.py` 只保留 `GraphState` + `build_graph_state`，聚焦"状态定义与图构建"，不再做事件组装与 SSE 收口。
+- cancel 外置：`run_completion_graph_stream` 新增可选 `should_stop` 回调，在每步之间检查外部取消信号并决定是否以 `completion.cancelled` 收口；从 `GraphState` 移除 `cancel_requested` 字段，`core/loop.py` 的 `should_continue` / `should_continue_after_tools` 不再读取消，loop 回归纯 model/tool 循环。取消判定收敛到 manager（`_produce` 注入 `should_stop=lambda: self.cancel_requested`，`terminate()` 不再写 `state.cancel_requested`）。
+- 同步 `service/file_extraction_agent/docs/DESIGN.md`、`agent_loop.md`、`flowchart.md` 及测试文档（`test_graph.md`、`test_manager.md`）。
+
+### 当前进展
+
+- `tests/file_extraction_agent` + `routes/test_file_extraction_agent_route.py` 全量 `86 passed`（agent/.venv）。
+
+### 下一步
+
+- 评估 backend 侧对「并行 tool_calls 事件顺序乱序」的适配（本轮未处理残缺 tool_calls）。
+
 ## 2026-09-03 16:09:12
 
 ### 已完成工作

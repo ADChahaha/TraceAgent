@@ -204,7 +204,9 @@ runtime.cancel_requested=false
 ActiveCompletion（单 completion 的运行时）
   -> 持有 state + resolution_model + 本 completion 专属 queue + threading.Lock
   -> stream() 首次迭代启动 producer 线程并消费队列产 SSE；finally 清理 workspace
-  -> _produce() 后台线程目标，跑 core/graph.run_completion_graph_stream(state, model) 并投事件
+  -> _produce() 后台线程目标，跑 manager.run_completion_graph_stream(state, model,
+     should_stop=lambda: self.cancel_requested) 并投事件；cancel 检查在 manager 外部，
+     loop 本身不感知取消
   -> terminate()/get_status()：取消 / 查询状态
    -> cancel_requested/status/closed 只能通过方法读写
    -> 状态检查、状态变更和 queue.put 必须在同一个 runtime lock 临界区里完成
@@ -522,9 +524,9 @@ core/documents.py
   -> 分块输入由 core/tools/embedding/index.py 的 _build_streams/_md_files_under 收集
 
 core/graph.py
-  -> 定义 GraphState 与 build_graph_state
-  -> 组装 completion.created/source_indexed/resolution/terminal event
-  -> 把事件序列化成 SSE 字符串
+  -> 定义 GraphState 与 build_graph_state（单 completion 的运行状态累积器）
+  -> 不做事件组装与 SSE 写出；一轮 completion 的事件组装与终态收口由
+     manager.run_completion_graph_stream 负责
 
 core/tools/              # 工具包：每个工具一个文件，统一由 __init__ 暴露 build_tools
   -> __init__.py 对外统一接口 build_tools(state)，转出 _ls/_grep/_read/_search_embedding
@@ -556,8 +558,12 @@ core/model.py
 manager.py
   -> prepare_completion_state(...) 做入口校验（非空、filename/html 非空）、
      派生 workspace_root、触发 materialize_tree 落盘并产出 GraphState（失败抛 ValueError）
+  -> run_completion_graph_stream(...)：把一轮 completion 的事件（completion.created /
+     source_indexed / resolution / terminal）组装成 SSE，并在结尾按终止类型选终态；
+     接受可选的 should_stop 回调，用于在每一步间检查外部取消信号
   -> ActiveCompletion：单 completion 的运行时，持有 state + resolution_model + 专属 queue + 锁；
-     stream()（起 producer 线程 + 消费队列产 SSE + finally 清理）、_produce()（跑 agent loop 投事件）、
+     stream()（起 producer 线程 + 消费队列产 SSE + finally 清理）、_produce()（跑
+     run_completion_graph_stream 并注入 should_stop=lambda: self.cancel_requested 投事件）、
      terminate()/get_status()；事件通道与终态由锁线性化
   -> CompletionManager：多 completion 的注册表 + create 装配（state+model -> ActiveCompletion -> 注册 ->
      返回 stream）+ terminate/status 转发 + _managed_stream 收尾移除注册表

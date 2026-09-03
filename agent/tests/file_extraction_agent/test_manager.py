@@ -25,7 +25,7 @@ def test_create_completion_stream_builds_completion_input_and_runs_graph(monkeyp
         captured["config"] = config
         return "resolution-model"
 
-    def fake_run_completion_graph_stream(state, resolution_model):
+    def fake_run_completion_graph_stream(state, resolution_model, **kwargs):
         captured["completion_id"] = state.completion_id
         captured["document_root"] = str(state.document.root)
         captured["messages"] = state.messages
@@ -80,7 +80,7 @@ def test_create_completion_stream_registers_active_completion_before_iteration(m
     def fake_build_resolution_model(config):
         return "resolution-model"
 
-    def fake_run_completion_graph_stream(completion_input, resolution_model):
+    def fake_run_completion_graph_stream(completion_input, resolution_model, **kwargs):
         del completion_input, resolution_model
         graph_called.set()
         yield 'event: completion.completed\ndata: {"id":"cmp_early_cancel"}\n\n'
@@ -112,7 +112,7 @@ def test_create_completion_stream_cancel_does_not_wait_for_blocked_graph(monkeyp
         del config
         return "resolution-model"
 
-    def fake_run_completion_graph_stream(completion_input, resolution_model):
+    def fake_run_completion_graph_stream(completion_input, resolution_model, **kwargs):
         del completion_input, resolution_model
         graph_started.set()
         release_graph.wait(timeout=1.0)
@@ -162,7 +162,7 @@ def test_create_completion_stream_flushes_committed_events_before_cancel(monkeyp
         del config
         return "resolution-model"
 
-    def fake_run_completion_graph_stream(completion_input, resolution_model):
+    def fake_run_completion_graph_stream(completion_input, resolution_model, **kwargs):
         del completion_input, resolution_model
         yield 'event: model_message\ndata: {"type":"model_message","content":"first"}\n\n'
         second_event_reached_graph.set()
@@ -200,6 +200,52 @@ def test_create_completion_stream_flushes_committed_events_before_cancel(monkeyp
     assert manager.terminate("cmp_flush") == {"id": "cmp_flush", "status": "not_found"}
 
 
+def test_should_stop_is_wired_to_cancel_requested(monkeypatch):
+    batch_running = threading.Event()
+    release_batch = threading.Event()
+    seen_should_stop = {"value": None}
+
+    def fake_build_resolution_model(config):
+        del config
+        return "resolution-model"
+
+    def fake_run_completion_graph_stream(state, resolution_model, **kwargs):
+        del state, resolution_model
+        seen_should_stop["value"] = kwargs.get("should_stop")
+        batch_running.set()
+        release_batch.wait(timeout=1.0)
+        yield 'event: completion.completed\ndata: {"id":"cmp_ws","type":"completion.completed","status":"completed"}\n\n'
+
+    monkeypatch.setattr("service.file_extraction_agent.manager.build_resolution_model", fake_build_resolution_model)
+    monkeypatch.setattr("service.file_extraction_agent.manager.run_completion_graph_stream", fake_run_completion_graph_stream)
+
+    manager = CompletionManager()
+    stream = manager.create(
+        completion_id="cmp_ws",
+        documents=[InputDocument(filename="notice.html", html='<p id="p1">通知</p>')],
+        messages=[DocumentQaMessage(role="user", content="问题")],
+        model_config=ModelConfig(model_name="resolution"),
+    )
+    stream_done = threading.Event()
+
+    def consume_stream():
+        list(stream)
+        stream_done.set()
+
+    consumer_thread = threading.Thread(target=consume_stream, daemon=True)
+    consumer_thread.start()
+
+    assert batch_running.wait(timeout=0.5)
+    assert callable(seen_should_stop["value"])
+    assert seen_should_stop["value"]() is False
+    assert manager.terminate("cmp_ws") == {"id": "cmp_ws", "status": "cancelling"}
+    assert seen_should_stop["value"]() is True
+    release_batch.set()
+    consumer_thread.join(timeout=1.0)
+    assert stream_done.is_set() is True
+    assert manager.terminate("cmp_ws") == {"id": "cmp_ws", "status": "not_found"}
+
+
 def test_terminate_defers_cancel_until_active_tool_batch_settles(monkeypatch):
     batch_running = threading.Event()
     release_batch = threading.Event()
@@ -208,7 +254,7 @@ def test_terminate_defers_cancel_until_active_tool_batch_settles(monkeypatch):
         del config
         return "resolution-model"
 
-    def fake_run_completion_graph_stream(state, resolution_model):
+    def fake_run_completion_graph_stream(state, resolution_model, **kwargs):
         del resolution_model
         with state.events_lock:
             state.tool_batch_active = True
@@ -261,7 +307,7 @@ def test_terminate_defers_cancel_until_active_tool_batch_settles(monkeypatch):
         del config
         return "resolution-model"
 
-    def fake_run_completion_graph_stream(completion_input, resolution_model):
+    def fake_run_completion_graph_stream(completion_input, resolution_model, **kwargs):
         del completion_input, resolution_model
         graph_can_complete.wait(timeout=1.0)
         yield 'event: completion.completed\ndata: {"id":"cmp_race","type":"completion.completed","status":"completed"}\n\n'
@@ -486,7 +532,7 @@ def test_completion_manager_create_runs_graph_and_returns_sse(monkeypatch):
         captured["config"] = config
         return "resolution-model"
 
-    def fake_run_completion_graph_stream(state, resolution_model):
+    def fake_run_completion_graph_stream(state, resolution_model, **kwargs):
         captured["completion_id"] = state.completion_id
         captured["messages"] = state.messages
         captured["model"] = resolution_model
@@ -518,7 +564,7 @@ def test_completion_manager_create_registers_before_iteration_and_terminate_canc
         del config
         return "resolution-model"
 
-    def fake_run_completion_graph_stream(state, resolution_model):
+    def fake_run_completion_graph_stream(state, resolution_model, **kwargs):
         del state, resolution_model
         graph_called.set()
         yield 'event: completion.completed\ndata: {"id":"cmp_mgr_cancel"}\n\n'

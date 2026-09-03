@@ -156,16 +156,13 @@ def build_resolution_graph(
         return {"messages": tool_messages}
 
     def should_continue(graph_state: MessagesState):
-        if getattr(state, "cancel_requested", False):
-            return END
         last_message = graph_state["messages"][-1]
         if getattr(last_message, "tool_calls", None):
             return "tools"
         return END
 
     def should_continue_after_tools(graph_state: MessagesState):
-        if getattr(state, "cancel_requested", False):
-            return END
+        del graph_state
         return "agent"
 
     graph = StateGraph(MessagesState)

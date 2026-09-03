@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import json
 
-from service.file_extraction_agent.core.graph import run_completion_graph_stream
-from service.file_extraction_agent.manager import prepare_completion_state
+from service.file_extraction_agent.manager import prepare_completion_state, run_completion_graph_stream
 from service.file_extraction_agent.schemas import DocumentQaMessage, InputDocument
 
 
@@ -95,3 +94,45 @@ def test_run_completion_graph_stream_flushes_after_each_tool_call(tmp_path):
     assert tool_started["type"] == "tool_started"
     assert tool_started["tool"] == "ls"
     assert len(model.calls) == 3
+
+
+def test_run_completion_graph_stream_honors_external_should_stop(tmp_path):
+    class StopAfterFirstModel:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, messages):
+            del messages
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "tool_name": "ls",
+                    "content": "我先看结构。",
+                    "arguments": {"path": ""},
+                }
+            return {"content": "最终答案。"}
+
+    stop_after = {"value": False}
+    state = _input(tmp_path)
+    events = list(
+        run_completion_graph_stream(
+            state,
+            StopAfterFirstModel(),
+            should_stop=lambda: stop_after["value"],
+        )
+    )
+    payloads = _sse_payloads(events)
+    assert payloads[-1]["type"] == "completion.completed"
+    assert state.events[-1]["type"] != "completion.cancelled"
+
+    stop_after["value"] = True
+    state2 = _input(tmp_path)
+    events2 = list(
+        run_completion_graph_stream(
+            state2,
+            StopAfterFirstModel(),
+            should_stop=lambda: stop_after["value"],
+        )
+    )
+    payloads2 = _sse_payloads(events2)
+    assert payloads2[-1]["type"] == "completion.cancelled"
