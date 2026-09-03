@@ -46,13 +46,6 @@ class EmbeddingModel:
         self.tokenize = tokenize
         self.dimension = dim
 
-    def empty_index(self) -> Any:
-        import numpy as np
-
-        from service.file_extraction_agent.core.tools.embedding.search import EmbeddingIndex
-
-        return EmbeddingIndex(model_id="", chunks=[], vectors=np.zeros((0, 0), dtype=np.float32), dimension=0)
-
 
 def get_embedder(
     model_id: str | None = None,

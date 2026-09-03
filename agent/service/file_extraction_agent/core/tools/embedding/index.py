@@ -50,7 +50,7 @@ def _get_index(state: Any, embedder: Any, scope: str = "") -> Any:
 
     streams = _build_streams(state)
     if not streams:
-        return embedder.empty_index() if hasattr(embedder, "empty_index") else _empty_index()
+        return _empty_index()
     from service.file_extraction_agent.core.tools.embedding.model import (
         DEFAULT_EMBEDDING_MODEL,
         get_tokenizer,
