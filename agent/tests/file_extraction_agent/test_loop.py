@@ -200,6 +200,63 @@ def test_resolution_graph_preserves_parallel_tool_calls(tmp_path):
     assert [call["name"] for call in model_events[0]["tool_calls"]] == ["ls", "read"]
 
 
+def test_tool_batch_active_spans_message_and_tool_execution(tmp_path, monkeypatch):
+    import threading
+
+    from service.file_extraction_agent.core.loop import build_resolution_graph
+
+    state = _state(tmp_path)
+    batch_observed = threading.Event()
+    release_batch = threading.Event()
+
+    class MultiToolModel:
+        def __init__(self):
+            self.calls = 0
+
+        def bind_tools(self, tools, **kwargs):
+            del tools, kwargs
+            return self
+
+        def stream(self, messages):
+            del messages
+            self.calls += 1
+            if self.calls > 1:
+                yield AIMessageChunk(content="完成。", response_metadata={"finish_reason": "stop"})
+                return
+            yield AIMessageChunk(
+                content="我先查结构。",
+                tool_call_chunks=[
+                    {"type": "tool_call_chunk", "name": "ls", "args": '{"path":""}', "id": "call-1", "index": 0},
+                ],
+            )
+
+    def fake_ls_result(state, path):
+        del state, path
+        batch_observed.set()
+        release_batch.wait(timeout=1.0)
+        return {"ok": True, "text": "blocked"}
+
+    monkeypatch.setattr("service.file_extraction_agent.core.tools.ls._ls_result", fake_ls_result)
+
+    model = MultiToolModel()
+    graph = build_resolution_graph(model, build_tools(state), state)
+
+    def run_graph():
+        try:
+            list(graph.stream({"messages": build_resolution_messages(state)}, config={"recursion_limit": 4}))
+        finally:
+            release_batch.set()
+
+    thread = threading.Thread(target=run_graph, daemon=True)
+    thread.start()
+
+    assert batch_observed.wait(timeout=0.5)
+    with state.events_lock:
+        assert state.tool_batch_active is True
+    release_batch.set()
+    thread.join(timeout=1.0)
+
+
 def test_resolution_uses_responses_api_stream_and_merges_content_with_tool_calls():
     class StreamingModel:
         def __init__(self):
@@ -510,3 +567,63 @@ def test_resolution_records_model_message_content_and_tool_calls_without_reasoni
         "tool_calls": [{"id": "call-1", "name": "ls", "args": {"path": ""}}],
         "is_final": False,
     }
+
+
+def test_parallel_tool_executor_runs_all_calls_concurrently(tmp_path):
+    import threading
+
+    from service.file_extraction_agent.core.loop import _execute_tools_parallel
+
+    state = _state(tmp_path)
+    gate = threading.Event()
+
+    class GatedTool:
+        name = "read"
+
+        def invoke(self, args):
+            del args
+            gate.wait(timeout=1.0)
+            return {"ok": True, "text": "done"}
+
+    class FastTool:
+        name = "ls"
+
+        def invoke(self, args):
+            del args
+            gate.set()
+            return {"ok": True, "text": "root"}
+
+    calls = [
+        {"id": "call-1", "name": "ls", "args": {"path": ""}},
+        {"id": "call-2", "name": "read", "args": {"path": "/x"}},
+    ]
+
+    result = _execute_tools_parallel(state, calls, tools=[FastTool(), GatedTool()], timeout=1.0)
+
+    assert len(result) == 2
+    assert {getattr(m, "tool_call_id", None) for m in result} == {"call-1", "call-2"}
+
+
+def test_parallel_tool_executor_times_out_slow_call(tmp_path):
+    import time
+
+    from service.file_extraction_agent.core.loop import _execute_tools_parallel
+
+    state = _state(tmp_path)
+
+    class SlowTool:
+        name = "read"
+
+        def invoke(self, args):
+            del args
+            time.sleep(2.0)
+            return {"ok": True, "text": "late"}
+
+    calls = [{"id": "call-1", "name": "read", "args": {"path": "/x"}}]
+
+    result = _execute_tools_parallel(state, calls, tools=[SlowTool()], timeout=0.05)
+
+    assert len(result) == 1
+    message = result[0]
+    assert message.tool_call_id == "call-1"
+    assert "timeout" in (getattr(message, "content", "") or "").lower()

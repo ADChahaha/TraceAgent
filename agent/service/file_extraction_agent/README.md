@@ -19,7 +19,7 @@ completion_id + documents + messages + run_options
   -> completion_manager.create / manager.prepare_completion_state 校验 completion_id 非空
   -> manager.prepare_completion_state 校验 documents 非空、每个 document 有 filename/html
   -> manager.prepare_completion_state 校验 messages 非空、每条 message.content 非空
-  -> manager.prepare_completion_state 归一化 run_options(max_tool_calls > 0)
+  -> manager.prepare_completion_state 归一化 run_options(max_tool_calls 不再作为硬限)
   -> documents.materialize_tree 解析 HTML，落盘真实文件树（DocumentFileTree）
   -> ActiveCompletion(completion_id, state, model) 注册进 CompletionManager
   -> graph 输出 completion.created 和 source_indexed(workspace_root + tree)

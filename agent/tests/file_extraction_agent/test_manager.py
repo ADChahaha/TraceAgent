@@ -200,7 +200,61 @@ def test_create_completion_stream_flushes_committed_events_before_cancel(monkeyp
     assert manager.terminate("cmp_flush") == {"id": "cmp_flush", "status": "not_found"}
 
 
-def test_create_completion_stream_emits_only_one_terminal_event_when_cancel_races_completed(monkeypatch):
+def test_terminate_defers_cancel_until_active_tool_batch_settles(monkeypatch):
+    batch_running = threading.Event()
+    release_batch = threading.Event()
+
+    def fake_build_resolution_model(config):
+        del config
+        return "resolution-model"
+
+    def fake_run_completion_graph_stream(state, resolution_model):
+        del resolution_model
+        with state.events_lock:
+            state.tool_batch_active = True
+        batch_running.set()
+        release_batch.wait(timeout=1.0)
+        yield 'event: tool_completed\ndata: {"id":"cmp_deferred","type":"tool_completed","tool":"read"}\n\n'
+        with state.events_lock:
+            state.tool_batch_active = False
+        yield 'event: completion.cancelled\ndata: {"id":"cmp_deferred","type":"completion.cancelled","status":"cancelled"}\n\n'
+
+    monkeypatch.setattr("service.file_extraction_agent.manager.build_resolution_model", fake_build_resolution_model)
+    monkeypatch.setattr("service.file_extraction_agent.manager.run_completion_graph_stream", fake_run_completion_graph_stream)
+
+    manager = CompletionManager()
+    stream = manager.create(
+        completion_id="cmp_deferred",
+        documents=[InputDocument(filename="notice.html", html='<p id="p1">通知</p>')],
+        messages=[DocumentQaMessage(role="user", content="问题")],
+        model_config=ModelConfig(model_name="resolution"),
+    )
+    events: list[str] = []
+    stream_done = threading.Event()
+
+    def consume_stream():
+        events.extend(list(stream))
+        stream_done.set()
+
+    consumer_thread = threading.Thread(target=consume_stream, daemon=True)
+    consumer_thread.start()
+
+    assert batch_running.wait(timeout=0.5)
+    assert manager.terminate("cmp_deferred") == {"id": "cmp_deferred", "status": "cancelling"}
+    try:
+        assert stream_done.wait(timeout=0.25) is False
+    finally:
+        release_batch.set()
+        consumer_thread.join(timeout=1.0)
+
+    tool_events = [event for event in events if "tool_completed" in event]
+    assert tool_events == [
+        'event: tool_completed\ndata: {"id":"cmp_deferred","type":"tool_completed","tool":"read"}\n\n'
+    ]
+    assert events[-1] == (
+        'event: completion.cancelled\ndata: {"id":"cmp_deferred","type":"completion.cancelled","status":"cancelled"}\n\n'
+    )
+    assert manager.terminate("cmp_deferred") == {"id": "cmp_deferred", "status": "not_found"}
     graph_can_complete = threading.Event()
 
     def fake_build_resolution_model(config):

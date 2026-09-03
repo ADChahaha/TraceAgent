@@ -62,19 +62,30 @@ def run_tool(
 
 
 def record_action(state: Any, tool_name: str, args: dict[str, Any], result: dict[str, Any]) -> None:
-    state.actions.append(
-        {
-            "tool_name": tool_name,
-            "args": args,
-            "result": result,
-        }
-    )
+    action = {
+        "tool_name": tool_name,
+        "args": args,
+        "result": result,
+    }
+    lock = getattr(state, "events_lock", None)
+    if lock is not None:
+        with lock:
+            state.actions.append(action)
+    else:
+        state.actions.append(action)
 
 
 def emit_event(state: Any, payload: dict[str, Any]) -> None:
-    event = {"seq": state.next_seq, **payload}
-    state.next_seq += 1
-    state.events.append(event)
+    lock = getattr(state, "events_lock", None)
+    if lock is not None:
+        with lock:
+            event = {"seq": state.next_seq, **payload}
+            state.next_seq += 1
+            state.events.append(event)
+    else:
+        event = {"seq": state.next_seq, **payload}
+        state.next_seq += 1
+        state.events.append(event)
 
 
 def expose_entries(entries: list[Any]) -> list[dict[str, Any]]:

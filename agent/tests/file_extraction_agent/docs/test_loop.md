@@ -16,9 +16,9 @@ GraphState(messages + DocumentFileTree)
   -> model.stream / model.invoke 产生 assistant content 和 tool call
   -> _invoke_model_message 校验 provider stop signal 与 tool_calls 是否一致
   -> provider attempt 失败时按 Ethernet 式随机指数退避后进入下一 attempt
-  -> 同轮多个 tool call 保留在同一条 AIMessage 中并交给 ToolNode 执行
+  -> 同轮多个 tool call 保留在同一条 AIMessage 中并交由并行执行器处理
   -> _record_model_message 记录用户可见 content、工具调用摘要和 is_final/stop_signal
-  -> ToolNode 执行 ls/grep/read
+  -> 并行执行器 _execute_tools_parallel 并发执行 ls/grep/read，套 tool_execution_timeout 超时
   -> terminal stop signal 且没有 tool call 时结束本轮 completion
 ```
 
@@ -26,12 +26,25 @@ GraphState(messages + DocumentFileTree)
 模型只通过真实文件路径引用 block。测试里的 `prepare_completion_state` 输入已全部
 强类型化（`list[InputDocument]` / `list[DocumentQaMessage]`），并直接产出 `GraphState`。
 
+与旧的单一 `ToolNode` 串行执行不同，当前实现把同一条 assistant 消息里的多个
+tool_calls 交给 `_execute_tools_parallel` 并发执行：每个工具调用仍是 `run_tool`
+骨架（产出 `tool_started/tool_completed/tool_failed` 事件并记录 action），但多次
+调用在 `ThreadPoolExecutor` 中并行，各自带 `tool_execution_timeout`（默认 60s，
+可配置）；超时的工具返回 `{ok:false, errors:[{message:"tool execution timeout"}]}`
+的错误结果，不会无限挂住整个批次。事件/action/seq 通过 `GraphState.events_lock`
+保证并发写入有序、seq 唯一不丢。`max_tool_calls` 不再作为总调用次数硬限，
+resolution 的 `recursion_limit` 改用固定的 `RESOLUTION_RECURSION_LIMIT`，让循环
+由模型 terminal stop signal、tool 超时与 cancel 协作收敛。
+
 ## 测试函数
 
 - `test_resolution_messages_describe_qa_investigation_not_field_extraction`：验证 prompt 说明 QA 调查流程和 evidence 规则（真实路径块链接），要求过程消息用可读 label、最终回答用数字 label、citation 紧跟被支撑句子，不汇总成一个总 `Sources` 区；同时验证不再出现 `task_spec/write_field/submit_result` 字段抽取语义，system prompt 不再接收 memory context。
 - `test_resolution_prompt_allows_direct_answers_without_forced_document_search`：验证 prompt 明确允许身份、能力和已有上下文可回答的问题直接回答，只有用户询问文档内容、要求证据或上下文不清楚时才使用文档工具；同时确认 prompt 使用 `ls / grep / read` 命名，避免把结构浏览工具描述成递归 `tree`，并避免用 `Show your thought process` 诱导隐藏推理。
 - `test_resolution_messages_preserve_openai_tool_history`：验证历史 assistant tool_calls 和 tool 结果会保留为真实 chat/tool message；最新用户消息仍是模型看到的最后一条 human 消息。
 - `test_resolution_graph_preserves_parallel_tool_calls`：验证 provider 同轮返回多个 tool call 时，resolution graph 会保留完整 tool_calls 摘要，并按顺序执行这些工具。
+- `test_parallel_tool_executor_runs_all_calls_concurrently`：直接验证 `_execute_tools_parallel` 会把同一批多个 tool_calls 并发执行（用一个 gate 证明两个工具同时进入执行而非串行等待），且各自返回带匹配 `tool_call_id` 的 `ToolMessage`。
+- `test_parallel_tool_executor_times_out_slow_call`：验证慢工具在超过 `tool_execution_timeout` 后返回带 `tool execution timeout` 结果的 `ToolMessage`，不会无限阻塞整个批次。
+- `test_tool_batch_active_spans_message_and_tool_execution`：验证「assistant 消息 + 整批 tool 执行」作为一个原子单元——模型产出带 tool_calls 的消息时 `tool_batch_active` 即被置位，直到该批工具执行完后才复位，从而让这一整段时间内的 cancel 走 deferred 收口、保证 tool 结果完整。
 - `test_resolution_uses_responses_api_stream_and_merges_content_with_tool_calls`：确认 stream 调用能把 text chunk 和 tool call chunk 合并成带 content 和 tool_calls 的 `AIMessage`。
 - `test_resolution_falls_back_from_stream_to_invoke_within_configured_transport`：确认一个已配置 transport 内 stream 失败后会降级到同 transport 的非流 invoke，不承担跨 Responses/chat-completions 自动切换。
 - `test_resolution_uses_ethernet_backoff_between_failed_provider_attempts`：确认 provider attempt 失败后，会按 `[0, 2^k - 1]` slot 的随机指数退避等待，再进入下一 attempt。

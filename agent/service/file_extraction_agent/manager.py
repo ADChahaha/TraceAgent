@@ -42,8 +42,7 @@ def prepare_completion_state(
 ) -> GraphState:
     """Validate the strong-typed completion inputs and build the GraphState.
 
-    Raises ValueError when a required field is empty, a list is empty, or
-    max_tool_calls is not positive.
+    Raises ValueError when a required field is empty or a list is empty.
     """
 
     if not isinstance(completion_id, str) or not completion_id.strip():
@@ -80,8 +79,6 @@ def _validate_messages(messages: list[DocumentQaMessage]) -> list[DocumentQaMess
 
 def _normalize_run_options(run_options: RunOptions | None) -> RunOptions:
     options = run_options if run_options is not None else RunOptions()
-    if options.max_tool_calls <= 0:
-        raise ValueError("max_tool_calls must be positive")
     return options
 
 
@@ -124,7 +121,9 @@ class ActiveCompletion:
         self.cancel_requested = False
         self.closed = False
         self.terminal_committed = False
+        self._cancel_deferred = False
         self._lock = threading.Lock()
+        self._state_lock = getattr(state, "events_lock", None) or threading.Lock()
         self.queue: queue.Queue[str | object] = queue.Queue()
 
     def stream(self) -> Iterable[str]:
@@ -188,7 +187,13 @@ class ActiveCompletion:
                 return self.status
             self.cancel_requested = True
             self.status = "cancelling"
-            self.queue.put(_QUEUE_CANCEL)
+            with self._state_lock:
+                self.state.cancel_requested = True
+                batch_active = getattr(self.state, "tool_batch_active", False)
+            if not batch_active:
+                self.queue.put(_QUEUE_CANCEL)
+            else:
+                self._cancel_deferred = True
             return self.status
 
     def get_status(self) -> str:
@@ -196,9 +201,14 @@ class ActiveCompletion:
 
     def commit_events(self, events: Iterable[str]) -> bool:
         with self._lock:
-            if self.cancel_requested or self.closed or self.terminal_committed:
+            if self.closed or self.terminal_committed:
                 return False
-            for event in events:
+            if self.cancel_requested and not self._cancel_deferred:
+                return False
+            active_events = list(events)
+            for event in active_events:
+                if _is_terminal_event(event):
+                    continue
                 self.queue.put(event)
             return True
 
@@ -207,7 +217,9 @@ class ActiveCompletion:
 
     def commit_terminal_event(self, event: str, status: str) -> bool:
         with self._lock:
-            if self.cancel_requested or self.closed or self.terminal_committed:
+            if self.closed or self.terminal_committed:
+                return False
+            if self.cancel_requested and not (self._cancel_deferred and status == "cancelled"):
                 return False
             self.terminal_committed = True
             self.status = status

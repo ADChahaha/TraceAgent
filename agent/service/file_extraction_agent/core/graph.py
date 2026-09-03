@@ -9,6 +9,7 @@ completion 的事件（completion.created / source_indexed / resolution / termin
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import asdict, dataclass, field, is_dataclass
 from typing import Any, Iterable
 
@@ -29,6 +30,9 @@ class GraphState:
     current_model_content: str = ""
     next_seq: int = 1
     failed_stage: str | None = None
+    events_lock: threading.Lock = field(default_factory=threading.Lock)
+    cancel_requested: bool = False
+    tool_batch_active: bool = False
 
 
 def build_graph_state(
@@ -72,7 +76,9 @@ def run_completion_graph_stream(
         yield _sse(state.events[emitted])
         emitted += 1
 
-    if _resolution_failed(outcome):
+    if getattr(state, "cancel_requested", False):
+        _append_completion_event(state, "completion.cancelled", status="cancelled")
+    elif _resolution_failed(outcome):
         _append_completion_event(state, "completion.failed", status="failed", error=_failure_reason(outcome))
     else:
         _append_completion_event(state, "completion.completed", status="completed")

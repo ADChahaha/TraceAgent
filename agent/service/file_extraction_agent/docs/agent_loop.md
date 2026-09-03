@@ -36,11 +36,12 @@ sequenceDiagram
 
 ```text
 agent 节点: _invoke_model_message -> _record_model_message(state, msg)
-  -> should_continue: state.actions >= max_tool_calls -> END
-                     最后一条消息有 tool_calls -> tools
-                     否则 -> END
-tools 节点: ToolNode 在 DocumentFileTree 上执行 ls / grep / read
-  -> 回到 agent
+  -> should_continue: cancel_requested -> END
+                      最后一条消息有 tool_calls -> tools
+                      否则 -> END
+tools 节点: _execute_tools_parallel 并发执行同批多个 tool_calls（ls / grep / read）
+  每个工具调用带 tool_execution_timeout 超时；事件/seq 由 events_lock 保证有序
+  -> should_continue_after_tools: cancel_requested -> END，否则回到 agent
 ```
 
-取消是协作式的：producer 只在每次提交时检查状态位，不在 provider 内部强制终止。
+取消是协作式的：producer 只在安全的工具批次边界检查 `state.cancel_requested`。若取消到达时正在执行工具批次，会等该批次跑完（或超时）后以 `completion.cancelled` 收口；否则由 cancel sentinel 立即收口。

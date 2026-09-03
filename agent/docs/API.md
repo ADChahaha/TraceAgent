@@ -99,7 +99,7 @@ POST /v1/document-qa/chat/completions
 - `messages[]`：必填，多轮对话消息，role 支持 `system` / `user` / `assistant` / `tool`，`content` 必须非空；backend 只追加新消息和工具结果，不自动裁剪或摘要。
 - `stream`：当前可传，但第一版总是返回 SSE。
 - `metadata`：可选，agent 目前不持久化；backend 可用于调试或未来扩展。
-- `run_options`：可选，目前支持 `max_tool_calls`，必须大于 0。
+- `run_options`：可选，目前支持 `tool_execution_timeout`（每个工具调用的执行超时，默认 60s）；`max_tool_calls` 保留字段但不再作为调用次数硬限。
 - `model_config`：可选，覆盖模型连接配置。
 - 扁平模型字段：`base_url`、`api_key` / `openai_api_key`、`model`、`api_transport`、`temperature`、`top_p`、`top_k`。
 
@@ -133,10 +133,12 @@ ChatCompletionRequest
   -> documents 把多份 HTML 落盘成真实文件树（DocumentFileTree）
   -> graph 先输出 completion.created 和 source_indexed（workspace_root + tree）
   -> loop 构建 QA prompt，暴露 ls / grep / read
-  -> 模型边回答边调用工具，过程消息用真实 .md 文件路径 Markdown link 引用证据
+  -> 模型边回答边调用工具，同一批多个 tool_calls 交给 _execute_tools_parallel 并行执行
+     （每个工具调用带 tool_execution_timeout 超时），过程消息用真实 .md 文件路径 Markdown link 引用证据
   -> 无 tool_calls 且 provider terminal stop signal 的 model_message 带 is_final=true
   -> graph 输出 completion.completed / completion.failed
-  -> manager 若收到 cancel flag，则输出 completion.cancelled
+  -> manager 若收到 cancel flag：无运行中工具批次时立即输出 completion.cancelled；
+     正在执行工具批次时等批次跑完（或超时）再收口
 ```
 
 ### SSE 事件

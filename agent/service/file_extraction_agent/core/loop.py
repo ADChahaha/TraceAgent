@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Iterable
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage, message_chunk_to_message
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import MessagesState
-from langgraph.prebuilt import ToolNode
 
 from service.file_extraction_agent.core.tools import build_tools
 from service.file_extraction_agent.core.model import ChatModelFallbackChain
@@ -18,6 +18,7 @@ from service.file_extraction_agent.core.model import ChatModelFallbackChain
 
 PROVIDER_ATTEMPT_LIMIT = 5
 PROVIDER_BACKOFF_SLOT_SECONDS = 0.25
+RESOLUTION_RECURSION_LIMIT = 10000
 
 
 def build_resolution_messages(state: Any) -> list[Any]:
@@ -118,7 +119,7 @@ def run_resolution_stream(
         output = None
         for output in graph.stream(
             {"messages": messages},
-            config={"recursion_limit": state.run_options.max_tool_calls * 2 + 10},
+            config={"recursion_limit": RESOLUTION_RECURSION_LIMIT},
         ):
             yield {"ok": None, "output": output}
         yield {"ok": True, "output": output}
@@ -132,32 +133,132 @@ def build_resolution_graph(
     state: Any,
 ):
     model = _bind_tools(resolution_model, tools)
-    tool_node = ToolNode(tools)
 
     def call_model(graph_state: MessagesState):
         message = _invoke_model_message(model, graph_state["messages"])
         _record_model_message(state, message)
+        if getattr(message, "tool_calls", None):
+            with state.events_lock:
+                state.tool_batch_active = True
         return {"messages": [message]}
 
+    def run_tools(graph_state: MessagesState):
+        last_message = graph_state["messages"][-1]
+        tool_calls = getattr(last_message, "tool_calls", None)
+        if not tool_calls:
+            return {"messages": []}
+        timeout = getattr(state.run_options, "tool_execution_timeout", 60.0)
+        try:
+            tool_messages = _execute_tools_parallel(state, tool_calls, tools, timeout=timeout)
+        finally:
+            with state.events_lock:
+                state.tool_batch_active = False
+        return {"messages": tool_messages}
+
     def should_continue(graph_state: MessagesState):
-        if len(state.actions) >= state.run_options.max_tool_calls:
+        if getattr(state, "cancel_requested", False):
             return END
         last_message = graph_state["messages"][-1]
         if getattr(last_message, "tool_calls", None):
             return "tools"
         return END
 
+    def should_continue_after_tools(graph_state: MessagesState):
+        if getattr(state, "cancel_requested", False):
+            return END
+        return "agent"
+
     graph = StateGraph(MessagesState)
     graph.add_node("agent", call_model)
-    graph.add_node("tools", tool_node)
+    graph.add_node("tools", run_tools)
     graph.set_entry_point("agent")
     graph.add_conditional_edges("agent", should_continue, {"tools": "tools", END: END})
-    graph.add_edge("tools", "agent")
+    graph.add_conditional_edges("tools", should_continue_after_tools, {"agent": "agent", END: END})
     return graph.compile()
 
 
 def _bind_tools(resolution_model: Any, tools: list[Any]) -> Any:
     return resolution_model.bind_tools(tools)
+
+
+def _execute_tools_parallel(
+    state: Any,
+    tool_calls: list[dict[str, Any]],
+    tools: list[Any],
+    timeout: float = 60.0,
+) -> list[Any]:
+    """Execute a batch of tool calls concurrently, each bounded by a timeout.
+
+    Each `tool_call` is `{"id": ..., "name": ..., "args": ...}`. Tools that
+    finish before the timeout return their ToolMessage; tools that exceed the
+    timeout produce a ToolMessage whose content reports a timeout instead of
+    blocking the batch forever. Results are returned in the original
+    `tool_calls` order so tool-call/tool-result pairing stays stable.
+    """
+
+    tool_map = {getattr(tool, "name", getattr(tool, "__name__", "")): tool for tool in tools}
+    results: dict[str, Any] = {}
+
+    def run_one(call: dict[str, Any]) -> None:
+        name = str(call.get("name") or "")
+        call_id = str(call.get("id") or "")
+        args = call.get("args") or {}
+        if call_id not in results:
+            results[call_id] = None
+        selected = tool_map.get(name)
+        if selected is None:
+            if results.get(call_id) is not None:
+                return
+            results[call_id] = ToolMessage(
+                content=json.dumps(_plain_json({"ok": False, "errors": [{"message": f"unknown tool: {name}"}]}), ensure_ascii=False),
+                tool_call_id=call_id,
+                name=name,
+            )
+            return
+        execute = getattr(selected, "invoke", None)
+        if callable(execute):
+            raw = execute(args)
+        else:
+            raw = selected(**args)
+        content = _plain_json(raw)
+        if isinstance(content, dict):
+            content = json.dumps(_plain_json(content), ensure_ascii=False)
+        else:
+            content = str(content or "")
+        if results.get(call_id) is not None:
+            return
+        results[call_id] = ToolMessage(content=content, tool_call_id=call_id, name=name)
+
+    pool = ThreadPoolExecutor(max_workers=max(1, len(tool_calls)))
+    futures = {pool.submit(run_one, call): call for call in tool_calls}
+    try:
+        for future, call in futures.items():
+            try:
+                future.result(timeout=timeout)
+            except Exception:
+                call_id = str(call.get("id") or "")
+                name = str(call.get("name") or "")
+                if results.get(call_id) is not None:
+                    continue
+                results[call_id] = ToolMessage(
+                    content=json.dumps(_plain_json({"ok": False, "errors": [{"message": "tool execution timeout"}]}), ensure_ascii=False),
+                    tool_call_id=call_id,
+                    name=name,
+                )
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+    ordered = []
+    for call in tool_calls:
+        message = results.get(str(call.get("id") or ""))
+        if message is None:
+            message = ToolMessage(
+                content=json.dumps(_plain_json({"ok": False, "errors": [{"message": "tool execution failed"}]}), ensure_ascii=False),
+                tool_call_id=str(call.get("id") or ""),
+                name=str(call.get("name") or ""),
+            )
+        ordered.append(message)
+    return ordered
 
 
 def _run_fake_model_loop_stream(
@@ -166,8 +267,7 @@ def _run_fake_model_loop_stream(
     messages: list[Any],
     tools: list[Any],
 ) -> Iterable[dict[str, Any]]:
-    tool_map = {getattr(tool, "name", getattr(tool, "__name__", "")): tool for tool in tools}
-    for _ in range(state.run_options.max_tool_calls):
+    while True:
         call = model.invoke(messages)
         content = _plain_json(_read(call, "content", ""))
         state.current_model_content = content if isinstance(content, str) else ""
@@ -178,14 +278,22 @@ def _run_fake_model_loop_stream(
         if not name:
             yield {"ok": True, "output": call}
             return
-        selected = tool_map.get(name)
-        if selected is None:
-            yield {"ok": False, "errors": [{"message": f"unknown tool: {name}"}]}
-            return
-        result = selected.invoke(args) if hasattr(selected, "invoke") else selected(**args)
-        messages.append({"tool": name, "result": result})
-        yield result
-    yield {"ok": False, "errors": [{"message": "max_tool_calls exceeded"}]}
+        timeout = getattr(state.run_options, "tool_execution_timeout", 60.0)
+        with state.events_lock:
+            state.tool_batch_active = True
+        try:
+            result = _execute_tools_parallel(
+                state,
+                [{"id": "call-0", "name": name, "args": args}],
+                tools,
+                timeout=timeout,
+            )[0]
+        finally:
+            with state.events_lock:
+                state.tool_batch_active = False
+        result_content = getattr(result, "content", "")
+        messages.append({"tool": name, "result": result_content})
+        yield {"ok": True, "output": result_content}
 
 
 def _supports_bind_tools(model: Any) -> bool:

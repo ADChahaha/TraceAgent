@@ -87,6 +87,7 @@ class ModelConfig:
 class RunOptions:
     max_tool_calls: int = 200
     workspace_root: str | None = None
+    tool_execution_timeout: float = 60.0
 
 
 __all__ = [

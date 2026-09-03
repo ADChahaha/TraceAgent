@@ -1,4 +1,23 @@
-last updated: 2026-09-02
+last updated: 2026-09-03
+
+## 2026-09-03 16:09:12
+
+### 已完成工作
+
+- `file_extraction_agent` QA completion 工具执行改为并行 + 超时：新增 `_execute_tools_parallel`（`core/loop.py`），单条 assistant 消息的多个 tool_calls 经 `ThreadPoolExecutor` 并发执行，各自带 `tool_execution_timeout`（`RunOptions` 新增，默认 60s）超时并返回 `tool execution timeout` 结果；保持返回顺序与 `tool_call_id` 匹配。
+- 移除 `ToolNode` 串行执行，LangGraph `tools` 节点改为 `run_tools`，新增 `should_continue_after_tools`，并让 `should_continue` 认 `cancel_requested`；`recursion_limit` 改为固定 `RESOLUTION_RECURSION_LIMIT`；`max_tool_calls` 不再作为硬限（`_normalize_run_options` 去掉 `>0` 校验）。
+- 线程安全：`GraphState` 新增 `events_lock`，`base.emit_event/record_action` 在锁内更新 `next_seq/events/actions`，保证并行写入 seq 唯一、不丢失。
+- cancel 语义分场景：`ActiveCompletion.terminate()` 仅当无运行中工具批次时立即放 cancel sentinel；若正在执行工具批次则记 `_cancel_deferred`，等批次跑完/超时后由 producer 以 `completion.cancelled` 收口（新 `test_terminate_defers_cancel_until_active_tool_batch_settles`）。`commit_events/commit_terminal_event` 允许 deferred cancel 批次事件继续入队。
+- 把「assistant 消息 + 整批 tool 执行」绑定为一个原子单元：模型产出带 tool_calls 的消息时（`core/loop.py` 的 `call_model` / fake loop）即置位 `tool_batch_active`，直到该批工具全部执行完（含各自超时产出的 timeout 占位结果，timeout 也是合法 tool 结果）才复位；从而让「产消息 → 批执行」整段时间内的 cancel 都走 deferred，保证 tool 结果不缺失。（新 `test_tool_batch_active_spans_message_and_tool_execution`）
+- 同步 `service/file_extraction_agent/docs/DESIGN.md`、`agent/docs/API.md`、`README.md`、`agent_loop.md` 及 `tests/file_extraction_agent/docs/test_loop.md`、`test_manager.md`。
+
+### 当前进展
+
+- `tests/file_extraction_agent` 全量 `75 passed`（agent/.venv）；含 `routes/test_file_extraction_agent_route.py` 共 `83 passed`。既有 `tests/document_processor` 1 例因 Windows GBK 编码读取失败（与本次改动无关）。
+
+### 下一步
+
+- 评估 backend 侧对「并行 tool_calls 事件顺序乱序」的适配（本轮未处理残缺 tool_calls）。
 
 ## 2026-09-02 16:31:42
 
