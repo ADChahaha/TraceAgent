@@ -30,6 +30,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from service.file_extraction_agent.core.documents import order_key
+
 DEFAULT_CHUNK_SIZE = int(os.getenv("EMBEDDING_CHUNK_SIZE", "256"))
 DEFAULT_CHUNK_OVERLAP = int(os.getenv("EMBEDDING_CHUNK_OVERLAP", "32"))
 EMBEDDING_INDEX_DIR = os.getenv(
@@ -103,7 +105,7 @@ def _md_files_under(root: Path) -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
 
     def walk(directory: Path) -> None:
-        for child in sorted(directory.iterdir(), key=lambda p: _order_key(p.name)):
+        for child in sorted(directory.iterdir(), key=lambda p: order_key(p.name)):
             if child.is_dir():
                 walk(child)
             elif child.is_file() and child.suffix == ".md":
@@ -202,16 +204,6 @@ def _empty_index() -> Any:
     from service.file_extraction_agent.core.tools.embedding.search import EmbeddingIndex
 
     return EmbeddingIndex(model_id="", chunks=[], vectors=np.zeros((0, 0), dtype=np.float32), dimension=0)
-
-
-def _order_key(name: str) -> int:
-    digits = ""
-    for char in name:
-        if char.isdigit():
-            digits += char
-        else:
-            break
-    return int(digits) if digits else 0
 
 
 __all__ = [

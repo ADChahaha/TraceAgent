@@ -16,12 +16,15 @@ run_tool(state, tool_name, args, execute)
   -> 返回 result
 ```
 
-`expose_entries`/`order_key` 等纯工具函数也放在这里，供各 tool 复用。
+`expose_entries` 等纯工具函数放在这里供各 tool 复用；`order_key` 为共享的文档树
+命名排序函数，来自 `core/documents.py`，此处仅重新导出。
 """
 
 from __future__ import annotations
 
 from typing import Any, Callable
+
+from service.file_extraction_agent.core.documents import order_key
 
 
 def run_tool(
@@ -79,16 +82,6 @@ def expose_entries(entries: list[Any]) -> list[dict[str, Any]]:
         {"name": entry.name, "path": entry.path, "kind": entry.kind, "order": entry.order}
         for entry in entries
     ]
-
-
-def order_key(name: str) -> int:
-    digits = ""
-    for char in name:
-        if char.isdigit():
-            digits += char
-        else:
-            break
-    return int(digits) if digits else 0
 
 
 __all__ = [

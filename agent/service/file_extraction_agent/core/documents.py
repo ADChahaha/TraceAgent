@@ -75,14 +75,14 @@ class DocumentFileTree:
 
         directory = self._resolve_directory(path)
         entries: list[FileEntry] = []
-        for child in sorted(directory.iterdir(), key=lambda p: _order_key(p.name)):
+        for child in sorted(directory.iterdir(), key=lambda p: order_key(p.name)):
             if child.is_dir():
                 entries.append(
-                    FileEntry(name=child.name, path=str(child), kind="dir", order=_order_key(child.name))
+                    FileEntry(name=child.name, path=str(child), kind="dir", order=order_key(child.name))
                 )
             elif child.is_file() and child.suffix == ".md":
                 entries.append(
-                    FileEntry(name=child.name, path=str(child), kind="md", order=_order_key(child.name))
+                    FileEntry(name=child.name, path=str(child), kind="md", order=order_key(child.name))
                 )
         return sorted(entries, key=lambda entry: entry.order)
 
@@ -357,7 +357,7 @@ def unique_name(base: str, used: dict[str, int]) -> str:
     return f"{base}-{used[base]}"
 
 
-def _order_key(name: str) -> int:
+def order_key(name: str) -> int:
     digits = ""
     for char in name:
         if char.isdigit():
@@ -396,4 +396,5 @@ __all__ = [
     "FileEntry",
     "DocumentFileTree",
     "materialize_tree",
+    "order_key",
 ]
