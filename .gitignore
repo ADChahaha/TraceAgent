@@ -15,6 +15,8 @@ backend/tmp/
 experiments/
 *.sqlite3
 *.sqlite3-*
+agent/data/
+temp_bekko_test/
 
 # Build outputs
 build/

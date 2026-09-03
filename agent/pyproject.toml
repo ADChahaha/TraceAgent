@@ -35,6 +35,11 @@ dev = [
     "Pillow>=10.0",
     "reportlab>=4.0",
 ]
+embeddings = [
+    "sentence-transformers>=3.0,<4",
+    "optimum-intel[openvino]>=1.24,<2",
+    "openvino>=2024.4",
+]
 
 [tool.setuptools]
 py-modules = ["main"]

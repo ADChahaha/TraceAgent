@@ -9,6 +9,7 @@ from service.file_extraction_agent.core.tools import (
     _grep,
     _ls,
     _read,
+    _search_embedding,
     build_tools,
 )
 from service.file_extraction_agent.manager import prepare_completion_state
@@ -66,7 +67,7 @@ def test_build_tools_exposes_qa_navigation_tools_only(tmp_path):
     tools = build_tools(_state(tmp_path))
     tool_names = [getattr(tool, "name", getattr(tool, "__name__", "")) for tool in tools]
 
-    assert tool_names == ["ls", "grep", "read"]
+    assert tool_names == ["ls", "grep", "read", "search_embedding"]
 
 
 def test_module_exports_qa_helpers_only():
@@ -113,7 +114,7 @@ def test_ls_lists_only_the_current_tree_level(tmp_path):
 def test_grep_returns_candidate_blocks_but_not_inline_evidence(tmp_path, monkeypatch):
     state = _state(tmp_path)
     monkeypatch.setattr(
-        "service.file_extraction_agent.core.tools._run_ripgrep",
+        "service.file_extraction_agent.core.tools.grep._run_ripgrep",
         lambda query, scope_dir, max_results: "001-something.md:Either party may terminate\n",
     )
 
@@ -143,7 +144,7 @@ def test_grep_can_scope_to_directory(tmp_path, monkeypatch):
         if sub.kind == "dir"
     )
     monkeypatch.setattr(
-        "service.file_extraction_agent.core.tools._run_ripgrep",
+        "service.file_extraction_agent.core.tools.grep._run_ripgrep",
         lambda query, scope_dir, max_results: "001-section.md:notice\n",
     )
 
@@ -155,8 +156,103 @@ def test_grep_can_scope_to_directory(tmp_path, monkeypatch):
 
 def test_grep_fails_gracefully_when_ripgrep_missing(tmp_path, monkeypatch):
     state = _state(tmp_path)
-    monkeypatch.setattr("service.file_extraction_agent.core.tools._run_ripgrep", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "service.file_extraction_agent.core.tools.grep._run_ripgrep", lambda *a, **k: None
+    )
 
     result = _grep(state, query="terminate", scope="", max_results=5)
 
     assert result["ok"] is False
+
+
+def _add_files_to(state, extra):
+    from pathlib import Path
+
+    doc_dir = next((e.path for e in state.document.entries() if e.kind == "dir"), None)
+    base = Path(doc_dir)
+    for name, text in extra:
+        (base / name).write_text(text, encoding="utf-8")
+
+
+def _fake_embedder(texts):
+    import numpy as np
+
+    rows = []
+    for text in texts:
+        n = sum(ord(ch) for ch in text) or 1
+        rows.append([float(n % 2), float(len(text) % 3), float(n % 5)])
+    return np.array(rows, dtype=np.float32)
+
+
+class _FakeEmbedder:
+    dim = 3
+
+    def encode(self, texts):
+        return _fake_embedder(texts)
+
+
+def _fake_index():
+    import numpy as np
+
+    from service.file_extraction_agent.core.tools.embedding.search import Chunk, EmbeddingIndex
+
+    chunks = [
+        Chunk(document="contract.pdf", chunk_id="contract.pdf#c1", text="Either party may terminate with notice.", token_range=(0, 6), covered_files=["/abs/0001/docs/0001-termination.md"]),
+        Chunk(document="contract.pdf", chunk_id="contract.pdf#c2", text="Payment is due within 30 days.", token_range=(6, 12), covered_files=["/abs/0001/docs/0003-terms.md"]),
+        Chunk(document="contract.pdf", chunk_id="contract.pdf#c3", text="Notice must be written in the same language.", token_range=(12, 18), covered_files=["/abs/0001/docs/0002-notice.md"]),
+    ]
+    vectors = _fake_embedder([chunk.text for chunk in chunks])
+    return EmbeddingIndex(model_id="fake-a8m", chunks=chunks, vectors=vectors, dimension=3)
+
+
+def _install_fake_index(monkeypatch):
+    fake_embedder = _FakeEmbedder()
+
+    def fake_get_index(state, embedder, scope=""):
+        return _fake_index()
+
+    monkeypatch.setattr("service.file_extraction_agent.core.tools.embedding._get_index", fake_get_index)
+    monkeypatch.setattr(
+        "service.file_extraction_agent.core.tools.embedding._get_embedder", lambda state: fake_embedder
+    )
+
+
+def test_search_embedding_returns_text_and_covered_files_sorted(tmp_path, monkeypatch):
+    state = _state(tmp_path)
+    _install_fake_index(monkeypatch)
+
+    result = _search_embedding(state, query="payment", top_k=3, scope="")
+
+    assert result["ok"] is True
+    assert result["query"] == "payment"
+    assert len(result["results"]) == 3
+    assert result["results"][0]["score"] >= result["results"][-1]["score"]
+    for item in result["results"]:
+        assert item["text"]
+        assert item["document"]
+        assert item["covered_files"]
+        assert item["chunk_id"]
+
+
+def test_search_embedding_returns_tool_events(tmp_path, monkeypatch):
+    state = _state(tmp_path)
+    _install_fake_index(monkeypatch)
+    before = len(state.events)
+
+    _search_embedding(state, query="payment", top_k=1, scope="")
+
+    event_types = [event["type"] for event in state.events[before:]]
+    assert event_types[0] == "tool_started"
+    assert event_types[-1] == "tool_completed"
+
+
+def test_search_embedding_rejects_empty_query(tmp_path, monkeypatch):
+    state = _state(tmp_path)
+    monkeypatch.setattr(
+        "service.file_extraction_agent.core.tools.embedding._get_embedder", lambda state: _fake_embedder
+    )
+
+    result = _search_embedding(state, query="   ", top_k=3, scope="")
+
+    assert result["ok"] is False
+    assert result["errors"][0]["code"] == "BAD_QUERY"

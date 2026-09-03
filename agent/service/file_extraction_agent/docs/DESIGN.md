@@ -4,6 +4,8 @@
 
 核心目标是**过程可追溯**：模型会在阅读过程中用真实文件路径的 Markdown evidence link 解释每个文档事实和阶段性判断；最终回答像 NotebookLM 一样把数字 evidence citation 紧跟在被支撑的句子后面。用户可以看到模型看了哪些文档、搜了什么、读了哪些 block 文件，以及每个最终结论句引用了哪些来源。
 
+**技术定位：Agentic RAG（工具式检索 + 可选的语义候选召回）。** 模型用 `ls / grep / read` 三个工具在真实文件树上按需检索（`grep` 走 ripgrep，是词法/稀疏检索），并可用第 4 个工具 `search_embedding` 做语义候选召回：它把当前文档按固定 token 窗口 + overlap 切 chunk（chunk 可在文档内跨多个 `.md` 块），对 chunk 与 query 做 embedding 余弦检索，返回带 `text` / `document` / `covered_files` 的候选 chunk。语义召回是词法检索的**补充**，不是替代——`search_embedding` 与 `grep` 一样只给候选，模型仍需 `read` 被覆盖的文件核对后才可引证，因此保留了证据可解释性。
+
 ## 1. 当前边界
 
 `file_extraction_agent` 只负责一次 QA completion 的执行，不负责上传文件、会话持久化、前端 SSE 续传或数据库写入。
@@ -18,6 +20,8 @@ backend 持久化 task / messages / documents / events
 ```
 
 第一版 agent 内部只保存 active completion 的内存状态，用于当前流和取消；它不保存完整历史消息，也不把 SQLite / LangGraph checkpointer 当成会话事实来源。
+
+**检索现状与演进**：当前检索是"工具式、词法级"（`grep`/ripgrep）为主，另增 `search_embedding` 作为**语义候选召回**补充（固定窗口分块 + 余弦检索 + 返回 chunk 文本与覆盖的 `.md` 块）。词法检索轻量可解释；`search_embedding` 覆盖"问句用词与文档用词不同"的语义改写召回。索引按内容哈希键持久化到磁盘复用，文档变更时自动失效。embedding 模型默认 `bekko-embedding-v1-a8m`（OpenVINO 后端），模型、分块窗口、索引目录均可用环境变量覆盖。
 
 配套草稿文档：
 
@@ -283,12 +287,13 @@ section 目录，不会因为第一个 `h1` 已经参与文档命名就被跳过
 
 ## 5. 工具设计
 
-当前只暴露三个模型工具：
+当前暴露四个模型工具：
 
 ```text
 ls(path="")
 grep(query, scope="", max_results=20)
 read(path="/abs/.../0001-section/0001-block.md")
+search_embedding(query, top_k=5, scope="")
 ```
 
 已删除旧字段抽取工具：`add_candidate_evidence`、`review_evidences`、
@@ -329,6 +334,26 @@ grep(query="termination", scope="/tmp/.../0001-contract/0001-Termination", max_r
 ```
 
 `grep` 只返回候选行，不是最终证据。模型需要继续 `read` 具体文件确认。
+
+### `search_embedding`
+
+`search_embedding` 是语义候选召回工具，用于 grep 命中不足或"问句用词与文档用词不同"的场景。它把当前 workspace 的每个文档（按文件树顺序拼接其全部 `.md` 块文本）切成固定 token 窗口 + overlap 的 chunk（chunk 可在文档内横跨多个 `.md` 块），再对 query 与各 chunk 做 embedding 余弦检索：
+
+```text
+search_embedding(query="early termination", top_k=5, scope="")
+  -> embedder.encode([query])                              # 惰性单例，OpenVINO/torch
+  -> index = _get_index(state, embedder)                    # 会话内缓存 -> 磁盘缓存(content hash) -> 构建落盘
+  -> search_top_k(query_vec, index, top_k)                  # 纯 numpy 余弦
+  -> 返回 [{score, document, chunk_id, text, token_range, covered_files}]
+```
+
+返回的每个候选 chunk 带：
+
+- `text`：chunk 原文，模型可直接用于理解与作答，无需额外 `read`。
+- `document`：chunk 归属的源文档名（文件树目录名），用于跨文档追踪。
+- `covered_files`：该 chunk 覆盖到的所有 `.md` 块绝对路径。chunk 在文档内跨块切分，因此可能列出多个 `.md` 文件；模型引证时引用其中任一真实路径即可。
+
+与 `grep` 一致，`search_embedding` 只返回候选 chunk，**不是最终证据**；模型应 `read` 被覆盖的文件核对后再引证，以保留证据可解释性。索引按内容哈希键持久化到磁盘复用，文档变更时自动失效重建。
 
 ### `read`
 
@@ -471,16 +496,28 @@ core/documents.py
   -> 解析语义 HTML
   -> 构建 DocumentFileTree（真实目录 + .md 文件）
   -> 提供 entries / read / scope_path；不再有 path_id / source_selectors / 句行级 selector
+  -> 分块输入由 core/tools/embedding/index.py 的 _build_streams/_md_files_under 收集
 
 core/graph.py
   -> 定义 GraphState 与 build_graph_state
   -> 组装 completion.created/source_indexed/resolution/terminal event
   -> 把事件序列化成 SSE 字符串
 
-core/tools.py
-  -> 构建 ls / grep / read
-  -> 每次工具调用写入 tool_started/tool_completed/tool_failed 事件
-  -> grep 用真实 rg 子进程返回原样 stdout；引用证据用真实 .md 文件路径
+core/tools/              # 工具包：每个工具一个文件，统一由 __init__ 暴露 build_tools
+  -> __init__.py 对外统一接口 build_tools(state)，转出 _ls/_grep/_read/_search_embedding
+     及可替身点 _run_ripgrep/_get_embedder/_get_index（供测试 monkeypatch）
+  -> base.py    共享骨架：run_tool（tool_started/tool_completed/tool_failed 事件 + action 记录）、
+     emit_event / record_action / expose_entries / order_key
+  -> ls.py      构建 ls 工具 + _ls / _ls_result
+  -> grep.py    构建 grep 工具 + _grep / _grep_output / _run_ripgrep（rg 子进程，引用证据用真实 .md 路径）
+  -> read.py    构建 read 工具 + _read / _read_result / _locator_error
+  -> embedding/  embedding 能力内聚子包（承载 search_embedding 工具）
+      __init__.py  search_embedding 工具（glue）+ _search_embedding / _get_embedder + 转出常量
+      model.py    真实模型惰性封装：get_embedder / get_tokenizer（不在 import 时加载 torch/OpenVINO）
+      search.py   纯 numpy 分块/索引/余弦检索：chunk_text / build_index / search_top_k
+      index.py    索引持久化 + 内容哈希缓存 key + _build_streams 收集文档流 + _get_index
+  core/tools 每次工具调用写入 tool_started/tool_completed/tool_failed 事件；
+  search_embedding 用纯 numpy 余弦返回候选 chunk（含 text/document/covered_files）
 
 core/loop.py
   -> 构建 QA system prompt，并保留 backend 传入的真实 chat/tool messages
