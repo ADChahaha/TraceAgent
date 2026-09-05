@@ -5,8 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from service.file_extraction_agent.core.graph import build_graph_state
-from service.file_extraction_agent.schemas import DocumentQaMessage
+from service.file_extraction_agent.schemas import DocumentQaMessage, RunOptions
 
 
 def test_qa_package_does_not_import_resource_builder():
@@ -25,11 +24,25 @@ def test_qa_package_does_not_import_resource_builder():
     assert dependencies == []
 
 
-def test_graph_state_only_carries_execution_inputs(resource_path):
-    state = build_graph_state(resource_path=resource_path,
-                              messages=[DocumentQaMessage(role="user", content="问题")])
-    assert set(vars(state)) == {"resource_path", "messages", "run_options"}
-    assert state.resource_path == resource_path
+def test_graph_only_keeps_messages_with_options_bound_outside():
+    from service.file_extraction_agent.core.graph import build_qa_graph
+    from service.file_extraction_agent.core.messages import build_qa_messages
+    from service.file_extraction_agent.core.model_invocation import _invoke_model_message
+    from service.file_extraction_agent.core.executor import _execute_tools_parallel
+    from unittest.mock import Mock
+    from langchain_core.messages import AIMessage
+    from service.file_extraction_agent.core.model import ChatModelFallbackChain, ModelCallAttempt
+
+    provider = Mock(spec=["bind_tools", "invoke"])
+    provider.bind_tools.return_value = provider
+    provider.invoke.return_value = AIMessage(content="回答", response_metadata={"finish_reason": "stop"})
+    model = ChatModelFallbackChain([ModelCallAttempt("test", provider, False)])
+    graph = build_qa_graph(model, [], run_options=RunOptions(tool_execution_timeout=0.1),
+                           invoke_model=_invoke_model_message, execute_tools=_execute_tools_parallel)
+    messages = build_qa_messages([DocumentQaMessage(role="user", content="问题")])
+    result = graph.invoke({"messages": messages})
+    assert set(result) == {"messages"}
+    assert [message.content for message in result["messages"]][-2:] == ["问题", "回答"]
 
 
 def test_tools_read_prepared_files_without_builder(resource_path, monkeypatch):

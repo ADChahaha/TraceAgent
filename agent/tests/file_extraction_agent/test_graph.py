@@ -4,12 +4,12 @@ from unittest.mock import Mock
 
 import pytest
 from langchain_core.messages import ToolMessage
-from service.file_extraction_agent import manager as manager_module
+from service.file_extraction_agent import completion_runtime as runtime_module
 
 from langchain_core.messages import AIMessage, AIMessageChunk
 from service.file_extraction_agent.core.model import ChatModelFallbackChain, ModelCallAttempt
 
-from service.file_extraction_agent.manager import stream_completion_events
+from service.file_extraction_agent.completion_runtime import stream_completion_events
 from service.file_extraction_agent.schemas import DocumentQaMessage
 
 
@@ -80,7 +80,7 @@ def test_cancel_after_model_drains_tools_without_next_model(resource_path):
 
 @pytest.mark.parametrize("cancelled", [False, True])
 def test_executor_failure_returns_entire_failed_batch(resource_path, monkeypatch, cancelled):
-    from service.file_extraction_agent.core import loop
+    from service.file_extraction_agent.core import executor
     stopped = False
     model, provider = _scripted_model()
     provider.invoke.side_effect = [AIMessage(content="读取", tool_calls=[
@@ -91,7 +91,7 @@ def test_executor_failure_returns_entire_failed_batch(resource_path, monkeypatch
         nonlocal stopped
         stopped = cancelled
         raise RuntimeError("执行中断")
-    monkeypatch.setattr(loop, "_execute_tools_parallel", fail)
+    monkeypatch.setattr(executor, "_execute_tools_parallel", fail)
     events = list(stream_completion_events(**_input(resource_path), qa_model=model, should_stop=lambda: stopped))
     replies = [e for e in events if e["type"] == "tool_failed"]
     assert [(e["tool_call_id"], e["args"]) for e in replies] == [("a", {"path": "first"}), ("b", {"path": "second"})]
@@ -109,7 +109,7 @@ def test_closing_event_stream_closes_message_generator(resource_path, monkeypatc
         finally:
             closed.append(True)
 
-    monkeypatch.setattr(manager_module, "run_qa_stream", messages)
+    monkeypatch.setattr(runtime_module, "run_qa_stream", messages)
     stream = stream_completion_events(**_input(resource_path), qa_model=object())
     next(stream)
     next(stream)

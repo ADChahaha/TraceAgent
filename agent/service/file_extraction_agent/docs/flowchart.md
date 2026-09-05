@@ -9,11 +9,11 @@ flowchart TD
     C --> D["返回 resource_path + documents"]
     D --> E["调用方保存路径与 HTML"]
     E --> F["POST /v1/document-qa/chat/completions: resource_path + messages"]
-    F --> G["manager 委托工具预检、创建问答模型、注册 ActiveCompletion"]
-    G --> H["GraphState 保存执行输入；工具层根据路径创建访问上下文"]
+    F --> G["manager 委托工具预检、创建问答模型、注册 CompletionRuntime"]
+    G --> H["loop 初始化工具并提供执行函数；graph 绑定节点/路由；图内仅 messages"]
     H --> I["LangGraph: 模型消息 / 完整工具结果批次"]
-    I --> J["manager 包装事件字典"]
-    J --> K["ActiveCompletion: queue → seq → SSE"]
+    I --> J["completion_runtime 包装事件字典"]
+    J --> K["CompletionRuntime: queue → seq → SSE"]
     K --> L["移除本轮运行时，保留资源"]
 ```
 

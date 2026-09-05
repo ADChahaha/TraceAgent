@@ -1,15 +1,17 @@
 # test_manager.py
 
-执行链路：委托工具层预检资源路径和索引 → 构建 runtime → 接收模型消息和工具结果批次 → 锁内队列提交 → consumer 分配 seq 并编码 SSE → 移除注册表，保留资源。
+执行链路：manager 委托工具层预检资源路径和索引 → 注册独立 completion_runtime.CompletionRuntime → 接收模型消息和工具结果批次 → 锁内队列提交 → consumer 分配 seq 并编码 SSE → 移除注册表，保留资源。
 
 取消批次按已提交模型事件中的调用 ID 跟踪；工具结果先配齐再关闭。旧 SSE 内容断言归一化掉 seq 后比较，独立完整流测试验证序号连续及终态唯一。事件转换只提取可见文本，异常与超时结果保留原始调用 ID。
 
 ## 测试函数
 
+- `test_manager_keeps_id_outside_runtime_and_cleans_only_matching_entry`：CompletionRuntime 构造函数和对象不接收或保存 ID；ID 仅保存在注册表和 manager 的流清理闭包；一轮结束只清理对应注册项，另一轮仍可按 ID 取消并清理。
+- `test_completion_runtime_streams_without_manager`：独立构造 completion_runtime.py 的运行时，验证无需注册表也能输出有序 SSE 并唯一收尾。
 - `test_stream_numbers_messages_and_terminal_once`：完成、失败、取消三种完整输出流均无 completion ID、连续编号且仅有一个终态；问答执行失败的阶段名为 qa。
 - `test_startup_events_only_acknowledge_without_reading_documents`：启动通知只返回状态和 ok，不遍历目录、读取文档或附带资源内容。
 - `test_runtime_cancel_drains_real_graph_batch_and_skips_next_model`：真实 LangGraph 并行同名工具执行中取消，等待匹配结果后关闭；不再请求模型，并保留资源目录。
-- `test_manager_wraps_messages_and_pairs_same_name_calls`：manager 将 AIMessage/ToolMessage 包装为模型、调度和结果事件，同名工具按 call ID 保留各自参数及失败状态。
+- `test_manager_wraps_messages_and_pairs_same_name_calls`：completion_runtime 将 AIMessage/ToolMessage 包装为模型、调度和结果事件，同名工具按 call ID 保留各自参数及失败状态。
 - `test_graph_keeps_events_as_objects_until_stream_boundary`：图执行器返回事件字典，开始、索引、终态顺序不变。
 - `test_stream_encodes_runtime_failure_with_special_characters`：运行时异常含换行、制表符、引号和反斜杠时，仍输出一个可解析的 SSE 失败帧。
 - `test_stream_preserves_terminal_words_in_data`：正文含终态字样时仍输出后续真实终态。
@@ -17,7 +19,7 @@
 - `test_terminal_detection_requires_exact_event_type`：正文、status 和前缀相似名称不会结束流。
 - `test_create_completion_stream_builds_completion_input_and_runs_graph`：用 fake model builder 和 fake stream graph 确认 `completion_manager.create(...)` 只传递资源路径、messages 和 qa model，completion ID 留在运行时管理层。
 - `test_create_completion_stream_validates_input_before_iteration`：确认 completion 输入校验发生在返回 SSE iterator 前，route 层可以把业务入参错误稳定映射为 422。
-- `test_create_completion_stream_registers_active_completion_before_iteration`：确认 active completion 会在返回 iterator 前注册，backend 立即调用 cancel 时不会因为流还没开始迭代而得到 `not_found`；早取消后 consumer 直接用 cancel sentinel 收口，不再启动 graph/provider producer。
+- `test_create_completion_stream_registers_completion_runtime_before_iteration`：确认 active completion 会在返回 iterator 前注册，backend 立即调用 cancel 时不会因为流还没开始迭代而得到 `not_found`；早取消后 consumer 直接用 cancel sentinel 收口，不再启动 graph/provider producer。
 - `test_create_completion_stream_cancel_does_not_wait_for_blocked_graph`：确认 graph/provider 卡住时，`completion_manager.terminate(...)` 会通过 runtime queue 的 cancel sentinel 主动唤醒 SSE consumer，consumer 立即输出 `completion.cancelled`，不等待 producer 继续产出或 queue timeout 轮询。
 - `test_create_completion_stream_flushes_committed_events_before_cancel`：确认 cancel 前已经成功 commit 到 runtime queue 的普通 event 会先按 FIFO 发出，然后才输出 `completion.cancelled`；consumer 不能用 cancel flag 跳过旧 event。
 - `test_create_completion_stream_emits_only_one_terminal_event_when_cancel_races_completed`：确认 cancel 与 producer 完成竞争时，同一个 completion 只会输出一个 terminal event。
@@ -27,7 +29,7 @@
 - `test_completion_manager_create_registers_before_iteration_and_terminate_cancels`：确认 `create` 在返回 SSE 前先注册 runtime，`terminate` 能把 active completion 取消，早取消后 consumer 用 cancel sentinel 收口且不再启动 producer。
 - `test_completion_manager_terminate_returns_not_found_for_unknown`：确认 `terminate` 对未知 completion id 返回 `not_found`。
 - `test_completion_manager_get_status_returns_none_for_unknown`：确认 `get_status` 对未知 completion id 返回 `None`。
-- `test_active_completion_owns_terminate_get_status_and_terminal_uniqueness`：确认 `ActiveCompletion` 直接持有 terminate/get_status，且 `close_once` 保证终态唯一（已关不能再关）。
+- `test_completion_runtime_owns_terminate_get_status_and_terminal_uniqueness`：确认 `CompletionRuntime` 直接持有 terminate/get_status，且 `close_once` 保证终态唯一（已关不能再关）。
 - `test_normalize_model_config_loads_default_env_file`：确认模型配置能从 `.env` 中读取 base URL、key、`MODEL`、`MODEL_API_TRANSPORT`、采样参数、推理强度、重试次数和超时。
 - `test_build_chat_model_builds_responses_transport_by_default`：确认默认只构造 Responses API 的 stream -> invoke 两级 attempt，未显式配置 `MODEL_REQUEST_TIMEOUT` 时默认 request timeout 为 8 秒。
 - `test_build_chat_model_builds_chat_completions_transport_when_configured`：确认 `api_transport=chat_completions` 时只构造 chat/completions 的 stream -> invoke 两级 attempt。
@@ -37,3 +39,5 @@
 - `test_qa_records_terminal_stop_message_as_final_answer`：合法终止消息标为最终回答。
 - `test_qa_records_model_message_content_and_tool_calls_without_reasoning`：保留工具调用和可见文本，不泄露推理。
 事件替身和 SSE 断言均不携带 completion ID；取消/状态接口仍按 ID 定位运行时。运行时测试通过真实 resource_path 进入，保留取消竞态、FIFO、终态唯一和消息包装覆盖。原每轮建树/清理测试由资源准备和损坏资源测试替代。
+
+模型装配替身注入 manager；事件生成和图执行替身注入 completion_runtime。现有取消竞态、FIFO、注册表移除和终态测试覆盖拆分后的协作。

@@ -1,4 +1,13 @@
-last updated: 2026-09-05 22:38:04
+last updated: 2026-09-05 23:13:22
+
+## 2026-09-05 23:13:22
+
+### 已完成工作
+
+- 图状态仅保留 MessagesState；路径用于初始化工具，运行参数绑定执行器。
+- 建图、消息转换、模型调用与工具执行分别归入 core/graph.py、messages.py、model_invocation.py、executor.py；executor 与 tools 同级，loop 仅驱动事件流。
+- 单轮运行时拆为 CompletionRuntime，不接收或保存 completion ID；manager 负责注册表及按 ID 清理。
+- 同步设计与测试文档；TDD 验证后，全量测试 166 passed，包含取消、并行批次和 wheel 打包验证。
 
 ## 2026-09-05 22:38:04
 

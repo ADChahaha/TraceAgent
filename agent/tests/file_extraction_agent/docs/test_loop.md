@@ -1,13 +1,13 @@
 # test_loop.py
 
-执行链路：资源路径和输入消息 → prompt/历史转换 → 绑定工具 → 正式 LangGraph agent/tools 循环 → 原样 yield AIMessage/ToolMessage；运行异常向外抛出，图内无事件或取消缓冲。
+执行链路：资源路径初始化工具上下文，运行参数绑定执行器；输入消息 → prompt/历史转换 → 绑定工具 → 正式 LangGraph agent/tools 循环 → 原样 yield AIMessage/ToolMessage；运行异常向外抛出，图内无事件或取消缓冲。
 
-工具并行提交并共享超时期限；按原始调用 ID 返回消息。超时失败先返回，迟到线程不能修改已返回消息。模型调用覆盖 stream/invoke 降级、响应终止信号校验和退避；manager 负责事件格式与最终回答标记。
+messages.py 的 build_qa_messages 直接接收消息列表；独立 graph.py 的 build_qa_graph 接收 RunOptions 以及 model_invocation.py 与 executor.py 的执行函数；工具执行器不接收状态容器。工具并行提交并共享超时期限；按原始调用 ID 返回消息。超时失败先返回，迟到线程不能修改已返回消息。model_invocation 测试覆盖 stream/invoke 降级、响应终止信号校验和退避；completion_runtime 负责事件格式与最终回答标记。
 
 ## 测试函数
 
 - `test_qa_stream_yields_only_original_messages`：同一正式循环返回原始模型消息和匹配的工具回复，没有 outcome 包装或重复最终消息。
-- `test_graph_state_has_no_event_or_runtime_buffers`：执行上下文不保存事件、action、序号、事件锁及取消批次状态。
+- `test_tool_context_has_no_event_or_runtime_buffers`：工具测试上下文不保存事件、action、序号、事件锁及取消批次状态。
 - `test_qa_requires_tool_binding_before_invoking_model`：缺少 `bind_tools` 的模型在调用前报错，不能通过旧字典协议执行备用循环。
 - `test_tool_timeout_emits_one_matching_result_and_discards_late_success`：验证超时只返回一个带调用 ID 的失败 ToolMessage，迟到成功不改写消息。
 - `test_tool_exception_is_reported_consistently_without_timeout`：普通异常保留真实错误，并与模型收到的结果一致。
@@ -19,7 +19,7 @@
 - `test_parallel_tool_executor_times_out_slow_call`：验证慢工具在超过 `tool_execution_timeout` 后返回带 `tool execution timeout` 结果的 `ToolMessage`，不会无限阻塞整个批次。
 - `test_qa_uses_responses_api_stream_and_merges_content_with_tool_calls`：确认 stream 调用能把 text chunk 和 tool call chunk 合并成带 content 和 tool_calls 的 `AIMessage`。
 - `test_qa_falls_back_from_stream_to_invoke_within_configured_transport`：确认一个已配置 transport 内 stream 失败后会降级到同 transport 的非流 invoke，不承担跨 Responses/chat-completions 自动切换。
-- `test_qa_uses_ethernet_backoff_between_failed_provider_attempts`：确认 provider attempt 失败后，会按 `[0, 2^k - 1]` slot 的随机指数退避等待，再进入下一 attempt。
+- `test_qa_uses_ethernet_backoff_between_failed_provider_attempts`：在 model_invocation 中替换退避时间槽，确认 provider attempt 失败后按 `[0, 2^k - 1]` slot 随机指数退避，再进入下一 attempt。
 - `test_qa_stops_after_provider_attempt_limit`：确认同一轮 provider 调用最多尝试五次，避免无限重试或长期占用 producer。
 - `test_qa_retries_transport_when_provider_stop_signal_requires_missing_tool_calls`：验证 provider 给出 `finish_reason=tool_calls` 但 LangChain 消息里没有实际 `tool_calls` 时，会把该响应视为不完整并切换到下一个 transport。
 - `test_qa_accepts_terminal_stop_message_without_tool_calls`：验证 `finish_reason=stop` 这类 terminal stop signal 仍会作为自然文本终态处理。

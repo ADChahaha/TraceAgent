@@ -2,23 +2,22 @@
 
 `core/tools` 包把每个工具拆成独立文件：`ls.py` / `grep.py` / `read.py` /
 `embedding.py`（承载 `search_embedding`），共享骨架放 `base.py`。本 `__init__.py`
-对外提供统一接口 `build_tools(state)`，并转出各工具的 `_ls/_grep/_read/
+对外提供统一接口 `build_tools(workspace)`，并转出各工具的 `_ls/_grep/_read/
 _search_embedding` 及可替身点 `_run_ripgrep/_get_embedder/_get_index`，供测试
 monkeypatch 与外部 import 使用。
 
 实现步骤：
 
 ```text
-build_tools(state)
-  -> state 含 resource_path 时调用 open_workspace 创建本轮工具上下文
-  -> build_ls(state)          # langchain @tool 包裹，绑定 ls
-  -> build_grep(state)        # 绑定 grep
-  -> build_read(state)        # 绑定 read
-  -> build_search_embedding(state)  # 绑定 search_embedding
+build_tools(workspace)
+  -> build_ls(workspace)          # langchain @tool 包裹，绑定 ls
+  -> build_grep(workspace)        # 绑定 grep
+  -> build_read(workspace)        # 绑定 read
+  -> build_search_embedding(workspace)  # 绑定 search_embedding
   -> 返回 [ls, grep, read, search_embedding]
 ```
 
-工具由 `base.run_tool` 执行并归一化异常，只返回结果；对外事件由 manager 包装。
+工具由 `base.run_tool` 执行并归一化异常，只返回结果；对外事件由 completion_runtime 包装。
 """
 
 from __future__ import annotations
@@ -49,17 +48,14 @@ from service.file_extraction_agent.core.tools.base import (
     run_tool,
 )
 
-from service.file_extraction_agent.core.tools.workspace import open_workspace
+from service.file_extraction_agent.core.tools.workspace import ToolWorkspace
 
 VALID_KINDS = {"md"}
 
 
-def build_tools(state: Any) -> list[Any]:
-    """路径执行输入或已注入工具上下文 → 四个共享上下文的文档工具。"""
-
-    if hasattr(state, "resource_path"):
-        state = open_workspace(state.resource_path)
-    return [build_ls(state), build_grep(state), build_read(state), build_search_embedding(state)]
+def build_tools(workspace: ToolWorkspace) -> list[Any]:
+    """工具访问上下文 → 四个共享文档与 embedding 访问器的工具。"""
+    return [build_ls(workspace), build_grep(workspace), build_read(workspace), build_search_embedding(workspace)]
 
 
 __all__ = [

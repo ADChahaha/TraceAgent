@@ -10,9 +10,9 @@ POST /v1/document-resources（files）
 
 POST /v1/document-qa/chat/completions（resource_path + messages）
   → CompletionManager 委托工具层预检资源并注册 completion
-  → graph 保存路径和消息；build_tools 创建工具访问上下文
+  → 路径创建工具上下文，运行配置绑定执行器，图内只保存 messages
   → 模型消息 / 完整工具结果批次
-  → manager 包装不含 completion ID 的事件，ActiveCompletion 编码 SSE
+  → completion_runtime 包装不含 completion ID 的事件并编码 SSE
   → 释放本轮运行时，保留文档资源
 ```
 
@@ -24,9 +24,13 @@ POST /v1/document-qa/chat/completions（resource_path + messages）
 | service/document_processor | PDF 调 MinerU、DOCX 调 python-docx，输出带 CSS 的 HTML |
 | service/document_resources | HTML 转文件、文档分块和 embedding 索引构建、资源落盘与发布前自检 |
 | routes/file_extraction_agent.py | 路径问答、取消 HTTP 适配 |
-| service/file_extraction_agent/manager.py | completion 注册、取消、事件包装与 SSE；不生成文档状态 |
-| service/file_extraction_agent/core/graph.py | 构造仅含 resource_path、messages、RunOptions 的 GraphState |
-| service/file_extraction_agent/core/loop.py | LangGraph 模型/工具循环；工具结果整批返回 |
+| service/file_extraction_agent/manager.py | completion 创建、注册、查找、取消转发与流结束后的移除 |
+| service/file_extraction_agent/completion_runtime.py | 单轮执行、事件包装、线程队列、SSE 与取消收尾 |
+| service/file_extraction_agent/core/loop.py | 初始化依赖、消费图更新、批次转发与取消关闭 |
+| service/file_extraction_agent/core/messages.py | 提示词、历史转换、响应校验、终止信号与消息 JSON 归一化 |
+| service/file_extraction_agent/core/model_invocation.py | 模型调用、流式聚合、重试与退避 |
+| service/file_extraction_agent/core/executor.py | 工具并行执行、共享超时与 ToolMessage 封装 |
+| service/file_extraction_agent/core/graph.py | 绑定 agent/tools 节点、条件路由，编译 MessagesState 图 |
 | service/file_extraction_agent/core/tools/workspace.py | 资源目录预检、文件浏览与读取 |
 | service/file_extraction_agent/core/tools/embedding.py | 清单配置和索引读取、查询模型缓存、query 编码与检索 |
 
@@ -43,14 +47,14 @@ POST /v1/document-qa/chat/completions（resource_path + messages）
 
 ## 问答运行时
 
-`CompletionManager` 只在进程内保存 active completion；管理 ID 不进入 graph。GraphState 只保存资源路径、历史消息和运行配置。工具闭包持有 ToolWorkspace；其中的 EmbeddingResources 管理本轮索引与查询模型引用。
+`CompletionManager` 只在进程内保存 active completion；管理 ID 不进入 graph。图使用 LangGraph MessagesState，仅保存消息；resource_path 用于创建工具上下文，RunOptions 在构图时绑定工具执行器。工具闭包持有 ToolWorkspace；其中的 EmbeddingResources 管理本轮索引与查询模型引用。
 
 ```text
 模型节点返回 AIMessage
-  → manager 输出 model_message 和 tool_started
+  → completion_runtime 输出 model_message 和 tool_started
   → 工具节点并行执行，按共享 deadline 收集整批 ToolMessage
   → 每项携带调用 ID、名称、参数和成功/失败结果
-  → manager 直接输出 tool_completed / tool_failed，不维护 pending 配对字典
+  → completion_runtime 直接输出 tool_completed / tool_failed，不维护 pending 配对字典
 ```
 
 取消保持已发布调用的结果完整性：没有活动批次时立即唤醒 SSE consumer；已有批次时消费完结果再结束，不调用下一轮模型。队列按 FIFO 发出已提交事件，终态只提交一次。资源校验错误在 HTTP 响应开始前返回 422；执行异常通过 completion.failed 收口。

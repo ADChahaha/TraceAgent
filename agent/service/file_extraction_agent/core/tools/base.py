@@ -1,6 +1,6 @@
 """工具公共处理：execute() → 原样返回结果；普通异常 → ok:false 结果。
 
-不读写事件或 action；manager 根据 ToolMessage 生成对外事件。
+不读写事件或 action；completion_runtime 根据 ToolMessage 生成对外事件。
 """
 
 from __future__ import annotations

@@ -11,8 +11,9 @@ from langchain_core.messages import AIMessage, ToolMessage
 from service.file_extraction_agent.core import model as model_module
 from service.file_extraction_agent.core.model import build_chat_model, normalize_model_config
 from service.file_extraction_agent import manager as manager_module
+from service.file_extraction_agent import completion_runtime as runtime_module
+from service.file_extraction_agent.completion_runtime import CompletionRuntime
 from service.file_extraction_agent.manager import (
-    ActiveCompletion,
     CompletionManager,
 )
 from service.file_extraction_agent.schemas import DocumentQaMessage, ModelConfig, RunOptions
@@ -31,7 +32,7 @@ def test_stream_numbers_messages_and_terminal_once(tmp_path, monkeypatch, ending
             manager.terminate("cmp_seq")
 
     monkeypatch.setattr(manager_module, "build_qa_model", lambda config: object())
-    monkeypatch.setattr(manager_module, "run_qa_stream", messages)
+    monkeypatch.setattr(runtime_module, "run_qa_stream", messages)
     frames = list(manager.create(
         completion_id="cmp_seq", run_options=RunOptions(),
         resource_path=resource_path,
@@ -43,7 +44,49 @@ def test_stream_numbers_messages_and_terminal_once(tmp_path, monkeypatch, ending
     assert events[-1]["type"] == f"completion.{ending}"
     if ending == "failed":
         assert [event["tool"] for event in events if event["type"] == "tool_failed"] == ["qa"]
-    assert sum(manager_module._terminal_status(event) is not None for event in events) == 1
+    assert sum(runtime_module._terminal_status(event) is not None for event in events) == 1
+
+
+def test_completion_runtime_streams_without_manager(resource_path, monkeypatch):
+    import json
+    from service.file_extraction_agent import completion_runtime
+
+    monkeypatch.setattr(completion_runtime, "run_qa_stream", lambda **kwargs: iter([
+        AIMessage(content="回答", response_metadata={"finish_reason": "stop"}),
+    ]))
+    runtime = completion_runtime.CompletionRuntime(
+        resource_path, object(), [DocumentQaMessage(role="user", content="问题")],
+    )
+    events = [json.loads(frame.split("data: ", 1)[1]) for frame in runtime.stream()]
+    assert [event["type"] for event in events] == [
+        "completion.created", "source_indexed", "model_message", "completion.completed",
+    ]
+    assert runtime.is_closed() and runtime.get_status() == "completed"
+    assert [event["seq"] for event in events] == [1, 2, 3, 4]
+    assert all("id" not in event for event in events)
+
+
+def test_manager_keeps_id_outside_runtime_and_cleans_only_matching_entry(resource_path, monkeypatch):
+    monkeypatch.setattr(manager_module, "build_qa_model", lambda config: object())
+    monkeypatch.setattr(runtime_module, "run_qa_stream", lambda **kwargs: iter([
+        AIMessage(content="回答", response_metadata={"finish_reason": "stop"}),
+    ]))
+    manager = CompletionManager()
+    streams = {cid: manager.create(completion_id=cid, resource_path=resource_path,
+                                  messages=[DocumentQaMessage(role="user", content="问题")])
+               for cid in ("first", "second")}
+    try:
+        assert all(not hasattr(runtime, "completion_id") for runtime in manager._completions.values())
+        list(streams["first"])
+        assert manager.get_status("first") is None
+        assert manager.get_status("second")["status"] == "in_progress"
+        assert manager.terminate("second")["status"] == "cancelling"
+        list(streams["second"])
+        assert manager.get_status("second") is None
+    finally:
+        for cid, stream in streams.items():
+            manager.terminate(cid)
+            list(stream)
 
 
 def test_startup_events_only_acknowledge_without_reading_documents(resource_path, monkeypatch):
@@ -54,7 +97,7 @@ def test_startup_events_only_acknowledge_without_reading_documents(resource_path
 
     monkeypatch.setattr(DocumentFileTree, "entries", forbidden)
     monkeypatch.setattr(DocumentFileTree, "read", forbidden)
-    stream = manager_module.stream_completion_events(
+    stream = runtime_module.stream_completion_events(
         resource_path=resource_path,
         messages=[DocumentQaMessage(role="user", content="问题")], qa_model=object(),
     )
@@ -136,8 +179,8 @@ def test_manager_wraps_messages_and_pairs_same_name_calls(tmp_path, monkeypatch,
         ToolMessage(content="失败", artifact={"ok": False, "errors": [{"message": "bad path"}]}, status="error", tool_call_id="b", name="read", additional_kwargs={"tool_args": {"path": "second"}})],
         AIMessage(content="答案", response_metadata={"finish_reason": "stop"}),
     ]
-    monkeypatch.setattr(manager_module, "run_qa_stream", lambda *args, **kwargs: iter(model_messages))
-    events = list(manager_module.stream_completion_events(resource_path=resource_path, messages=[DocumentQaMessage(role="user", content="问题")], qa_model=object()))
+    monkeypatch.setattr(runtime_module, "run_qa_stream", lambda *args, **kwargs: iter(model_messages))
+    events = list(runtime_module.stream_completion_events(resource_path=resource_path, messages=[DocumentQaMessage(role="user", content="问题")], qa_model=object()))
     assert [e["type"] for e in events] == [
         "completion.created", "source_indexed", "model_message", "tool_started", "tool_started",
         "tool_completed", "tool_failed", "model_message", "completion.completed",
@@ -148,8 +191,8 @@ def test_manager_wraps_messages_and_pairs_same_name_calls(tmp_path, monkeypatch,
 
 
 def test_graph_keeps_events_as_objects_until_stream_boundary(tmp_path, monkeypatch, resource_path):
-    monkeypatch.setattr(manager_module, "run_qa_stream", lambda *args, **kwargs: iter([AIMessage(content="完成", response_metadata={"finish_reason": "stop"})]))
-    events = list(manager_module.stream_completion_events(resource_path=resource_path, messages=[DocumentQaMessage(role="user", content="问题")], qa_model=object()))
+    monkeypatch.setattr(runtime_module, "run_qa_stream", lambda *args, **kwargs: iter([AIMessage(content="完成", response_metadata={"finish_reason": "stop"})]))
+    events = list(runtime_module.stream_completion_events(resource_path=resource_path, messages=[DocumentQaMessage(role="user", content="问题")], qa_model=object()))
     assert all(isinstance(event, dict) for event in events)
     assert [event["type"] for event in events] == [
         "completion.created", "source_indexed", "model_message", "completion.completed",
@@ -164,7 +207,7 @@ def test_stream_encodes_runtime_failure_with_special_characters(tmp_path, monkey
         raise RuntimeError(error)
 
     monkeypatch.setattr(manager_module, "build_qa_model", lambda config: object())
-    monkeypatch.setattr(manager_module, "stream_completion_events", fail)
+    monkeypatch.setattr(runtime_module, "stream_completion_events", fail)
     frames = _frames(CompletionManager().create(
         completion_id="cmp_error", run_options=RunOptions(),
         resource_path=resource_path,
@@ -188,7 +231,7 @@ def test_stream_preserves_terminal_words_in_data(tmp_path, monkeypatch, marker, 
     ordinary = {"type": "model_message", "content": f"event: completion.{marker}"}
     terminal = {"type": "completion.completed", "status": "completed"}
     monkeypatch.setattr(manager_module, "build_qa_model", lambda config: object())
-    monkeypatch.setattr(manager_module, "stream_completion_events", lambda *a, **k: iter([ordinary, terminal]))
+    monkeypatch.setattr(runtime_module, "stream_completion_events", lambda *a, **k: iter([ordinary, terminal]))
     frames = _frames(CompletionManager().create(
         completion_id="cmp_words", run_options=RunOptions(),
         resource_path=resource_path,
@@ -200,7 +243,7 @@ def test_stream_preserves_terminal_words_in_data(tmp_path, monkeypatch, marker, 
 @pytest.mark.parametrize("status", ["completed", "cancelled", "failed"])
 def test_terminal_status_reads_only_event_type(status):
     event = {"type": f"completion.{status}", "content": "event: completion.cancelled"}
-    assert manager_module._terminal_status(event) == status
+    assert runtime_module._terminal_status(event) == status
 
 
 @pytest.mark.parametrize("event", [
@@ -209,7 +252,7 @@ def test_terminal_status_reads_only_event_type(status):
     {"content": "event: completion.cancelled"},
 ])
 def test_terminal_detection_requires_exact_event_type(event):
-    assert manager_module._terminal_status(event) is None
+    assert runtime_module._terminal_status(event) is None
 
 
 def test_create_completion_stream_builds_completion_input_and_runs_graph(monkeypatch, resource_path):
@@ -227,7 +270,7 @@ def test_create_completion_stream_builds_completion_input_and_runs_graph(monkeyp
         yield {'type': 'completion.completed'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
-    monkeypatch.setattr("service.file_extraction_agent.manager.stream_completion_events", fake_stream_completion_events)
+    monkeypatch.setattr("service.file_extraction_agent.completion_runtime.stream_completion_events", fake_stream_completion_events)
 
     manager = CompletionManager()
     events = _frames(
@@ -268,7 +311,7 @@ def test_create_completion_stream_validates_input_before_iteration(monkeypatch, 
     assert called is False
 
 
-def test_create_completion_stream_registers_active_completion_before_iteration(monkeypatch, resource_path):
+def test_create_completion_stream_registers_completion_runtime_before_iteration(monkeypatch, resource_path):
     graph_called = threading.Event()
 
     def fake_build_qa_model(config):
@@ -280,7 +323,7 @@ def test_create_completion_stream_registers_active_completion_before_iteration(m
         yield {'type': 'completion.completed'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
-    monkeypatch.setattr("service.file_extraction_agent.manager.stream_completion_events", fake_stream_completion_events)
+    monkeypatch.setattr("service.file_extraction_agent.completion_runtime.stream_completion_events", fake_stream_completion_events)
 
     manager = CompletionManager()
     stream = manager.create(
@@ -313,7 +356,7 @@ def test_create_completion_stream_cancel_does_not_wait_for_blocked_graph(monkeyp
         yield {'type': 'completion.completed'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
-    monkeypatch.setattr("service.file_extraction_agent.manager.stream_completion_events", fake_stream_completion_events)
+    monkeypatch.setattr("service.file_extraction_agent.completion_runtime.stream_completion_events", fake_stream_completion_events)
 
     manager = CompletionManager()
     stream = manager.create(
@@ -365,7 +408,7 @@ def test_create_completion_stream_flushes_committed_events_before_cancel(monkeyp
         yield {'type': 'completion.completed', 'status': 'completed'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
-    monkeypatch.setattr("service.file_extraction_agent.manager.stream_completion_events", fake_stream_completion_events)
+    monkeypatch.setattr("service.file_extraction_agent.completion_runtime.stream_completion_events", fake_stream_completion_events)
 
     manager = CompletionManager()
     stream = iter(
@@ -411,7 +454,7 @@ def test_should_stop_is_wired_to_cancel_requested(monkeypatch, resource_path):
         yield {'type': 'completion.completed', 'status': 'completed'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
-    monkeypatch.setattr("service.file_extraction_agent.manager.stream_completion_events", fake_stream_completion_events)
+    monkeypatch.setattr("service.file_extraction_agent.completion_runtime.stream_completion_events", fake_stream_completion_events)
 
     manager = CompletionManager()
     stream = manager.create(
@@ -458,7 +501,7 @@ def test_terminate_defers_cancel_until_active_tool_batch_settles(monkeypatch, re
         yield {'type': 'completion.cancelled', 'status': 'cancelled'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
-    monkeypatch.setattr("service.file_extraction_agent.manager.stream_completion_events", fake_stream_completion_events)
+    monkeypatch.setattr("service.file_extraction_agent.completion_runtime.stream_completion_events", fake_stream_completion_events)
 
     manager = CompletionManager()
     stream = manager.create(
@@ -508,7 +551,7 @@ def test_create_completion_stream_emits_only_one_terminal_event_when_cancel_race
         yield {'type': 'completion.completed', 'status': 'completed'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
-    monkeypatch.setattr("service.file_extraction_agent.manager.stream_completion_events", fake_stream_completion_events)
+    monkeypatch.setattr("service.file_extraction_agent.completion_runtime.stream_completion_events", fake_stream_completion_events)
 
     manager = CompletionManager()
     stream = manager.create(
@@ -675,7 +718,7 @@ def test_completion_manager_create_runs_graph_and_returns_sse(monkeypatch, resou
         yield {'type': 'completion.completed'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
-    monkeypatch.setattr("service.file_extraction_agent.manager.stream_completion_events", fake_stream_completion_events)
+    monkeypatch.setattr("service.file_extraction_agent.completion_runtime.stream_completion_events", fake_stream_completion_events)
 
     events = _frames(
         CompletionManager().create(
@@ -707,7 +750,7 @@ def test_completion_manager_create_registers_before_iteration_and_terminate_canc
 
     manager = CompletionManager()
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
-    monkeypatch.setattr("service.file_extraction_agent.manager.stream_completion_events", fake_stream_completion_events)
+    monkeypatch.setattr("service.file_extraction_agent.completion_runtime.stream_completion_events", fake_stream_completion_events)
 
     stream = manager.create(
         completion_id="cmp_mgr_cancel",
@@ -734,14 +777,14 @@ def test_completion_manager_get_status_returns_none_for_unknown():
     assert manager.get_status("cmp_missing") is None
 
 
-def test_active_completion_owns_terminate_get_status_and_terminal_uniqueness():
+def test_completion_runtime_owns_terminate_get_status_and_terminal_uniqueness():
     state = SimpleNamespace(
         completion_id="cmp_ac",
         document=SimpleNamespace(root=Path(".") / "nonexistent"),
         messages=[],
         run_options=RunOptions(),
     )
-    runtime = ActiveCompletion("cmp_ac", "unused", object(), [])
+    runtime = CompletionRuntime("unused", object(), [])
 
     assert runtime.get_status() == "in_progress"
     assert runtime.terminate() == "cancelling"
@@ -768,7 +811,7 @@ def test_qa_records_text_from_responses_api_content_blocks(tmp_path):
         ],
     )
 
-    event = manager_module._model_message_event(message)
+    event = runtime_module._model_message_event(message)
 
     assert event["content"] == "I will inspect root. "
 
@@ -782,7 +825,7 @@ def test_qa_records_terminal_stop_message_as_final_answer(tmp_path):
         response_metadata={"finish_reason": "stop"},
     )
 
-    event = manager_module._model_message_event(message)
+    event = runtime_module._model_message_event(message)
 
     assert event["content"] == "最终答案。"
     assert event["is_final"] is True
@@ -803,7 +846,7 @@ def test_qa_records_model_message_content_and_tool_calls_without_reasoning(tmp_p
         ],
     )
 
-    event = manager_module._model_message_event(message)
+    event = runtime_module._model_message_event(message)
 
     assert event == {
         "type": "model_message",

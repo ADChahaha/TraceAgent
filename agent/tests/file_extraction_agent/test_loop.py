@@ -9,11 +9,11 @@ from service.document_resources.schemas import InputDocument
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
 from service.file_extraction_agent.core import loop as qa_module
-from service.file_extraction_agent.core.loop import (
-    _invoke_model_message,
-    build_qa_graph,
-    build_qa_messages,
-)
+from service.file_extraction_agent.core.model_invocation import _invoke_model_message
+from service.file_extraction_agent.core import model_invocation
+from service.file_extraction_agent.core.messages import build_qa_messages
+from service.file_extraction_agent.core import executor
+from service.file_extraction_agent.core.graph import build_qa_graph
 from service.file_extraction_agent.core.tools import build_tools
 from service.document_resources.documents import materialize_tree
 from service.file_extraction_agent.core.tools.workspace import DocumentFileTree
@@ -39,7 +39,7 @@ def test_qa_stream_yields_only_original_messages(tmp_path, monkeypatch, resource
     assert messages[2] is final
 
 
-def test_graph_state_has_no_event_or_runtime_buffers(tmp_path):
+def test_tool_context_has_no_event_or_runtime_buffers(tmp_path):
     state = _state(tmp_path)
     for field in ("completion_id", "task_id", "events", "actions", "next_seq", "events_lock", "tool_batch_active", "current_model_content", "failed_stage"):
         assert not hasattr(state, field), field
@@ -70,8 +70,8 @@ def test_tool_timeout_emits_one_matching_result_and_discards_late_success(tmp_pa
                 finished.set()
 
     try:
-        messages = qa_module._execute_tools_parallel(
-            state, [{"id": "slow", "name": "read", "args": {"path": "x"}}], [SlowTool()], timeout=0.02,
+        messages = executor._execute_tools_parallel(
+            [{"id": "slow", "name": "read", "args": {"path": "x"}}], [SlowTool()], timeout=0.02,
         )
         result = json.loads(messages[0].content)
         assert messages[0].artifact == result
@@ -95,8 +95,8 @@ def test_tool_exception_is_reported_consistently_without_timeout(tmp_path):
         def invoke(self, args):
             raise ValueError("invalid path")
 
-    messages = qa_module._execute_tools_parallel(
-        state, [{"id": "broken", "name": "read", "args": {}}], [BrokenTool()], timeout=1,
+    messages = executor._execute_tools_parallel(
+        [{"id": "broken", "name": "read", "args": {}}], [BrokenTool()], timeout=1,
     )
     result = json.loads(messages[0].content)
     assert result["errors"][0]["message"] == "invalid path"
@@ -144,7 +144,7 @@ def _state(tmp_path):
 
 
 def test_qa_messages_describe_qa_investigation_not_field_extraction(tmp_path):
-    messages = build_qa_messages(_state(tmp_path))
+    messages = build_qa_messages(_state(tmp_path).messages)
     system_content = messages[0].content
     human_content = messages[1].content
 
@@ -167,7 +167,7 @@ def test_qa_messages_describe_qa_investigation_not_field_extraction(tmp_path):
 
 
 def test_qa_prompt_allows_direct_answers_without_forced_document_search(tmp_path):
-    messages = build_qa_messages(_state(tmp_path))
+    messages = build_qa_messages(_state(tmp_path).messages)
     system_content = messages[0].content
 
     assert "Answer directly when the question can be answered from conversation context" in system_content
@@ -216,7 +216,7 @@ def test_qa_messages_preserve_openai_tool_history(tmp_path):
         ],
         workspace_root=tmp_path,
     )
-    messages = build_qa_messages(state)
+    messages = build_qa_messages(state.messages)
 
     assert messages[1].type == "human"
     assert messages[2].type == "ai"
@@ -273,9 +273,11 @@ def test_qa_graph_preserves_parallel_tool_calls(tmp_path):
             )
 
     model = MultiToolModel()
-    graph = build_qa_graph(model, build_tools(state), state)
+    graph = build_qa_graph(model, build_tools(state), run_options=state.run_options,
+                           invoke_model=model_invocation._invoke_model_message,
+                           execute_tools=executor._execute_tools_parallel)
 
-    outputs = list(graph.stream({"messages": build_qa_messages(state)}, config={"recursion_limit": 4}))
+    outputs = list(graph.stream({"messages": build_qa_messages(state.messages)}, config={"recursion_limit": 4}))
 
     model_events = [update["agent"]["messages"][0] for update in outputs if "agent" in update]
     assert model.bind_kwargs == {}
@@ -420,9 +422,9 @@ def test_qa_uses_ethernet_backoff_between_failed_provider_attempts(monkeypatch):
                 SimpleNamespace(name="responses_invoke", model=SuccessfulInvokeModel(), use_stream=False),
             ]
 
-    monkeypatch.setattr(qa_module.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(model_invocation.time, "sleep", lambda seconds: sleeps.append(seconds))
     monkeypatch.setattr(random, "randint", lambda lower, upper: upper)
-    monkeypatch.setattr(qa_module, "PROVIDER_BACKOFF_SLOT_SECONDS", 0.01)
+    monkeypatch.setattr(model_invocation, "PROVIDER_BACKOFF_SLOT_SECONDS", 0.01)
 
     message = _invoke_model_message(FallbackModel(), ["messages"])
 
@@ -444,7 +446,7 @@ def test_qa_stops_after_provider_attempt_limit(monkeypatch):
                 for index in range(7)
             ]
 
-    monkeypatch.setattr(qa_module.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(model_invocation.time, "sleep", lambda seconds: None)
     monkeypatch.setattr(random, "randint", lambda lower, upper: lower)
 
     with pytest.raises(RuntimeError) as exc:
@@ -536,7 +538,7 @@ def test_qa_rejects_plan_only_message_without_terminal_stop_signal():
 def test_parallel_tool_executor_runs_all_calls_concurrently(tmp_path):
     import threading
 
-    from service.file_extraction_agent.core.loop import _execute_tools_parallel
+    from service.file_extraction_agent.core.executor import _execute_tools_parallel
 
     state = _state(tmp_path)
     gate = threading.Event()
@@ -562,7 +564,7 @@ def test_parallel_tool_executor_runs_all_calls_concurrently(tmp_path):
         {"id": "call-2", "name": "read", "args": {"path": "/x"}},
     ]
 
-    result = _execute_tools_parallel(state, calls, tools=[FastTool(), GatedTool()], timeout=1.0)
+    result = _execute_tools_parallel(calls, tools=[FastTool(), GatedTool()], timeout=1.0)
 
     assert len(result) == 2
     assert {getattr(m, "tool_call_id", None) for m in result} == {"call-1", "call-2"}
@@ -571,7 +573,7 @@ def test_parallel_tool_executor_runs_all_calls_concurrently(tmp_path):
 def test_parallel_tool_executor_times_out_slow_call(tmp_path):
     import time
 
-    from service.file_extraction_agent.core.loop import _execute_tools_parallel
+    from service.file_extraction_agent.core.executor import _execute_tools_parallel
 
     state = _state(tmp_path)
 
@@ -585,7 +587,7 @@ def test_parallel_tool_executor_times_out_slow_call(tmp_path):
 
     calls = [{"id": "call-1", "name": "read", "args": {"path": "/x"}}]
 
-    result = _execute_tools_parallel(state, calls, tools=[SlowTool()], timeout=0.05)
+    result = _execute_tools_parallel(calls, tools=[SlowTool()], timeout=0.05)
 
     assert len(result) == 1
     message = result[0]
