@@ -1,5 +1,7 @@
 # test_file_extraction_agent_route.py
 
+`test_document_qa_chat_completion_route_calls_completion_manager` 同时检查 backend 的 `metadata.task_id` 被传给 manager，用于跨轮缓存隔离。
+
 这份测试覆盖 `document-qa chat/completions` 的 HTTP 出口。route 层接收 backend 传来的 `completion_id + documents + append-only messages`，调用业务层 `completion_manager.create(...)`，并用 SSE 返回 QA agent 的过程事件。
 
 实现链路：

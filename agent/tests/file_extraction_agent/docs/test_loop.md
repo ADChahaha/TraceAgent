@@ -1,5 +1,12 @@
 # test_loop.py
 
+- `test_resolution_requires_tool_binding_before_invoking_model`：缺少 `bind_tools` 的模型在调用前报错，不能通过旧字典协议执行备用循环。
+
+超时验证链路：阻塞工具 → 到期返回失败 → SSE 与 ToolMessage 结果一致 → 释放阻塞 → 迟到成功不再改写事件。
+
+- `test_tool_timeout_emits_one_matching_result_and_discards_late_success`：验证超时只产生一个带调用 ID 的结果事件和 action，迟到成功被丢弃。
+- `test_tool_exception_is_reported_consistently_without_timeout`：普通异常保留真实错误，并与模型收到的结果一致。
+
 这份测试覆盖 QA completion 的 resolution loop。resolution 不再围绕 `task_spec`
 和字段写入，而是围绕 `ls/grep/read` 工具和用户可见的 evidence-bearing model
 message 推进。

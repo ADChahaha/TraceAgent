@@ -71,6 +71,7 @@ def _create_chat_completion_stream(request: ChatCompletionRequest):
     completion_manager = import_module("service.file_extraction_agent.manager").completion_manager
     return completion_manager.create(
         completion_id=request.completion_id,
+        task_id=request.metadata.get("task_id"),
         documents=request.documents,
         messages=request.messages,
         run_options=request.run_options,

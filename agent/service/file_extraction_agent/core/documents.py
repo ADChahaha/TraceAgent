@@ -301,18 +301,40 @@ def direct_text_without_nested_lists(node: HtmlNode) -> str:
 
 
 def parse_table(node: HtmlNode) -> dict[str, Any]:
+    """HTML 行与单元格 → 按跨度填充逻辑网格 → 首行列名及其余数据行。"""
     label = ""
     rows: list[list[str]] = []
+    occupied: dict[tuple[int, int], str] = {}
+    row_index = 0
     for child in walk(node):
         if child.tag == "caption" and not label:
             label = node_text(child)
         if child.tag == "tr":
-            cells = [node_text(grandchild) for grandchild in child.children if grandchild.tag in {"th", "td"}]
-            if cells:
-                rows.append(cells)
+            column = 0
+            for cell in (item for item in child.children if item.tag in {"th", "td"}):
+                while (row_index, column) in occupied:
+                    column += 1
+                colspan = _cell_span(cell, "colspan")
+                rowspan = _cell_span(cell, "rowspan")
+                for dy in range(rowspan):
+                    for dx in range(colspan):
+                        occupied[row_index + dy, column + dx] = node_text(cell)
+                column += colspan
+            width = max((col + 1 for row, col in occupied if row == row_index), default=0)
+            if width:
+                rows.append([occupied.get((row_index, col), "") for col in range(width)])
+            row_index += 1
     columns = rows[0] if rows else []
     data_rows = rows[1:] if rows else []
     return {"label": label, "columns": columns, "rows": data_rows}
+
+
+def _cell_span(cell: HtmlNode, attr: str) -> int:
+    """解析跨度；无效值按单格处理，限制异常跨度的内存开销。"""
+    try:
+        return max(1, min(int(cell.attrs.get(attr, "1")), 1000))
+    except ValueError:
+        return 1
 
 
 def render_list_markdown(items: list[dict[str, Any]]) -> str:
@@ -328,14 +350,18 @@ def render_table_markdown(table: dict[str, Any]) -> str:
     rows = table["rows"]
     if not columns:
         return ""
+    width = max(map(len, [columns, *rows]))
+
+    def render_row(row: list[str]) -> str:
+        cells = list(row) + [""] * (width - len(row))
+        return "| " + " | ".join(cell.replace("|", "\\|") for cell in cells) + " |"
     lines: list[str] = []
     if table.get("label"):
         lines.append(table["label"])
-    lines.append("| " + " | ".join(columns) + " |")
-    lines.append("| " + " | ".join("---" for _ in columns) + " |")
+    lines.append(render_row(columns))
+    lines.append(render_row(["---"] * width))
     for row in rows:
-        padded = list(row) + [""] * (len(columns) - len(row))
-        lines.append("| " + " | ".join(padded[: len(columns)]) + " |")
+        lines.append(render_row(row))
     return "\n".join(lines)
 
 

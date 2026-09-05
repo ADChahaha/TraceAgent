@@ -1,5 +1,9 @@
 # test_documents.py
 
+表格验证链路：HTML 合并单元格 → 展开行列跨度 → 写入 Markdown → 检查金额、列位置及竖线转义。
+
+- `test_table_preserves_merged_cells_and_wider_rows`：覆盖合并表头、跨行单元格、后续行更宽和单元格内竖线，确保内容不截断、不移列。
+
 这份测试覆盖新的「真实文件树」materialization。输入是多个带文件名的 HTML
 文档，输出是落盘的真实目录树（`DocumentFileTree`），每个 paragraph / list /
 table 都写成一个 `.md` 文件，供 `ls` / `grep`(rg) / `read` 工具在真实文件

@@ -1,10 +1,15 @@
 # test_manager.py
 
+内部事件验证：图产生事件字典 → runtime 通过队列传递 → stream 统一编码 SSE；异常文本也经 JSON 编码。
+
+- `test_graph_keeps_events_as_objects_until_stream_boundary`：图执行器返回事件字典，开始、索引、终态顺序不变。
+- `test_stream_encodes_runtime_failure_with_special_characters`：运行时异常含换行、制表符、引号和反斜杠时，仍输出一个可解析的 SSE 失败帧。
+
 这份测试覆盖 `file_extraction_agent.manager` 的 QA completion 生命周期：`ActiveCompletion`
 （单 completion 运行时，持有 state + model + 专属 queue + 锁，自行起 producer/consumer、
 裁定终态、清理）与 `CompletionManager`（多 completion 注册表 + create/terminate/status
 转发），以及模型配置读取。入口负责把 `completion_id`、`documents`、`messages` 和模型配置
-组装成图输入，然后把图执行器产出的 SSE 原样向外迭代。
+组装成图输入，然后将图执行器产出的事件字典在 stream 输出边界统一编码为 SSE。
 
 入口已经强类型化：`completion_manager.create(...)` 只接受
 `documents: list[InputDocument]`、`messages: list[DocumentQaMessage]`、
@@ -23,11 +28,18 @@ completion_manager.create(...)（公开入口 = CompletionManager 单例）
   -> terminate 在 lock 下置 cancel 状态：若当前没有运行中的 tool 批次，立即放 cancel sentinel
       唤醒 consumer；若正在执行 tool 批次，则标记 deferred cancel，等该批次跑完（或超时）后
       由 producer 以 completion.cancelled 收口，完整写入工具事件后再结束
-  -> consumer 阻塞 queue.get；普通事件按 FIFO yield；cancel sentinel 前已提交事件不丢弃
+  -> consumer 阻塞 queue.get；普通事件按 FIFO 编码为 SSE 后 yield；cancel sentinel 前已提交事件不丢弃
   -> 收到 cancel sentinel / 终态事件时 close_once 收口；finally 清理 workspace（注册表移除在 manager）
 ```
 
 ## 测试函数
+
+- `test_prepare_rejects_unsafe_completion_id_before_materializing`：危险路径 ID 在落盘前被拒绝；使用替身避免触碰外部目录。
+- `test_prepare_rejects_existing_workspace_without_overwriting`：已有目录不可被复用或覆盖。
+- `test_cleanup_rejects_workspace_outside_owned_parent`：清理越界目录前抛错，不调用删除。
+- `test_stream_preserves_terminal_words_in_data`：正文含终态字样时仍输出后续真实终态。
+- `test_terminal_status_reads_only_event_type`：三种 completion 终态都只按字典的 type 取状态。
+- `test_terminal_detection_requires_exact_event_type`：正文、status 和前缀相似名称不会结束流。
 
 - `test_create_completion_stream_builds_completion_input_and_runs_graph`：用 fake model builder 和 fake stream graph 确认 `completion_manager.create(...)` 会传递 completion id、落盘文件树、messages 和 resolution model。
 - `test_create_completion_stream_validates_input_before_iteration`：确认 completion 输入校验发生在返回 SSE iterator 前，route 层可以把业务入参错误稳定映射为 422。
@@ -52,3 +64,5 @@ completion_manager.create(...)（公开入口 = CompletionManager 单例）
 - `test_build_chat_model_builds_chat_completions_transport_when_configured`：确认 `api_transport=chat_completions` 时只构造 chat/completions 的 stream -> invoke 两级 attempt。
 - `test_build_chat_model_rejects_unknown_transport`：确认 `MODEL_API_TRANSPORT` 只允许 `responses` 或 `chat_completions`，不支持 `auto`。
 - `test_normalize_model_config_rejects_untyped_dict_input`：确认 `normalize_model_config` 拒绝未定型 dict 输入，模型配置边界也走强类型。
+
+事件类型测试直接读取字典的 `type`，正文、status 和相似前缀不决定终态；原有取消、FIFO 和终态唯一性测试继续检查对外 SSE。

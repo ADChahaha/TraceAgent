@@ -31,6 +31,18 @@ backend 持久化 task / messages / documents / events
 
 ## 2. 输入、输出和运行步骤
 
+运行与缓存的边界：`metadata.task_id` → route 传入 manager → `GraphState.task_id` → embedding 缓存按任务、文档相对路径与内容、模型/后端及分块配置生成版本键。缓存只保存相对路径，命中后映射到本轮 workspace；未提供 task_id 时只在当前 completion 内复用。
+
+工作目录：校验 completion_id 只含字母、数字、下划线和连字符（首字符为字母或数字，最长 128 字符）→ 在配置根目录下独占创建 completion 子目录 → 落盘文档 → 结束时检查目录仍属于原父目录后清理。危险 ID、已有目录或越界清理抛出 `ValueError`；模型初始化失败也清理已创建目录。
+
+表格落盘：HTML `rowspan/colspan` → 展开逻辑网格 → 按所有行的最大列数补齐 → 转义单元格竖线 → 写 Markdown，保留合并表头下的金额与列位置。
+
+工具结果：每次调用由 `ToolExecution` 记录带 `tool_call_id` 的开始事件 → 工具正常返回、异常或超时竞争同一个结果锁 → 固定唯一 action 与完成/失败事件 → 用相同结果构造模型的 ToolMessage。超时后的线程可能继续运行，但迟到结果不能再写入事件；一批工具共享从提交时起计算的超时期限。
+
+内部事件链路：`run_completion_graph_stream` 产生事件字典 → `ActiveCompletion` 在锁内提交到 `queue.Queue` → consumer 读取字典的 `type` 决定终态 → 仅在 `stream()` 输出处调用 `_sse` 编码。取消、兜底完成及运行时异常也先构造字典，统一使用 JSON 编码；正文、status 或相似前缀不决定终态。
+
+模型执行只有一条链路：`run_resolution_stream` 构建消息和工具 → `resolution_model.bind_tools(tools)` → LangGraph 的 agent/tools 循环 → 有工具调用则执行并回填 ToolMessage，无工具且有合法终止信号则完成。缺少绑定接口直接报错；模型调用全部尝试失败抛出 `RuntimeError`，由 manager 转为失败事件。测试仅替换 provider 响应，不使用专用 fake 循环。
+
 Python 入口是 `completion_manager.create(...)`（`manager.CompletionManager` 的进程单例）：
 
 ```text
@@ -44,7 +56,7 @@ completion_id + documents + messages + run_options + model_config
        -> build_graph_state(...) 产出 GraphState（不再有 DocumentQaCompletionInput 包装对象）
   -> 构造 ActiveCompletion(completion_id, state, model) 并放入注册表
   -> model.build_resolution_model(model_config) 构建 LangChain chat model
-  -> manager 启动 producer 线程运行 graph.run_completion_graph_stream(...)
+  -> manager 启动 producer 线程运行 manager.run_completion_graph_stream(...)
        -> 输出 completion.created
        -> 输出 source_indexed(workspace_root + tree)
        -> loop.run_resolution_stream(...)
@@ -56,8 +68,8 @@ completion_id + documents + messages + run_options + model_config
                terminal stop signal 且无工具时自然结束
         -> resolution 正常结束输出 completion.completed
         -> resolution 异常输出 tool_failed(resolution) + completion.failed
-        -> producer 把每条 SSE event 放入 runtime queue
-   -> manager 的 SSE consumer 从 runtime queue 取 event 并向 HTTP response yield
+        -> producer 把每条事件字典放入 runtime queue
+   -> ActiveCompletion 的 consumer 从 queue 取事件字典，统一编码为 SSE 后向 HTTP response yield
         -> 无事件时阻塞等待 runtime queue
         -> cancel endpoint 通过 runtime 往 queue 放入 cancel sentinel，主动唤醒 consumer
         -> consumer 按 FIFO 先发出 cancel sentinel 之前已提交的普通 event
@@ -107,7 +119,7 @@ flowchart TD
     B["manager.prepare_completion_state<br/>校验 completion_id / documents / messages<br/>归一化 RunOptions<br/>materialize_tree 落盘"]
     C["documents.materialize_tree<br/>HTML -> DocumentFileTree<br/>落盘真实文件仓库"]
     D["graph.build_graph_state<br/>生成 GraphState"]
-    E["graph.run_completion_graph_stream<br/>组织本轮 completion 事件"]
+    E["manager.run_completion_graph_stream<br/>组织本轮 completion 事件"]
     F["completion.created"]
     G["source_indexed<br/>workspace_root + tree"]
     H["loop.run_resolution_stream<br/>构建 prompt / 历史消息 / tools"]
@@ -165,7 +177,7 @@ HTTP SSE consumer
   -> close_once 成功则 yield completion.cancelled 并关闭本轮 SSE
 
 producer 线程
-  -> 运行 graph.run_completion_graph_stream(...)
+  -> 运行 manager.run_completion_graph_stream(...)
   -> graph 内部可能阻塞在 LangChain/OpenAI provider.stream()
   -> 每次 provider 请求必须使用明确 request timeout，不能无限等待
   -> provider 吐出 chunk 后继续生成 model/tool/completion event
@@ -256,7 +268,7 @@ consumer 的结束条件来自 queue item，不直接读取 `cancel_requested`�
 ```text
 consumer queue.get() -> 普通 event
   -> 这个 event 已经在 producer/cancel 线性化点之前成功提交
-  -> consumer 直接按 FIFO yield 给 backend，不再用 cancel flag 二次裁决
+  -> consumer 直接按 FIFO 经 _sse 编码后 yield 给 backend，不再用 cancel flag 二次裁决
 
 consumer queue.get() -> cancel sentinel
   -> runtime.close_once("cancelled")
@@ -271,19 +283,20 @@ consumer queue.get() -> completion.completed / completion.failed
 
 `cancel_requested` 只服务于入队侧：producer 用它判断后续 event 能不能 commit，cancel handler 用它避免重复塞 sentinel。consumer 如果用 `cancel_requested` 直接停流，会跳过 sentinel 前已经提交的旧 event，破坏 FIFO 语义。
 
-终态事件只能发一次。cancel consumer、producer 正常完成和 producer 失败都会竞争调用 `runtime.close_once(status)`：
+终态分为提交与输出两个阶段：
 
 ```text
-consumer 收到 cancel sentinel
-  -> close_once("cancelled") 成功：yield completion.cancelled 并结束 SSE
-  -> close_once(...) 失败：说明 producer 已经先完成，consumer 不再发第二个终态
+producer 生成终态字典
+  -> commit_terminal_event(event) 由 event.type 派生 status
+  -> 锁内检查取消/关闭/已提交状态，只允许提交一次
+  -> consumer 取出终态，close_once(status) 成功后编码为 SSE 并结束
 
-producer 生成 completion.completed / completion.failed / completion.cancelled
-  -> close_once(status) 成功：把该 terminal event 投递给 consumer
-  -> close_once(...) 失败：说明 cancel 或其他终态已经生效，丢弃该 event 并退出
+consumer 收到 cancel sentinel
+  -> close_once("cancelled") 成功后构造取消事件字典
+  -> 经同一 _sse 编码器输出并结束
 ```
 
-同一个 `completion_id` 不能同时出现 `completion.cancelled`、`completion.completed` 或 `completion.failed` 中的多个终态；谁先原子关闭 runtime，谁就是唯一结果。
+没有活动工具批次时，取消通过 sentinel 收口；活动批次的延迟取消允许先提交完整工具事件。已入队普通事件保持 FIFO，终态只输出一次。
 
 ## 4. 真实文件树
 
@@ -371,7 +384,7 @@ grep(query="termination", scope="/tmp/.../0001-contract/0001-Termination", max_r
 ```text
 search_embedding(query="early termination", top_k=5, scope="")
   -> embedder.encode([query])                              # 惰性单例，OpenVINO/torch
-  -> index = _get_index(state, embedder)                    # 会话内缓存 -> 磁盘缓存(content hash) -> 构建落盘
+  -> index = _get_index(state, embedder)                    # task_id + 文档版本磁盘缓存 -> 未命中则构建落盘
   -> search_top_k(query_vec, index, top_k)                  # 纯 numpy 余弦
   -> 返回 [{score, document, chunk_id, text, token_range, covered_files}]
 ```
@@ -529,8 +542,8 @@ core/documents.py
 
 core/graph.py
   -> 定义 GraphState 与 build_graph_state（单 completion 的运行状态累积器）
-  -> 不做事件组装与 SSE 写出；一轮 completion 的事件组装与终态收口由
-     manager.run_completion_graph_stream 负责
+  -> 不做事件组装与 SSE 写出；manager.run_completion_graph_stream 组装事件字典，
+     ActiveCompletion.stream 负责运行时收口及 SSE 输出
 
 core/tools/              # 工具包：每个工具一个文件，统一由 __init__ 暴露 build_tools
   -> __init__.py 对外统一接口 build_tools(state)，转出 _ls/_grep/_read/_search_embedding
@@ -563,7 +576,7 @@ manager.py
   -> prepare_completion_state(...) 做入口校验（非空、filename/html 非空）、
      派生 workspace_root、触发 materialize_tree 落盘并产出 GraphState（失败抛 ValueError）
   -> run_completion_graph_stream(...)：把一轮 completion 的事件（completion.created /
-     source_indexed / resolution / terminal）组装成 SSE，并在结尾按终止类型选终态；
+     source_indexed / resolution / terminal）组装成事件字典，并在结尾按终止类型选终态；
      接受可选的 should_stop 回调，用于在每一步间检查外部取消信号
   -> ActiveCompletion：单 completion 的运行时，持有 state + resolution_model + 专属 queue + 锁；
      stream()（起 producer 线程 + 消费队列产 SSE + finally 清理）、_produce()（跑

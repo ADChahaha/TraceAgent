@@ -33,6 +33,7 @@ def test_document_qa_chat_completion_route_calls_completion_manager(monkeypatch)
             "documents": [{"filename": "notice.html", "html": '<p id="p1">通知</p>'}],
             "messages": [{"role": "user", "content": "这份文件说了什么？"}],
             "stream": True,
+            "metadata": {"task_id": "task_123"},
         },
     ) as response:
         body = response.read().decode()
@@ -40,6 +41,7 @@ def test_document_qa_chat_completion_route_calls_completion_manager(monkeypatch)
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     assert seen_call["completion_id"] == "cmp_123"
+    assert seen_call["task_id"] == "task_123"
     assert seen_call["documents"][0].filename == "notice.html"
     assert seen_call["messages"][0].content == "这份文件说了什么？"
     assert "memory" not in seen_call

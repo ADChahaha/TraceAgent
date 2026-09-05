@@ -1,4 +1,41 @@
-last updated: 2026-09-03
+last updated: 2026-09-05 13:23:11
+
+## 2026-09-05 13:23:11
+
+### 已完成工作
+
+- 内部事件统一为字典，仅在 stream 输出边界编码 SSE。
+- 删除 fake 专用循环，统一 LangGraph 执行路径。
+- 同步设计和测试文档。
+
+### 验证
+
+- TDD red：三项目标测试失败。
+- 重构后在 agent-gate 运行全套测试：151 passed。
+
+### 当前进展
+
+- 代码、测试及设计文档已同步。
+
+## 2026-09-05 12:42:46
+
+### 已完成工作
+
+- completion_id 校验 → 独占创建工作目录 → 清理前检查所属父目录，拒绝路径越界及已有目录复用。
+- HTML 表格展开 rowspan/colspan，按最大列数输出 Markdown 并转义竖线，避免合并表头导致金额丢列。
+- 工具返回、异常和超时共用唯一结果收口；SSE 与模型 ToolMessage 使用相同结果和 tool_call_id，丢弃迟到结果。
+- metadata.task_id → GraphState → 按任务及文档版本复用 embedding 缓存；缓存保存相对路径，命中后绑定当前 completion 的引用路径。
+- SSE 终态仅按 event 字段精确判断，正文和注释中的终态字样不再影响生命周期。
+- 同步设计文档和各测试文件对应的测试说明。
+
+### 验证
+
+- TDD red：相关测试 `28 failed, 58 passed`，失败对应上述目标行为。
+- 激活 agent-gate，在 agent/ 执行 `python -X utf8 -m pytest tests -q -p no:cacheprovider --tb=short`，结果 `154 passed`；UTF-8 模式避免 Windows 默认编码影响源码读取测试。
+
+### 下一步
+
+- 按用户要求暂不修改 backend；其历史重建仍按工具名称配对，同名并行工具的 tool_call_id 配对适配留待后续。
 
 ## 2026-09-03 18:23:45
 

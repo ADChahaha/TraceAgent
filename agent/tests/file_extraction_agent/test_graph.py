@@ -1,39 +1,27 @@
 from __future__ import annotations
 
-import json
+from unittest.mock import Mock
 
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk
+from service.file_extraction_agent.core.model import ChatModelFallbackChain, ModelCallAttempt
 
 from service.file_extraction_agent.manager import prepare_completion_state, run_completion_graph_stream
 from service.file_extraction_agent.schemas import DocumentQaMessage, InputDocument
 
 
-class FakeStreamingModel:
-    def __init__(self):
-        self.calls = [
-            {
-                "tool_name": "ls",
-                "content": "我先看文档结构。",
-                "arguments": {"path": ""},
-            },
-            {
-                "tool_name": "grep",
-                "content": "我搜索 termination 相关位置。",
-                "arguments": {"query": "terminate", "max_results": 5},
-            },
-            {
-                "tool_name": "read",
-                "content": "我读取命中的终止条款。",
-                "arguments": {"path": "/abs/0001-contract/0001-Termination/0001-termination.md"},
-            },
-            {
-                "content": "答案：可以提前终止，但需要提前 30 天书面通知。[30 天书面通知](/abs/0001-contract/0001-Termination/0001-termination.md)",
-            },
-        ]
-
-    def invoke(self, messages):
-        del messages
-        return self.calls.pop(0)
+def _scripted_model():
+    provider = Mock(spec=["bind_tools", "invoke"])
+    provider.bind_tools.return_value = provider
+    provider.invoke.side_effect = [
+        AIMessage(content="我先看文档结构。", tool_calls=[
+            {"id": "call-ls", "name": "ls", "args": {"path": ""}},
+        ]),
+        AIMessage(content="我搜索条款。", tool_calls=[
+            {"id": "call-grep", "name": "grep", "args": {"query": "terminate", "max_results": 5}},
+        ]),
+        AIMessage(content="答案。", response_metadata={"finish_reason": "stop"}),
+    ]
+    return ChatModelFallbackChain([ModelCallAttempt("test_invoke", provider, False)]), provider
 
 
 def _input(tmp_path):
@@ -54,20 +42,14 @@ def _input(tmp_path):
     )
 
 
-def _sse_payloads(events: list[str]) -> list[dict]:
-    payloads = []
-    for event in events:
-        data_lines = [line.removeprefix("data: ") for line in event.splitlines() if line.startswith("data: ")]
-        if data_lines:
-            payloads.append(json.loads("\n".join(data_lines)))
-    return payloads
+def test_run_completion_graph_stream_yields_objects_and_terminal_completion(tmp_path):
+    model, provider = _scripted_model()
+    events = list(run_completion_graph_stream(_input(tmp_path), model))
 
-
-def test_run_completion_graph_stream_yields_sse_events_and_terminal_completion(tmp_path):
-    events = list(run_completion_graph_stream(_input(tmp_path), FakeStreamingModel()))
-
-    assert all(event.endswith("\n\n") for event in events)
-    payloads = _sse_payloads(events)
+    assert all(isinstance(event, dict) for event in events)
+    history = provider.invoke.call_args.args[0]
+    assert [m.tool_call_id for m in history if m.type == "tool"] == ["call-ls", "call-grep"]
+    payloads = events
     assert payloads[0]["type"] == "completion.created"
     assert payloads[0]["id"] == "cmp_123"
     assert payloads[1]["type"] == "source_indexed"
@@ -82,61 +64,46 @@ def test_run_completion_graph_stream_yields_sse_events_and_terminal_completion(t
 
 
 def test_run_completion_graph_stream_flushes_after_each_tool_call(tmp_path):
-    model = FakeStreamingModel()
+    model, provider = _scripted_model()
     stream = iter(run_completion_graph_stream(_input(tmp_path), model))
 
-    created = _sse_payloads([next(stream)])[0]
-    source = _sse_payloads([next(stream)])[0]
-    model_message = _sse_payloads([next(stream)])[0]
-    tool_started = _sse_payloads([next(stream)])[0]
+    created = next(stream)
+    source = next(stream)
+    model_message = next(stream)
+    tool_started = next(stream)
 
     assert created["type"] == "completion.created"
     assert source["type"] == "source_indexed"
     assert model_message["type"] == "model_message"
     assert tool_started["type"] == "tool_started"
     assert tool_started["tool"] == "ls"
-    assert len(model.calls) == 3
+    assert provider.invoke.call_count == 1
 
 
 def test_run_completion_graph_stream_honors_external_should_stop(tmp_path):
-    class StopAfterFirstModel:
-        def __init__(self):
-            self.calls = 0
-
-        def invoke(self, messages):
-            del messages
-            self.calls += 1
-            if self.calls == 1:
-                return {
-                    "tool_name": "ls",
-                    "content": "我先看结构。",
-                    "arguments": {"path": ""},
-                }
-            return {"content": "最终答案。"}
-
     stop_after = {"value": False}
     state = _input(tmp_path)
     events = list(
         run_completion_graph_stream(
             state,
-            StopAfterFirstModel(),
+            _scripted_model()[0],
             should_stop=lambda: stop_after["value"],
         )
     )
-    payloads = _sse_payloads(events)
+    payloads = events
     assert payloads[-1]["type"] == "completion.completed"
     assert state.events[-1]["type"] != "completion.cancelled"
 
     stop_after["value"] = True
-    state2 = _input(tmp_path)
+    state2 = _input(tmp_path / "second_run")
     events2 = list(
         run_completion_graph_stream(
             state2,
-            StopAfterFirstModel(),
+            _scripted_model()[0],
             should_stop=lambda: stop_after["value"],
         )
     )
-    payloads2 = _sse_payloads(events2)
+    payloads2 = events2
     assert payloads2[-1]["type"] == "completion.cancelled"
 
 
@@ -168,7 +135,7 @@ def test_should_stop_backfills_cancel_tool_replies_for_pending_tool_calls(tmp_pa
             should_stop=lambda: stop_after["value"],
         )
     )
-    payloads = _sse_payloads(events)
+    payloads = events
     cancel_replies = [p for p in payloads if p.get("type") == "tool_completed" and p.get("tool") == "read"]
     assert len(cancel_replies) >= 1
     result = cancel_replies[0].get("result", {})

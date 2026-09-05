@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -29,6 +30,8 @@ class GraphState:
     failed_stage: str | None = None
     events_lock: threading.Lock = field(default_factory=threading.Lock)
     tool_batch_active: bool = False
+    task_id: str | None = None
+    workspace_parent: Path | None = None
 
 
 def build_graph_state(

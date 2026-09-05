@@ -18,13 +18,57 @@ run_tool(state, tool_name, args, execute)
 
 `expose_entries` 等纯工具函数放在这里供各 tool 复用；`order_key` 为共享的文档树
 命名排序函数，来自 `core/documents.py`，此处仅重新导出。
+
+并行执行时由 `ToolExecution` 接管事件：构造时写开始 → `invoke` 设置本线程的
+托管上下文，内层 `run_tool` 只执行 → 返回、异常或超时通过 `finish` 锁定唯一
+结果并写 action/终态事件。托管上下文在 finally 复位，迟到结果不重复写入。
 """
 
 from __future__ import annotations
 
 from typing import Any, Callable
+from contextvars import ContextVar
+import threading
 
 from service.file_extraction_agent.core.documents import order_key
+
+
+_MANAGED_TOOL: ContextVar[bool] = ContextVar("managed_qa_tool", default=False)
+
+
+class ToolExecution:
+    """单次工具调用：开始事件 → 执行或超时竞争 → 固定唯一结果，丢弃迟到结果。"""
+
+    def __init__(self, state: Any, name: str, args: dict[str, Any], call_id: str) -> None:
+        self.state, self.name, self.args, self.call_id = state, name, args, call_id
+        self._lock = threading.Lock()
+        self._result: Any = None
+        self._finished = False
+        emit_event(state, {"type": "tool_started", "tool": name, "args": args, "tool_call_id": call_id})
+
+    def invoke(self, execute: Callable[[], Any]) -> Any:
+        token = _MANAGED_TOOL.set(True)
+        try:
+            try:
+                result = execute()
+            except Exception as exc:
+                result = {"ok": False, "errors": [{"message": str(exc)}]}
+            return self.finish(result)
+        finally:
+            _MANAGED_TOOL.reset(token)
+
+    def finish(self, result: Any) -> Any:
+        with self._lock:
+            if not self._finished:
+                self._finished = True
+                self._result = result
+                record_action(self.state, self.name, self.args, result)
+                failed = isinstance(result, dict) and result.get("ok") is False
+                emit_event(self.state, {
+                    "type": "tool_failed" if failed else "tool_completed", "tool": self.name,
+                    "args": self.args, "result": result, "tool_call_id": self.call_id,
+                })
+            return self._result
 
 
 def run_tool(
@@ -34,6 +78,9 @@ def run_tool(
     execute: Callable[[], dict[str, Any]],
 ) -> dict[str, Any]:
     """Wrap a tool execution, emitting started/completed/failed events."""
+
+    if _MANAGED_TOOL.get():
+        return execute()
 
     emit_event(
         state,
@@ -96,6 +143,7 @@ def expose_entries(entries: list[Any]) -> list[dict[str, Any]]:
 
 
 __all__ = [
+    "ToolExecution",
     "run_tool",
     "record_action",
     "emit_event",

@@ -122,12 +122,12 @@ POST /v1/document-qa/chat/completions
   -> route 解析 ChatCompletionRequest
   -> completion_manager.create(...)（内含 prepare_completion_state 校验 completion_id/documents/messages/run_options）
   -> documents 把多份 HTML 落盘成真实文件树（DocumentFileTree）
-  -> graph 输出 completion.created 和 source_indexed（workspace_root + tree）
-  -> loop 让模型通过 ls / grep / read 浏览文档
+  -> manager 组装 completion.created 和 source_indexed 事件字典（workspace_root + tree）
+  -> loop 绑定工具并通过唯一 LangGraph 循环执行模型/工具调用
   -> tools 把每次工具调用写成 tool_started/tool_completed/tool_failed
   -> 过程 model_message 在阅读过程中内嵌真实 .md 文件路径 Markdown link
   -> 最终 model_message 带 is_final=true，在被支撑句子后紧跟数字 evidence citation
-  -> completion.completed / completion.cancelled / completion.failed 收口 SSE
+  -> ActiveCompletion 队列传递事件字典，按 type 判定终态，仅在 stream 输出边界编码 SSE
 ```
 
 `file_extraction_agent` 第一版只在内存 `CompletionManager` 注册表保存 active runtime，用于取消正在运行的 completion。它不保存历史 completion，也不支持多 worker 进程共享 cancel 状态。

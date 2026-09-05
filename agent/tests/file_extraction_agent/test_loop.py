@@ -19,6 +19,66 @@ from service.file_extraction_agent.manager import prepare_completion_state
 from service.file_extraction_agent.schemas import DocumentQaMessage, InputDocument
 
 
+def test_resolution_requires_tool_binding_before_invoking_model(tmp_path):
+    calls = []
+    model = SimpleNamespace(invoke=lambda messages: calls.append(messages) or {"content": "旧协议答案"})
+    with pytest.raises((TypeError, AttributeError), match="bind_tools"):
+        list(resolution_module.run_resolution_stream(_state(tmp_path), model))
+    assert calls == []
+
+
+def test_tool_timeout_emits_one_matching_result_and_discards_late_success(tmp_path):
+    import threading
+    from service.file_extraction_agent.core.tools.base import run_tool
+    state = _state(tmp_path)
+    release = threading.Event()
+    finished = threading.Event()
+
+    class SlowTool:
+        name = "read"
+
+        def invoke(self, args):
+            try:
+                return run_tool(state, self.name, args, lambda: (release.wait(2), {"ok": True})[1])
+            finally:
+                finished.set()
+
+    try:
+        messages = resolution_module._execute_tools_parallel(
+            state, [{"id": "slow", "name": "read", "args": {"path": "x"}}], [SlowTool()], timeout=0.02,
+        )
+        result = json.loads(messages[0].content)
+        terminal = [e for e in state.events if e["type"] in {"tool_completed", "tool_failed"}]
+        assert len(terminal) == 1
+        assert terminal[0]["result"] == result
+        assert terminal[0]["tool_call_id"] == "slow"
+        assert "timeout" in result["errors"][0]["message"]
+        snapshot = list(state.events)
+    finally:
+        release.set()
+        assert finished.wait(2)
+    assert state.events == snapshot
+    assert len(state.actions) == 1
+
+
+def test_tool_exception_is_reported_consistently_without_timeout(tmp_path):
+    state = _state(tmp_path)
+
+    class BrokenTool:
+        name = "read"
+
+        def invoke(self, args):
+            raise ValueError("invalid path")
+
+    messages = resolution_module._execute_tools_parallel(
+        state, [{"id": "broken", "name": "read", "args": {}}], [BrokenTool()], timeout=1,
+    )
+    result = json.loads(messages[0].content)
+    assert result["errors"][0]["message"] == "invalid path"
+    assert state.events[-1]["result"] == result
+    assert state.events[-1]["tool_call_id"] == "broken"
+
+
 def _company_paragraph_path(state):
     def first_md(dir_path):
         for entry in state.document.entries(dir_path):

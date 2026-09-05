@@ -15,7 +15,7 @@ _get_index(state, embedder, scope)
        ├─ 命中 -> 直接复用（不重新 embed）
        └─ 未命中 -> build_index(...) 构建 + _save_index 落盘 + 返回
 
-index cache key = sha256(model_id + 文档内容哈希 + chunk_size + overlap)
+index cache key = sha256(task_id + model_id + backend + 文档相对路径与内容 + chunk_size + overlap)
 ```
 
 环境配置：
@@ -26,6 +26,7 @@ index cache key = sha256(model_id + 文档内容哈希 + chunk_size + overlap)
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 import shutil
 from pathlib import Path
 from typing import Any
@@ -41,12 +42,7 @@ EMBEDDING_INDEX_DIR = os.getenv(
 
 
 def _get_index(state: Any, embedder: Any, scope: str = "") -> Any:
-    """Read or build-on-demand the embedding index for the current workspace.
-
-    Index is keyed by a content hash so it can be persisted and reused across
-    sessions; within one completion the built index is cached on state so no
-    re-embedding happens on repeated calls.
-    """
+    """文件树 → 任务和文档版本键 → 读缓存或编码落盘 → 将相对引用映射到本轮目录。"""
 
     streams = _build_streams(state)
     if not streams:
@@ -58,11 +54,17 @@ def _get_index(state: Any, embedder: Any, scope: str = "") -> Any:
     from service.file_extraction_agent.core.tools.embedding.search import build_index
 
     model_id = getattr(state, "embedding_model", None) or DEFAULT_EMBEDDING_MODEL
-
-    tokenizer = get_tokenizer(model_id)
-    cache_key = _index_cache_key(streams, model_id)
+    root = state.document.root.resolve()
+    streams = {
+        document: [(Path(path).relative_to(root).as_posix(), text) for path, text in files]
+        for document, files in streams.items()
+    }
+    task_id = getattr(state, "task_id", None) or state.completion_id
+    backend = getattr(state, "embedding_backend", None) or os.getenv("EMBEDDING_BACKEND", "openvino")
+    cache_key = _index_cache_key(streams, model_id, task_id=task_id, backend=backend)
     index = _load_index(cache_key)
     if index is None:
+        tokenizer = get_tokenizer(model_id)
         index = build_index(
             streams,
             embedder=embedder,
@@ -74,10 +76,14 @@ def _get_index(state: Any, embedder: Any, scope: str = "") -> Any:
         _save_index(
             cache_key,
             index,
-            getattr(state, "embedding_backend", None) or os.getenv("EMBEDDING_BACKEND", "openvino"),
+            backend,
             model_id,
         )
-    return index
+    # 缓存只保存相对路径；返回时绑定本轮 workspace，不能复用旧 completion 的绝对路径。
+    return replace(index, chunks=[
+        replace(chunk, covered_files=[str(root / path) for path in chunk.covered_files])
+        for chunk in index.chunks
+    ])
 
 
 def _build_streams(state: Any) -> dict[str, list[tuple[str, str]]]:
@@ -115,14 +121,19 @@ def _md_files_under(root: Path) -> list[tuple[str, str]]:
     return found
 
 
-def _index_cache_key(streams: dict[str, list[tuple[str, str]]], model_id: str) -> str:
+def _index_cache_key(
+    streams: dict[str, list[tuple[str, str]]], model_id: str, *, task_id: str = "", backend: str = "",
+) -> str:
     import hashlib
     import json
 
-    payload = {"model": model_id, "chunk_size": DEFAULT_CHUNK_SIZE, "overlap": DEFAULT_CHUNK_OVERLAP}
+    payload = {
+        "version": 2, "task_id": task_id, "backend": backend, "model": model_id,
+        "chunk_size": DEFAULT_CHUNK_SIZE, "overlap": DEFAULT_CHUNK_OVERLAP, "documents": {},
+    }
     for document_name, files in streams.items():
         hashes = [hashlib.sha256(f"{path}\0{text}".encode("utf-8")).hexdigest() for path, text in files]
-        payload[document_name] = hashes
+        payload["documents"][document_name] = hashes
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
     return digest
 

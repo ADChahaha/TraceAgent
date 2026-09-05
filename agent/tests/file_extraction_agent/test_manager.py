@@ -18,6 +18,106 @@ from service.file_extraction_agent.manager import (
 from service.file_extraction_agent.schemas import DocumentQaMessage, InputDocument, ModelConfig, RunOptions
 
 
+def test_graph_keeps_events_as_objects_until_stream_boundary(tmp_path, monkeypatch):
+    state = prepare_completion_state(
+        completion_id="cmp_objects", workspace_root=tmp_path,
+        documents=[InputDocument(filename="a.html", html="<p>真实正文</p>")],
+        messages=[DocumentQaMessage(role="user", content="问题")],
+    )
+    monkeypatch.setattr(manager_module, "run_resolution_stream", lambda *args: iter([{"ok": True}]))
+    events = list(manager_module.run_completion_graph_stream(state, object()))
+    assert all(isinstance(event, dict) for event in events)
+    assert [event["type"] for event in events] == [
+        "completion.created", "source_indexed", "completion.completed",
+    ]
+
+
+def test_stream_encodes_runtime_failure_with_special_characters(tmp_path, monkeypatch):
+    import json
+    error = '失败：第一行\n第二行\t"引号"\\路径'
+
+    def fail(*args, **kwargs):
+        raise RuntimeError(error)
+
+    monkeypatch.setattr(manager_module, "build_resolution_model", lambda config: object())
+    monkeypatch.setattr(manager_module, "run_completion_graph_stream", fail)
+    frames = list(CompletionManager().create(
+        completion_id="cmp_error", run_options=RunOptions(workspace_root=str(tmp_path)),
+        documents=[InputDocument(filename="a.html", html="<p>正文</p>")],
+        messages=[DocumentQaMessage(role="user", content="问题")],
+    ))
+    assert len(frames) == 1
+    event_line, data_line, _, _ = frames[0].split("\n")
+    assert event_line == "event: completion.failed"
+    assert json.loads(data_line.removeprefix("data: "))["error_message"] == error
+
+
+@pytest.mark.parametrize("completion_id", ["..", ".", "../other", "a/b", "a\\b", "C:\\outside", "/outside"])
+def test_prepare_rejects_unsafe_completion_id_before_materializing(tmp_path, monkeypatch, completion_id):
+    calls = []
+    monkeypatch.setattr(manager_module, "materialize_tree", lambda docs, root: calls.append(root))
+    with pytest.raises(ValueError, match="completion_id"):
+        prepare_completion_state(
+            completion_id=completion_id, workspace_root=tmp_path,
+            documents=[InputDocument(filename="a.html", html="<p>x</p>")],
+            messages=[DocumentQaMessage(role="user", content="问题")],
+        )
+    assert not calls
+
+
+def test_prepare_rejects_existing_workspace_without_overwriting(tmp_path):
+    existing = tmp_path / "cmp_existing"
+    existing.mkdir()
+    marker = existing / "keep.md"
+    marker.write_text("保留", encoding="utf-8")
+    with pytest.raises(ValueError, match="workspace"):
+        prepare_completion_state(
+            completion_id="cmp_existing", workspace_root=tmp_path,
+            documents=[InputDocument(filename="a.html", html="<p>x</p>")],
+            messages=[DocumentQaMessage(role="user", content="问题")],
+        )
+    assert list(existing.iterdir()) == [marker]
+
+
+def test_cleanup_rejects_workspace_outside_owned_parent(tmp_path, monkeypatch):
+    removed = []
+    state = SimpleNamespace(document=SimpleNamespace(root=tmp_path), workspace_parent=tmp_path / "owned")
+    monkeypatch.setattr(manager_module.shutil, "rmtree", lambda *a, **k: removed.append(a))
+    with pytest.raises(ValueError, match="workspace"):
+        manager_module._cleanup_workspace(state)
+    assert not removed
+
+
+@pytest.mark.parametrize("marker", ["completed", "cancelled", "failed"])
+def test_stream_preserves_terminal_words_in_data(tmp_path, monkeypatch, marker):
+    import json
+    ordinary = {"type": "model_message", "content": f"event: completion.{marker}"}
+    terminal = {"type": "completion.completed", "status": "completed"}
+    monkeypatch.setattr(manager_module, "build_resolution_model", lambda config: object())
+    monkeypatch.setattr(manager_module, "run_completion_graph_stream", lambda *a, **k: iter([ordinary, terminal]))
+    frames = list(CompletionManager().create(
+        completion_id="cmp_words", run_options=RunOptions(workspace_root=str(tmp_path)),
+        documents=[InputDocument(filename="a.html", html="<p>x</p>")],
+        messages=[DocumentQaMessage(role="user", content="问题")],
+    ))
+    assert [json.loads(frame.split("data: ", 1)[1]) for frame in frames] == [ordinary, terminal]
+
+
+@pytest.mark.parametrize("status", ["completed", "cancelled", "failed"])
+def test_terminal_status_reads_only_event_type(status):
+    event = {"type": f"completion.{status}", "content": "event: completion.cancelled"}
+    assert manager_module._terminal_status(event) == status
+
+
+@pytest.mark.parametrize("event", [
+    {"type": "completion.completed.extra"},
+    {"type": "model_message", "status": "failed", "content": "event: completion.failed"},
+    {"content": "event: completion.cancelled"},
+])
+def test_terminal_detection_requires_exact_event_type(event):
+    assert manager_module._terminal_status(event) is None
+
+
 def test_create_completion_stream_builds_completion_input_and_runs_graph(monkeypatch):
     captured = {}
 
@@ -30,7 +130,7 @@ def test_create_completion_stream_builds_completion_input_and_runs_graph(monkeyp
         captured["document_root"] = str(state.document.root)
         captured["messages"] = state.messages
         captured["model"] = resolution_model
-        yield 'event: completion.completed\ndata: {"id":"cmp_123"}\n\n'
+        yield {'id': 'cmp_123', 'type': 'completion.completed'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_resolution_model", fake_build_resolution_model)
     monkeypatch.setattr("service.file_extraction_agent.manager.run_completion_graph_stream", fake_run_completion_graph_stream)
@@ -45,7 +145,7 @@ def test_create_completion_stream_builds_completion_input_and_runs_graph(monkeyp
         )
     )
 
-    assert events == ['event: completion.completed\ndata: {"id":"cmp_123"}\n\n']
+    assert events == ['event: completion.completed\ndata: {"id":"cmp_123","type":"completion.completed"}\n\n']
     assert captured["completion_id"] == "cmp_123"
     assert captured["document_root"].endswith("cmp_123")
     assert captured["messages"][0].content == "问题"
@@ -83,7 +183,7 @@ def test_create_completion_stream_registers_active_completion_before_iteration(m
     def fake_run_completion_graph_stream(completion_input, resolution_model, **kwargs):
         del completion_input, resolution_model
         graph_called.set()
-        yield 'event: completion.completed\ndata: {"id":"cmp_early_cancel"}\n\n'
+        yield {'id': 'cmp_early_cancel', 'type': 'completion.completed'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_resolution_model", fake_build_resolution_model)
     monkeypatch.setattr("service.file_extraction_agent.manager.run_completion_graph_stream", fake_run_completion_graph_stream)
@@ -116,7 +216,7 @@ def test_create_completion_stream_cancel_does_not_wait_for_blocked_graph(monkeyp
         del completion_input, resolution_model
         graph_started.set()
         release_graph.wait(timeout=1.0)
-        yield 'event: completion.completed\ndata: {"id":"cmp_blocked"}\n\n'
+        yield {'id': 'cmp_blocked', 'type': 'completion.completed'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_resolution_model", fake_build_resolution_model)
     monkeypatch.setattr("service.file_extraction_agent.manager.run_completion_graph_stream", fake_run_completion_graph_stream)
@@ -164,11 +264,11 @@ def test_create_completion_stream_flushes_committed_events_before_cancel(monkeyp
 
     def fake_run_completion_graph_stream(completion_input, resolution_model, **kwargs):
         del completion_input, resolution_model
-        yield 'event: model_message\ndata: {"type":"model_message","content":"first"}\n\n'
+        yield {'type': 'model_message', 'content': 'first'}
         second_event_reached_graph.set()
-        yield 'event: tool_completed\ndata: {"type":"tool_completed","tool":"read"}\n\n'
+        yield {'type': 'tool_completed', 'tool': 'read'}
         release_graph.wait(timeout=1.0)
-        yield 'event: completion.completed\ndata: {"id":"cmp_flush","type":"completion.completed","status":"completed"}\n\n'
+        yield {'id': 'cmp_flush', 'type': 'completion.completed', 'status': 'completed'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_resolution_model", fake_build_resolution_model)
     monkeypatch.setattr("service.file_extraction_agent.manager.run_completion_graph_stream", fake_run_completion_graph_stream)
@@ -214,7 +314,7 @@ def test_should_stop_is_wired_to_cancel_requested(monkeypatch):
         seen_should_stop["value"] = kwargs.get("should_stop")
         batch_running.set()
         release_batch.wait(timeout=1.0)
-        yield 'event: completion.completed\ndata: {"id":"cmp_ws","type":"completion.completed","status":"completed"}\n\n'
+        yield {'id': 'cmp_ws', 'type': 'completion.completed', 'status': 'completed'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_resolution_model", fake_build_resolution_model)
     monkeypatch.setattr("service.file_extraction_agent.manager.run_completion_graph_stream", fake_run_completion_graph_stream)
@@ -260,10 +360,10 @@ def test_terminate_defers_cancel_until_active_tool_batch_settles(monkeypatch):
             state.tool_batch_active = True
         batch_running.set()
         release_batch.wait(timeout=1.0)
-        yield 'event: tool_completed\ndata: {"id":"cmp_deferred","type":"tool_completed","tool":"read"}\n\n'
+        yield {'id': 'cmp_deferred', 'type': 'tool_completed', 'tool': 'read'}
         with state.events_lock:
             state.tool_batch_active = False
-        yield 'event: completion.cancelled\ndata: {"id":"cmp_deferred","type":"completion.cancelled","status":"cancelled"}\n\n'
+        yield {'id': 'cmp_deferred', 'type': 'completion.cancelled', 'status': 'cancelled'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_resolution_model", fake_build_resolution_model)
     monkeypatch.setattr("service.file_extraction_agent.manager.run_completion_graph_stream", fake_run_completion_graph_stream)
@@ -310,7 +410,7 @@ def test_terminate_defers_cancel_until_active_tool_batch_settles(monkeypatch):
     def fake_run_completion_graph_stream(completion_input, resolution_model, **kwargs):
         del completion_input, resolution_model
         graph_can_complete.wait(timeout=1.0)
-        yield 'event: completion.completed\ndata: {"id":"cmp_race","type":"completion.completed","status":"completed"}\n\n'
+        yield {'id': 'cmp_race', 'type': 'completion.completed', 'status': 'completed'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_resolution_model", fake_build_resolution_model)
     monkeypatch.setattr("service.file_extraction_agent.manager.run_completion_graph_stream", fake_run_completion_graph_stream)
@@ -536,7 +636,7 @@ def test_completion_manager_create_runs_graph_and_returns_sse(monkeypatch):
         captured["completion_id"] = state.completion_id
         captured["messages"] = state.messages
         captured["model"] = resolution_model
-        yield 'event: completion.completed\ndata: {"id":"cmp_mgr"}\n\n'
+        yield {'id': 'cmp_mgr', 'type': 'completion.completed'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_resolution_model", fake_build_resolution_model)
     monkeypatch.setattr("service.file_extraction_agent.manager.run_completion_graph_stream", fake_run_completion_graph_stream)
@@ -550,7 +650,7 @@ def test_completion_manager_create_runs_graph_and_returns_sse(monkeypatch):
         )
     )
 
-    assert events == ['event: completion.completed\ndata: {"id":"cmp_mgr"}\n\n']
+    assert events == ['event: completion.completed\ndata: {"id":"cmp_mgr","type":"completion.completed"}\n\n']
     assert captured["completion_id"] == "cmp_mgr"
     assert captured["messages"][0].content == "问题"
     assert captured["model"] == "resolution-model"
@@ -567,7 +667,7 @@ def test_completion_manager_create_registers_before_iteration_and_terminate_canc
     def fake_run_completion_graph_stream(state, resolution_model, **kwargs):
         del state, resolution_model
         graph_called.set()
-        yield 'event: completion.completed\ndata: {"id":"cmp_mgr_cancel"}\n\n'
+        yield {'id': 'cmp_mgr_cancel', 'type': 'completion.completed'}
 
     manager = CompletionManager()
     monkeypatch.setattr("service.file_extraction_agent.manager.build_resolution_model", fake_build_resolution_model)

@@ -15,6 +15,7 @@ import os
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 import queue
+import re
 import shutil
 import threading
 from typing import Any, Iterable
@@ -40,12 +41,13 @@ def run_completion_graph_stream(
     resolution_model: ChatModelFallbackChain | None = None,
     *,
     should_stop=None,
-) -> Iterable[str]:
+) -> Iterable[dict[str, Any]]:
+    """累积模型/工具事件并输出字典；异常转失败终态，外部停止则补工具回复后取消。"""
     emitted = 0
     _append_completion_event(state, "completion.created", status="in_progress")
     _append_source_index_event(state)
     while emitted < len(state.events):
-        yield _sse(state.events[emitted])
+        yield state.events[emitted]
         emitted += 1
 
     outcome: Any = {"ok": False, "errors": [{"message": "resolution did not run"}]}
@@ -56,7 +58,7 @@ def run_completion_graph_stream(
                 stopped = True
                 break
             while emitted < len(state.events):
-                yield _sse(state.events[emitted])
+                yield state.events[emitted]
                 emitted += 1
     except Exception as exc:
         state.failed_stage = "resolution"
@@ -67,7 +69,7 @@ def run_completion_graph_stream(
         _backfill_pending_tool_cancels(state)
 
     while emitted < len(state.events):
-        yield _sse(state.events[emitted])
+        yield state.events[emitted]
         emitted += 1
 
     if stopped:
@@ -76,7 +78,7 @@ def run_completion_graph_stream(
         _append_completion_event(state, "completion.failed", status="failed", error=_failure_reason(outcome))
     else:
         _append_completion_event(state, "completion.completed", status="completed")
-    yield _sse(state.events[-1])
+    yield state.events[-1]
 
 
 def _backfill_pending_tool_cancels(state: GraphState) -> None:
@@ -211,6 +213,7 @@ def prepare_completion_state(
     messages: list[DocumentQaMessage],
     run_options: RunOptions | None = None,
     workspace_root: str | Path | None = None,
+    task_id: str | None = None,
 ) -> GraphState:
     """Validate the strong-typed completion inputs and build the GraphState.
 
@@ -219,17 +222,35 @@ def prepare_completion_state(
 
     if not isinstance(completion_id, str) or not completion_id.strip():
         raise ValueError("completion_id is required")
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", completion_id) is None:
+        raise ValueError("completion_id must be a safe identifier (letters, digits, underscores or hyphens)")
+    if task_id is not None and (not isinstance(task_id, str) or not task_id.strip()):
+        raise ValueError("task_id must be a non-empty string")
     validated_documents = _validate_documents(documents)
     validated_messages = _validate_messages(messages)
     normalized_run_options = _normalize_run_options(run_options)
-    resolved_root = _resolve_workspace_root(workspace_root, normalized_run_options)
-    document = materialize_tree(validated_documents, Path(resolved_root) / completion_id)
-    return build_graph_state(
+    resolved_root = _resolve_workspace_root(workspace_root, normalized_run_options).resolve()
+    run_root = resolved_root / completion_id
+    if run_root.resolve().parent != resolved_root:
+        raise ValueError("workspace escapes its parent directory")
+    try:
+        run_root.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        raise ValueError("completion workspace already exists") from exc
+    try:
+        document = materialize_tree(validated_documents, run_root)
+    except Exception:
+        shutil.rmtree(run_root, ignore_errors=True)
+        raise
+    state = build_graph_state(
         completion_id=completion_id,
         document=document,
         messages=validated_messages,
         run_options=normalized_run_options,
     )
+    state.task_id = task_id
+    state.workspace_parent = resolved_root
+    return state
 
 
 def _validate_documents(documents: list[InputDocument]) -> list[InputDocument]:
@@ -270,12 +291,12 @@ class ActiveCompletion:
 
     stream()
       -> 首次迭代时启动 producer 线程（target=_produce）
-      -> 循环 queue.get() 取事件：普通事件 yield；_QUEUE_CANCEL/_QUEUE_DONE/终态事件
+      -> 循环 queue.get() 取事件：普通事件编码为 SSE 后 yield；_QUEUE_CANCEL/_QUEUE_DONE/终态事件
          则 close_once 后收口并结束
       -> finally 确保终态唯一并清理 workspace（注册表移除由 CompletionManager 托管）
 
     _produce()
-      -> 后台线程目标，循环 run_completion_graph_stream(state, model) 产 SSE 事件
+      -> 后台线程目标，循环 run_completion_graph_stream(state, model) 产事件字典
       -> 用 commit_* / commit_terminal_event 投进 queue；异常投 completion.failed；
          兜底 commit_done
 
@@ -296,7 +317,7 @@ class ActiveCompletion:
         self._cancel_deferred = False
         self._lock = threading.Lock()
         self._state_lock = getattr(state, "events_lock", None) or threading.Lock()
-        self.queue: queue.Queue[str | object] = queue.Queue()
+        self.queue: queue.Queue[dict[str, Any] | object] = queue.Queue()
 
     def stream(self) -> Iterable[str]:
         def run() -> Iterable[str]:
@@ -312,19 +333,20 @@ class ActiveCompletion:
                     event = self.queue.get()
                     if event is _QUEUE_CANCEL:
                         if self.close_once("cancelled"):
-                            yield _completion_cancelled_event(self.completion_id)
+                            yield _sse(_completion_event(self.completion_id, "cancelled"))
                         return
                     if event is _QUEUE_DONE:
                         if self.close_once("completed"):
-                            yield _completion_completed_event(self.completion_id)
+                            yield _sse(_completion_event(self.completion_id, "completed"))
                         return
-                    if not isinstance(event, str):
+                    if not isinstance(event, dict):
                         continue
-                    if _is_terminal_event(event):
-                        if self.close_once(_terminal_status(event)):
-                            yield event
+                    status = _terminal_status(event)
+                    if status is not None:
+                        if self.close_once(status):
+                            yield _sse(event)
                         return
-                    yield event
+                    yield _sse(event)
             finally:
                 if not self.is_closed():
                     self.close_once("cancelled")
@@ -340,16 +362,14 @@ class ActiveCompletion:
                 self.model,
                 should_stop=lambda: self.cancel_requested,
             ):
-                if _is_terminal_event(event):
-                    status = _terminal_status(event)
-                    terminal_committed = self.commit_terminal_event(event, status)
+                if _terminal_status(event) is not None:
+                    terminal_committed = self.commit_terminal_event(event)
                     return
                 if not self.commit_event(event):
                     return
         except Exception as exc:
             terminal_committed = self.commit_terminal_event(
-                _completion_failed_event(self.completion_id, str(exc)),
-                "failed",
+                _completion_event(self.completion_id, "failed", error_message=str(exc)),
             )
         finally:
             if not terminal_committed:
@@ -374,7 +394,7 @@ class ActiveCompletion:
     def get_status(self) -> str:
         return self.status
 
-    def commit_events(self, events: Iterable[str]) -> bool:
+    def commit_events(self, events: Iterable[dict[str, Any]]) -> bool:
         with self._lock:
             if self.closed or self.terminal_committed:
                 return False
@@ -382,15 +402,18 @@ class ActiveCompletion:
                 return False
             active_events = list(events)
             for event in active_events:
-                if _is_terminal_event(event):
+                if _terminal_status(event) is not None:
                     continue
                 self.queue.put(event)
             return True
 
-    def commit_event(self, event: str) -> bool:
+    def commit_event(self, event: dict[str, Any]) -> bool:
         return self.commit_events([event])
 
-    def commit_terminal_event(self, event: str, status: str) -> bool:
+    def commit_terminal_event(self, event: dict[str, Any]) -> bool:
+        status = _terminal_status(event)
+        if status is None:
+            raise ValueError("expected a completion terminal event")
         with self._lock:
             if self.closed or self.terminal_committed:
                 return False
@@ -448,14 +471,20 @@ class CompletionManager:
         messages: list[DocumentQaMessage],
         model_config: ModelConfig | None = None,
         run_options: RunOptions | None = None,
+        task_id: str | None = None,
     ) -> Iterable[str]:
         state = prepare_completion_state(
             completion_id=completion_id,
             documents=documents,
             messages=messages,
             run_options=run_options,
+            task_id=task_id,
         )
-        resolution_model = build_resolution_model(model_config)
+        try:
+            resolution_model = build_resolution_model(model_config)
+        except Exception:
+            _cleanup_workspace(state)
+            raise
         runtime = ActiveCompletion(completion_id, state, resolution_model)
         with self._lock:
             self._completions[completion_id] = runtime
@@ -493,45 +522,23 @@ completion_manager = CompletionManager()
 
 def _cleanup_workspace(state: GraphState) -> None:
     root = state.document.root
+    parent = state.workspace_parent
+    if parent is None or root.is_symlink() or root.resolve().parent != parent.resolve():
+        raise ValueError("workspace is outside its owned parent directory")
     shutil.rmtree(root, ignore_errors=True)
 
 
-def _completion_cancelled_event(completion_id: str) -> str:
-    return (
-        "event: completion.cancelled\n"
-        f'data: {{"id":"{completion_id}","type":"completion.cancelled","status":"cancelled"}}\n\n'
-    )
+def _completion_event(completion_id: str, status: str, **fields: Any) -> dict[str, Any]:
+    return {"id": completion_id, "type": f"completion.{status}", "status": status, **fields}
 
 
-def _completion_completed_event(completion_id: str) -> str:
-    return (
-        "event: completion.completed\n"
-        f'data: {{"id":"{completion_id}","type":"completion.completed","status":"completed"}}\n\n'
-    )
-
-
-def _completion_failed_event(completion_id: str, error_message: str) -> str:
-    escaped = error_message.replace("\\", "\\\\").replace('"', '\\"')
-    return (
-        "event: completion.failed\n"
-        f'data: {{"id":"{completion_id}","type":"completion.failed","status":"failed","error_message":"{escaped}"}}\n\n'
-    )
-
-
-def _is_terminal_event(event: str) -> bool:
-    return (
-        "event: completion.completed" in event
-        or "event: completion.cancelled" in event
-        or "event: completion.failed" in event
-    )
-
-
-def _terminal_status(event: str) -> str:
-    if "event: completion.cancelled" in event:
-        return "cancelled"
-    if "event: completion.failed" in event:
-        return "failed"
-    return "completed"
+def _terminal_status(event: dict[str, Any]) -> str | None:
+    """仅由内部事件的 type 决定终态，不解析 SSE 或正文。"""
+    return {
+        "completion.completed": "completed",
+        "completion.cancelled": "cancelled",
+        "completion.failed": "failed",
+    }.get(event.get("type"))
 
 
 __all__ = [

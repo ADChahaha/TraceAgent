@@ -8,6 +8,18 @@ from service.file_extraction_agent.core.documents import materialize_tree
 from service.file_extraction_agent.schemas import InputDocument
 
 
+@pytest.mark.parametrize("html, expected", [
+    ('<table><tr><th colspan="2">费用</th></tr><tr><td>服务A</td><td>100</td></tr></table>', ['| 费用 | 费用 |', '| 服务A | 100 |']),
+    ('<table><tr><th>项目</th><th>金额</th></tr><tr><td rowspan="2">服务A</td><td>100</td></tr><tr><td>200</td></tr></table>', ['| 服务A | 100 |', '| 服务A | 200 |']),
+    ('<table><tr><th>项目</th></tr><tr><td>A|B</td><td>100</td></tr></table>', ['| A\\|B | 100 |']),
+])
+def test_table_preserves_merged_cells_and_wider_rows(tmp_path, html, expected):
+    materialize_tree([InputDocument(filename="fees.html", html=html)], tmp_path)
+    rendered = next(tmp_path.rglob("*.md")).read_text(encoding="utf-8")
+    for row in expected:
+        assert row in rendered
+
+
 def _documents():
     return [
         InputDocument(
