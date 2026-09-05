@@ -1,9 +1,10 @@
 # test_graph.py
 
-执行链路：预设 provider 的标准 AIMessage → 真实 ChatModelFallbackChain 绑定工具 → 唯一 LangGraph 循环 → 工具执行与消息配对 → 图输出事件字典。测试只替换 provider 返回值，不另建 Agent 循环；对外 SSE 编码由 test_manager.py 覆盖。
+消息执行链路：预设 provider 响应 → 正式 LangGraph → AIMessage/ToolMessage → manager 包装事件；取消在消息边界检查，已发布工具调用按 ID 配齐结果。
 
-- `test_run_completion_graph_stream_yields_objects_and_terminal_completion`：事件是字典，开始/索引/终态及序号正确，真实循环中的工具结果 ID 与模型调用配对。
-- `test_run_completion_graph_stream_flushes_after_each_tool_call`：第一批事件输出时未提前调用下一轮模型。
-- `test_run_completion_graph_stream_honors_external_should_stop`：正常执行完成，外部停止信号则产生取消终态。
-- `test_should_stop_backfills_cancel_tool_replies_for_pending_tool_calls`：未执行工具在取消时得到失败回复。
-- `test_should_stop_after_fulfilled_batch_does_not_duplicate_tool_replies`：已完成工具不重复补回复，只补未完成项。
+- `test_run_completion_graph_stream_yields_objects_and_terminal_completion`：正式模型/工具循环产出完整事件顺序，消息 ID 配对正确，包装层不预分配 SSE 序号。
+- `test_tool_started_is_yielded_before_tool_execution`：工具结果执行前已向外产出开始调度事件。
+- `test_cancel_before_execution_does_not_call_model`：早取消不调用 provider。
+- `test_cancel_after_model_drains_tools_without_next_model`：模型调用已发布后取消，先返回工具回复且不请求下一轮模型。
+- `test_interrupted_batch_backfills_only_pending_call_ids`：同名批次部分完成后异常，仅为剩余调用补失败；取消时用 cancelled 收口。
+- `test_closing_event_stream_closes_message_generator`：外层关闭传播到消息生成器，停止后续调用。

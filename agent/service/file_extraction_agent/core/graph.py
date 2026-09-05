@@ -1,17 +1,9 @@
-"""Reusable completion state for document-QA completions.
-
-`GraphState` 是单 completion 的运行状态累积器（completion_id、文件树、消息、
-运行选项、actions、events、next_seq）；`build_graph_state` 构造初始状态。
-一轮 completion 的事件组装与 SSE 收口由 `manager.run_completion_graph_stream`
-负责，不在此模块。
-"""
+"""文档 QA 执行上下文：输入文档落盘后保存文件树、消息和配置，不保存对外事件或取消状态。"""
 
 from __future__ import annotations
 
-import threading
 from pathlib import Path
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 from service.file_extraction_agent.core.documents import DocumentFileTree
 from service.file_extraction_agent.schemas import DocumentQaMessage, RunOptions
@@ -23,13 +15,6 @@ class GraphState:
     document: DocumentFileTree
     messages: list[DocumentQaMessage]
     run_options: RunOptions
-    actions: list[dict[str, Any]] = field(default_factory=list)
-    events: list[dict[str, Any]] = field(default_factory=list)
-    current_model_content: str = ""
-    next_seq: int = 1
-    failed_stage: str | None = None
-    events_lock: threading.Lock = field(default_factory=threading.Lock)
-    tool_batch_active: bool = False
     task_id: str | None = None
     workspace_parent: Path | None = None
 

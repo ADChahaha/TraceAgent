@@ -124,10 +124,10 @@ POST /v1/document-qa/chat/completions
   -> documents 把多份 HTML 落盘成真实文件树（DocumentFileTree）
   -> manager 组装 completion.created 和 source_indexed 事件字典（workspace_root + tree）
   -> loop 绑定工具并通过唯一 LangGraph 循环执行模型/工具调用
-  -> tools 把每次工具调用写成 tool_started/tool_completed/tool_failed
+  -> loop 仅 yield AIMessage / ToolMessage；manager 包装 model_message 和工具事件
   -> 过程 model_message 在阅读过程中内嵌真实 .md 文件路径 Markdown link
   -> 最终 model_message 带 is_final=true，在被支撑句子后紧跟数字 evidence citation
-  -> ActiveCompletion 队列传递事件字典，按 type 判定终态，仅在 stream 输出边界编码 SSE
+  -> ActiveCompletion 队列传递事件字典，按 type 判定终态，仅在 stream 输出边界分配 seq 并编码 SSE
 ```
 
 `file_extraction_agent` 第一版只在内存 `CompletionManager` 注册表保存 active runtime，用于取消正在运行的 completion。它不保存历史 completion，也不支持多 worker 进程共享 cancel 状态。
@@ -185,5 +185,5 @@ POST /v1/document-qa/chat/completions/{completion_id}/cancel
 - `file_extraction_agent` 接收的 `messages` 采用 OpenAI chat 结构；backend 会把上一轮 assistant 的 `tool_calls` 和对应 `tool` 结果一起重建回来。
 - QA completion 当前总是以 SSE 返回；非流式 chat completion 还没有实现。
 - `GET /v1/document-qa/chat/completions/{completion_id}` 当前是占位调试接口。
-- cancellation 是本地 completion 级取消：SSE consumer 检查 cancel flag 后立即输出 `completion.cancelled` 并关闭响应；producer 若仍阻塞在 provider stream，会依赖有限 request timeout 回收，迟到事件会被丢弃。
+- cancellation 由 runtime 管理：无活动批次时用队列 sentinel 唤醒 consumer；已发布工具调用时先配齐结果再收口。consumer 按 FIFO 输出已提交事件，producer 的迟到事件会被丢弃。
 - 第一版要求单进程/单 worker 部署；多 uvicorn worker 会让内存 `CompletionManager` 注册表不共享，导致 cancel 可能找不到目标 completion。

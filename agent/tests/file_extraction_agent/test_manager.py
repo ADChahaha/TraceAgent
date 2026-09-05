@@ -6,6 +6,7 @@ import time
 from types import SimpleNamespace
 
 import pytest
+from langchain_core.messages import AIMessage, ToolMessage
 
 from service.file_extraction_agent.core import model as model_module
 from service.file_extraction_agent.core.model import build_chat_model, normalize_model_config
@@ -18,17 +19,127 @@ from service.file_extraction_agent.manager import (
 from service.file_extraction_agent.schemas import DocumentQaMessage, InputDocument, ModelConfig, RunOptions
 
 
+@pytest.mark.parametrize("ending", ["completed", "failed", "cancelled"])
+def test_stream_numbers_messages_and_terminal_once(tmp_path, monkeypatch, ending):
+    import json
+    manager = CompletionManager()
+
+    def messages(*args):
+        yield AIMessage(content="答案", response_metadata={"finish_reason": "stop"})
+        if ending == "failed":
+            raise RuntimeError("provider failed")
+        if ending == "cancelled":
+            manager.terminate("cmp_seq")
+
+    monkeypatch.setattr(manager_module, "build_resolution_model", lambda config: object())
+    monkeypatch.setattr(manager_module, "run_resolution_stream", messages)
+    frames = list(manager.create(
+        completion_id="cmp_seq", run_options=RunOptions(workspace_root=str(tmp_path)),
+        documents=[InputDocument(filename="a.html", html="<p>正文</p>")],
+        messages=[DocumentQaMessage(role="user", content="问题")],
+    ))
+    events = [json.loads(frame.split("data: ", 1)[1]) for frame in frames]
+    assert [event["seq"] for event in events] == list(range(1, len(events) + 1))
+    assert events[-1]["type"] == f"completion.{ending}"
+    assert sum(manager_module._terminal_status(event) is not None for event in events) == 1
+
+
+def test_runtime_cancel_drains_real_graph_batch_and_skips_next_model(tmp_path, monkeypatch):
+    import json
+    from unittest.mock import Mock
+    from service.file_extraction_agent.core.model import ChatModelFallbackChain, ModelCallAttempt
+    from service.file_extraction_agent.core import loop
+    started, release = threading.Event(), threading.Event()
+    provider = Mock(spec=["bind_tools", "invoke"])
+    provider.bind_tools.return_value = provider
+    provider.invoke.side_effect = [AIMessage(content="读取", tool_calls=[
+        {"id": "read-1", "name": "read", "args": {"path": "first"}},
+        {"id": "read-2", "name": "read", "args": {"path": "second"}},
+    ])]
+
+    class Reader:
+        name = "read"
+
+        def invoke(self, args):
+            started.set()
+            assert release.wait(2)
+            return {"ok": True, "text": args["path"]}
+
+    monkeypatch.setattr(loop, "build_tools", lambda state: [Reader()])
+    monkeypatch.setattr(manager_module, "build_resolution_model", lambda config:
+        ChatModelFallbackChain([ModelCallAttempt("test", provider, False)]))
+    manager = CompletionManager()
+    stream = manager.create(
+        completion_id="cmp_real_cancel", run_options=RunOptions(workspace_root=str(tmp_path)),
+        documents=[InputDocument(filename="a.html", html="<p>正文</p>")],
+        messages=[DocumentQaMessage(role="user", content="问题")],
+    )
+    frames = []
+    done = threading.Event()
+
+    def consume():
+        try:
+            frames.extend(stream)
+        finally:
+            done.set()
+
+    thread = threading.Thread(target=consume, daemon=True)
+    thread.start()
+    try:
+        assert started.wait(1)
+        assert manager.terminate("cmp_real_cancel")["status"] == "cancelling"
+        assert not done.wait(0.05)
+    finally:
+        release.set()
+        thread.join(2)
+    assert done.is_set()
+    events = [json.loads(frame.split("data: ", 1)[1]) for frame in frames]
+    results = [event for event in events if event["type"] == "tool_completed"]
+    assert [(e["tool_call_id"], e["result"]["text"]) for e in results] == [("read-1", "first"), ("read-2", "second")]
+    assert events[-1]["type"] == "completion.cancelled"
+    assert [event["seq"] for event in events] == list(range(1, len(events) + 1))
+    assert provider.invoke.call_count == 1
+    assert not (tmp_path / "cmp_real_cancel").exists()
+
+
+def test_manager_wraps_messages_and_pairs_same_name_calls(tmp_path, monkeypatch):
+    from langchain_core.messages import AIMessage, ToolMessage
+    state = prepare_completion_state(
+        completion_id="cmp_pair", workspace_root=tmp_path,
+        documents=[InputDocument(filename="a.html", html="<p>正文</p>")],
+        messages=[DocumentQaMessage(role="user", content="问题")],
+    )
+    model_messages = [
+        AIMessage(content="读取", tool_calls=[
+            {"id": "a", "name": "read", "args": {"path": "first"}},
+            {"id": "b", "name": "read", "args": {"path": "second"}},
+        ]),
+        ToolMessage(content="第一段", artifact={"ok": True, "text": "第一段"}, tool_call_id="a", name="read"),
+        ToolMessage(content="失败", artifact={"ok": False, "errors": [{"message": "bad path"}]}, status="error", tool_call_id="b", name="read"),
+        AIMessage(content="答案", response_metadata={"finish_reason": "stop"}),
+    ]
+    monkeypatch.setattr(manager_module, "run_resolution_stream", lambda *args: iter(model_messages))
+    events = list(manager_module.run_completion_graph_stream(state, object()))
+    assert [e["type"] for e in events] == [
+        "completion.created", "source_indexed", "model_message", "tool_started", "tool_started",
+        "tool_completed", "tool_failed", "model_message", "completion.completed",
+    ]
+    results = [e for e in events if e["type"] in {"tool_completed", "tool_failed"}]
+    assert [(e["tool_call_id"], e["args"]["path"]) for e in results] == [("a", "first"), ("b", "second")]
+    assert events[-2]["is_final"] is True
+
+
 def test_graph_keeps_events_as_objects_until_stream_boundary(tmp_path, monkeypatch):
     state = prepare_completion_state(
         completion_id="cmp_objects", workspace_root=tmp_path,
         documents=[InputDocument(filename="a.html", html="<p>真实正文</p>")],
         messages=[DocumentQaMessage(role="user", content="问题")],
     )
-    monkeypatch.setattr(manager_module, "run_resolution_stream", lambda *args: iter([{"ok": True}]))
+    monkeypatch.setattr(manager_module, "run_resolution_stream", lambda *args: iter([AIMessage(content="完成", response_metadata={"finish_reason": "stop"})]))
     events = list(manager_module.run_completion_graph_stream(state, object()))
     assert all(isinstance(event, dict) for event in events)
     assert [event["type"] for event in events] == [
-        "completion.created", "source_indexed", "completion.completed",
+        "completion.created", "source_indexed", "model_message", "completion.completed",
     ]
 
 
@@ -41,7 +152,7 @@ def test_stream_encodes_runtime_failure_with_special_characters(tmp_path, monkey
 
     monkeypatch.setattr(manager_module, "build_resolution_model", lambda config: object())
     monkeypatch.setattr(manager_module, "run_completion_graph_stream", fail)
-    frames = list(CompletionManager().create(
+    frames = _frames(CompletionManager().create(
         completion_id="cmp_error", run_options=RunOptions(workspace_root=str(tmp_path)),
         documents=[InputDocument(filename="a.html", html="<p>正文</p>")],
         messages=[DocumentQaMessage(role="user", content="问题")],
@@ -95,7 +206,7 @@ def test_stream_preserves_terminal_words_in_data(tmp_path, monkeypatch, marker):
     terminal = {"type": "completion.completed", "status": "completed"}
     monkeypatch.setattr(manager_module, "build_resolution_model", lambda config: object())
     monkeypatch.setattr(manager_module, "run_completion_graph_stream", lambda *a, **k: iter([ordinary, terminal]))
-    frames = list(CompletionManager().create(
+    frames = _frames(CompletionManager().create(
         completion_id="cmp_words", run_options=RunOptions(workspace_root=str(tmp_path)),
         documents=[InputDocument(filename="a.html", html="<p>x</p>")],
         messages=[DocumentQaMessage(role="user", content="问题")],
@@ -136,7 +247,7 @@ def test_create_completion_stream_builds_completion_input_and_runs_graph(monkeyp
     monkeypatch.setattr("service.file_extraction_agent.manager.run_completion_graph_stream", fake_run_completion_graph_stream)
 
     manager = CompletionManager()
-    events = list(
+    events = _frames(
         manager.create(
             completion_id="cmp_123",
             documents=[InputDocument(filename="notice.html", html='<p id="p1">通知</p>')],
@@ -197,7 +308,7 @@ def test_create_completion_stream_registers_active_completion_before_iteration(m
     )
 
     assert manager.terminate("cmp_early_cancel") == {"id": "cmp_early_cancel", "status": "cancelling"}
-    assert list(stream) == [
+    assert _frames(stream) == [
         'event: completion.cancelled\ndata: {"id":"cmp_early_cancel","type":"completion.cancelled","status":"cancelled"}\n\n'
     ]
     assert not graph_called.is_set()
@@ -232,7 +343,7 @@ def test_create_completion_stream_cancel_does_not_wait_for_blocked_graph(monkeyp
     stream_done = threading.Event()
 
     def consume_stream():
-        events.extend(list(stream))
+        events.extend(_frames(stream))
         stream_done.set()
 
     consumer_thread = threading.Thread(target=consume_stream, daemon=True)
@@ -283,12 +394,12 @@ def test_create_completion_stream_flushes_committed_events_before_cancel(monkeyp
         )
     )
 
-    first_event = next(stream)
+    first_event = _without_seq(next(stream))
     assert second_event_reached_graph.wait(timeout=0.5)
     time.sleep(0.02)
     assert manager.terminate("cmp_flush") == {"id": "cmp_flush", "status": "cancelling"}
     try:
-        remaining_events = list(stream)
+        remaining_events = _frames(stream)
     finally:
         release_graph.set()
 
@@ -329,7 +440,7 @@ def test_should_stop_is_wired_to_cancel_requested(monkeypatch):
     stream_done = threading.Event()
 
     def consume_stream():
-        list(stream)
+        _frames(stream)
         stream_done.set()
 
     consumer_thread = threading.Thread(target=consume_stream, daemon=True)
@@ -356,13 +467,11 @@ def test_terminate_defers_cancel_until_active_tool_batch_settles(monkeypatch):
 
     def fake_run_completion_graph_stream(state, resolution_model, **kwargs):
         del resolution_model
-        with state.events_lock:
-            state.tool_batch_active = True
+        yield {"type": "model_message", "content": "读取", "tool_calls": [{"id": "deferred-read", "name": "read", "args": {}}]}
         batch_running.set()
         release_batch.wait(timeout=1.0)
-        yield {'id': 'cmp_deferred', 'type': 'tool_completed', 'tool': 'read'}
-        with state.events_lock:
-            state.tool_batch_active = False
+        yield {'id': 'cmp_deferred', 'type': 'tool_completed', 'tool': 'read', 'tool_call_id': 'deferred-read'}
+
         yield {'id': 'cmp_deferred', 'type': 'completion.cancelled', 'status': 'cancelled'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_resolution_model", fake_build_resolution_model)
@@ -379,7 +488,7 @@ def test_terminate_defers_cancel_until_active_tool_batch_settles(monkeypatch):
     stream_done = threading.Event()
 
     def consume_stream():
-        events.extend(list(stream))
+        events.extend(_frames(stream))
         stream_done.set()
 
     consumer_thread = threading.Thread(target=consume_stream, daemon=True)
@@ -395,12 +504,15 @@ def test_terminate_defers_cancel_until_active_tool_batch_settles(monkeypatch):
 
     tool_events = [event for event in events if "tool_completed" in event]
     assert tool_events == [
-        'event: tool_completed\ndata: {"id":"cmp_deferred","type":"tool_completed","tool":"read"}\n\n'
+        'event: tool_completed\ndata: {"id":"cmp_deferred","type":"tool_completed","tool":"read","tool_call_id":"deferred-read"}\n\n'
     ]
     assert events[-1] == (
         'event: completion.cancelled\ndata: {"id":"cmp_deferred","type":"completion.cancelled","status":"cancelled"}\n\n'
     )
     assert manager.terminate("cmp_deferred") == {"id": "cmp_deferred", "status": "not_found"}
+
+
+def test_create_completion_stream_emits_only_one_terminal_event_when_cancel_races_completed(monkeypatch):
     graph_can_complete = threading.Event()
 
     def fake_build_resolution_model(config):
@@ -425,7 +537,7 @@ def test_terminate_defers_cancel_until_active_tool_batch_settles(monkeypatch):
 
     assert manager.terminate("cmp_race") == {"id": "cmp_race", "status": "cancelling"}
     graph_can_complete.set()
-    events = list(stream)
+    events = _frames(stream)
 
     terminal_events = [event for event in events if "completion." in event]
     assert terminal_events == [
@@ -641,7 +753,7 @@ def test_completion_manager_create_runs_graph_and_returns_sse(monkeypatch):
     monkeypatch.setattr("service.file_extraction_agent.manager.build_resolution_model", fake_build_resolution_model)
     monkeypatch.setattr("service.file_extraction_agent.manager.run_completion_graph_stream", fake_run_completion_graph_stream)
 
-    events = list(
+    events = _frames(
         CompletionManager().create(
             completion_id="cmp_mgr",
             documents=[InputDocument(filename="notice.html", html='<p id="p1">通知</p>')],
@@ -681,7 +793,7 @@ def test_completion_manager_create_registers_before_iteration_and_terminate_canc
     )
 
     assert manager.terminate("cmp_mgr_cancel") == {"id": "cmp_mgr_cancel", "status": "cancelling"}
-    assert list(stream) == [
+    assert _frames(stream) == [
         'event: completion.cancelled\ndata: {"id":"cmp_mgr_cancel","type":"completion.cancelled","status":"cancelled"}\n\n'
     ]
     assert not graph_called.is_set()
@@ -714,3 +826,79 @@ def test_active_completion_owns_terminate_get_status_and_terminal_uniqueness():
     assert runtime.close_once("cancelled") is True
     assert runtime.get_status() == "cancelled"
     assert runtime.close_once("completed") is False
+
+
+def test_resolution_records_text_from_responses_api_content_blocks(tmp_path):
+    message = AIMessage(
+        content=[
+            {"type": "reasoning", "summary": []},
+            {"type": "text", "text": "I will inspect root. "},
+            {"type": "function_call", "name": "ls", "arguments": '{"path":""}'},
+        ],
+        tool_calls=[
+            {
+                "id": "call-1",
+                "name": "ls",
+                "args": {"path": ""},
+            }
+        ],
+    )
+
+    event = manager_module._model_message_event(message)
+
+    assert event["content"] == "I will inspect root. "
+
+
+
+
+
+def test_resolution_records_terminal_stop_message_as_final_answer(tmp_path):
+    message = AIMessage(
+        content="最终答案。",
+        response_metadata={"finish_reason": "stop"},
+    )
+
+    event = manager_module._model_message_event(message)
+
+    assert event["content"] == "最终答案。"
+    assert event["is_final"] is True
+    assert event["stop_signal"] == "stop"
+
+
+
+def test_resolution_records_model_message_content_and_tool_calls_without_reasoning(tmp_path):
+    message = AIMessage(
+        content="I will inspect the root listing while calling a tool.",
+        additional_kwargs={"reasoning_content": "hidden reasoning must not be persisted"},
+        tool_calls=[
+            {
+                "id": "call-1",
+                "name": "ls",
+                "args": {"path": ""},
+            }
+        ],
+    )
+
+    event = manager_module._model_message_event(message)
+
+    assert event == {
+        "type": "model_message",
+        "content": "I will inspect the root listing while calling a tool.",
+        "tool_call_count": 1,
+        "tool_calls": [{"id": "call-1", "name": "ls", "args": {"path": ""}}],
+        "is_final": False,
+    }
+
+
+
+
+def _without_seq(frame):
+    import json
+    event_line, data = frame.split("\ndata: ", 1)
+    payload = json.loads(data)
+    payload.pop("seq", None)
+    return event_line + "\ndata: " + json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n\n"
+
+
+def _frames(stream):
+    return [_without_seq(frame) for frame in stream]

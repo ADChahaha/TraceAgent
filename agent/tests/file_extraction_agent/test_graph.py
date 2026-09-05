@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from unittest.mock import Mock
 
+import pytest
+from langchain_core.messages import ToolMessage
+from service.file_extraction_agent import manager as manager_module
+
 from langchain_core.messages import AIMessage, AIMessageChunk
 from service.file_extraction_agent.core.model import ChatModelFallbackChain, ModelCallAttempt
 
@@ -45,137 +49,89 @@ def _input(tmp_path):
 def test_run_completion_graph_stream_yields_objects_and_terminal_completion(tmp_path):
     model, provider = _scripted_model()
     events = list(run_completion_graph_stream(_input(tmp_path), model))
-
-    assert all(isinstance(event, dict) for event in events)
+    assert [e["type"] for e in events] == [
+        "completion.created", "source_indexed", "model_message", "tool_started", "tool_completed",
+        "model_message", "tool_started", "tool_completed", "model_message", "completion.completed",
+    ]
     history = provider.invoke.call_args.args[0]
     assert [m.tool_call_id for m in history if m.type == "tool"] == ["call-ls", "call-grep"]
-    payloads = events
-    assert payloads[0]["type"] == "completion.created"
-    assert payloads[0]["id"] == "cmp_123"
-    assert payloads[1]["type"] == "source_indexed"
-    assert payloads[1]["result"]["workspace_root"] == str(tmp_path / "cmp_123")
-    assert isinstance(payloads[1]["result"]["tree"], list)
-    assert payloads[2]["type"] == "model_message"
-    assert payloads[3]["type"] == "tool_started"
-    assert payloads[3]["tool"] == "ls"
-    assert payloads[-1]["type"] == "completion.completed"
-    assert payloads[-1]["id"] == "cmp_123"
-    assert [payload["seq"] for payload in payloads] == list(range(1, len(payloads) + 1))
+    assert all("seq" not in event for event in events)
 
 
-def test_run_completion_graph_stream_flushes_after_each_tool_call(tmp_path):
+def test_tool_started_is_yielded_before_tool_execution(tmp_path):
     model, provider = _scripted_model()
-    stream = iter(run_completion_graph_stream(_input(tmp_path), model))
+    stream = run_completion_graph_stream(_input(tmp_path), model)
+    assert next(stream)["type"] == "completion.created"
+    assert next(stream)["type"] == "source_indexed"
+    assert next(stream)["type"] == "model_message"
+    assert next(stream)["type"] == "tool_started"
+    assert provider.invoke.call_count == 1
+    assert next(stream)["type"] == "tool_completed"
+    stream.close()
 
-    created = next(stream)
-    source = next(stream)
-    model_message = next(stream)
-    tool_started = next(stream)
 
-    assert created["type"] == "completion.created"
-    assert source["type"] == "source_indexed"
-    assert model_message["type"] == "model_message"
-    assert tool_started["type"] == "tool_started"
-    assert tool_started["tool"] == "ls"
+def test_cancel_before_execution_does_not_call_model(tmp_path):
+    model, provider = _scripted_model()
+    events = list(run_completion_graph_stream(_input(tmp_path), model, should_stop=lambda: True))
+    assert events[-1]["type"] == "completion.cancelled"
+    provider.invoke.assert_not_called()
+
+
+def test_cancel_after_model_drains_tools_without_next_model(tmp_path):
+    model, provider = _scripted_model()
+    cancel = False
+    stream = run_completion_graph_stream(_input(tmp_path), model, should_stop=lambda: cancel)
+    assert next(stream)["type"] == "completion.created"
+    assert next(stream)["type"] == "source_indexed"
+    assert next(stream)["type"] == "model_message"
+    cancel = True
+    events = list(stream)
+    assert [e["type"] for e in events] == ["tool_started", "tool_completed", "completion.cancelled"]
+    assert events[1]["tool_call_id"] == "call-ls"
     assert provider.invoke.call_count == 1
 
 
-def test_run_completion_graph_stream_honors_external_should_stop(tmp_path):
-    stop_after = {"value": False}
-    state = _input(tmp_path)
-    events = list(
-        run_completion_graph_stream(
-            state,
-            _scripted_model()[0],
-            should_stop=lambda: stop_after["value"],
-        )
-    )
-    payloads = events
-    assert payloads[-1]["type"] == "completion.completed"
-    assert state.events[-1]["type"] != "completion.cancelled"
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_interrupted_batch_backfills_only_pending_call_ids(tmp_path, monkeypatch, cancelled):
+    stopped = False
+    closed = []
 
-    stop_after["value"] = True
-    state2 = _input(tmp_path / "second_run")
-    events2 = list(
-        run_completion_graph_stream(
-            state2,
-            _scripted_model()[0],
-            should_stop=lambda: stop_after["value"],
-        )
-    )
-    payloads2 = events2
-    assert payloads2[-1]["type"] == "completion.cancelled"
+    def messages(*args):
+        nonlocal stopped
+        try:
+            yield AIMessage(content="读取", tool_calls=[
+                {"id": "a", "name": "read", "args": {"path": "first"}},
+                {"id": "b", "name": "read", "args": {"path": "second"}},
+            ])
+            yield ToolMessage(content="成功", tool_call_id="a", name="read")
+            stopped = cancelled
+            raise RuntimeError("执行中断")
+        finally:
+            closed.append(True)
 
-
-def test_should_stop_backfills_cancel_tool_replies_for_pending_tool_calls(tmp_path):
-    class PendingToolModel:
-        def __init__(self):
-            self.calls = 0
-
-        def bind_tools(self, tools, **kwargs):
-            del tools, kwargs
-            return self
-
-        def stream(self, messages):
-            del messages
-            self.calls += 1
-            yield AIMessageChunk(
-                content="我先读文件。",
-                tool_call_chunks=[
-                    {"type": "tool_call_chunk", "name": "read", "args": '{"path":"/abs/0001-section/0001-block.md"}', "id": "call-read", "index": 0},
-                ],
-            )
-
-    stop_after = {"value": True}
-    state = _input(tmp_path)
-    events = list(
-        run_completion_graph_stream(
-            state,
-            PendingToolModel(),
-            should_stop=lambda: stop_after["value"],
-        )
-    )
-    payloads = events
-    cancel_replies = [p for p in payloads if p.get("type") == "tool_completed" and p.get("tool") == "read"]
-    assert len(cancel_replies) >= 1
-    result = cancel_replies[0].get("result", {})
-    assert result.get("ok") is False
-    assert "cancel" in str(result).lower()
-    assert payloads[-1]["type"] == "completion.cancelled"
+    monkeypatch.setattr(manager_module, "run_resolution_stream", messages)
+    events = list(run_completion_graph_stream(_input(tmp_path), object(), should_stop=lambda: stopped))
+    replies = [e for e in events if e.get("tool_call_id") and e["type"] != "tool_started"]
+    assert [(e["tool_call_id"], e["type"]) for e in replies] == [("a", "tool_completed"), ("b", "tool_failed")]
+    assert replies[1]["args"] == {"path": "second"}
+    assert events[-1]["type"] == ("completion.cancelled" if cancelled else "completion.failed")
+    assert closed == [True]
 
 
-def test_should_stop_after_fulfilled_batch_does_not_duplicate_tool_replies(tmp_path):
-    from service.file_extraction_agent.manager import _backfill_pending_tool_cancels
+def test_closing_event_stream_closes_message_generator(tmp_path, monkeypatch):
+    closed = []
 
-    state = _input(tmp_path)
-    state.events.append(
-        {
-            "seq": state.next_seq,
-            "type": "model_message",
-            "content": "我先看结构。",
-            "tool_calls": [{"id": "call-1", "name": "ls", "args": {"path": ""}}, {"id": "call-2", "name": "read", "args": {"path": "/x"}}],
-            "is_final": False,
-        }
-    )
-    state.next_seq += 1
-    state.events.append(
-        {
-            "seq": state.next_seq,
-            "type": "tool_completed",
-            "tool": "ls",
-            "args": {"path": ""},
-            "result": {"ok": True, "text": "root"},
-        }
-    )
-    state.next_seq += 1
+    def messages(*args):
+        try:
+            yield AIMessage(content="答案", response_metadata={"finish_reason": "stop"})
+            raise AssertionError("不应请求下一条消息")
+        finally:
+            closed.append(True)
 
-    _backfill_pending_tool_cancels(state)
-
-    tool_events = [e for e in state.events if e.get("type") == "tool_completed"]
-    ls_count = sum(1 for e in tool_events if e.get("tool") == "ls")
-    read_count = sum(1 for e in tool_events if e.get("tool") == "read")
-    assert ls_count == 1
-    assert read_count == 1
-    read_event = next(e for e in tool_events if e.get("tool") == "read")
-    assert read_event["result"]["ok"] is False
-    assert "cancel" in str(read_event["result"]).lower()
+    monkeypatch.setattr(manager_module, "run_resolution_stream", messages)
+    stream = run_completion_graph_stream(_input(tmp_path), object())
+    next(stream)
+    next(stream)
+    assert next(stream)["type"] == "model_message"
+    stream.close()
+    assert closed == [True]

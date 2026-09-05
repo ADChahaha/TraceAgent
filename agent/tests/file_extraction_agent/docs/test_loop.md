@@ -1,64 +1,26 @@
 # test_loop.py
 
-- `test_resolution_requires_tool_binding_before_invoking_model`：缺少 `bind_tools` 的模型在调用前报错，不能通过旧字典协议执行备用循环。
+执行链路：GraphState 的输入消息和文档树 → prompt/历史转换 → 绑定工具 → 正式 LangGraph agent/tools 循环 → 原样 yield AIMessage/ToolMessage；运行异常向外抛出，图内无事件或取消缓冲。
 
-超时验证链路：阻塞工具 → 到期返回失败 → SSE 与 ToolMessage 结果一致 → 释放阻塞 → 迟到成功不再改写事件。
-
-- `test_tool_timeout_emits_one_matching_result_and_discards_late_success`：验证超时只产生一个带调用 ID 的结果事件和 action，迟到成功被丢弃。
-- `test_tool_exception_is_reported_consistently_without_timeout`：普通异常保留真实错误，并与模型收到的结果一致。
-
-这份测试覆盖 QA completion 的 resolution loop。resolution 不再围绕 `task_spec`
-和字段写入，而是围绕 `ls/grep/read` 工具和用户可见的 evidence-bearing model
-message 推进。
-
-实现链路：
-
-```text
-GraphState(messages + DocumentFileTree)
-  -> build_resolution_messages 生成 QA system prompt
-  -> prompt 要求过程消息用可读 label，最终回答只用数字 label，并把 citation 紧跟在被支撑句子后面
-  -> prompt 对模型暴露的导航工具名是 ls / grep / read，引用证据用真实 .md 文件路径
-  -> build_resolution_messages 把 OpenAI 风格 messages 原样转成 LangChain chat/tool messages
-  -> 最新真实用户消息保持为最后一条 HumanMessage，不追加额外运行指令
-  -> model.stream / model.invoke 产生 assistant content 和 tool call
-  -> _invoke_model_message 校验 provider stop signal 与 tool_calls 是否一致
-  -> provider attempt 失败时按 Ethernet 式随机指数退避后进入下一 attempt
-  -> 同轮多个 tool call 保留在同一条 AIMessage 中并交由并行执行器处理
-  -> _record_model_message 记录用户可见 content、工具调用摘要和 is_final/stop_signal
-  -> 并行执行器 _execute_tools_parallel 并发执行 ls/grep/read，套 tool_execution_timeout 超时
-  -> terminal stop signal 且没有 tool call 时结束本轮 completion
-```
-
-说明：`inspect`、`evidence://range`、`path_id` 和句/行级 selector 已全部删除；
-模型只通过真实文件路径引用 block。测试里的 `prepare_completion_state` 输入已全部
-强类型化（`list[InputDocument]` / `list[DocumentQaMessage]`），并直接产出 `GraphState`。
-
-与旧的单一 `ToolNode` 串行执行不同，当前实现把同一条 assistant 消息里的多个
-tool_calls 交给 `_execute_tools_parallel` 并发执行：每个工具调用仍是 `run_tool`
-骨架（产出 `tool_started/tool_completed/tool_failed` 事件并记录 action），但多次
-调用在 `ThreadPoolExecutor` 中并行，各自带 `tool_execution_timeout`（默认 60s，
-可配置）；超时的工具返回 `{ok:false, errors:[{message:"tool execution timeout"}]}`
-的错误结果，不会无限挂住整个批次。事件/action/seq 通过 `GraphState.events_lock`
-保证并发写入有序、seq 唯一不丢。`max_tool_calls` 不再作为总调用次数硬限，
-resolution 的 `recursion_limit` 改用固定的 `RESOLUTION_RECURSION_LIMIT`，让循环
-由模型 terminal stop signal、tool 超时与 cancel 协作收敛。
+工具并行提交并共享超时期限；按原始调用 ID 返回消息。超时失败先返回，迟到线程不能修改已返回消息。模型调用覆盖 stream/invoke 降级、响应终止信号校验和退避；manager 负责事件格式与最终回答标记。
 
 ## 测试函数
 
+- `test_resolution_stream_yields_only_original_messages`：同一正式循环返回原始模型消息和匹配的工具回复，没有 outcome 包装或重复最终消息。
+- `test_graph_state_has_no_event_or_runtime_buffers`：执行上下文不保存事件、action、序号、事件锁及取消批次状态。
+- `test_resolution_requires_tool_binding_before_invoking_model`：缺少 `bind_tools` 的模型在调用前报错，不能通过旧字典协议执行备用循环。
+- `test_tool_timeout_emits_one_matching_result_and_discards_late_success`：验证超时只返回一个带调用 ID 的失败 ToolMessage，迟到成功不改写消息。
+- `test_tool_exception_is_reported_consistently_without_timeout`：普通异常保留真实错误，并与模型收到的结果一致。
 - `test_resolution_messages_describe_qa_investigation_not_field_extraction`：验证 prompt 说明 QA 调查流程和 evidence 规则（真实路径块链接），要求过程消息用可读 label、最终回答用数字 label、citation 紧跟被支撑句子，不汇总成一个总 `Sources` 区；同时验证不再出现 `task_spec/write_field/submit_result` 字段抽取语义，system prompt 不再接收 memory context。
 - `test_resolution_prompt_allows_direct_answers_without_forced_document_search`：验证 prompt 明确允许身份、能力和已有上下文可回答的问题直接回答，只有用户询问文档内容、要求证据或上下文不清楚时才使用文档工具；同时确认 prompt 使用 `ls / grep / read` 命名，避免把结构浏览工具描述成递归 `tree`，并避免用 `Show your thought process` 诱导隐藏推理。
 - `test_resolution_messages_preserve_openai_tool_history`：验证历史 assistant tool_calls 和 tool 结果会保留为真实 chat/tool message；最新用户消息仍是模型看到的最后一条 human 消息。
 - `test_resolution_graph_preserves_parallel_tool_calls`：验证 provider 同轮返回多个 tool call 时，resolution graph 会保留完整 tool_calls 摘要，并按顺序执行这些工具。
 - `test_parallel_tool_executor_runs_all_calls_concurrently`：直接验证 `_execute_tools_parallel` 会把同一批多个 tool_calls 并发执行（用一个 gate 证明两个工具同时进入执行而非串行等待），且各自返回带匹配 `tool_call_id` 的 `ToolMessage`。
 - `test_parallel_tool_executor_times_out_slow_call`：验证慢工具在超过 `tool_execution_timeout` 后返回带 `tool execution timeout` 结果的 `ToolMessage`，不会无限阻塞整个批次。
-- `test_tool_batch_active_spans_message_and_tool_execution`：验证「assistant 消息 + 整批 tool 执行」作为一个原子单元——模型产出带 tool_calls 的消息时 `tool_batch_active` 即被置位，直到该批工具执行完后才复位，从而让这一整段时间内的 cancel 走 deferred 收口、保证 tool 结果完整。
 - `test_resolution_uses_responses_api_stream_and_merges_content_with_tool_calls`：确认 stream 调用能把 text chunk 和 tool call chunk 合并成带 content 和 tool_calls 的 `AIMessage`。
 - `test_resolution_falls_back_from_stream_to_invoke_within_configured_transport`：确认一个已配置 transport 内 stream 失败后会降级到同 transport 的非流 invoke，不承担跨 Responses/chat-completions 自动切换。
 - `test_resolution_uses_ethernet_backoff_between_failed_provider_attempts`：确认 provider attempt 失败后，会按 `[0, 2^k - 1]` slot 的随机指数退避等待，再进入下一 attempt。
 - `test_resolution_stops_after_provider_attempt_limit`：确认同一轮 provider 调用最多尝试五次，避免无限重试或长期占用 producer。
-- `test_resolution_records_text_from_responses_api_content_blocks`：确认 Responses API content block 列表会抽取 `type=text` 文本并写入 `model_message.content`。
 - `test_resolution_retries_transport_when_provider_stop_signal_requires_missing_tool_calls`：验证 provider 给出 `finish_reason=tool_calls` 但 LangChain 消息里没有实际 `tool_calls` 时，会把该响应视为不完整并切换到下一个 transport。
 - `test_resolution_accepts_terminal_stop_message_without_tool_calls`：验证 `finish_reason=stop` 这类 terminal stop signal 仍会作为自然文本终态处理。
-- `test_resolution_records_terminal_stop_message_as_final_answer`：验证没有 tool call 且带 terminal stop signal 的 `model_message` 会记录 `is_final=true` 和归一化 `stop_signal`。
 - `test_resolution_rejects_plan_only_message_without_terminal_stop_signal`：验证只有计划性文本、没有工具调用、也没有 terminal stop signal 的模型响应不能被当成完成结果。
-- `test_resolution_records_model_message_content_and_tool_calls_without_reasoning`：确认 trace 只记录普通 assistant content、工具摘要和 `is_final=false`，不保存隐藏 reasoning content。

@@ -20,9 +20,12 @@ import shutil
 import threading
 from typing import Any, Iterable
 
+from langchain_core.messages import AIMessage, ToolMessage
+
 from service.file_extraction_agent.core.documents import materialize_tree
 from service.file_extraction_agent.core.graph import GraphState, build_graph_state
-from service.file_extraction_agent.core.loop import run_resolution_stream
+
+from service.file_extraction_agent.core.loop import run_resolution_stream, _message_stop_signal, _terminal_stop_signals
 from service.file_extraction_agent.core.model import ChatModelFallbackChain, build_resolution_model
 from service.file_extraction_agent.schemas import DocumentQaMessage, InputDocument, ModelConfig, RunOptions
 
@@ -42,121 +45,102 @@ def run_completion_graph_stream(
     *,
     should_stop=None,
 ) -> Iterable[dict[str, Any]]:
-    """累积模型/工具事件并输出字典；异常转失败终态，外部停止则补工具回复后取消。"""
-    emitted = 0
-    _append_completion_event(state, "completion.created", status="in_progress")
-    _append_source_index_event(state)
-    while emitted < len(state.events):
-        yield state.events[emitted]
-        emitted += 1
+    """消息流 → 模型/调度/结果事件；按 call ID 配对，批次后取消，异常补结果后失败。"""
+    pending: dict[str, dict[str, Any]] = {}
 
-    outcome: Any = {"ok": False, "errors": [{"message": "resolution did not run"}]}
-    stopped = False
+    def stopped() -> bool:
+        return should_stop is not None and should_stop()
+
+    yield {"id": state.completion_id, "type": "completion.created", "status": "in_progress"}
+    yield {"type": "source_indexed", "tool": "source_index", "result": {
+        "ok": True, "workspace_root": str(state.document.root), "tree": _file_tree_lines(state.document),
+    }}
+    messages = iter(run_resolution_stream(state, resolution_model))
     try:
-        for outcome in run_resolution_stream(state, resolution_model):
-            if should_stop is not None and should_stop():
-                stopped = True
+        while pending or not stopped():
+            try:
+                message = next(messages)
+            except StopIteration:
+                if pending:
+                    raise RuntimeError("message stream ended with pending tool calls")
                 break
-            while emitted < len(state.events):
-                yield state.events[emitted]
-                emitted += 1
+            if isinstance(message, AIMessage):
+                if pending:
+                    raise ValueError("model message arrived before tool replies")
+                if stopped():
+                    break
+                calls = {call["id"]: call for call in message.tool_calls}
+                if any(not call_id for call_id in calls) or len(calls) != len(message.tool_calls):
+                    raise ValueError("tool calls require unique non-empty IDs")
+                pending.update(calls)
+                yield _model_message_event(message)
+                for call in pending.values():
+                    yield {"type": "tool_started", "tool": call["name"], "args": call["args"], "tool_call_id": call["id"]}
+            elif isinstance(message, ToolMessage):
+                call = pending.pop(message.tool_call_id, None)
+                if call is None:
+                    raise ValueError(f"unpaired tool reply: {message.tool_call_id}")
+                yield _tool_message_event(message, call)
+            else:
+                raise TypeError(f"unexpected message type: {type(message).__name__}")
     except Exception as exc:
-        state.failed_stage = "resolution"
-        _append_failure_event(state, exc)
-        outcome = {"ok": False, "errors": [{"message": str(exc)}]}
-
-    if stopped:
-        _backfill_pending_tool_cancels(state)
-
-    while emitted < len(state.events):
-        yield state.events[emitted]
-        emitted += 1
-
-    if stopped:
-        _append_completion_event(state, "completion.cancelled", status="cancelled")
-    elif _resolution_failed(outcome):
-        _append_completion_event(state, "completion.failed", status="failed", error=_failure_reason(outcome))
-    else:
-        _append_completion_event(state, "completion.completed", status="completed")
-    yield state.events[-1]
-
-
-def _backfill_pending_tool_cancels(state: GraphState) -> None:
-    latest_model_tool_calls: list[dict[str, Any]] = []
-    for event in state.events:
-        if event.get("type") == "model_message":
-            tool_calls = event.get("tool_calls")
-            if isinstance(tool_calls, list) and tool_calls:
-                latest_model_tool_calls = tool_calls
-    if not latest_model_tool_calls:
+        for call in pending.values():
+            result = {"ok": False, "errors": [{"message": str(exc)}]}
+            yield _tool_message_event(ToolMessage(content=json.dumps(result), artifact=result,
+                status="error", tool_call_id=call["id"]), call)
+        yield {"type": "tool_failed", "tool": "resolution", "result": {"ok": False, "errors": [{"message": str(exc)}]}}
+        status = "cancelled" if stopped() else "failed"
+        yield _completion_event(state.completion_id, status, error=str(exc))
         return
-    fulfilled_tool_refs: set[str] = set()
-    for event in state.events:
-        if event.get("type") in {"tool_completed", "tool_failed"}:
-            tool = event.get("tool")
-            if tool is not None:
-                fulfilled_tool_refs.add(str(tool))
-    for call in latest_model_tool_calls:
-        name = str(call.get("name") or "")
-        if name and name in fulfilled_tool_refs:
-            continue
-        state.events.append(
-            {
-                "seq": state.next_seq,
-                "type": "tool_completed",
-                "tool": name,
-                "args": call.get("args") or {},
-                "result": {"ok": False, "errors": [{"message": "tool execution cancelled"}]},
-            }
-        )
-        state.next_seq += 1
+    finally:
+        close = getattr(messages, "close", None)
+        if close is not None:
+            close()
+    yield _completion_event(state.completion_id, "cancelled" if stopped() else "completed")
 
 
-def _append_completion_event(
-    state: GraphState,
-    event_type: str,
-    *,
-    status: str,
-    error: str | None = None,
-) -> None:
-    payload: dict[str, Any] = {
-        "seq": state.next_seq,
-        "id": state.completion_id,
-        "type": event_type,
-        "status": status,
+def _model_message_event(message: AIMessage) -> dict[str, Any]:
+    """提取可见文本、工具调用和终止信号，不携带隐藏推理。"""
+    stop_signal = _message_stop_signal(message)
+    event = {
+        "type": "model_message",
+        "content": _message_content_text(message.content),
+        "tool_call_count": len(message.tool_calls),
+        "tool_calls": [{"id": call["id"], "name": call["name"], "args": call["args"]} for call in message.tool_calls],
+        "is_final": not message.tool_calls and stop_signal in _terminal_stop_signals(),
     }
-    if error:
-        payload["error"] = error
-    state.next_seq += 1
-    state.events.append(payload)
+    if stop_signal:
+        event["stop_signal"] = stop_signal
+    return event
 
 
-def _append_failure_event(state: GraphState, exc: Exception) -> None:
-    state.events.append(
-        {
-            "seq": state.next_seq,
-            "type": "tool_failed",
-            "tool": "resolution",
-            "result": {"ok": False, "errors": [{"message": str(exc)}]},
-        }
-    )
-    state.next_seq += 1
+def _tool_message_event(message: ToolMessage, call: dict[str, Any]) -> dict[str, Any]:
+    result = message.artifact
+    if result is None:
+        try:
+            result = json.loads(message.content)
+        except (TypeError, json.JSONDecodeError):
+            result = message.content
+    failed = message.status == "error" or isinstance(result, dict) and result.get("ok") is False
+    return {"type": "tool_failed" if failed else "tool_completed", "tool": call["name"],
+            "args": call["args"], "tool_call_id": message.tool_call_id, "result": result}
 
 
-def _append_source_index_event(state: GraphState) -> None:
-    state.events.append(
-        {
-            "seq": state.next_seq,
-            "type": "source_indexed",
-            "tool": "source_index",
-            "result": {
-                "ok": True,
-                "workspace_root": str(state.document.root),
-                "tree": _file_tree_lines(state.document),
-            },
-        }
-    )
-    state.next_seq += 1
+def _message_content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for item in content:
+        if isinstance(item, str):
+            parts.append(item)
+            continue
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "text" and isinstance(item.get("text"), str):
+            parts.append(item["text"])
+    return "".join(parts)
 
 
 def _file_tree_lines(document: Any) -> list[str]:
@@ -175,18 +159,6 @@ def _file_tree_lines(document: Any) -> list[str]:
 
     walk(None, "")
     return lines
-
-
-def _resolution_failed(outcome: Any) -> bool:
-    return isinstance(outcome, dict) and outcome.get("ok") is False
-
-
-def _failure_reason(outcome: Any) -> str:
-    if isinstance(outcome, dict):
-        errors = outcome.get("errors") or []
-        if errors:
-            return "; ".join(str(error.get("message", error)) if isinstance(error, dict) else str(error) for error in errors)
-    return "resolution failed"
 
 
 def _sse(event: dict[str, Any]) -> str:
@@ -316,11 +288,19 @@ class ActiveCompletion:
         self.terminal_committed = False
         self._cancel_deferred = False
         self._lock = threading.Lock()
-        self._state_lock = getattr(state, "events_lock", None) or threading.Lock()
+        self._pending_tool_ids: set[str] = set()
         self.queue: queue.Queue[dict[str, Any] | object] = queue.Queue()
 
     def stream(self) -> Iterable[str]:
         def run() -> Iterable[str]:
+            next_seq = 1
+
+            def encode(event: dict[str, Any]) -> str:
+                nonlocal next_seq
+                frame = _sse({**event, "seq": next_seq})
+                next_seq += 1
+                return frame
+
             if not self.should_cancel():
                 producer = threading.Thread(
                     target=self._produce,
@@ -333,20 +313,20 @@ class ActiveCompletion:
                     event = self.queue.get()
                     if event is _QUEUE_CANCEL:
                         if self.close_once("cancelled"):
-                            yield _sse(_completion_event(self.completion_id, "cancelled"))
+                            yield encode(_completion_event(self.completion_id, "cancelled"))
                         return
                     if event is _QUEUE_DONE:
                         if self.close_once("completed"):
-                            yield _sse(_completion_event(self.completion_id, "completed"))
+                            yield encode(_completion_event(self.completion_id, "completed"))
                         return
                     if not isinstance(event, dict):
                         continue
                     status = _terminal_status(event)
                     if status is not None:
                         if self.close_once(status):
-                            yield _sse(event)
+                            yield encode(event)
                         return
-                    yield _sse(event)
+                    yield encode(event)
             finally:
                 if not self.is_closed():
                     self.close_once("cancelled")
@@ -383,9 +363,7 @@ class ActiveCompletion:
                 return self.status
             self.cancel_requested = True
             self.status = "cancelling"
-            with self._state_lock:
-                batch_active = getattr(self.state, "tool_batch_active", False)
-            if not batch_active:
+            if not self._pending_tool_ids:
                 self.queue.put(_QUEUE_CANCEL)
             else:
                 self._cancel_deferred = True
@@ -404,6 +382,10 @@ class ActiveCompletion:
             for event in active_events:
                 if _terminal_status(event) is not None:
                     continue
+                if event.get("type") == "model_message":
+                    self._pending_tool_ids.update(call["id"] for call in event.get("tool_calls", []))
+                elif event.get("type") in {"tool_completed", "tool_failed"}:
+                    self._pending_tool_ids.discard(event.get("tool_call_id"))
                 self.queue.put(event)
             return True
 

@@ -17,7 +17,7 @@ build_tools(state)
   -> 返回 [ls, grep, read, search_embedding]
 ```
 
-工具的运行时行为（事件记录、action 记录、错误收敛）由 `base.run_tool` 统一处理。
+工具由 `base.run_tool` 执行并归一化异常，只返回结果；对外事件由 manager 包装。
 """
 
 from __future__ import annotations

@@ -234,16 +234,13 @@ def test_search_embedding_returns_text_and_covered_files_sorted(tmp_path, monkey
         assert item["chunk_id"]
 
 
-def test_search_embedding_returns_tool_events(tmp_path, monkeypatch):
+def test_search_embedding_returns_result_without_event_state(tmp_path, monkeypatch):
     state = _state(tmp_path)
     _install_fake_index(monkeypatch)
-    before = len(state.events)
 
-    _search_embedding(state, query="payment", top_k=1, scope="")
-
-    event_types = [event["type"] for event in state.events[before:]]
-    assert event_types[0] == "tool_started"
-    assert event_types[-1] == "tool_completed"
+    result = _search_embedding(state, query="payment", top_k=1, scope="")
+    assert result["ok"] is True
+    assert not hasattr(state, "events")
 
 
 def test_search_embedding_rejects_empty_query(tmp_path, monkeypatch):

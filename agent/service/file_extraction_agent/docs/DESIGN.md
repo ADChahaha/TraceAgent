@@ -29,274 +29,62 @@ backend 持久化 task / messages / documents / events
 - [agent_loop.md](agent_loop.md)：描述更轻量的协作式 cancel 伪代码；在 backend 作为事实来源时，agent 只需要在安全点检查 `cancel_flag` 并尽快停止。
 - [tools.md](tools.md)：描述 `ls / grep / read` 三个工具的表面。
 
-## 2. 输入、输出和运行步骤
+## 2. 消息执行与事件包装边界
 
-运行与缓存的边界：`metadata.task_id` → route 传入 manager → `GraphState.task_id` → embedding 缓存按任务、文档相对路径与内容、模型/后端及分块配置生成版本键。缓存只保存相对路径，命中后映射到本轮 workspace；未提供 task_id 时只在当前 completion 内复用。
-
-工作目录：校验 completion_id 只含字母、数字、下划线和连字符（首字符为字母或数字，最长 128 字符）→ 在配置根目录下独占创建 completion 子目录 → 落盘文档 → 结束时检查目录仍属于原父目录后清理。危险 ID、已有目录或越界清理抛出 `ValueError`；模型初始化失败也清理已创建目录。
-
-表格落盘：HTML `rowspan/colspan` → 展开逻辑网格 → 按所有行的最大列数补齐 → 转义单元格竖线 → 写 Markdown，保留合并表头下的金额与列位置。
-
-工具结果：每次调用由 `ToolExecution` 记录带 `tool_call_id` 的开始事件 → 工具正常返回、异常或超时竞争同一个结果锁 → 固定唯一 action 与完成/失败事件 → 用相同结果构造模型的 ToolMessage。超时后的线程可能继续运行，但迟到结果不能再写入事件；一批工具共享从提交时起计算的超时期限。
-
-内部事件链路：`run_completion_graph_stream` 产生事件字典 → `ActiveCompletion` 在锁内提交到 `queue.Queue` → consumer 读取字典的 `type` 决定终态 → 仅在 `stream()` 输出处调用 `_sse` 编码。取消、兜底完成及运行时异常也先构造字典，统一使用 JSON 编码；正文、status 或相似前缀不决定终态。
-
-模型执行只有一条链路：`run_resolution_stream` 构建消息和工具 → `resolution_model.bind_tools(tools)` → LangGraph 的 agent/tools 循环 → 有工具调用则执行并回填 ToolMessage，无工具且有合法终止信号则完成。缺少绑定接口直接报错；模型调用全部尝试失败抛出 `RuntimeError`，由 manager 转为失败事件。测试仅替换 provider 响应，不使用专用 fake 循环。
-
-Python 入口是 `completion_manager.create(...)`（`manager.CompletionManager` 的进程单例）：
+`loop` 只执行并返回消息；`manager` 把消息转成业务事件；`ActiveCompletion.stream` 最后编码 SSE。
 
 ```text
 completion_id + documents + messages + run_options + model_config
-  -> completion_manager.create / manager.prepare_completion_state(...)（校验函数，失败抛 ValueError）
-       -> 校验 completion_id 非空
-       -> 校验 documents 是非空 list，且每个 InputDocument 有 filename/html
-       -> 校验 messages 是非空 list，支持 OpenAI 风格 user/assistant/tool 消息
-        -> run_options 缺省补成 RunOptions(max_tool_calls=200, tool_execution_timeout=60.0)；不再要求 max_tool_calls > 0（不再是硬限）
-       -> documents.materialize_tree(documents, workspace_root/<completion_id>) 落盘真实文件树
-       -> build_graph_state(...) 产出 GraphState（不再有 DocumentQaCompletionInput 包装对象）
-  -> 构造 ActiveCompletion(completion_id, state, model) 并放入注册表
-  -> model.build_resolution_model(model_config) 构建 LangChain chat model
-  -> manager 启动 producer 线程运行 manager.run_completion_graph_stream(...)
-       -> 输出 completion.created
-       -> 输出 source_indexed(workspace_root + tree)
-       -> loop.run_resolution_stream(...)
-            -> build_resolution_messages，把历史 OpenAI messages 原样转成 chat/tool messages
-               并保持最新真实用户消息为最后一条 human message
-            -> build_tools(state) 暴露 ls / grep / read
-            -> 模型产生 model_message，先校验 provider stop signal 与 tool_calls 是否一致
-            -> 有 tool_calls 时保留同轮一个或多个工具调用，并交给并行执行器并发执行；
-               terminal stop signal 且无工具时自然结束
-        -> resolution 正常结束输出 completion.completed
-        -> resolution 异常输出 tool_failed(resolution) + completion.failed
-        -> producer 把每条事件字典放入 runtime queue
-   -> ActiveCompletion 的 consumer 从 queue 取事件字典，统一编码为 SSE 后向 HTTP response yield
-        -> 无事件时阻塞等待 runtime queue
-        -> cancel endpoint 通过 runtime 往 queue 放入 cancel sentinel，主动唤醒 consumer
-        -> consumer 按 FIFO 先发出 cancel sentinel 之前已提交的普通 event
-        -> consumer 收到 cancel sentinel 后输出 completion.cancelled 并结束 stream，不等待 provider 下一个 chunk
-        -> producer 后续若从 provider 返回更多 event，看到 runtime 已结束后丢弃
-   -> finally 从 CompletionManager 注册表移除本轮 completion
+  -> CompletionManager.create / prepare_completion_state
+     校验安全 completion_id、非空文件名/HTML/消息，独占创建 workspace
+     materialize_tree 将 HTML 落成 DocumentFileTree，构造 GraphState
+  -> build_resolution_model 构造支持 bind_tools 的模型；失败则清理 workspace
+  -> 注册 ActiveCompletion，首次消费 stream 时启动 producer
+  -> run_completion_graph_stream 先输出 completion.created / source_indexed
+  -> run_resolution_stream 构建 system prompt、历史消息和 tools
+     -> LangGraph stream(mode="updates") 取每个节点的 messages
+     -> 原样 yield AIMessage 或 ToolMessage，不包装 ok/output 或写事件列表
+  -> manager 按消息类型组装事件字典
+     -> AIMessage：model_message；有 tool_calls 则追加对应 tool_started
+     -> ToolMessage：按 tool_call_id 找回名称/参数，包装 tool_completed/tool_failed
+  -> runtime 锁内提交事件字典到 queue.Queue
+  -> consumer 按 FIFO 取事件、分配递增 seq、统一 _sse 编码后交给 backend
+  -> 正常结束 completion.completed；异常 completion.failed；取消 completion.cancelled
+  -> finally 清理 workspace、从注册表移除 completion
 ```
 
-同一批多个 tool_calls 的并发执行与取消语义：
+`GraphState` 只保存 completion_id、文档树、输入消息、运行配置、task_id 和工作目录归属；不保存 events、actions、next_seq、current_model_content、failed_stage、events_lock 或 tool_batch_active。LangGraph 自己维护本轮消息历史，manager 不通过共享 state 读取消息副作用。
+
+工具只返回结果：`run_tool` 捕获普通异常并转为 `{ok:false, errors:[...]}`；并行执行器使用共享 deadline，按调用顺序生成带原始 call ID 的 ToolMessage。结果放在消息的 content；原始结果保存在 ToolMessage.artifact 供 manager 无损包装，status 表示成功/失败。线程超时后不再读取迟到结果，线程也没有事件/action 写入渠道。
+
+manager 用本轮局部 pending 字典按 tool_call_id 保存未完成调用；收到 ToolMessage 后移除对应项。同名并行调用分别配对。tool_started 表示收到调用并开始调度，不表示每个工作线程的精确启动时刻。消息内容块只提取可见文本，模型事件不暴露隐藏推理；最终回答仍通过合法 stop signal 和无 tool_calls 标记 is_final。
+
+模型请求失败或响应不完整由 loop 的调用尝试处理，全部耗尽抛 RuntimeError；manager 补齐尚未配对的失败结果，输出 tool_failed(resolution) 后收口。工具异常/超时通常作为 ToolMessage 返回模型，允许继续作答；未知消息类型或未配对结果按协议错误结束。图自然结束时不额外 yield 重复的最后一条消息。
+
+输入及缓存边界保持不变：metadata.task_id 由 route 传到 GraphState；embedding 缓存按任务、文档内容和相对路径、模型及分块配置生成版本键。缓存中的相对路径映射到本轮 workspace。危险 completion_id、已有目录或越界清理抛 ValueError；HTML 表格展开合并单元格后输出 Markdown。
+
+## 3. 取消、终态与线程边界
+
+执行层不读取消标志。manager 在继续请求下一条消息前检查取消；已经发布工具调用时，先消费其全部 ToolMessage，再停止，不请求下一轮模型。
 
 ```text
-同一条 assistant 消息带多个 tool_calls
-  -> 交给 _execute_tools_parallel 用 ThreadPoolExecutor 并发执行
-  -> 每个工具调用仍是 run_tool 骨架（tool_started/tool_completed/tool_failed + action）
-  -> 每个工具调用带 tool_execution_timeout（默认 60s，可配置）
-      超时返回 {ok:false, errors:[{message:"tool execution timeout"}]}，不阻塞整个批次
-  -> 事件/action/seq 由 GraphState.events_lock 保护，并发写入有序且 seq 唯一
-  -> max_tool_calls 不再是总调用次数硬限；resolution 的 recursion_limit 固定为
-      RESOLUTION_RECURSION_LIMIT，循环由模型 terminal stop signal、tool 超时与 cancel 协作收敛
-  -> 「assistant 消息 + 整批 tool 执行」绑定为一个原子单元：模型产出带 tool_calls 的消息时
-      tool_batch_active 即置位，直到该批工具全部执行完（含各自 tool_execution_timeout 超时
-      产出的 timeout 占位结果）才复位；超时结果同样是合法 tool 结果，保证 OpenAI 格式完整
-  -> cancel 到达时：若当前无运行中的「消息+批次」单元，立即放 cancel sentinel 收口；
-       若正在执行该单元，则标记 deferred cancel，等整批工具跑完（或超时）后，
-       完整写入工具事件再以 completion.cancelled 收口
-  -> should_stop 触发时（run_completion_graph_stream 的每步间检查）：若最后产出的 provider
-       消息带有尚未执行的 tool_calls，先由 _backfill_pending_tool_cancels 为每个未配对
-       tool 补一条 ok:false / "tool execution cancelled" 的 tool_completed 回复，再以
-       completion.cancelled 收口，避免悬垂 tool_call；已跑成功的 tool 不会被重复追加
+ActiveCompletion.commit_event(model_message with tool_calls)
+  -> 同一个 runtime 锁内标记活动批次并提交模型事件
+  -> 后续 tool_started 和结果事件保持 FIFO
+  -> 已发布调用都返回结果后清除活动批次
+
+terminate()
+  -> 同一个 runtime 锁内设置 cancel_requested
+  -> 无活动批次：放 cancel sentinel，唤醒 consumer
+  -> 有活动批次：标记 deferred cancel，让结果（含超时失败）先提交
+  -> manager 在批次完成后输出 completion.cancelled
 ```
 
-公开边界全部强类型化：`completion_manager.create(...)` 的 `documents` 只接收
-`list[InputDocument]`、`messages` 只接收 `list[DocumentQaMessage]`、
-`model_config` 只接收 `ModelConfig | None`、`run_options` 只接收
-`RunOptions | None`；不再接收 `list[Any]` / `dict` / duck-typed object。
-不存在独立的 `DocumentQaCompletionInput` 包装对象或 `input_adapter` 模块：
-校验、派生 `workspace_root` 和触发 `materialize_tree` 落盘都收进
-`manager.prepare_completion_state(...)`，它直接产出 `GraphState`。
-`routes` 层通过 Pydantic `ChatCompletionRequest` 把 JSON 转成强类型对象后
-（含 `RunOptions`/`ModelConfig`）再交给 entry。
+取消早于模型事件提交时，该迟到消息不再发布；取消晚于模型事件提交时，已发布的工具调用必须配齐结果。若批次中执行流抛异常，manager 按 pending call ID 补失败回复；取消优先以 cancelled 收口。事件转换器关闭时也关闭内层消息生成器，避免继续请求 provider。
 
-整体流程图：
+producer 通过 runtime 锁控制事件提交；consumer 的结束条件是队列中的终态或 sentinel，不用取消标志跳过已提交事件。terminal_committed 防止终态重复入队，close_once 防止重复关闭；consumer 统一为普通事件和各种终态分配 seq，图内不分配序号。
 
-```mermaid
-flowchart TD
-    A["completion_id + documents + messages + run_options + model_config"]
-    B["manager.prepare_completion_state<br/>校验 completion_id / documents / messages<br/>归一化 RunOptions<br/>materialize_tree 落盘"]
-    C["documents.materialize_tree<br/>HTML -> DocumentFileTree<br/>落盘真实文件仓库"]
-    D["graph.build_graph_state<br/>生成 GraphState"]
-    E["manager.run_completion_graph_stream<br/>组织本轮 completion 事件"]
-    F["completion.created"]
-    G["source_indexed<br/>workspace_root + tree"]
-    H["loop.run_resolution_stream<br/>构建 prompt / 历史消息 / tools"]
-    I["build_tools(state)<br/>ls / grep / read"]
-    J["模型输出 model_message"]
-    K{"是否有 tool_calls?"}
-    L["并行执行器执行工具<br/>_execute_tools_parallel"]
-    M["tools<br/>记录 tool_started / tool_completed / tool_failed"]
-    N["ls<br/>看真实文件树当前层"]
-    O["grep<br/>rg 搜索候选 .md block"]
-    P["read<br/>读取一个 .md block 文件"]
-    R["model_message<br/>过程解释或最终答案<br/>带真实路径 citation"]
-    S{"terminal stop<br/>且无工具调用?"}
-    T["completion.completed"]
-    U["异常<br/>tool_failed(resolution) + completion.failed"]
-
-    A --> B --> C --> D --> E
-    E --> F
-    E --> G
-    E --> H --> I --> J --> K
-    K -- "有工具调用" --> L --> M
-    M --> N
-    M --> O
-    M --> P
-    N --> J
-    O --> J
-    P --> J
-    K -- "无工具调用" --> S
-    S -- "是" --> R --> T
-    H -- "异常" --> U
-```
-
-输出是 SSE 字符串迭代器，每条形如：
-
-```text
-event: model_message
-data: {"seq":4,"type":"model_message","content":"..."}
-
-```
-
-失败时主要有两类：
-
-- 入参校验失败：`manager.prepare_completion_state(...)` 或 Pydantic schema 抛出 `ValueError`，HTTP route 映射为 422。
-- resolution 运行失败：`graph` 捕获异常，先输出 `tool_failed`，再用 `completion.failed` 收口。
-
-## 3. Cancel 和 Provider Stream 边界
-
-当前目标设计把 agent 的 SSE 输出拆成 producer / consumer 两层，避免 cancel 被上游 provider stream 卡住：
-
-```text
-HTTP SSE consumer
-  -> 阻塞等待 runtime.queue.get()
-  -> 有 event 就 yield 给 backend
-  -> 收到 cancel sentinel 时 close_once("cancelled")
-  -> close_once 成功则 yield completion.cancelled 并关闭本轮 SSE
-
-producer 线程
-  -> 运行 manager.run_completion_graph_stream(...)
-  -> graph 内部可能阻塞在 LangChain/OpenAI provider.stream()
-  -> 每次 provider 请求必须使用明确 request timeout，不能无限等待
-  -> provider 吐出 chunk 后继续生成 model/tool/completion event
-  -> 如果 runtime 已 cancelled/closed，丢弃后续 event
-```
-
-这里的 cancel 语义是“本地 run 立刻收口”，不是保证上游 provider 物理停止生成。同步 SDK 如果卡在阻塞 IO 中，Python 不能安全强杀该调用；agent 能保证的是 `/cancel` 通过 runtime 设置取消状态并向本轮 runtime queue 投递 cancel sentinel，主动唤醒原 SSE consumer。consumer 不需要 timeout 轮询，也不等待 provider 下一个 chunk，而是把 cancel sentinel 之前已经提交到 queue 的普通 event 按 FIFO flush 给 backend，然后输出 `completion.cancelled` 并释放响应链路。
-
-cancel 的精确边界由 runtime lock 上的提交顺序定义，而不是由用户点击取消的现实时间定义：
-
-```text
-producer commit_events([event_a, event_b]) 先拿到 runtime lock
-  -> event_a/event_b 都成功进入 runtime queue，成为已提交 event
-  -> cancel 后拿到 lock，只能把 cancel sentinel 排在 event_b 后面
-  -> consumer 必须依次 yield event_a、event_b、completion.cancelled
-
-cancel request_cancel() 先拿到 runtime lock
-  -> cancel sentinel 进入 runtime queue
-  -> runtime 进入 cancelling/closed 边界
-  -> producer 后续 commit_events([...]) 发现 runtime 已取消，整批不入队
-```
-
-因此 `request_cancel()` 只阻止 cancel sentinel 之后的新 event 入队，不能丢弃 sentinel 之前已经成功提交的旧 event。producer 可以单条提交，也可以小批量提交已经在锁外生成好的 event；但提交临界区只能做状态检查和 `queue.put`，不得包含 provider stream、tool 调用、graph 运行或其他慢 IO。小批量提交的代价是 cancel 粒度变成 batch 之间；只要 batch 是很短的内存提交，就不会造成锁长期占用。
-
-为了避免 producer/consumer 只是把卡死从前台链路挪到后台线程，provider 请求必须有有限 timeout。timeout 和重试等待采用 Ethernet binary exponential backoff 思路：同一个 completion 内最多重试五次，第 `k` 次失败后从 `[0, 2^k - 1]` 个离散 slot 中随机选择等待时长，再发起下一次 provider 调用；slot 基准时长和单次 request timeout 可由配置覆盖，但都必须是有限秒数，不能配置成无限等待。每次 provider 调用都使用明确 request timeout；如果因为 timeout 失败且还有剩余尝试，就按随机退避等待后切到下一 transport/attempt 或同 transport 重试；如果五次耗尽：
-
-```text
-runtime.cancel_requested=true
-  -> producer 安静退出，consumer 已经负责输出 completion.cancelled
-
-runtime.cancel_requested=false
-  -> producer 输出 tool_failed(resolution) + completion.failed
-```
-
-因此后台 producer 最多残留到当前 provider request timeout 结束，连续 cancel 不会无限堆积僵尸线程；随机退避还能避免多个 completion 在同一时间点同时重试上游 provider。后续如果把 provider transport 改成原生 async/httpx stream，cancel 时还应主动 close socket；但即使有主动 close，有限 request timeout 和随机指数退避仍然是最后的资源回收边界。
-
-线程安全约束：
-
-```text
-ActiveCompletion（单 completion 的运行时）
-  -> 持有 state + resolution_model + 本 completion 专属 queue + threading.Lock
-  -> stream() 首次迭代启动 producer 线程并消费队列产 SSE；finally 清理 workspace
-  -> _produce() 后台线程目标，跑 manager.run_completion_graph_stream(state, model,
-     should_stop=lambda: self.cancel_requested) 并投事件；cancel 检查在 manager 外部，
-     loop 本身不感知取消
-  -> terminate()/get_status()：取消 / 查询状态
-   -> cancel_requested/status/closed 只能通过方法读写
-   -> 状态检查、状态变更和 queue.put 必须在同一个 runtime lock 临界区里完成
-   -> terminate() 标记取消意图；若当前无运行中 tool 批次则立即向 runtime queue 放
-      cancel sentinel 唤醒 consumer；若正在执行工具批次则标记 deferred cancel（不立刻
-      放 sentinel），等该批次跑完（或 tool_execution_timeout 超时）后由 producer 以
-      completion.cancelled 收口
-   -> close_once(status) 原子决定唯一终态
-
-CompletionManager._completions
-  -> 所有 get/set/pop 都必须持有自身的 registry lock
-  -> create(...) 装配 state + model，构造 ActiveCompletion 并注册后才返回 stream()
-  -> _managed_stream(...) 包装 stream()，结束后从 registry 移除 runtime
-  -> registry 只保存 completion_id -> runtime 的索引；queue 是 runtime 私有字段，不存在全局共享 queue
-
-producer -> consumer event queue
-  -> 如果 consumer 是 async generator，producer 线程只能通过 loop.call_soon_threadsafe(...) 投递事件
-  -> 如果使用同步 StreamingResponse generator，则使用线程安全 queue.Queue
-  -> 禁止 producer 线程直接操作 asyncio.Queue
-  -> 已经 commit 到 queue 的普通 event 必须按 FIFO 发出，不因后续 cancel 被丢弃
-  -> cancel sentinel 之后的普通 event 不允许再 commit；producer 迟到 event 直接丢弃
-```
-
-`queue.Queue` 自己的内部锁只保证队列数据结构线程安全，不保证业务上的 cancel 顺序。业务顺序必须由 `runtime.lock` 统一线性化：
-
-```text
-runtime.commit_events(events)
-  -> with runtime.lock
-  -> 如果 runtime 已 cancelling/closed，整批 event 不入队
-  -> 否则把 events 逐个 queue.put，形成一个已提交 batch
-
-runtime.request_cancel()
-  -> with runtime.lock
-  -> 如果 runtime 已 closed/cancelling，直接返回当前状态
-  -> 否则设置 cancel_requested=true、status=cancelling
-  -> 在同一个临界区内 queue.put(cancel sentinel)
-```
-
-不能先改 `cancel_requested` 再在锁外放 sentinel，也不能先放 sentinel 再在锁外改状态；否则 producer、consumer 看到的 runtime 状态和 queue 顺序可能不一致。consumer 可以阻塞在 `runtime.queue.get()` 上，但阻塞等待时绝不能持有 `runtime.lock`。
-
-consumer 的结束条件来自 queue item，不直接读取 `cancel_requested`：
-
-```text
-consumer queue.get() -> 普通 event
-  -> 这个 event 已经在 producer/cancel 线性化点之前成功提交
-  -> consumer 直接按 FIFO 经 _sse 编码后 yield 给 backend，不再用 cancel flag 二次裁决
-
-consumer queue.get() -> cancel sentinel
-  -> runtime.close_once("cancelled")
-  -> close_once 成功才 yield completion.cancelled
-  -> 结束本轮 SSE
-
-consumer queue.get() -> completion.completed / completion.failed
-  -> runtime.close_once("completed" / "failed")
-  -> close_once 成功才 yield 对应终态
-  -> 结束本轮 SSE
-```
-
-`cancel_requested` 只服务于入队侧：producer 用它判断后续 event 能不能 commit，cancel handler 用它避免重复塞 sentinel。consumer 如果用 `cancel_requested` 直接停流，会跳过 sentinel 前已经提交的旧 event，破坏 FIFO 语义。
-
-终态分为提交与输出两个阶段：
-
-```text
-producer 生成终态字典
-  -> commit_terminal_event(event) 由 event.type 派生 status
-  -> 锁内检查取消/关闭/已提交状态，只允许提交一次
-  -> consumer 取出终态，close_once(status) 成功后编码为 SSE 并结束
-
-consumer 收到 cancel sentinel
-  -> close_once("cancelled") 成功后构造取消事件字典
-  -> 经同一 _sse 编码器输出并结束
-```
-
-没有活动工具批次时，取消通过 sentinel 收口；活动批次的延迟取消允许先提交完整工具事件。已入队普通事件保持 FIFO，终态只输出一次。
+queue.get 阻塞时不持有 runtime 锁。没有活动工具批次的取消不等待 provider 下一个 chunk；同步 provider 及已超时工具线程不能被强杀，有限请求 timeout 负责约束阻塞时间，迟到结果不能再写事件。注册表仅在进程内共享，部署仍要求单进程/单 worker。
 
 ## 4. 真实文件树
 
@@ -516,15 +304,15 @@ SSE 事件按 `seq` 递增，常见类型如下：
 
 | 事件 | 来源 | 作用 |
 | --- | --- | --- |
-| `completion.created` | graph | 标记本轮 completion 开始。 |
-| `source_indexed` | graph | 暴露本轮 `workspace_root` 和逐层 `tree` 清单。 |
-| `model_message` | loop | 模型面向用户的过程说明或最终回答；过程事实应内嵌带可读 label 的 evidence link，最终回答带 `is_final=true` 和 `stop_signal`，并把数字 evidence citation 放在被支撑句子后面。 |
-| `tool_started` | tools | 记录工具开始及参数。 |
-| `tool_completed` | tools | 记录工具成功结果。 |
-| `tool_failed` | tools / graph | 记录工具或 resolution 失败。 |
-| `completion.completed` | graph | 正常结束。 |
+| `completion.created` | manager | 标记本轮 completion 开始。 |
+| `source_indexed` | manager | 暴露本轮 `workspace_root` 和逐层 `tree` 清单。 |
+| `model_message` | manager | 模型面向用户的过程说明或最终回答；过程事实应内嵌带可读 label 的 evidence link，最终回答带 `is_final=true` 和 `stop_signal`，并把数字 evidence citation 放在被支撑句子后面。 |
+| `tool_started` | manager | 记录工具开始及参数。 |
+| `tool_completed` | manager | 记录工具成功结果。 |
+| `tool_failed` | manager | 记录工具或 resolution 失败。 |
+| `completion.completed` | manager | 正常结束。 |
 | `completion.cancelled` | manager | 后端请求取消后结束。 |
-| `completion.failed` | graph | resolution 失败后结束。 |
+| `completion.failed` | manager | resolution 失败后结束。 |
 
 backend 应把这些事件作为事实流持久化；前端断线续传和历史回放应读取 backend 数据库，而不是依赖 agent 仍保留 runtime。
 
@@ -541,15 +329,14 @@ core/documents.py
   -> 分块输入由 core/tools/embedding/index.py 的 _build_streams/_md_files_under 收集
 
 core/graph.py
-  -> 定义 GraphState 与 build_graph_state（单 completion 的运行状态累积器）
+  -> 定义 GraphState 与 build_graph_state（输入与文档执行上下文，无事件缓冲）
   -> 不做事件组装与 SSE 写出；manager.run_completion_graph_stream 组装事件字典，
      ActiveCompletion.stream 负责运行时收口及 SSE 输出
 
 core/tools/              # 工具包：每个工具一个文件，统一由 __init__ 暴露 build_tools
   -> __init__.py 对外统一接口 build_tools(state)，转出 _ls/_grep/_read/_search_embedding
      及可替身点 _run_ripgrep/_get_embedder/_get_index（供测试 monkeypatch）
-  -> base.py    共享骨架：run_tool（tool_started/tool_completed/tool_failed 事件 + action 记录）、
-     emit_event / record_action / expose_entries / order_key
+  -> base.py    共享骨架：run_tool 只执行并归一化异常结果；expose_entries / order_key
   -> ls.py      构建 ls 工具 + _ls / _ls_result
   -> grep.py    构建 grep 工具 + _grep / _grep_output / _run_ripgrep（rg 子进程，引用证据用真实 .md 路径）
   -> read.py    构建 read 工具 + _read / _read_result / _locator_error
@@ -558,15 +345,15 @@ core/tools/              # 工具包：每个工具一个文件，统一由 __in
       model.py    真实模型惰性封装：get_embedder / get_tokenizer（不在 import 时加载 torch/OpenVINO）
       search.py   纯 numpy 分块/索引/余弦检索：chunk_text / build_index / search_top_k
       index.py    索引持久化 + 内容哈希缓存 key + _build_streams 收集文档流 + _get_index
-  core/tools 每次工具调用写入 tool_started/tool_completed/tool_failed 事件；
+  core/tools 只返回工具结果，manager 将 ToolMessage 包装成事件；
   search_embedding 用纯 numpy 余弦返回候选 chunk（含 text/document/covered_files）
 
 core/loop.py
   -> 构建 QA system prompt，并保留 backend 传入的真实 chat/tool messages
   -> 用 LangGraph 运行 model/tool loop
-  -> 记录 model_message
+  -> 原样 yield AIMessage / ToolMessage，由 manager 包装事件
   -> 保留 provider 返回的一个或多个 tool call，并交给 _execute_tools_parallel 并行执行
-     （每个工具调用带 tool_execution_timeout 超时，返回顺序稳定，由 events_lock 保证线程安全）
+     （整批共享 tool_execution_timeout 期限，返回顺序稳定，无共享事件写入）
 
 core/model.py
   -> build_resolution_model / normalize_model_config / build_chat_model

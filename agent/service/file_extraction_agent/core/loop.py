@@ -13,7 +13,6 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import MessagesState
 
 from service.file_extraction_agent.core.tools import build_tools
-from service.file_extraction_agent.core.tools.base import ToolExecution
 from service.file_extraction_agent.core.model import ChatModelFallbackChain
 
 
@@ -112,17 +111,18 @@ def build_resolution_messages(state: Any) -> list[Any]:
 def run_resolution_stream(
     state: Any,
     resolution_model: ChatModelFallbackChain | None,
-) -> Iterable[dict[str, Any]]:
+) -> Iterable[AIMessage | ToolMessage]:
+    """节点更新中的 messages 原样向外迭代；正常耗尽结束，模型异常向调用方抛出。"""
     tools = build_tools(state)
     messages = build_resolution_messages(state)
     graph = build_resolution_graph(resolution_model, tools, state)
-    output = None
     for output in graph.stream(
         {"messages": messages},
+        stream_mode="updates",
         config={"recursion_limit": RESOLUTION_RECURSION_LIMIT},
     ):
-        yield {"ok": None, "output": output}
-    yield {"ok": True, "output": output}
+        for update in output.values():
+            yield from update.get("messages", [])
 
 
 def build_resolution_graph(
@@ -134,10 +134,6 @@ def build_resolution_graph(
 
     def call_model(graph_state: MessagesState):
         message = _invoke_model_message(model, graph_state["messages"])
-        _record_model_message(state, message)
-        if getattr(message, "tool_calls", None):
-            with state.events_lock:
-                state.tool_batch_active = True
         return {"messages": [message]}
 
     def run_tools(graph_state: MessagesState):
@@ -146,11 +142,7 @@ def build_resolution_graph(
         if not tool_calls:
             return {"messages": []}
         timeout = getattr(state.run_options, "tool_execution_timeout", 60.0)
-        try:
-            tool_messages = _execute_tools_parallel(state, tool_calls, tools, timeout=timeout)
-        finally:
-            with state.events_lock:
-                state.tool_batch_active = False
+        tool_messages = _execute_tools_parallel(state, tool_calls, tools, timeout=timeout)
         return {"messages": tool_messages}
 
     def should_continue(graph_state: MessagesState):
@@ -178,44 +170,40 @@ def _execute_tools_parallel(
     tools: list[Any],
     timeout: float = 60.0,
 ) -> list[Any]:
-    """tool_calls → ToolExecution 记录开始 → 并行调用 → 原顺序返回 ToolMessage。
+    """并行调用工具 → 按共享期限收集结果 → 按原始 ID 返回 ToolMessage。
 
-    工具返回、普通异常和批次期限到达共用唯一结果收口；同一结果写入 SSE 和
-    模型消息。未知工具转为失败结果，超时不等待剩余线程，迟到结果不再写事件。
+    普通异常与超时转失败消息；不等待迟到线程，不写共享事件或 action。
     """
-
     tool_map = {getattr(tool, "name", getattr(tool, "__name__", "")): tool for tool in tools}
-    executions = [
-        ToolExecution(state, str(call.get("name") or ""), call.get("args") or {}, str(call.get("id") or ""))
-        for call in tool_calls
-    ]
 
-    def run_one(execution: ToolExecution) -> Any:
-        selected = tool_map.get(execution.name)
+    def run_one(call: dict[str, Any]) -> Any:
+        selected = tool_map.get(call["name"])
         if selected is None:
-            raise ValueError(f"unknown tool: {execution.name}")
+            raise ValueError(f"unknown tool: {call['name']}")
         execute = getattr(selected, "invoke", None)
         if callable(execute):
-            return execute(execution.args)
-        return selected(**execution.args)
+            return execute(call.get("args") or {})
+        return selected(**(call.get("args") or {}))
 
     pool = ThreadPoolExecutor(max_workers=max(1, len(tool_calls)))
     deadline = time.monotonic() + timeout
-    futures = [
-        (pool.submit(execution.invoke, lambda item=execution: run_one(item)), execution)
-        for execution in executions
-    ]
+    futures = [(pool.submit(run_one, call), call) for call in tool_calls]
     ordered = []
     try:
-        for future, execution in futures:
+        for future, call in futures:
             try:
                 raw = future.result(timeout=max(0.0, deadline - time.monotonic()))
             except TimeoutError:
-                raw = execution.finish({"ok": False, "errors": [{"message": "tool execution timeout"}]})
-            content = _plain_json(raw)
+                raw = {"ok": False, "errors": [{"message": "tool execution timeout"}]}
+            except Exception as exc:
+                raw = {"ok": False, "errors": [{"message": str(exc)}]}
+            result = _plain_json(raw)
+            failed = isinstance(result, dict) and result.get("ok") is False
             ordered.append(ToolMessage(
-                content=json.dumps(content, ensure_ascii=False) if isinstance(content, dict) else str(content or ""),
-                tool_call_id=execution.call_id, name=execution.name,
+                content=json.dumps(result, ensure_ascii=False) if isinstance(result, dict) else str(result or ""),
+                artifact=result,
+                status="error" if failed else "success",
+                tool_call_id=call["id"], name=call["name"],
             ))
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
@@ -274,45 +262,6 @@ def _stream_model_message(model: Any, messages: list[Any]) -> Any:
     if streamed_message is None:
         raise RuntimeError("model stream returned no chunks")
     return message_chunk_to_message(streamed_message)
-
-
-def _record_model_message(state: Any, message: Any) -> None:
-    tool_calls = getattr(message, "tool_calls", None)
-    if not isinstance(tool_calls, list):
-        tool_calls = []
-    content = _message_content_text(getattr(message, "content", ""))
-    stop_signal = _message_stop_signal(message)
-    is_final = not tool_calls and stop_signal in _terminal_stop_signals()
-    event = {
-        "seq": state.next_seq,
-        "type": "model_message",
-        "content": content,
-        "tool_call_count": len(tool_calls),
-        "tool_calls": [_tool_call_summary(call) for call in tool_calls],
-        "is_final": is_final,
-    }
-    if stop_signal:
-        event["stop_signal"] = stop_signal
-    state.current_model_content = content if isinstance(content, str) else ""
-    state.events.append(event)
-    state.next_seq += 1
-
-
-def _message_content_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, list):
-        return ""
-    parts: list[str] = []
-    for item in content:
-        if isinstance(item, str):
-            parts.append(item)
-            continue
-        if not isinstance(item, dict):
-            continue
-        if item.get("type") == "text" and isinstance(item.get("text"), str):
-            parts.append(item["text"])
-    return "".join(parts)
 
 
 def _conversation_messages(messages: list[Any]) -> list[Any]:
@@ -433,15 +382,6 @@ def _read(value: Any, key: str, default: Any = None) -> Any:
     if isinstance(value, dict):
         return value.get(key, default)
     return getattr(value, key, default)
-
-
-def _tool_call_summary(call: Any) -> dict[str, Any]:
-    summary = {
-        "id": _read(call, "id"),
-        "name": _read(call, "name"),
-        "args": _plain_json(_read(call, "args", {})),
-    }
-    return {key: value for key, value in summary.items() if value not in (None, "")}
 
 
 def _plain_json(value: Any) -> Any:

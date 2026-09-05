@@ -10,13 +10,35 @@ from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from service.file_extraction_agent.core import loop as resolution_module
 from service.file_extraction_agent.core.loop import (
     _invoke_model_message,
-    _record_model_message,
     build_resolution_graph,
     build_resolution_messages,
 )
 from service.file_extraction_agent.core.tools import build_tools
 from service.file_extraction_agent.manager import prepare_completion_state
 from service.file_extraction_agent.schemas import DocumentQaMessage, InputDocument
+
+
+def test_resolution_stream_yields_only_original_messages(tmp_path, monkeypatch):
+    from unittest.mock import Mock
+    from service.file_extraction_agent.core.model import ChatModelFallbackChain, ModelCallAttempt
+    provider = Mock(spec=["bind_tools", "invoke"])
+    provider.bind_tools.return_value = provider
+    first = AIMessage(content="读取结构", tool_calls=[{"id": "ls-1", "name": "ls", "args": {}}])
+    final = AIMessage(content="完成", response_metadata={"finish_reason": "stop"})
+    provider.invoke.side_effect = [first, final]
+    model = ChatModelFallbackChain([ModelCallAttempt("test", provider, False)])
+    messages = list(resolution_module.run_resolution_stream(_state(tmp_path), model))
+    assert len(messages) == 3
+    assert messages[0] is first
+    assert isinstance(messages[1], ToolMessage)
+    assert messages[1].tool_call_id == "ls-1"
+    assert messages[2] is final
+
+
+def test_graph_state_has_no_event_or_runtime_buffers(tmp_path):
+    state = _state(tmp_path)
+    for field in ("events", "actions", "next_seq", "events_lock", "tool_batch_active", "current_model_content", "failed_stage"):
+        assert not hasattr(state, field), field
 
 
 def test_resolution_requires_tool_binding_before_invoking_model(tmp_path):
@@ -48,17 +70,16 @@ def test_tool_timeout_emits_one_matching_result_and_discards_late_success(tmp_pa
             state, [{"id": "slow", "name": "read", "args": {"path": "x"}}], [SlowTool()], timeout=0.02,
         )
         result = json.loads(messages[0].content)
-        terminal = [e for e in state.events if e["type"] in {"tool_completed", "tool_failed"}]
-        assert len(terminal) == 1
-        assert terminal[0]["result"] == result
-        assert terminal[0]["tool_call_id"] == "slow"
+        assert messages[0].artifact == result
+        assert messages[0].tool_call_id == "slow"
+        assert messages[0].status == "error"
         assert "timeout" in result["errors"][0]["message"]
-        snapshot = list(state.events)
+        snapshot = messages[0].model_dump()
     finally:
         release.set()
         assert finished.wait(2)
-    assert state.events == snapshot
-    assert len(state.actions) == 1
+    assert messages[0].model_dump() == snapshot
+    assert not hasattr(state, "events")
 
 
 def test_tool_exception_is_reported_consistently_without_timeout(tmp_path):
@@ -75,8 +96,9 @@ def test_tool_exception_is_reported_consistently_without_timeout(tmp_path):
     )
     result = json.loads(messages[0].content)
     assert result["errors"][0]["message"] == "invalid path"
-    assert state.events[-1]["result"] == result
-    assert state.events[-1]["tool_call_id"] == "broken"
+    assert messages[0].artifact == result
+    assert messages[0].tool_call_id == "broken"
+    assert messages[0].status == "error"
 
 
 def _company_paragraph_path(state):
@@ -251,70 +273,15 @@ def test_resolution_graph_preserves_parallel_tool_calls(tmp_path):
     model = MultiToolModel()
     graph = build_resolution_graph(model, build_tools(state), state)
 
-    list(graph.stream({"messages": build_resolution_messages(state)}, config={"recursion_limit": 4}))
+    outputs = list(graph.stream({"messages": build_resolution_messages(state)}, config={"recursion_limit": 4}))
 
-    model_events = [event for event in state.events if event.get("type") == "model_message"]
+    model_events = [update["agent"]["messages"][0] for update in outputs if "agent" in update]
     assert model.bind_kwargs == {}
-    assert [action["tool_name"] for action in state.actions] == ["ls", "read"]
-    assert model_events[0]["tool_call_count"] == 2
-    assert [call["name"] for call in model_events[0]["tool_calls"]] == ["ls", "read"]
-
-
-def test_tool_batch_active_spans_message_and_tool_execution(tmp_path, monkeypatch):
-    import threading
-
-    from service.file_extraction_agent.core.loop import build_resolution_graph
-
-    state = _state(tmp_path)
-    batch_observed = threading.Event()
-    release_batch = threading.Event()
-
-    class MultiToolModel:
-        def __init__(self):
-            self.calls = 0
-
-        def bind_tools(self, tools, **kwargs):
-            del tools, kwargs
-            return self
-
-        def stream(self, messages):
-            del messages
-            self.calls += 1
-            if self.calls > 1:
-                yield AIMessageChunk(content="完成。", response_metadata={"finish_reason": "stop"})
-                return
-            yield AIMessageChunk(
-                content="我先查结构。",
-                tool_call_chunks=[
-                    {"type": "tool_call_chunk", "name": "ls", "args": '{"path":""}', "id": "call-1", "index": 0},
-                ],
-            )
-
-    def fake_ls_result(state, path):
-        del state, path
-        batch_observed.set()
-        release_batch.wait(timeout=1.0)
-        return {"ok": True, "text": "blocked"}
-
-    monkeypatch.setattr("service.file_extraction_agent.core.tools.ls._ls_result", fake_ls_result)
-
-    model = MultiToolModel()
-    graph = build_resolution_graph(model, build_tools(state), state)
-
-    def run_graph():
-        try:
-            list(graph.stream({"messages": build_resolution_messages(state)}, config={"recursion_limit": 4}))
-        finally:
-            release_batch.set()
-
-    thread = threading.Thread(target=run_graph, daemon=True)
-    thread.start()
-
-    assert batch_observed.wait(timeout=0.5)
-    with state.events_lock:
-        assert state.tool_batch_active is True
-    release_batch.set()
-    thread.join(timeout=1.0)
+    assert not hasattr(state, "actions")
+    assert len(model_events[0].tool_calls) == 2
+    assert [call["name"] for call in model_events[0].tool_calls] == ["ls", "read"]
+    replies = next(update["tools"]["messages"] for update in outputs if "tools" in update)
+    assert [reply.tool_call_id for reply in replies] == ["call-1", "call-2"]
 
 
 def test_resolution_uses_responses_api_stream_and_merges_content_with_tool_calls():
@@ -487,31 +454,6 @@ def test_resolution_stops_after_provider_attempt_limit(monkeypatch):
     assert "attempt_5" not in message
 
 
-def test_resolution_records_text_from_responses_api_content_blocks(tmp_path):
-    state = _state(tmp_path)
-    message = AIMessage(
-        content=[
-            {"type": "reasoning", "summary": []},
-            {"type": "text", "text": "I will inspect root. "},
-            {"type": "function_call", "name": "ls", "arguments": '{"path":""}'},
-        ],
-        tool_calls=[
-            {
-                "id": "call-1",
-                "name": "ls",
-                "args": {"path": ""},
-            }
-        ],
-    )
-
-    _record_model_message(state, message)
-
-    assert state.current_model_content == "I will inspect root. "
-    assert state.events[-1]["content"] == "I will inspect root. "
-
-
-
-
 def test_resolution_retries_transport_when_provider_stop_signal_requires_missing_tool_calls():
     calls = []
 
@@ -569,20 +511,6 @@ def test_resolution_accepts_terminal_stop_message_without_tool_calls():
     assert message.tool_calls == []
 
 
-def test_resolution_records_terminal_stop_message_as_final_answer(tmp_path):
-    state = _state(tmp_path)
-    message = AIMessage(
-        content="最终答案。",
-        response_metadata={"finish_reason": "stop"},
-    )
-
-    _record_model_message(state, message)
-
-    assert state.events[-1]["content"] == "最终答案。"
-    assert state.events[-1]["is_final"] is True
-    assert state.events[-1]["stop_signal"] == "stop"
-
-
 def test_resolution_rejects_plan_only_message_without_terminal_stop_signal():
     class PlanOnlyModel:
         def stream(self, messages):
@@ -601,32 +529,6 @@ def test_resolution_rejects_plan_only_message_without_terminal_stop_signal():
         assert "terminal stop signal" in str(exc)
     else:
         raise AssertionError("plan-only message without terminal stop signal should fail")
-
-
-def test_resolution_records_model_message_content_and_tool_calls_without_reasoning(tmp_path):
-    state = _state(tmp_path)
-    message = AIMessage(
-        content="I will inspect the root listing while calling a tool.",
-        additional_kwargs={"reasoning_content": "hidden reasoning must not be persisted"},
-        tool_calls=[
-            {
-                "id": "call-1",
-                "name": "ls",
-                "args": {"path": ""},
-            }
-        ],
-    )
-
-    _record_model_message(state, message)
-
-    assert state.events[-1] == {
-        "seq": 1,
-        "type": "model_message",
-        "content": "I will inspect the root listing while calling a tool.",
-        "tool_call_count": 1,
-        "tool_calls": [{"id": "call-1", "name": "ls", "args": {"path": ""}}],
-        "is_final": False,
-    }
 
 
 def test_parallel_tool_executor_runs_all_calls_concurrently(tmp_path):
