@@ -1,4 +1,4 @@
-"""Resolution loop for document QA completions."""
+"""文档问答的模型与工具循环。"""
 
 from __future__ import annotations
 
@@ -20,10 +20,10 @@ from service.file_extraction_agent.schemas import DocumentQaMessage, RunOptions
 
 PROVIDER_ATTEMPT_LIMIT = 5
 PROVIDER_BACKOFF_SLOT_SECONDS = 0.25
-RESOLUTION_RECURSION_LIMIT = 10000
+QA_RECURSION_LIMIT = 10000
 
 
-def build_resolution_messages(state: Any) -> list[Any]:
+def build_qa_messages(state: Any) -> list[Any]:
     system_content = (
         "You are a document QA assistant. You help users understand documents in a "
         "real file workspace by answering with evidence when documents are relevant. "
@@ -110,11 +110,11 @@ def build_resolution_messages(state: Any) -> list[Any]:
     return messages
 
 
-def run_resolution_stream(
+def run_qa_stream(
     *,
     resource_path: str,
     messages: list[DocumentQaMessage],
-    resolution_model: ChatModelFallbackChain | None,
+    qa_model: ChatModelFallbackChain | None,
     run_options: RunOptions | None = None,
     should_stop=None,
 ) -> Iterable[AIMessage | list[ToolMessage]]:
@@ -124,12 +124,12 @@ def run_resolution_stream(
     if stopped():
         return
     tools = build_tools(state)
-    messages = build_resolution_messages(state)
-    graph = build_resolution_graph(resolution_model, tools, state)
+    messages = build_qa_messages(state)
+    graph = build_qa_graph(qa_model, tools, state)
     updates = graph.stream(
         {"messages": messages},
         stream_mode="updates",
-        config={"recursion_limit": RESOLUTION_RECURSION_LIMIT},
+        config={"recursion_limit": QA_RECURSION_LIMIT},
     )
     try:
         for output in updates:
@@ -153,12 +153,12 @@ def run_resolution_stream(
         updates.close()
 
 
-def build_resolution_graph(
-    resolution_model: ChatModelFallbackChain | None,
+def build_qa_graph(
+    qa_model: ChatModelFallbackChain | None,
     tools: list[Any],
     state: Any,
 ):
-    model = resolution_model.bind_tools(tools)
+    model = qa_model.bind_tools(tools)
 
     def call_model(graph_state: MessagesState):
         message = _invoke_model_message(model, graph_state["messages"])
@@ -431,8 +431,8 @@ def _plain_json(value: Any) -> Any:
 
 
 __all__ = [
-    "build_resolution_messages",
-    "run_resolution_stream",
-    "build_resolution_graph",
+    "build_qa_messages",
+    "run_qa_stream",
+    "build_qa_graph",
     "_invoke_model_message",
 ]

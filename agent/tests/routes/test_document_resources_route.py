@@ -84,7 +84,7 @@ def test_qa_uses_prepared_path_without_rebuilding_or_deleting(resources, monkeyp
         def invoke(self, messages):
             return AIMessage(content="回答", response_metadata={"finish_reason": "stop"})
 
-    monkeypatch.setattr(manager, "build_resolution_model", lambda config: Model())
+    monkeypatch.setattr(manager, "build_qa_model", lambda config: Model())
     client = TestClient(create_app())
     prepared = upload(client)
     assert prepared.status_code == 200, prepared.text

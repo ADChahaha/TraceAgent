@@ -30,3 +30,5 @@ HTTP POST /v1/document-qa/chat/completions/{completion_id}/cancel
 
 请求改为 resource_path；不再向 manager 传 documents 或 task_id，历史消息与模型配置测试保留。
 `test_document_qa_completion_cancel_route_calls_manager`：取消路由按 completion ID 转发 manager，保留取消响应。
+
+测试调用与替身模型名称同步采用 qa 命名，验证行为保持原契约。

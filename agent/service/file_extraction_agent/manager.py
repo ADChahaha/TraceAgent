@@ -17,17 +17,17 @@ from langchain_core.messages import AIMessage, ToolMessage
 
 from service.document_resources import load_resource
 
-from service.file_extraction_agent.core.loop import run_resolution_stream, _message_stop_signal, _terminal_stop_signals
-from service.file_extraction_agent.core.model import ChatModelFallbackChain, build_resolution_model
+from service.file_extraction_agent.core.loop import run_qa_stream, _message_stop_signal, _terminal_stop_signals
+from service.file_extraction_agent.core.model import ChatModelFallbackChain, build_qa_model
 from service.file_extraction_agent.schemas import DocumentQaMessage, ModelConfig, RunOptions
 
 
 _QUEUE_CANCEL = object()
 _QUEUE_DONE = object()
 
-def run_completion_graph_stream(
+def stream_completion_events(
     *, completion_id: str, resource_path: str, messages: list[DocumentQaMessage],
-    resolution_model: ChatModelFallbackChain | None = None,
+    qa_model: ChatModelFallbackChain | None = None,
     run_options: RunOptions | None = None, should_stop=None,
 ) -> Iterable[dict[str, Any]]:
     """路径与消息 → graph 批次输出 → 业务事件；管理 ID 不进入 graph。"""
@@ -37,8 +37,8 @@ def run_completion_graph_stream(
     yield {"type": "source_indexed", "tool": "source_index", "result": {
         "ok": True, "workspace_root": str(document.root), "tree": _file_tree_lines(document),
     }}
-    outputs = run_resolution_stream(
-        resource_path=resource_path, messages=messages, resolution_model=resolution_model,
+    outputs = run_qa_stream(
+        resource_path=resource_path, messages=messages, qa_model=qa_model,
         run_options=run_options, should_stop=should_stop,
     )
     try:
@@ -57,7 +57,7 @@ def run_completion_graph_stream(
             else:
                 raise TypeError(f"unexpected graph output: {type(output).__name__}")
     except Exception as exc:
-        yield {"type": "tool_failed", "tool": "resolution", "result": {"ok": False, "errors": [{"message": str(exc)}]}}
+        yield {"type": "tool_failed", "tool": "qa", "result": {"ok": False, "errors": [{"message": str(exc)}]}}
         yield _completion_event(completion_id, "cancelled" if stopped() else "failed", error=str(exc))
         return
     finally:
@@ -149,7 +149,7 @@ def _plain(value: Any) -> Any:
 class ActiveCompletion:
     """单个 document-QA chat completion 的运行时。
 
-    持有该 completion 专属的 resource_path、messages、resolution_model、事件通道 queue 与同步锁。
+    持有该 completion 专属的 resource_path、messages、qa_model、事件通道 queue 与同步锁。
     它自己完成生产、消费与收尾：
 
     stream()
@@ -159,7 +159,7 @@ class ActiveCompletion:
       -> finally 确保终态唯一并释放运行时（注册表移除由 CompletionManager 托管）
 
     _produce()
-      -> 后台线程目标，循环 run_completion_graph_stream(resource_path=..., resolution_model=...) 产事件字典
+      -> 后台线程目标，循环 stream_completion_events(resource_path=..., qa_model=...) 产事件字典
       -> 用 commit_* / commit_terminal_event 投进 queue；异常投 completion.failed；
          兜底 commit_done
 
@@ -169,13 +169,13 @@ class ActiveCompletion:
     之后的新事件被拒收；terminal 只提交一次；close_once 保证终态唯一。
     """
 
-    def __init__(self, completion_id: str, resource_path: str, resolution_model: ChatModelFallbackChain,
+    def __init__(self, completion_id: str, resource_path: str, qa_model: ChatModelFallbackChain,
                  messages: list[DocumentQaMessage], run_options: RunOptions | None = None) -> None:
         self.completion_id = completion_id
         self.resource_path = resource_path
         self.messages = messages
         self.run_options = run_options
-        self.model = resolution_model
+        self.model = qa_model
         self.status: str = "in_progress"
         self.cancel_requested = False
         self.closed = False
@@ -230,9 +230,9 @@ class ActiveCompletion:
     def _produce(self) -> None:
         terminal_committed = False
         try:
-            for event in run_completion_graph_stream(
+            for event in stream_completion_events(
                 completion_id=self.completion_id, resource_path=self.resource_path,
-                messages=self.messages, run_options=self.run_options, resolution_model=self.model,
+                messages=self.messages, run_options=self.run_options, qa_model=self.model,
                 should_stop=lambda: self.cancel_requested,
             ):
                 if _terminal_status(event) is not None:
@@ -352,8 +352,8 @@ class CompletionManager:
         if not messages:
             raise ValueError("messages must be a non-empty list")
         load_resource(resource_path)
-        resolution_model = build_resolution_model(model_config)
-        runtime = ActiveCompletion(completion_id, resource_path, resolution_model, messages, run_options)
+        qa_model = build_qa_model(model_config)
+        runtime = ActiveCompletion(completion_id, resource_path, qa_model, messages, run_options)
         with self._lock:
             if completion_id in self._completions:
                 raise ValueError("completion_id is already active")

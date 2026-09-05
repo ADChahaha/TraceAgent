@@ -89,6 +89,8 @@ data: {"id":"cmp_123","type":"completion.created","status":"in_progress","seq":1
 
 最终回答由 is_final=true 标记，在结论句后引用真实 Markdown 路径。取消已发布工具批次时，先配齐结果再结束。
 
+问答执行层异常的 tool_failed 事件使用 `tool: "qa"` 标记阶段；具体工具失败仍使用 read、grep 等实际工具名称。
+
 ## 取消与查询
 
 ```http

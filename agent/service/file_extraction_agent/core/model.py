@@ -1,4 +1,4 @@
-"""Build the LangChain chat model for the resolution stage."""
+"""构建文档问答使用的 LangChain 模型。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from service.file_extraction_agent.schemas import ModelConfig
 DEFAULT_MODEL_REQUEST_TIMEOUT_SECONDS = 8.0
 
 
-def build_resolution_model(config: ModelConfig | None) -> "ChatModelFallbackChain":
+def build_qa_model(config: ModelConfig | None) -> "ChatModelFallbackChain":
     normalized = normalize_model_config(config)
     return build_chat_model(normalized, normalized.model_name)
 
@@ -251,4 +251,4 @@ def _should_enable_deepseek_thinking(config: ModelConfig, model_name: str) -> bo
     return bool(config.reasoning_effort) and _should_disable_deepseek_thinking(config, model_name)
 
 
-__all__ = ["build_resolution_model", "normalize_model_config", "build_chat_model"]
+__all__ = ["build_qa_model", "normalize_model_config", "build_chat_model"]

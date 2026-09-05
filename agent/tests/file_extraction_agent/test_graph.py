@@ -9,7 +9,7 @@ from service.file_extraction_agent import manager as manager_module
 from langchain_core.messages import AIMessage, AIMessageChunk
 from service.file_extraction_agent.core.model import ChatModelFallbackChain, ModelCallAttempt
 
-from service.file_extraction_agent.manager import run_completion_graph_stream
+from service.file_extraction_agent.manager import stream_completion_events
 from service.file_extraction_agent.schemas import DocumentQaMessage, InputDocument
 
 
@@ -33,9 +33,9 @@ def _input(resource_path):
                 messages=[DocumentQaMessage(role="user", content="Can this contract be terminated early?")])
 
 
-def test_run_completion_graph_stream_yields_objects_and_terminal_completion(resource_path):
+def test_stream_completion_events_yields_objects_and_terminal_completion(resource_path):
     model, provider = _scripted_model()
-    events = list(run_completion_graph_stream(**_input(resource_path), resolution_model=model))
+    events = list(stream_completion_events(**_input(resource_path), qa_model=model))
     assert [e["type"] for e in events] == [
         "completion.created", "source_indexed", "model_message", "tool_started", "tool_completed",
         "model_message", "tool_started", "tool_completed", "model_message", "completion.completed",
@@ -47,7 +47,7 @@ def test_run_completion_graph_stream_yields_objects_and_terminal_completion(reso
 
 def test_tool_started_is_yielded_before_tool_execution(resource_path):
     model, provider = _scripted_model()
-    stream = run_completion_graph_stream(**_input(resource_path), resolution_model=model)
+    stream = stream_completion_events(**_input(resource_path), qa_model=model)
     assert next(stream)["type"] == "completion.created"
     assert next(stream)["type"] == "source_indexed"
     assert next(stream)["type"] == "model_message"
@@ -59,7 +59,7 @@ def test_tool_started_is_yielded_before_tool_execution(resource_path):
 
 def test_cancel_before_execution_does_not_call_model(resource_path):
     model, provider = _scripted_model()
-    events = list(run_completion_graph_stream(**_input(resource_path), resolution_model=model, should_stop=lambda: True))
+    events = list(stream_completion_events(**_input(resource_path), qa_model=model, should_stop=lambda: True))
     assert events[-1]["type"] == "completion.cancelled"
     provider.invoke.assert_not_called()
 
@@ -67,7 +67,7 @@ def test_cancel_before_execution_does_not_call_model(resource_path):
 def test_cancel_after_model_drains_tools_without_next_model(resource_path):
     model, provider = _scripted_model()
     cancel = False
-    stream = run_completion_graph_stream(**_input(resource_path), resolution_model=model, should_stop=lambda: cancel)
+    stream = stream_completion_events(**_input(resource_path), qa_model=model, should_stop=lambda: cancel)
     assert next(stream)["type"] == "completion.created"
     assert next(stream)["type"] == "source_indexed"
     assert next(stream)["type"] == "model_message"
@@ -92,7 +92,7 @@ def test_executor_failure_returns_entire_failed_batch(resource_path, monkeypatch
         stopped = cancelled
         raise RuntimeError("执行中断")
     monkeypatch.setattr(loop, "_execute_tools_parallel", fail)
-    events = list(run_completion_graph_stream(**_input(resource_path), resolution_model=model, should_stop=lambda: stopped))
+    events = list(stream_completion_events(**_input(resource_path), qa_model=model, should_stop=lambda: stopped))
     replies = [e for e in events if e["type"] == "tool_failed"]
     assert [(e["tool_call_id"], e["args"]) for e in replies] == [("a", {"path": "first"}), ("b", {"path": "second"})]
     assert events[-1]["type"] == ("completion.cancelled" if cancelled else "completion.completed")
@@ -109,8 +109,8 @@ def test_closing_event_stream_closes_message_generator(resource_path, monkeypatc
         finally:
             closed.append(True)
 
-    monkeypatch.setattr(manager_module, "run_resolution_stream", messages)
-    stream = run_completion_graph_stream(**_input(resource_path), resolution_model=object())
+    monkeypatch.setattr(manager_module, "run_qa_stream", messages)
+    stream = stream_completion_events(**_input(resource_path), qa_model=object())
     next(stream)
     next(stream)
     assert next(stream)["type"] == "model_message"

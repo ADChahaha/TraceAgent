@@ -36,9 +36,9 @@ def test_path_graph_returns_complete_tool_batch_and_stops_after_cancel(monkeypat
         {"id": "b", "name": "read", "args": {"path": "bad"}},
     ])
     cancelled = False
-    stream = loop.run_resolution_stream(
+    stream = loop.run_qa_stream(
         resource_path="R", messages=state.messages, run_options=state.run_options,
-        resolution_model=ChatModelFallbackChain([ModelCallAttempt("test", provider, False)]),
+        qa_model=ChatModelFallbackChain([ModelCallAttempt("test", provider, False)]),
         should_stop=lambda: cancelled,
     )
     assert isinstance(next(stream), AIMessage)

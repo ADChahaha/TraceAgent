@@ -5,8 +5,8 @@
 ```text
 resource_path + messages + 模型/运行配置
   → CompletionManager 校验资源并注册 ActiveCompletion（管理 completion_id）
-  → run_completion_graph_stream 包装业务事件
-  → run_resolution_stream 调 build_graph_state，加载资源并初始化图内状态
+  → stream_completion_events 包装业务事件
+  → run_qa_stream 调 build_graph_state，加载资源并初始化图内状态
   → LangGraph 模型节点 / 工具节点
   → AIMessage / list[ToolMessage]
   → manager 事件字典 → ActiveCompletion 队列 → 分配 seq 并编码 SSE

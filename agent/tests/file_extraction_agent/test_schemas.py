@@ -89,7 +89,7 @@ def test_model_config_keeps_model_transport_and_sampling_options():
     config = ModelConfig(
         base_url="https://example.com/v1",
         api_key="key",
-        model_name="resolution",
+        model_name="qa",
         api_transport="chat_completions",
         temperature=0.2,
         top_p=0.9,
@@ -98,7 +98,7 @@ def test_model_config_keeps_model_transport_and_sampling_options():
         request_timeout=90.0,
     )
 
-    assert config.model_name == "resolution"
+    assert config.model_name == "qa"
     assert config.api_transport == "chat_completions"
     assert config.temperature == 0.2
     assert config.top_p == 0.9
@@ -108,7 +108,7 @@ def test_model_config_keeps_model_transport_and_sampling_options():
 
 
 def test_model_config_defaults_disable_sdk_retries_for_outer_backoff():
-    config = ModelConfig(model_name="resolution")
+    config = ModelConfig(model_name="qa")
 
     assert config.api_transport == "responses"
     assert config.max_retries == 0

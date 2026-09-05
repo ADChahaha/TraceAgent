@@ -13,3 +13,5 @@
 - `test_parser_failure_identifies_file_and_does_not_build_index`：解析失败显示文件和原因，不进入索引构建。
 
 资源基础实现导入迁移到 `service.document_resources`。
+
+测试调用与替身模型名称同步采用 qa 命名，验证行为保持原契约。

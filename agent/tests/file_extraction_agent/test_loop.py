@@ -7,11 +7,11 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
-from service.file_extraction_agent.core import loop as resolution_module
+from service.file_extraction_agent.core import loop as qa_module
 from service.file_extraction_agent.core.loop import (
     _invoke_model_message,
-    build_resolution_graph,
-    build_resolution_messages,
+    build_qa_graph,
+    build_qa_messages,
 )
 from service.file_extraction_agent.core.tools import build_tools
 from service.document_resources.documents import materialize_tree
@@ -20,7 +20,7 @@ from types import SimpleNamespace
 from service.file_extraction_agent.schemas import DocumentQaMessage, InputDocument
 
 
-def test_resolution_stream_yields_only_original_messages(tmp_path, monkeypatch, resource_path):
+def test_qa_stream_yields_only_original_messages(tmp_path, monkeypatch, resource_path):
     from unittest.mock import Mock
     from service.file_extraction_agent.core.model import ChatModelFallbackChain, ModelCallAttempt
     provider = Mock(spec=["bind_tools", "invoke"])
@@ -29,7 +29,7 @@ def test_resolution_stream_yields_only_original_messages(tmp_path, monkeypatch, 
     final = AIMessage(content="完成", response_metadata={"finish_reason": "stop"})
     provider.invoke.side_effect = [first, final]
     model = ChatModelFallbackChain([ModelCallAttempt("test", provider, False)])
-    messages = list(resolution_module.run_resolution_stream(resource_path=resource_path, messages=_state(tmp_path).messages, resolution_model=model))
+    messages = list(qa_module.run_qa_stream(resource_path=resource_path, messages=_state(tmp_path).messages, qa_model=model))
     assert len(messages) == 3
     assert messages[0] is first
     assert isinstance(messages[1], list)
@@ -43,11 +43,11 @@ def test_graph_state_has_no_event_or_runtime_buffers(tmp_path):
         assert not hasattr(state, field), field
 
 
-def test_resolution_requires_tool_binding_before_invoking_model(tmp_path, resource_path):
+def test_qa_requires_tool_binding_before_invoking_model(tmp_path, resource_path):
     calls = []
     model = SimpleNamespace(invoke=lambda messages: calls.append(messages) or {"content": "旧协议答案"})
     with pytest.raises((TypeError, AttributeError), match="bind_tools"):
-        list(resolution_module.run_resolution_stream(resource_path=resource_path, messages=_state(tmp_path).messages, resolution_model=model))
+        list(qa_module.run_qa_stream(resource_path=resource_path, messages=_state(tmp_path).messages, qa_model=model))
     assert calls == []
 
 
@@ -68,7 +68,7 @@ def test_tool_timeout_emits_one_matching_result_and_discards_late_success(tmp_pa
                 finished.set()
 
     try:
-        messages = resolution_module._execute_tools_parallel(
+        messages = qa_module._execute_tools_parallel(
             state, [{"id": "slow", "name": "read", "args": {"path": "x"}}], [SlowTool()], timeout=0.02,
         )
         result = json.loads(messages[0].content)
@@ -93,7 +93,7 @@ def test_tool_exception_is_reported_consistently_without_timeout(tmp_path):
         def invoke(self, args):
             raise ValueError("invalid path")
 
-    messages = resolution_module._execute_tools_parallel(
+    messages = qa_module._execute_tools_parallel(
         state, [{"id": "broken", "name": "read", "args": {}}], [BrokenTool()], timeout=1,
     )
     result = json.loads(messages[0].content)
@@ -141,8 +141,8 @@ def _state(tmp_path):
     )
 
 
-def test_resolution_messages_describe_qa_investigation_not_field_extraction(tmp_path):
-    messages = build_resolution_messages(_state(tmp_path))
+def test_qa_messages_describe_qa_investigation_not_field_extraction(tmp_path):
+    messages = build_qa_messages(_state(tmp_path))
     system_content = messages[0].content
     human_content = messages[1].content
 
@@ -164,8 +164,8 @@ def test_resolution_messages_describe_qa_investigation_not_field_extraction(tmp_
     assert "Investigate the documents" not in human_content
 
 
-def test_resolution_prompt_allows_direct_answers_without_forced_document_search(tmp_path):
-    messages = build_resolution_messages(_state(tmp_path))
+def test_qa_prompt_allows_direct_answers_without_forced_document_search(tmp_path):
+    messages = build_qa_messages(_state(tmp_path))
     system_content = messages[0].content
 
     assert "Answer directly when the question can be answered from conversation context" in system_content
@@ -180,7 +180,7 @@ def test_resolution_prompt_allows_direct_answers_without_forced_document_search(
     assert "One tool per turn" not in system_content
 
 
-def test_resolution_messages_preserve_openai_tool_history(tmp_path):
+def test_qa_messages_preserve_openai_tool_history(tmp_path):
     state = _prepare_test_state(
         documents=[
             InputDocument(
@@ -214,7 +214,7 @@ def test_resolution_messages_preserve_openai_tool_history(tmp_path):
         ],
         workspace_root=tmp_path,
     )
-    messages = build_resolution_messages(state)
+    messages = build_qa_messages(state)
 
     assert messages[1].type == "human"
     assert messages[2].type == "ai"
@@ -227,7 +227,7 @@ def test_resolution_messages_preserve_openai_tool_history(tmp_path):
     assert "Investigate the documents" not in messages[-1].content
 
 
-def test_resolution_graph_preserves_parallel_tool_calls(tmp_path):
+def test_qa_graph_preserves_parallel_tool_calls(tmp_path):
     state = _state(tmp_path)
     read_path = _company_paragraph_path(state)
 
@@ -271,9 +271,9 @@ def test_resolution_graph_preserves_parallel_tool_calls(tmp_path):
             )
 
     model = MultiToolModel()
-    graph = build_resolution_graph(model, build_tools(state), state)
+    graph = build_qa_graph(model, build_tools(state), state)
 
-    outputs = list(graph.stream({"messages": build_resolution_messages(state)}, config={"recursion_limit": 4}))
+    outputs = list(graph.stream({"messages": build_qa_messages(state)}, config={"recursion_limit": 4}))
 
     model_events = [update["agent"]["messages"][0] for update in outputs if "agent" in update]
     assert model.bind_kwargs == {}
@@ -284,7 +284,7 @@ def test_resolution_graph_preserves_parallel_tool_calls(tmp_path):
     assert [reply.tool_call_id for reply in replies] == ["call-1", "call-2"]
 
 
-def test_resolution_uses_responses_api_stream_and_merges_content_with_tool_calls():
+def test_qa_uses_responses_api_stream_and_merges_content_with_tool_calls():
     class StreamingModel:
         def __init__(self):
             self.streamed = False
@@ -337,7 +337,7 @@ def test_resolution_uses_responses_api_stream_and_merges_content_with_tool_calls
     ]
 
 
-def test_resolution_falls_back_from_stream_to_invoke_within_configured_transport():
+def test_qa_falls_back_from_stream_to_invoke_within_configured_transport():
     calls = []
 
     class FailingStreamModel:
@@ -384,7 +384,7 @@ def test_resolution_falls_back_from_stream_to_invoke_within_configured_transport
     assert message.tool_calls[0]["name"] == "ls"
 
 
-def test_resolution_uses_ethernet_backoff_between_failed_provider_attempts(monkeypatch):
+def test_qa_uses_ethernet_backoff_between_failed_provider_attempts(monkeypatch):
     calls = []
     sleeps = []
 
@@ -418,9 +418,9 @@ def test_resolution_uses_ethernet_backoff_between_failed_provider_attempts(monke
                 SimpleNamespace(name="responses_invoke", model=SuccessfulInvokeModel(), use_stream=False),
             ]
 
-    monkeypatch.setattr(resolution_module.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(qa_module.time, "sleep", lambda seconds: sleeps.append(seconds))
     monkeypatch.setattr(random, "randint", lambda lower, upper: upper)
-    monkeypatch.setattr(resolution_module, "PROVIDER_BACKOFF_SLOT_SECONDS", 0.01)
+    monkeypatch.setattr(qa_module, "PROVIDER_BACKOFF_SLOT_SECONDS", 0.01)
 
     message = _invoke_model_message(FallbackModel(), ["messages"])
 
@@ -429,7 +429,7 @@ def test_resolution_uses_ethernet_backoff_between_failed_provider_attempts(monke
     assert message.content == "fallback invoke worked"
 
 
-def test_resolution_stops_after_provider_attempt_limit(monkeypatch):
+def test_qa_stops_after_provider_attempt_limit(monkeypatch):
     class FailingStreamModel:
         def stream(self, messages):
             del messages
@@ -442,7 +442,7 @@ def test_resolution_stops_after_provider_attempt_limit(monkeypatch):
                 for index in range(7)
             ]
 
-    monkeypatch.setattr(resolution_module.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(qa_module.time, "sleep", lambda seconds: None)
     monkeypatch.setattr(random, "randint", lambda lower, upper: lower)
 
     with pytest.raises(RuntimeError) as exc:
@@ -454,7 +454,7 @@ def test_resolution_stops_after_provider_attempt_limit(monkeypatch):
     assert "attempt_5" not in message
 
 
-def test_resolution_retries_transport_when_provider_stop_signal_requires_missing_tool_calls():
+def test_qa_retries_transport_when_provider_stop_signal_requires_missing_tool_calls():
     calls = []
 
     class IncompleteToolCallStreamModel:
@@ -496,7 +496,7 @@ def test_resolution_retries_transport_when_provider_stop_signal_requires_missing
     assert message.tool_calls[0]["name"] == "ls"
 
 
-def test_resolution_accepts_terminal_stop_message_without_tool_calls():
+def test_qa_accepts_terminal_stop_message_without_tool_calls():
     class FinalAnswerModel:
         def stream(self, messages):
             del messages
@@ -511,7 +511,7 @@ def test_resolution_accepts_terminal_stop_message_without_tool_calls():
     assert message.tool_calls == []
 
 
-def test_resolution_rejects_plan_only_message_without_terminal_stop_signal():
+def test_qa_rejects_plan_only_message_without_terminal_stop_signal():
     class PlanOnlyModel:
         def stream(self, messages):
             del messages

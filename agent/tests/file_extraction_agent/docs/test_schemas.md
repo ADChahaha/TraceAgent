@@ -23,3 +23,5 @@ backend 传入 completion_id + resource_path + messages
 - `test_run_options_defaults_to_tool_budget_only`：验证运行预算默认只保留工具调用上限。
 
 请求改为 resource_path；不再向 manager 传 documents 或 task_id，历史消息与模型配置测试保留。
+
+测试调用与替身模型名称同步采用 qa 命名，验证行为保持原契约。

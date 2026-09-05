@@ -1,51 +1,25 @@
 # Agent Loop
 
-本轮 completion 的 agent loop 由 `core/loop.py`（LangGraph）驱动，被
-`manager.py` 的 `ActiveCompletion._produce` 在后台线程里跑。协作式取消走
-`ActiveCompletion` 的提交门（commit_*），见 `docs/DESIGN.md`。
-
-```mermaid
-sequenceDiagram
-    participant M as ActiveCompletion
-    participant G as core/graph (run_completion_graph_stream)
-    participant L as core/loop (LangGraph)
-    participant C as consumer (SSE)
-
-    M->>G: 启动 producer 线程（_produce 调 run_completion_graph_stream）
-    G->>L: run_resolution_stream(state, model)
-    loop 每轮 agent 节点
-        L->>L: _invoke_model_message(model, messages) -> AIMessage
-        L->>M: commit_event(model_message 事件)
-    end
-    L->>M: 事件进入 runtime queue（含 tool_started/tool_completed/final）
-    M->>C: queue.get() -> yield SSE（每次 next() 取一条事件）
-```
-
-## 驱动与停止
-
-- producer：`ActiveCompletion._produce` 循环 `manager.run_completion_graph_stream(state, model,
-  should_stop=lambda: self.cancel_requested)`，用 `commit_event` / `commit_terminal_event`
-  把每条事件投进 `runtime.queue`。停止点在"提交门前"：若 `cancel_requested` / `closed` /
-  `terminal_committed` 命中，提交返回 `False`，producer 立即停止，已提交事件按 FIFO 保留。
-- consumer：`ActiveCompletion.stream()` 返回的生成器，`queue.get()` 阻塞取事件；
-  遇到 `_QUEUE_CANCEL` / `_QUEUE_DONE` / 终态事件时 `close_once` 收口。
-- cancel：`completion_manager.terminate(id)` -> `runtime.terminate()`，在锁内置
-  `cancel_requested=true`；若当前无运行中工具批次则放 `_QUEUE_CANCEL` 哨兵立即唤醒 consumer，
-  否则标记 deferred，等 `should_stop` 在批次结束后触发 `completion.cancelled` 收口。
-
-## LangGraph 环（core/loop.py）
+`ActiveCompletion._produce` 在后台消费 manager 的 `stream_completion_events`；后者包装 `run_qa_stream` 返回的模型消息和工具批次，最终由 consumer 编码 SSE。
 
 ```text
-agent 节点: _invoke_model_message -> _record_model_message(state, msg)
-  -> should_continue: 最后一条消息有 tool_calls -> tools，否则 -> END
-tools 节点: _execute_tools_parallel 并发执行同批多个 tool_calls（ls / grep / read）
-  每个工具调用带 tool_execution_timeout 超时；事件/seq 由 events_lock 保证有序
-  -> should_continue_after_tools: 回到 agent
+ActiveCompletion 保存 completion_id、resource_path、messages、qa_model
+  → stream_completion_events 输出开始和资源树事件
+  → run_qa_stream 根据 resource_path 调 build_graph_state
+  → build_qa_messages 保留完整历史，build_qa_graph 绑定工具并编译图
+  → 模型节点返回 AIMessage
+  → manager 包装 model_message / tool_started
+  → 工具节点并行执行整批调用，返回 list[ToolMessage]
+  → manager 包装 tool_completed / tool_failed
+  → runtime 锁内入队，consumer 按 FIFO 分配 seq 并输出 SSE
 ```
 
-loop 本身不读 `cancel_requested`，是纯 model/tool 循环。取消信号由 manager 通过
-`should_stop` 注入到 `run_completion_graph_stream`，在每一步（每次 `graph.stream` 产出）
-之间检查；取消到达时若正在执行工具批次，会让该批次跑完（或超时）后再以
-`completion.cancelled` 收口，保证 tool 结果完整。若最后产出的 provider 消息带有尚未执行
-的 `tool_calls`，则先由 `_backfill_pending_tool_cancels` 补一条取消占位的 `tool_completed`
-回复，再收口，避免悬垂 tool_call。
+## 取消和失败
+
+- 无活动工具批次时，取消 sentinel 立即唤醒 consumer；已有批次则先配齐结果。
+- `run_qa_stream` 在工具批次返回后检查 should_stop，不再请求下一轮模型。
+- 工具普通异常和超时转为对应 ToolMessage；执行器整体异常转为整批失败结果。
+- 模型调用失败耗尽尝试后向 manager 抛异常，输出 tool_failed（tool=qa）及 completion.failed；取消优先以 cancelled 收口。
+- 关闭外层流时关闭内层生成器，迟到线程结果不再写事件。问答结束保留文档资源。
+
+管理 ID 不进入 graph；执行细节和取消锁语义见 [DESIGN.md](DESIGN.md)。
