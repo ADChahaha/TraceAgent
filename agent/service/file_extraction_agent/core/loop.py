@@ -14,6 +14,8 @@ from langgraph.graph.message import MessagesState
 
 from service.file_extraction_agent.core.tools import build_tools
 from service.file_extraction_agent.core.model import ChatModelFallbackChain
+from service.file_extraction_agent.core.graph import build_graph_state
+from service.file_extraction_agent.schemas import DocumentQaMessage, RunOptions
 
 
 PROVIDER_ATTEMPT_LIMIT = 5
@@ -109,20 +111,46 @@ def build_resolution_messages(state: Any) -> list[Any]:
 
 
 def run_resolution_stream(
-    state: Any,
+    *,
+    resource_path: str,
+    messages: list[DocumentQaMessage],
     resolution_model: ChatModelFallbackChain | None,
-) -> Iterable[AIMessage | ToolMessage]:
-    """节点更新中的 messages 原样向外迭代；正常耗尽结束，模型异常向调用方抛出。"""
+    run_options: RunOptions | None = None,
+    should_stop=None,
+) -> Iterable[AIMessage | list[ToolMessage]]:
+    """路径初始化状态 → 模型消息 / 完整工具批次；已发布批次结束后响应取消。"""
+    state = build_graph_state(resource_path=resource_path, messages=messages, run_options=run_options)
+    stopped = lambda: should_stop is not None and should_stop()
+    if stopped():
+        return
     tools = build_tools(state)
     messages = build_resolution_messages(state)
     graph = build_resolution_graph(resolution_model, tools, state)
-    for output in graph.stream(
+    updates = graph.stream(
         {"messages": messages},
         stream_mode="updates",
         config={"recursion_limit": RESOLUTION_RECURSION_LIMIT},
-    ):
-        for update in output.values():
-            yield from update.get("messages", [])
+    )
+    try:
+        for output in updates:
+            for node, update in output.items():
+                batch = update.get("messages", [])
+                if node == "agent":
+                    if stopped():
+                        return
+                    message = batch[0]
+                    ids = [call["id"] for call in message.tool_calls]
+                    if any(not call_id for call_id in ids) or len(set(ids)) != len(ids):
+                        raise ValueError("tool calls require unique non-empty IDs")
+                    yield message
+                    if not message.tool_calls and stopped():
+                        return
+                else:
+                    yield batch
+                    if stopped():
+                        return
+    finally:
+        updates.close()
 
 
 def build_resolution_graph(
@@ -142,7 +170,14 @@ def build_resolution_graph(
         if not tool_calls:
             return {"messages": []}
         timeout = getattr(state.run_options, "tool_execution_timeout", 60.0)
-        tool_messages = _execute_tools_parallel(state, tool_calls, tools, timeout=timeout)
+        try:
+            tool_messages = _execute_tools_parallel(state, tool_calls, tools, timeout=timeout)
+        except Exception as exc:
+            result = {"ok": False, "errors": [{"message": str(exc)}]}
+            tool_messages = [ToolMessage(
+                content=json.dumps(result), artifact=result, status="error",
+                tool_call_id=call["id"], name=call["name"], additional_kwargs={"tool_args": call["args"]},
+            ) for call in tool_calls]
         return {"messages": tool_messages}
 
     def should_continue(graph_state: MessagesState):
@@ -204,6 +239,7 @@ def _execute_tools_parallel(
                 artifact=result,
                 status="error" if failed else "success",
                 tool_call_id=call["id"], name=call["name"],
+                additional_kwargs={"tool_args": call["args"]},
             ))
     finally:
         pool.shutdown(wait=False, cancel_futures=True)

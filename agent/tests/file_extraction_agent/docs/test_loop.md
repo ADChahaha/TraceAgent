@@ -24,3 +24,5 @@
 - `test_resolution_retries_transport_when_provider_stop_signal_requires_missing_tool_calls`：验证 provider 给出 `finish_reason=tool_calls` 但 LangChain 消息里没有实际 `tool_calls` 时，会把该响应视为不完整并切换到下一个 transport。
 - `test_resolution_accepts_terminal_stop_message_without_tool_calls`：验证 `finish_reason=stop` 这类 terminal stop signal 仍会作为自然文本终态处理。
 - `test_resolution_rejects_plan_only_message_without_terminal_stop_signal`：验证只有计划性文本、没有工具调用、也没有 terminal stop signal 的模型响应不能被当成完成结果。
+
+执行输入改为资源路径；`test_resolution_stream_yields_only_original_messages` 验证模型消息和整批工具结果。工具与 prompt 测试仅构造文件树，不依赖 manager 初始化状态。

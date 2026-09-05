@@ -1,5 +1,6 @@
-# test_embedding_cache.py
+# 资源索引复用测试
 
-相同任务的不同 completion → 同一文档版本命中磁盘缓存 → 不重复编码 → 引用路径映射到当前 workspace。
+资源准备 → 两轮加载同一路径 → 使用清单模型编码查询，不再通过任务 ID 查找缓存。
 
-- `test_task_cache_reuses_vectors_and_rebases_paths`：验证同任务跨轮只编码一次、引用指向当前文件；不同任务或文档内容变更重新编码。
+- `test_resource_reuses_vectors_and_preserves_paths`：加载不调用 embedding，向量和引用路径保持一致，图状态没有管理 ID。
+- `test_query_uses_recorded_model_after_env_change`：环境配置变化后仍使用资源记录的模型和后端，只编码 query。

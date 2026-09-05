@@ -43,13 +43,11 @@ embeddings = [
 
 [tool.setuptools]
 py-modules = ["main"]
-packages = [
-    "service",
-    "service.document_processor",
-    "service.file_extraction_agent",
-    "service.file_extraction_agent.impl",
-    "routes",
-]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["service*", "routes*"]
+namespaces = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

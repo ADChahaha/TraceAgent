@@ -1,235 +1,111 @@
 # Agent Service API
 
-这份文档记录 `agent` 服务当前对 backend 暴露的 HTTP 能力：PDF/DOCX 文档标准化和多文档 QA chat completion。更细的模块设计见 [`DESIGN.md`](DESIGN.md)。
-
-## 1. 基本工作方式
+先上传一组 PDF / DOCX，准备完成后保存返回的资源路径；每轮问答只回传路径及完整历史 messages。
 
 ```text
-backend 持有原始 PDF/DOCX
-  -> POST /v1/document-processor/process（file_type 判定 pdf/docx）
-  -> 得到 filename + html
-  -> backend 保存文档和对话状态
-
-backend 持有 documents(filename + html) + append-only messages
-  -> POST /v1/document-qa/chat/completions
-  -> 持续得到 completion.created / source_indexed / model_message / tool_* / completion.*
-  -> backend 入库并转发给前端
+files → POST /v1/document-resources → resource_path + documents
+resource_path + messages → POST /v1/document-qa/chat/completions → SSE
 ```
 
-agent 不保存多轮 conversation；每一轮 QA 都由 backend 把 documents 和 append-only messages 重新传入。这里没有 memory/summary 通路，避免每轮重写上下文破坏 provider prompt cache。
+两个接口部署在同一个 agent 服务中，共用本机资源目录。backend 无需访问 agent 磁盘。**当前 backend 尚未切换到下面的新契约。**
 
-## 2. 运行前提
+## 文档解析与资源准备
 
-在 `agent/` 目录启动服务：
+```http
+POST /v1/document-resources
+Content-Type: multipart/form-data
+```
+
+重复使用 `files` 字段上传一个或多个 PDF / DOCX；文件类型由后缀判断，不接收 task_id。同步等待全部文件解析、文件树生成、分块及文档 embedding 完成。
 
 ```bash
-conda activate agent-gate
-set -a; source .env; set +a
-python -m uvicorn main:app --host 127.0.0.1 --port 8001
+curl -X POST http://127.0.0.1:8001/v1/document-resources \
+  -F "files=@contract.pdf" -F "files=@appendix.docx"
 ```
 
-模型调用需要 `.env` 或运行环境提供：
-
-```text
-BASE_URL
-OPENAI_API_KEY
-MODEL
-MODEL_API_TRANSPORT
-```
-
-`MODEL_API_TRANSPORT` 只支持 `responses` 或 `chat_completions`，默认 `responses`；它决定同一轮 provider attempt 只走 Responses API 还是只走 chat/completions，不做跨 API 自动 fallback。可选参数包括 `TEMPERATURE`、`TOP_P`、`TOP_K`、`REASONING_EFFORT`、`MODEL_MAX_RETRIES` 和 `MODEL_REQUEST_TIMEOUT`。
-
-## 3. 健康检查
-
-```text
-GET /healthz
-```
-
-响应：
-
-```json
-{"status": "ok"}
-```
-
-## 4. 文档转 HTML
-
-```text
-POST /v1/document-processor/process
-```
-
-请求类型：`multipart/form-data`
-
-字段：
-
-- `file`：必填，上传的 PDF 或 DOCX 文件。
-- `file_type`：可选，传 `pdf`/`.pdf` 或 `docx`/`.docx`；不传时由文件名后缀确认。
-
-处理流程：
-
-```text
-PDF/DOCX UploadFile
-  -> route 层包装成可读 file-like 对象
-  -> process(file_obj, file_type)  统一入口，file_type 分流（缺省看后缀）
-  -> PDF 走 MinerU：pdf.convert_pdf_to_html(...)（内部 converter -> html）
-  -> DOCX 走 python-docx：Document(BytesIO(...)) 按 body 顺序遍历 paragraph/table
-  -> 生成带 CSS 的完整 HTML 文档
-  -> ProcessResult(filename, html)
-  -> route 层返回 JSON
-```
-
-失败语义：
-
-- 文件对象不可读、PDF 文件类型不是 PDF 或无法确认 PDF 时返回 422。
-- 解析运行时失败时向上返回服务错误。
-
-## 5. 多文档 QA Chat Completion
-
-```text
-POST /v1/document-qa/chat/completions
-```
-
-请求类型：`application/json`
-
-响应类型：`text/event-stream`
-
-### 请求字段
-
-- `completion_id`：必填，由 backend 生成的本轮 completion id。
-- `documents[]`：必填，每个元素包含 `filename` 和 `html`。
-- `messages[]`：必填，多轮对话消息，role 支持 `system` / `user` / `assistant` / `tool`，`content` 必须非空；backend 只追加新消息和工具结果，不自动裁剪或摘要。
-- `stream`：当前可传，但第一版总是返回 SSE。
-- `metadata`：可选，agent 目前不持久化；backend 可用于调试或未来扩展。
-- `run_options`：可选，目前支持 `tool_execution_timeout`（每个工具调用的执行超时，默认 60s）；`max_tool_calls` 保留字段但不再作为调用次数硬限。
-- `model_config`：可选，覆盖模型连接配置。
-- 扁平模型字段：`base_url`、`api_key` / `openai_api_key`、`model`、`api_transport`、`temperature`、`top_p`、`top_k`。
-
-示例：
+成功返回 200：
 
 ```json
 {
-  "completion_id": "cmp_456",
+  "resource_path": "D:/TraceAgent/agent/data/resources/res_abc",
   "documents": [
-    {
-      "filename": "contract.pdf",
-      "html": "<h1>Agreement</h1><h2>Termination</h2><p>Either party may terminate...</p>"
-    }
-  ],
-  "messages": [
-    {"role": "user", "content": "这份合同可以提前终止吗？"}
-  ],
-  "stream": true,
-  "metadata": {"task_id": "task_001", "turn_id": "turn_003"},
-  "run_options": {"max_tool_calls": 80}
+    {"filename": "contract.pdf", "html": "<html>...</html>"},
+    {"filename": "appendix.docx", "html": "<html>...</html>"}
+  ]
 }
 ```
 
-### 处理流程
+HTML 用于原文展示；路径用于后续问答。资源发布后不会被 completion 清理，首版没有删除接口或自动过期。
 
-```text
-ChatCompletionRequest
-  -> route 层解析 JSON，禁止未知字段
-  -> completion_manager.create(...)（同 manager.prepare_completion_state 校验）
-         -> prepare_completion_state 校验 completion_id/documents/messages/run_options
-  -> documents 把多份 HTML 落盘成真实文件树（DocumentFileTree）
-  -> graph 先输出 completion.created 和 source_indexed（workspace_root + tree）
-  -> loop 构建 QA prompt，暴露 ls / grep / read
-  -> 模型边回答边调用工具，同一批多个 tool_calls 交给 _execute_tools_parallel 并行执行
-     （每个工具调用带 tool_execution_timeout 超时），过程消息用真实 .md 文件路径 Markdown link 引用证据
-  -> 无 tool_calls 且 provider terminal stop signal 的 model_message 带 is_final=true
-  -> graph 输出 completion.completed / completion.failed
-  -> manager 若收到 cancel flag：无运行中工具批次时立即输出 completion.cancelled；
-     正在执行工具批次时等批次跑完（或超时）再收口
+- 缺少文件、后缀不支持等输入错误：422。
+- 解析或资源准备失败：500，detail 标明阶段或文件及原因；不返回可用路径。
+- 任一文件失败则整组失败。调用方的 HTTP 超时需覆盖 OCR 和 embedding 的准备耗时。
+
+## 路径问答
+
+```http
+POST /v1/document-qa/chat/completions
+Content-Type: application/json
+Accept: text/event-stream
 ```
 
-### SSE 事件
+```json
+{
+  "completion_id": "cmp_123",
+  "resource_path": "D:/TraceAgent/agent/data/resources/res_abc",
+  "messages": [{"role": "user", "content": "付款条件是什么？"}],
+  "run_options": {"tool_execution_timeout": 60},
+  "model_config": {
+    "base_url": "https://example.com/v1",
+    "api_key": "...",
+    "model_name": "model",
+    "api_transport": "responses"
+  }
+}
+```
 
-常见事件：
+- completion_id 必填，1–128 位，以字母或数字开头，其余允许字母、数字、下划线和短横线；活动 ID 不可重复。
+- resource_path 必须是本服务受管理目录下的已发布完整资源，不能传任意本机目录。
+- messages 非空，支持 OpenAI 风格 user / assistant / tool 历史；assistant 可携带 tool_calls，tool 必须携带 tool_call_id。不自动摘要或裁剪。
+- 模型配置可省略，沿用环境配置；api_transport 支持 responses / chat_completions。
+- 不再接收 documents、metadata.task_id 或 workspace_root。stream 保留兼容字段，当前仍始终返回 SSE。
+- 资源缺失、损坏、引用越界、清单版本不支持等在流开始前返回 422，不自动重建。
 
-- `completion.created`
-- `source_indexed`
-- `model_message`
-- `tool_started`
-- `tool_completed`
-- `tool_failed`
-- `completion.completed`
-- `completion.cancelled`
-- `completion.failed`
-
-示例：
+SSE 按 seq 从 1 递增：
 
 ```text
 event: completion.created
-data: {"seq":1,"id":"cmp_456","type":"completion.created","status":"in_progress"}
-
-event: source_indexed
-data: {"seq":2,"type":"source_indexed","tool":"source_index","result":{"ok":true,"workspace_root":"/tmp/qa_workspace/cmp_456","tree":["└── 0001-contract/"]}}
-
-event: model_message
-data: {"seq":4,"type":"model_message","content":"我先查看 Termination 章节。[Termination](/tmp/qa_workspace/cmp_456/0001-contract/0001-Termination)","tool_call_count":1,"tool_calls":[{"name":"read","args":{"path":"/tmp/qa_workspace/cmp_456/0001-contract/0001-Termination/0001-termination.md"}}],"is_final":false}
-
-event: model_message
-data: {"seq":11,"type":"model_message","content":"可以提前终止。[任一方可以终止](/tmp/qa_workspace/cmp_456/0001-contract/0001-Termination/0001-termination.md)","tool_call_count":0,"tool_calls":[],"is_final":true,"stop_signal":"stop"}
-
-event: completion.completed
-data: {"seq":12,"id":"cmp_456","type":"completion.completed","status":"completed"}
+data: {"id":"cmp_123","type":"completion.created","status":"in_progress","seq":1}
 ```
 
-### 证据规则
+| 事件 | 含义 |
+| --- | --- |
+| completion.created | 开始执行 |
+| source_indexed | 当前资源 documents 目录的 workspace_root 与 tree |
+| model_message | 可见正文、tool_calls、is_final 和可选 stop_signal |
+| tool_started | 已发布的工具调用 ID、名称与参数 |
+| tool_completed / tool_failed | 对应调用的结果 |
+| completion.completed / completion.cancelled / completion.failed | 唯一终态 |
 
-- `grep` 只是候选搜索（rg 原样 stdout），不能单独作为最终事实依据。
-- `read` 读取一个 `.md` block 文件，用于理解上下文。
-- `model_message` 中首次陈述具体事实时，应使用真实文件路径的 Markdown evidence link，例如 `[任一方可以终止](/abs/path/.../0001-termination.md)`。
+最终回答由 is_final=true 标记，在结论句后引用真实 Markdown 路径。取消已发布工具批次时，先配齐结果再结束。
 
-## 6. 查询 completion
+## 取消与查询
 
-```text
-GET /v1/document-qa/chat/completions/{completion_id}
-```
-
-当前实现是占位调试接口：
-
-```json
-{"status": "not_implemented"}
-```
-
-后续如果需要查询 active runtime，可在不改变 backend 作为持久化事实来源的前提下扩展。
-
-## 7. 取消 completion
-
-```text
+```http
 POST /v1/document-qa/chat/completions/{completion_id}/cancel
 ```
 
-处理流程：
+返回 `{"id":"cmp_123","status":"cancelling"}`；未找到活动 completion 时返回 not_found。已取消或结束的 completion 不会删除文档资源。
 
-```text
-completion_id
-  -> completion_manager.terminate(completion_id)
-  -> 在 CompletionManager 注册表中查找 active runtime
-  -> 找到则设置 cancel_requested=true、status=cancelling
-  -> completion_manager.create 的 SSE consumer 立即输出 completion.cancelled 并关闭 SSE
-  -> producer 若稍后从 provider 返回事件，会在 runtime 已关闭时丢弃
-  -> 找不到则返回 not_found
-```
+`GET /v1/document-qa/chat/completions/{completion_id}` 仍返回 `{"status":"not_implemented"}`。
 
-示例响应：
+`GET /healthz` 返回 `{"status":"ok"}`；`GET /v1/ocr/capabilities` 返回 PDF / DOCX 支持情况。
 
-```json
-{"id": "cmp_456", "status": "cancelling"}
-```
+## 部署配置
 
-或：
+- `DOCUMENT_RESOURCES_ROOT`：持久资源根目录。
+- `EMBEDDING_MODEL`、`EMBEDDING_BACKEND`、`EMBEDDING_CHUNK_SIZE`、`EMBEDDING_CHUNK_OVERLAP`：准备阶段配置；查询使用资源清单记录的配置。
+- `BASE_URL`、`OPENAI_API_KEY`、`MODEL`、`MODEL_API_TRANSPORT`：问答模型配置。
+- `MINERU_BIN`、`DOCUMENT_PROCESSOR_MINERU_LANG`：PDF 解析配置。
 
-```json
-{"id": "cmp_456", "status": "not_found"}
-```
-
-## 8. 已删除旧接口
-
-本分支不再暴露旧字段抽取入口：
-
-```text
-POST /v1/file-extraction-agent/extract/stream
-```
-
-也不再接收 `task_spec`，不再输出 `result_completed` 字段结果事件。
+旧 `/v1/document-processor/process`、专用 DOCX 路由和旧 OCR process 路由不再提供。

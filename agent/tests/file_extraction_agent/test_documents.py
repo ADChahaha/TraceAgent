@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from service.file_extraction_agent.core.documents import materialize_tree
+from service.document_resources.documents import materialize_tree
 from service.file_extraction_agent.schemas import InputDocument
 
 

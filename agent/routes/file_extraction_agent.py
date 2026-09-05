@@ -8,10 +8,10 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.concurrency import run_in_threadpool
 
 from service.file_extraction_agent.schemas import (
     DocumentQaMessage,
-    InputDocument,
     ModelConfig,
     RunOptions,
 )
@@ -24,10 +24,9 @@ class ChatCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     completion_id: str
-    documents: list[InputDocument]
+    resource_path: str
     messages: list[DocumentQaMessage]
     stream: bool = True
-    metadata: dict[str, Any] = Field(default_factory=dict)
     run_options: RunOptions | None = None
     model_config_override: ModelConfig | None = Field(
         default=None,
@@ -46,7 +45,7 @@ class ChatCompletionRequest(BaseModel):
 @router.post("/v1/document-qa/chat/completions")
 async def create_chat_completion(request: ChatCompletionRequest) -> StreamingResponse:
     try:
-        stream = _create_chat_completion_stream(request)
+        stream = await run_in_threadpool(_create_chat_completion_stream, request)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -71,8 +70,7 @@ def _create_chat_completion_stream(request: ChatCompletionRequest):
     completion_manager = import_module("service.file_extraction_agent.manager").completion_manager
     return completion_manager.create(
         completion_id=request.completion_id,
-        task_id=request.metadata.get("task_id"),
-        documents=request.documents,
+        resource_path=request.resource_path,
         messages=request.messages,
         run_options=request.run_options,
         model_config=_model_config(request),

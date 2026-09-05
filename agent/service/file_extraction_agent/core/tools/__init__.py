@@ -25,19 +25,12 @@ from __future__ import annotations
 from typing import Any
 
 from service.file_extraction_agent.core.tools.embedding import (
-    DEFAULT_CHUNK_OVERLAP,
-    DEFAULT_CHUNK_SIZE,
     DEFAULT_EMBEDDING_BACKEND,
     DEFAULT_EMBEDDING_MODEL,
-    EMBEDDING_INDEX_DIR,
     _get_embedder,
+    _get_index,
     _search_embedding,
     build_search_embedding,
-)
-from service.file_extraction_agent.core.tools.embedding.index import (
-    _build_streams,
-    _get_index,
-    _index_cache_key,
 )
 from service.file_extraction_agent.core.tools.grep import (
     _grep,
@@ -74,7 +67,6 @@ __all__ = [
     "_grep_output",
     "_read_result",
     "_locator_error",
-    "_build_streams",
     "_get_embedder",
     "_get_index",
     "_run_ripgrep",
@@ -83,8 +75,5 @@ __all__ = [
     "order_key",
     "DEFAULT_EMBEDDING_MODEL",
     "DEFAULT_EMBEDDING_BACKEND",
-    "DEFAULT_CHUNK_SIZE",
-    "DEFAULT_CHUNK_OVERLAP",
-    "EMBEDDING_INDEX_DIR",
     "VALID_KINDS",
 ]

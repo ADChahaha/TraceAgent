@@ -14,11 +14,13 @@ from service.file_extraction_agent.core.loop import (
     build_resolution_messages,
 )
 from service.file_extraction_agent.core.tools import build_tools
-from service.file_extraction_agent.manager import prepare_completion_state
+from service.document_resources.documents import materialize_tree
+from service.file_extraction_agent.schemas import RunOptions
+from types import SimpleNamespace
 from service.file_extraction_agent.schemas import DocumentQaMessage, InputDocument
 
 
-def test_resolution_stream_yields_only_original_messages(tmp_path, monkeypatch):
+def test_resolution_stream_yields_only_original_messages(tmp_path, monkeypatch, resource_path):
     from unittest.mock import Mock
     from service.file_extraction_agent.core.model import ChatModelFallbackChain, ModelCallAttempt
     provider = Mock(spec=["bind_tools", "invoke"])
@@ -27,25 +29,25 @@ def test_resolution_stream_yields_only_original_messages(tmp_path, monkeypatch):
     final = AIMessage(content="完成", response_metadata={"finish_reason": "stop"})
     provider.invoke.side_effect = [first, final]
     model = ChatModelFallbackChain([ModelCallAttempt("test", provider, False)])
-    messages = list(resolution_module.run_resolution_stream(_state(tmp_path), model))
+    messages = list(resolution_module.run_resolution_stream(resource_path=resource_path, messages=_state(tmp_path).messages, resolution_model=model))
     assert len(messages) == 3
     assert messages[0] is first
-    assert isinstance(messages[1], ToolMessage)
-    assert messages[1].tool_call_id == "ls-1"
+    assert isinstance(messages[1], list)
+    assert messages[1][0].tool_call_id == "ls-1"
     assert messages[2] is final
 
 
 def test_graph_state_has_no_event_or_runtime_buffers(tmp_path):
     state = _state(tmp_path)
-    for field in ("events", "actions", "next_seq", "events_lock", "tool_batch_active", "current_model_content", "failed_stage"):
+    for field in ("completion_id", "task_id", "events", "actions", "next_seq", "events_lock", "tool_batch_active", "current_model_content", "failed_stage"):
         assert not hasattr(state, field), field
 
 
-def test_resolution_requires_tool_binding_before_invoking_model(tmp_path):
+def test_resolution_requires_tool_binding_before_invoking_model(tmp_path, resource_path):
     calls = []
     model = SimpleNamespace(invoke=lambda messages: calls.append(messages) or {"content": "旧协议答案"})
     with pytest.raises((TypeError, AttributeError), match="bind_tools"):
-        list(resolution_module.run_resolution_stream(_state(tmp_path), model))
+        list(resolution_module.run_resolution_stream(resource_path=resource_path, messages=_state(tmp_path).messages, resolution_model=model))
     assert calls == []
 
 
@@ -121,8 +123,7 @@ def _company_paragraph_path(state):
 
 
 def _state(tmp_path):
-    return prepare_completion_state(
-        completion_id="cmp_123",
+    return _prepare_test_state(
         documents=[
             InputDocument(
                 filename="company.html",
@@ -180,8 +181,7 @@ def test_resolution_prompt_allows_direct_answers_without_forced_document_search(
 
 
 def test_resolution_messages_preserve_openai_tool_history(tmp_path):
-    state = prepare_completion_state(
-        completion_id="cmp_123",
+    state = _prepare_test_state(
         documents=[
             InputDocument(
                 filename="company.html",
@@ -589,3 +589,8 @@ def test_parallel_tool_executor_times_out_slow_call(tmp_path):
     message = result[0]
     assert message.tool_call_id == "call-1"
     assert "timeout" in (getattr(message, "content", "") or "").lower()
+
+
+def _prepare_test_state(*, documents, messages, workspace_root):
+    """工具和 prompt 测试只准备文件树，不引入 completion 管理字段。"""
+    return SimpleNamespace(document=materialize_tree(documents, workspace_root), messages=messages, run_options=RunOptions())

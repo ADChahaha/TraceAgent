@@ -1,155 +1,51 @@
 # Agent Service
 
-`agent/` 是 TraceAgent 的 AI 能力层，给 `backend` 提供两个 HTTP 阶段：
-
-- `document_processor`：把 PDF/DOCX 标准化成 QA 友好的语义 HTML、展示用 HTML、markdown、blocks 和处理元信息。
-- `file_extraction_agent`：对 backend 传入的多份语义 HTML 做多轮文档 QA chat completion，像 code agent 浏览代码仓库一样用 `ls / grep / read / inspect` 查文档，并通过 SSE 返回带 evidence link 的过程消息和终态事件。
-
-它不访问 backend SQLite，不保存多轮 conversation，也不直接连接前端。任务、append-only messages、事件续传、replay 和最终展示都由 `backend` 负责。
-
-## 基本链路
+agent 提供文档准备与路径问答两个 HTTP 入口。文档准备将 PDF / DOCX 解析成 HTML，并生成可跨轮复用的 Markdown 文件树与 embedding 索引；问答读取资源路径并通过 SSE 输出回答。
 
 ```text
-backend 上传 PDF/DOCX bytes
-  -> POST /v1/document-processor/process（file_type 判定 pdf/docx）
-  -> document_processor 返回 filename + html
-  -> backend 保存文档、对话 messages 和事件游标
-  -> 用户提问时 backend 生成 completion_id
-  -> POST /v1/document-qa/chat/completions
-  -> file_extraction_agent 流式返回 completion.created / source_indexed / model_message / tool_* / completion.*
-  -> backend 持久化事件并转发给前端
-  -> 下一轮问题由 backend 再次携带 documents + append-only messages 调用 agent
+上传 files → POST /v1/document-resources → resource_path + documents（filename/html）
+提交 resource_path + messages → POST /v1/document-qa/chat/completions → SSE
 ```
 
-## 本地启动
+两个入口部署在同一个 agent 服务中，共用本机资源目录。backend 保存、回传路径，无需读取 agent 磁盘。本次只改 agent，backend 仍需后续适配新接口。
 
-`agent/AGENTS.md` 约定 Python 命令应在 `agent-gate` Conda 环境里执行：
+## 启动
 
 ```bash
-conda create -n agent-gate python=3.11 -y
 conda activate agent-gate
-cd /path/to/agent_gate/agent
-pip install -e ".[dev]"
+pip install -e ".[dev,embeddings]"
+python -m uvicorn main:app --host 127.0.0.1 --port 8001
 ```
 
-真实调用模型和 MinerU 时，启动前设置必要变量：
+准备阶段必须安装 embedding 依赖；PDF 需要 MinerU，DOCX 使用 python-docx。默认 embedding 后端为 OpenVINO。
+
+启动前配置问答模型的 `BASE_URL`、`OPENAI_API_KEY`、`MODEL`，可选 `MODEL_API_TRANSPORT=responses` 或 `chat_completions`。PDF 语言使用 `DOCUMENT_PROCESSOR_MINERU_LANG`（默认 japan，中文可设 ch）。
+
+资源目录由 `DOCUMENT_RESOURCES_ROOT` 配置，默认 `agent/data/resources`。`EMBEDDING_MODEL`、`EMBEDDING_BACKEND`、分块参数在准备阶段记录到资源清单；查询沿用记录的模型配置。资源不会随问答结束删除，首版无自动过期或删除接口。
+
+completion cancel 依赖进程内注册表，使用单 worker。启动后 `GET /healthz` 探活，`GET /docs` 查看 OpenAPI。
+
+## 模块
+
+| 目录 | 职责 |
+| --- | --- |
+| routes | HTTP 校验、线程池调度和错误映射 |
+| service/document_processor | PDF / DOCX → HTML |
+| service/document_resources | HTML → 文档树、embedding 索引、资源清单；路径加载 |
+| service/file_extraction_agent | 路径问答、模型/工具循环、事件和取消管理 |
+
+问答工具为 ls / grep / read / search_embedding。模型引用 documents 目录下真实 Markdown 路径，最终回答以 is_final=true 标记。agent 不存储多轮会话或 backend 数据库。
+
+## 文档与验证
+
+- [HTTP API](docs/API.md)：上传和问答请求示例、响应与错误。
+- [服务设计](docs/DESIGN.md)：模块边界和生命周期。
+- [资源设计](service/document_resources/docs/DESIGN.md)：本地资源准备与加载。
+- [问答设计](service/file_extraction_agent/docs/DESIGN.md)：批次消息、工具与取消。
 
 ```bash
-export BASE_URL="https://your-model-endpoint/v1"
-export OPENAI_API_KEY="your-api-key"
-export MODEL="your-model"
-export MODEL_API_TRANSPORT="responses"  # responses or chat_completions
-export DOCUMENT_PROCESSOR_MINERU_LANG="japan"
+conda activate agent-gate
+python -m pytest tests -q
 ```
 
-中文 PDF 可以把 `DOCUMENT_PROCESSOR_MINERU_LANG` 设为 `ch`。
-
-启动服务时建议使用根 README 约定的 `8001` 端口，避免和 backend 的 `8000` 冲突：
-
-```bash
-python -m uvicorn main:app --reload --host 127.0.0.1 --port 8001
-```
-
-第一版 QA cancel 依赖单进程内存 `CompletionManager` 注册表，不要使用多个 uvicorn worker。
-
-启动后可访问：
-
-- `GET /healthz`
-- `GET /docs`
-
-## HTTP 入口
-
-### 文档标准化
-
-```text
-POST /v1/document-processor/process
-```
-
-接收 multipart PDF 或 DOCX 文件（`file_type` 字段可选，缺省由文件名后缀判定）。
-
-```text
-PDF / DOCX UploadFile
-  -> route 层包装成可读 file-like 对象
-  -> service.document_processor.processor.process(file_obj, file_type)  统一入口，file_type 分流
-  -> 校验 file_obj.read() 与目标类型
-  -> PDF 走 MinerU：pdf.convert_pdf_to_html(...)（内部 converter -> html）
-  -> DOCX 走 python-docx：Document(BytesIO(...)) 按 Word body 原始顺序遍历 paragraph/table
-  -> 生成带 CSS 的完整 HTML 文档
-  -> 返回 ProcessResult(filename, html)
-```
-
-### 多文档 QA chat completion
-
-```text
-POST /v1/document-qa/chat/completions
-GET  /v1/document-qa/chat/completions/{completion_id}
-POST /v1/document-qa/chat/completions/{completion_id}/cancel
-```
-
-`POST /chat/completions` 接收 backend 准备好的 `documents(filename + html)`、多轮 append-only `messages`、可选 `run_options` 和可选模型配置，返回 `text/event-stream`。
-
-```text
-completion_id + documents + messages
-  -> manager.prepare_completion_state 校验 completion_id、documents、messages 和 max_tool_calls
-  -> documents 把多份 HTML 落盘成真实文件树
-  -> graph 输出 completion.created + source_indexed
-  -> loop 构建 QA prompt 并调用模型
-  -> tools 提供 ls / grep / read
-  -> model_message 在过程中引用真实 .md 路径
-  -> graph/manager 输出 completion.completed / completion.cancelled / completion.failed
-```
-
-### QA 工具和 stream 粒度
-
-`file_extraction_agent` 的可追溯性来自用户可见 `model_message`、真实工具调用和可反查 evidence selector。agent 不写 DB；backend 负责消费 SSE、入库和转发。
-
-| Tool / Event | 粒度 | 保留的关键信息 | 用途 |
-| --- | --- | --- | --- |
-| `ls(path_id)` | 当前层列表 | `evidence://` locator、目录/文件名 | 追踪模型先看了哪些文档和章节。 |
-| `grep(query, scope, kind, max_results)` | 候选搜索 | 命中文档、section、block locator、preview、match_spans | 像 `rg` 一样定位候选 block；不作为最终证据。 |
-| `read(locator)` | 上下文读取 | 单个 block 或连续 range 的 Markdown 阅读视图 | 追踪模型实际读了哪些 paragraph/list/table。 |
-| `inspect(locator)` | 精确证据展开 | `Sxxx` / `Ixxx` / `Rxxx` inline link 和反查文本 | 支撑具体事实、条件、金额、日期、冲突和最终结论。 |
-| `model_message` | 用户可见过程 | 自然语言说明、Markdown evidence link、`is_final`/`stop_signal` | 让用户边看边验证模型阅读过程；backend 用 `is_final=true` 保存最终 assistant 消息。 |
-| `completion.completed` | 正常终态 | completion id、status | 本轮 QA 完成并关闭 SSE。 |
-| `completion.cancelled` | 取消终态 | completion id、status | backend 调 cancel 后收口本轮流。 |
-| `completion.failed` | 失败终态 | completion id、status、error | resolution 失败后收口本轮流。 |
-
-这套工具让前端可以把 QA 过程回放成：
-
-```text
-模型说明下一步要查什么
-  -> 搜索候选 block
-  -> 读取上下文
-  -> 展开句子/列表项/表格行证据
-  -> 在过程消息或最终回答里引用 evidence link
-  -> completion 终态关闭本轮流
-```
-
-## 目录结构
-
-```text
-agent/
-  main.py
-  routes/
-    document_processor.py
-    file_extraction_agent.py
-  service/
-    document_processor/
-    file_extraction_agent/
-  tests/
-  docs/
-```
-
-模块边界：
-
-- `main.py` 只创建 FastAPI app 并挂载 routers。
-- `routes/` 只做 HTTP 协议适配和错误状态映射。
-- `service/document_processor/` 放 PDF/DOCX 标准化实现。
-- `service/file_extraction_agent/` 放文档 QA completion 的 graph、工具、schema 和 active runtime 管理。
-
-## 参考文档
-
-- [docs/API.md](docs/API.md)：HTTP API 和请求/响应契约。
-- [docs/DESIGN.md](docs/DESIGN.md)：agent 服务模块边界和主链路。
-- [service/document_processor/docs/DESIGN.md](service/document_processor/docs/DESIGN.md)：PDF/DOCX 标准化设计。
-- [service/file_extraction_agent/docs/DESIGN.md](service/file_extraction_agent/docs/DESIGN.md)：文档 QA agent 设计。
+测试包含真实 DOCX 解析、替身 embedding、路径复用、取消竞态及 wheel 安装包内容验证；不依赖真实 provider 或下载 embedding 模型。

@@ -1,102 +1,70 @@
-"""Completion lifecycle manager for document-QA chat completions.
+"""问答生命周期：校验资源路径 → 注册 completion → graph 执行 → SSE 事件 → 释放运行时。
 
-`ActiveCompletion` 是单个 completion 的完整运行时：持有该 completion 专属的
-state（GraphState）、resolution_model、事件通道 queue 与同步锁，并自己启动
-producer 线程、消费队列产出 SSE、决定唯一终态、清理落盘目录。`CompletionManager`
-只负责多个 completion 的注册表与 create/terminate/status 转发。公开入口是进程内
-单例 `completion_manager`，HTTP 路由等调用方直接 `completion_manager.create(...)` /
-`completion_manager.terminate(...)`。
+manager 保存管理 ID，graph 只接收路径和执行参数。资源由 document_resources 管理，
+本轮结束不删除资源。ActiveCompletion 用队列和锁保证取消、事件顺序及终态唯一。
 """
 
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import asdict, is_dataclass
-from pathlib import Path
 import queue
 import re
-import shutil
 import threading
 from typing import Any, Iterable
 
 from langchain_core.messages import AIMessage, ToolMessage
 
-from service.file_extraction_agent.core.documents import materialize_tree
-from service.file_extraction_agent.core.graph import GraphState, build_graph_state
+from service.document_resources import load_resource
 
 from service.file_extraction_agent.core.loop import run_resolution_stream, _message_stop_signal, _terminal_stop_signals
 from service.file_extraction_agent.core.model import ChatModelFallbackChain, build_resolution_model
-from service.file_extraction_agent.schemas import DocumentQaMessage, InputDocument, ModelConfig, RunOptions
+from service.file_extraction_agent.schemas import DocumentQaMessage, ModelConfig, RunOptions
 
 
 _QUEUE_CANCEL = object()
 _QUEUE_DONE = object()
 
-DEFAULT_WORKSPACE_ROOT = os.getenv(
-    "FILE_EXTRACTION_AGENT_WORKSPACE_ROOT",
-    str(Path(__file__).resolve().parents[2] / "data" / "qa_workspace"),
-)
-
-
 def run_completion_graph_stream(
-    state: GraphState,
+    *, completion_id: str, resource_path: str, messages: list[DocumentQaMessage],
     resolution_model: ChatModelFallbackChain | None = None,
-    *,
-    should_stop=None,
+    run_options: RunOptions | None = None, should_stop=None,
 ) -> Iterable[dict[str, Any]]:
-    """消息流 → 模型/调度/结果事件；按 call ID 配对，批次后取消，异常补结果后失败。"""
-    pending: dict[str, dict[str, Any]] = {}
-
-    def stopped() -> bool:
-        return should_stop is not None and should_stop()
-
-    yield {"id": state.completion_id, "type": "completion.created", "status": "in_progress"}
+    """路径与消息 → graph 批次输出 → 业务事件；管理 ID 不进入 graph。"""
+    stopped = lambda: should_stop is not None and should_stop()
+    document = load_resource(resource_path).document
+    yield {"id": completion_id, "type": "completion.created", "status": "in_progress"}
     yield {"type": "source_indexed", "tool": "source_index", "result": {
-        "ok": True, "workspace_root": str(state.document.root), "tree": _file_tree_lines(state.document),
+        "ok": True, "workspace_root": str(document.root), "tree": _file_tree_lines(document),
     }}
-    messages = iter(run_resolution_stream(state, resolution_model))
+    outputs = run_resolution_stream(
+        resource_path=resource_path, messages=messages, resolution_model=resolution_model,
+        run_options=run_options, should_stop=should_stop,
+    )
     try:
-        while pending or not stopped():
-            try:
-                message = next(messages)
-            except StopIteration:
-                if pending:
-                    raise RuntimeError("message stream ended with pending tool calls")
-                break
-            if isinstance(message, AIMessage):
-                if pending:
-                    raise ValueError("model message arrived before tool replies")
-                if stopped():
-                    break
-                calls = {call["id"]: call for call in message.tool_calls}
-                if any(not call_id for call_id in calls) or len(calls) != len(message.tool_calls):
-                    raise ValueError("tool calls require unique non-empty IDs")
-                pending.update(calls)
-                yield _model_message_event(message)
-                for call in pending.values():
+        for output in outputs:
+            if isinstance(output, AIMessage):
+                yield _model_message_event(output)
+                for call in output.tool_calls:
                     yield {"type": "tool_started", "tool": call["name"], "args": call["args"], "tool_call_id": call["id"]}
-            elif isinstance(message, ToolMessage):
-                call = pending.pop(message.tool_call_id, None)
-                if call is None:
-                    raise ValueError(f"unpaired tool reply: {message.tool_call_id}")
-                yield _tool_message_event(message, call)
+            elif isinstance(output, list):
+                for message in output:
+                    if not isinstance(message, ToolMessage):
+                        raise TypeError("tool batch requires ToolMessage results")
+                    yield _tool_message_event(message, {
+                        "name": message.name, "args": message.additional_kwargs["tool_args"],
+                    })
             else:
-                raise TypeError(f"unexpected message type: {type(message).__name__}")
+                raise TypeError(f"unexpected graph output: {type(output).__name__}")
     except Exception as exc:
-        for call in pending.values():
-            result = {"ok": False, "errors": [{"message": str(exc)}]}
-            yield _tool_message_event(ToolMessage(content=json.dumps(result), artifact=result,
-                status="error", tool_call_id=call["id"]), call)
         yield {"type": "tool_failed", "tool": "resolution", "result": {"ok": False, "errors": [{"message": str(exc)}]}}
-        status = "cancelled" if stopped() else "failed"
-        yield _completion_event(state.completion_id, status, error=str(exc))
+        yield _completion_event(completion_id, "cancelled" if stopped() else "failed", error=str(exc))
         return
     finally:
-        close = getattr(messages, "close", None)
+        close = getattr(outputs, "close", None)
         if close is not None:
             close()
-    yield _completion_event(state.completion_id, "cancelled" if stopped() else "completed")
+    yield _completion_event(completion_id, "cancelled" if stopped() else "completed")
 
 
 def _model_message_event(message: AIMessage) -> dict[str, Any]:
@@ -178,97 +146,20 @@ def _plain(value: Any) -> Any:
 
 
 
-def prepare_completion_state(
-    *,
-    completion_id: str,
-    documents: list[InputDocument],
-    messages: list[DocumentQaMessage],
-    run_options: RunOptions | None = None,
-    workspace_root: str | Path | None = None,
-    task_id: str | None = None,
-) -> GraphState:
-    """Validate the strong-typed completion inputs and build the GraphState.
-
-    Raises ValueError when a required field is empty or a list is empty.
-    """
-
-    if not isinstance(completion_id, str) or not completion_id.strip():
-        raise ValueError("completion_id is required")
-    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", completion_id) is None:
-        raise ValueError("completion_id must be a safe identifier (letters, digits, underscores or hyphens)")
-    if task_id is not None and (not isinstance(task_id, str) or not task_id.strip()):
-        raise ValueError("task_id must be a non-empty string")
-    validated_documents = _validate_documents(documents)
-    validated_messages = _validate_messages(messages)
-    normalized_run_options = _normalize_run_options(run_options)
-    resolved_root = _resolve_workspace_root(workspace_root, normalized_run_options).resolve()
-    run_root = resolved_root / completion_id
-    if run_root.resolve().parent != resolved_root:
-        raise ValueError("workspace escapes its parent directory")
-    try:
-        run_root.mkdir(parents=True, exist_ok=False)
-    except FileExistsError as exc:
-        raise ValueError("completion workspace already exists") from exc
-    try:
-        document = materialize_tree(validated_documents, run_root)
-    except Exception:
-        shutil.rmtree(run_root, ignore_errors=True)
-        raise
-    state = build_graph_state(
-        completion_id=completion_id,
-        document=document,
-        messages=validated_messages,
-        run_options=normalized_run_options,
-    )
-    state.task_id = task_id
-    state.workspace_parent = resolved_root
-    return state
-
-
-def _validate_documents(documents: list[InputDocument]) -> list[InputDocument]:
-    if not documents:
-        raise ValueError("documents must be a non-empty list")
-    for index, document in enumerate(documents, start=1):
-        if not document.filename.strip():
-            raise ValueError(f"documents[{index}].filename is required")
-        if not document.html.strip():
-            raise ValueError(f"documents[{index}].html must be a non-empty string")
-    return documents
-
-
-def _validate_messages(messages: list[DocumentQaMessage]) -> list[DocumentQaMessage]:
-    if not messages:
-        raise ValueError("messages must be a non-empty list")
-    return messages
-
-
-def _normalize_run_options(run_options: RunOptions | None) -> RunOptions:
-    options = run_options if run_options is not None else RunOptions()
-    return options
-
-
-def _resolve_workspace_root(explicit: str | Path | None, run_options: RunOptions) -> Path:
-    if explicit is not None:
-        return Path(explicit)
-    if run_options.workspace_root:
-        return Path(run_options.workspace_root)
-    return Path(DEFAULT_WORKSPACE_ROOT)
-
-
 class ActiveCompletion:
     """单个 document-QA chat completion 的运行时。
 
-    持有该 completion 专属的 state、resolution_model、事件通道 queue 与同步锁。
+    持有该 completion 专属的 resource_path、messages、resolution_model、事件通道 queue 与同步锁。
     它自己完成生产、消费与收尾：
 
     stream()
       -> 首次迭代时启动 producer 线程（target=_produce）
       -> 循环 queue.get() 取事件：普通事件编码为 SSE 后 yield；_QUEUE_CANCEL/_QUEUE_DONE/终态事件
          则 close_once 后收口并结束
-      -> finally 确保终态唯一并清理 workspace（注册表移除由 CompletionManager 托管）
+      -> finally 确保终态唯一并释放运行时（注册表移除由 CompletionManager 托管）
 
     _produce()
-      -> 后台线程目标，循环 run_completion_graph_stream(state, model) 产事件字典
+      -> 后台线程目标，循环 run_completion_graph_stream(resource_path=..., resolution_model=...) 产事件字典
       -> 用 commit_* / commit_terminal_event 投进 queue；异常投 completion.failed；
          兜底 commit_done
 
@@ -278,9 +169,12 @@ class ActiveCompletion:
     之后的新事件被拒收；terminal 只提交一次；close_once 保证终态唯一。
     """
 
-    def __init__(self, completion_id: str, state: GraphState, resolution_model: ChatModelFallbackChain) -> None:
+    def __init__(self, completion_id: str, resource_path: str, resolution_model: ChatModelFallbackChain,
+                 messages: list[DocumentQaMessage], run_options: RunOptions | None = None) -> None:
         self.completion_id = completion_id
-        self.state = state
+        self.resource_path = resource_path
+        self.messages = messages
+        self.run_options = run_options
         self.model = resolution_model
         self.status: str = "in_progress"
         self.cancel_requested = False
@@ -330,7 +224,6 @@ class ActiveCompletion:
             finally:
                 if not self.is_closed():
                     self.close_once("cancelled")
-                _cleanup_workspace(self.state)
 
         return run()
 
@@ -338,8 +231,8 @@ class ActiveCompletion:
         terminal_committed = False
         try:
             for event in run_completion_graph_stream(
-                self.state,
-                self.model,
+                completion_id=self.completion_id, resource_path=self.resource_path,
+                messages=self.messages, run_options=self.run_options, resolution_model=self.model,
                 should_stop=lambda: self.cancel_requested,
             ):
                 if _terminal_status(event) is not None:
@@ -435,7 +328,7 @@ class ActiveCompletion:
 class CompletionManager:
     """进程内多个 document-QA chat completion 的注册表与协调。
 
-    create(...) 装配 state + model，构造一个 ActiveCompletion（单 completion 的
+    create(...) 装配 路径 + model，构造一个 ActiveCompletion（单 completion 的
     运行时）并注册，返回其 stream() 产出的 SSE 流；terminate / get_status 转发到
     对应 runtime；stream 结束后由托管包装从注册表移除。单实例持有注册表 + 锁，
     应按单进程单实例部署（多 uvicorn worker 不同进程间不共享 cancel 状态）。
@@ -449,26 +342,21 @@ class CompletionManager:
         self,
         *,
         completion_id: str,
-        documents: list[InputDocument],
+        resource_path: str,
         messages: list[DocumentQaMessage],
         model_config: ModelConfig | None = None,
         run_options: RunOptions | None = None,
-        task_id: str | None = None,
     ) -> Iterable[str]:
-        state = prepare_completion_state(
-            completion_id=completion_id,
-            documents=documents,
-            messages=messages,
-            run_options=run_options,
-            task_id=task_id,
-        )
-        try:
-            resolution_model = build_resolution_model(model_config)
-        except Exception:
-            _cleanup_workspace(state)
-            raise
-        runtime = ActiveCompletion(completion_id, state, resolution_model)
+        if not isinstance(completion_id, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", completion_id) is None:
+            raise ValueError("completion_id must be a safe non-empty identifier")
+        if not messages:
+            raise ValueError("messages must be a non-empty list")
+        load_resource(resource_path)
+        resolution_model = build_resolution_model(model_config)
+        runtime = ActiveCompletion(completion_id, resource_path, resolution_model, messages, run_options)
         with self._lock:
+            if completion_id in self._completions:
+                raise ValueError("completion_id is already active")
             self._completions[completion_id] = runtime
         return self._managed_stream(runtime)
 
@@ -502,14 +390,6 @@ class CompletionManager:
 completion_manager = CompletionManager()
 
 
-def _cleanup_workspace(state: GraphState) -> None:
-    root = state.document.root
-    parent = state.workspace_parent
-    if parent is None or root.is_symlink() or root.resolve().parent != parent.resolve():
-        raise ValueError("workspace is outside its owned parent directory")
-    shutil.rmtree(root, ignore_errors=True)
-
-
 def _completion_event(completion_id: str, status: str, **fields: Any) -> dict[str, Any]:
     return {"id": completion_id, "type": f"completion.{status}", "status": status, **fields}
 
@@ -527,5 +407,4 @@ __all__ = [
     "ActiveCompletion",
     "CompletionManager",
     "completion_manager",
-    "prepare_completion_state",
 ]

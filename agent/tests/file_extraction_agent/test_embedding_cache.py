@@ -1,44 +1,43 @@
-from pathlib import Path
+"""资源索引跨轮复用，查询使用资源记录的模型配置。"""
 
+from pathlib import Path
 import numpy as np
 
-from service.file_extraction_agent.core.tools.embedding import index as cache
-from service.file_extraction_agent.core.tools.embedding import model
-from service.file_extraction_agent.manager import prepare_completion_state
-from service.file_extraction_agent.schemas import DocumentQaMessage, InputDocument
+from service.document_resources import model
+from service.file_extraction_agent.core.graph import build_graph_state
+from service.file_extraction_agent.core.tools.embedding import _search_embedding
+from service.file_extraction_agent.schemas import DocumentQaMessage
 
 
-def test_task_cache_reuses_vectors_and_rebases_paths(tmp_path, monkeypatch):
-    monkeypatch.setattr(cache, "EMBEDDING_INDEX_DIR", str(tmp_path / "cache"))
-    monkeypatch.setattr(model, "get_tokenizer", lambda _: lambda text: [(i, i + 1) for i in range(len(text))])
+def test_resource_reuses_vectors_and_preserves_paths(resource_path, monkeypatch):
+    def fail(**kwargs):
+        raise AssertionError("加载资源不能调用 embedding")
+    monkeypatch.setattr(model, "get_embedder", fail)
+    states = [build_graph_state(resource_path=resource_path, messages=[DocumentQaMessage(role="user", content="问题")]) for _ in range(2)]
+    assert np.array_equal(states[0].index.vectors, states[1].index.vectors)
+    assert states[0].document.root == states[1].document.root
+    for state in states:
+        assert not hasattr(state, "task_id")
+        assert not hasattr(state, "completion_id")
+        for chunk in state.index.chunks:
+            assert all(Path(path).is_file() for path in chunk.covered_files)
 
+
+def test_query_uses_recorded_model_after_env_change(resource_path, monkeypatch):
+    state = build_graph_state(resource_path=resource_path, messages=[DocumentQaMessage(role="user", content="问题")])
+    monkeypatch.setenv("EMBEDDING_MODEL", "other-model")
+    monkeypatch.setenv("EMBEDDING_BACKEND", "other-backend")
+    calls = []
+    texts_seen = []
     class Embedder:
-        calls = 0
-
         def encode(self, texts):
-            self.calls += 1
-            return np.ones((len(texts), 3))
-
-    embedder = Embedder()
-
-    def load(completion_id, task_id, html="<p>same content</p>"):
-        state = prepare_completion_state(
-            completion_id=completion_id, task_id=task_id, workspace_root=tmp_path / "work",
-            documents=[InputDocument(filename="a.html", html=html)],
-            messages=[DocumentQaMessage(role="user", content="问题")],
-        )
-        state.embedding_model = "fake"
-        return state, cache._get_index(state, embedder)
-
-    first_state, first = load("cmp1", "task1")
-    second_state, second = load("cmp2", "task1")
-    assert embedder.calls == 1
-    assert first.chunks[0].text == second.chunks[0].text
-    for path in second.chunks[0].covered_files:
-        assert Path(path).is_relative_to(second_state.document.root)
-        assert Path(path).is_file()
-        assert not Path(path).is_relative_to(first_state.document.root)
-    load("cmp3", "task2")
-    assert embedder.calls == 2
-    load("cmp4", "task1", "<p>changed content</p>")
-    assert embedder.calls == 3
+            texts_seen.extend(texts)
+            return np.ones((len(texts), 3), dtype=np.float32)
+    def get_embedder(**kwargs):
+        calls.append(kwargs)
+        return Embedder()
+    monkeypatch.setattr(model, "get_embedder", get_embedder)
+    result = _search_embedding(state, query="notice")
+    assert result["ok"] is True
+    assert calls == [{"model_id": state.embedding_model, "backend": state.embedding_backend}]
+    assert texts_seen == ["notice"]

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from service.file_extraction_agent.core.documents import order_key
+from service.document_resources.documents import order_key
 
 
 def run_tool(

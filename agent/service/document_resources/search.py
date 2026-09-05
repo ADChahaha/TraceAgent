@@ -5,8 +5,8 @@
 编码向量并建索引；查询时只对 query 编码一次，再用余弦相似度取 top-k。
 
 本模块**不依赖任何真实 embedding 模型或向量库**：embedder 和 tokenize 都是
-可注入的替身，便于单元测试。真实模型封装见 `core/tools/embedding/model.py`，
-索引持久化与构建编排见 `core/tools/embedding/__init__.py`。
+可注入的替身，便于单元测试。真实模型封装见 `model.py`，
+索引持久化与构建编排见 `resources.py`。
 
 实现步骤：
 

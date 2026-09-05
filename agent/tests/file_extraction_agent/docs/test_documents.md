@@ -44,3 +44,5 @@ list[InputDocument](filename + html)
 - `test_tree_read_rejects_paths_outside_workspace`：确认 `read` 拒绝超出 workspace 根目录的文件路径。
 - `test_tree_entries_reject_paths_outside_workspace`：确认 `entries` 拒绝超出 workspace 根目录的目录路径。
 - `test_materialize_tree_rejects_document_without_filename_or_html`：确认缺 filename 或空 html 会抛 ValueError。
+
+资源基础实现导入已迁移到 `service.document_resources`；原测试行为保持不变。

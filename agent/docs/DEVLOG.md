@@ -1,4 +1,23 @@
-last updated: 2026-09-05 13:23:11
+last updated: 2026-09-05 20:57:22
+
+## 2026-09-05 20:57:22
+
+### 已完成工作
+
+- 合并解析与资源准备 HTTP 入口为 POST /v1/document-resources，返回 resource_path 与各文件 HTML。
+- 文档树和 embedding 基础实现移入 document_resources；资源独立持久化，不使用任务或 completion ID。
+- 问答接收资源路径，graph 内部初始化状态；工具结果整批返回，manager 删除 pending 配对字典。
+- 同步接口、设计、测试说明及安装包发现配置。
+
+### 验证
+
+- TDD red：准备接口缺失、graph 不接受路径；安装包测试因旧 impl 目录失效而失败。
+- agent-gate 全量测试及 wheel 内容验证通过；真实 DOCX 解析配合替身 embedding，不调用真实 provider。
+
+### 下一步
+
+- backend 按用户要求保持未改动，后续需接入统一准备接口、保存资源路径并更新问答请求。
+- 真实 MinerU / embedding 服务联调及资源清理策略另行安排。
 
 ## 2026-09-05 13:23:11
 

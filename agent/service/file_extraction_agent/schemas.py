@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from service.document_resources.schemas import InputDocument
 
 
 CompletionStatus = Literal[
@@ -18,13 +19,6 @@ CompletionStatus = Literal[
 ]
 MessageRole = Literal["system", "user", "assistant", "tool"]
 ModelApiTransport = Literal["responses", "chat_completions"]
-
-
-class InputDocument(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    filename: str
-    html: str
 
 
 class DocumentQaMessage(BaseModel):
@@ -51,18 +45,17 @@ class DocumentQaCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     completion_id: str
-    documents: list[InputDocument]
+    resource_path: str
     messages: list[DocumentQaMessage]
     stream: bool = True
-    metadata: dict[str, Any] = Field(default_factory=dict)
     run_options: "RunOptions | None" = None
 
     @model_validator(mode="after")
     def validate_request(self) -> "DocumentQaCompletionRequest":
         if not self.completion_id.strip():
             raise ValueError("completion_id is required")
-        if not self.documents:
-            raise ValueError("documents must be a non-empty list")
+        if not self.resource_path.strip():
+            raise ValueError("resource_path is required")
         if not self.messages:
             raise ValueError("messages must be a non-empty list")
         return self
@@ -86,7 +79,6 @@ class ModelConfig:
 @dataclass
 class RunOptions:
     max_tool_calls: int = 200
-    workspace_root: str | None = None
     tool_execution_timeout: float = 60.0
 
 

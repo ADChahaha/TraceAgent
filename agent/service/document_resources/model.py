@@ -1,7 +1,7 @@
 """Lazy embedding model wrapper for semantic search in document QA.
 
 `model.py` 负责真实 embedding 模型的惰性加载与 `tokenize` 函数构造，供
-`core/tools/embedding/__init__.py` 的 `search_embedding` 工具使用。设计上
+资源准备与问答 `search_embedding` 工具使用。设计上
 **模块 import 时不加载任何重依赖**：`torch`、`sentence-transformers`、
 `openvino` 只在 `get_embedder` 真正被调用时才导入，因此单元测试无需安装
 这些包也能 import 本模块。

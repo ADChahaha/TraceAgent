@@ -30,10 +30,10 @@ def test_document_qa_chat_completion_route_calls_completion_manager(monkeypatch)
         "/v1/document-qa/chat/completions",
         json={
             "completion_id": "cmp_123",
-            "documents": [{"filename": "notice.html", "html": '<p id="p1">通知</p>'}],
+            "resource_path": "D:/resources/res_test",
             "messages": [{"role": "user", "content": "这份文件说了什么？"}],
             "stream": True,
-            "metadata": {"task_id": "task_123"},
+
         },
     ) as response:
         body = response.read().decode()
@@ -41,8 +41,8 @@ def test_document_qa_chat_completion_route_calls_completion_manager(monkeypatch)
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     assert seen_call["completion_id"] == "cmp_123"
-    assert seen_call["task_id"] == "task_123"
-    assert seen_call["documents"][0].filename == "notice.html"
+    assert "task_id" not in seen_call
+    assert seen_call["resource_path"] == "D:/resources/res_test"
     assert seen_call["messages"][0].content == "这份文件说了什么？"
     assert "memory" not in seen_call
     assert body == (
@@ -57,7 +57,7 @@ def test_document_qa_chat_completion_route_rejects_memory_field():
         "/v1/document-qa/chat/completions",
         json={
             "completion_id": "cmp_123",
-            "documents": [{"filename": "notice.html", "html": '<p id="p1">通知</p>'}],
+            "resource_path": "D:/resources/res_test",
             "messages": [{"role": "user", "content": "问题"}],
             "memory": {"prior_answers": ["会破坏 append-only prompt cache"]},
         },
@@ -86,7 +86,7 @@ def test_document_qa_chat_completion_route_passes_run_options(monkeypatch):
         "/v1/document-qa/chat/completions",
         json={
             "completion_id": "cmp_123",
-            "documents": [{"filename": "notice.html", "html": '<p id="p1">通知</p>'}],
+            "resource_path": "D:/resources/res_test",
             "messages": [{"role": "user", "content": "问题"}],
             "run_options": {"max_tool_calls": 33},
         },
@@ -116,7 +116,7 @@ def test_document_qa_chat_completion_route_passes_model_overrides(monkeypatch):
         "/v1/document-qa/chat/completions",
         json={
             "completion_id": "cmp_123",
-            "documents": [{"filename": "notice.html", "html": '<p id="p1">通知</p>'}],
+            "resource_path": "D:/resources/res_test",
             "messages": [{"role": "user", "content": "问题"}],
             "base_url": "https://example.com/v1",
             "openai_api_key": "key",
@@ -167,7 +167,7 @@ def test_legacy_file_extraction_route_is_removed():
     response = client.post(
         "/v1/file-extraction-agent/extract/stream",
         json={
-            "documents": [{"filename": "notice.html", "html": '<p id="p1">通知</p>'}],
+            "resource_path": "D:/resources/res_test",
             "task_spec": {"fields": [{"name": "title"}]},
         },
     )
@@ -181,7 +181,7 @@ def test_document_qa_chat_completion_rejects_task_spec_payload():
         "/v1/document-qa/chat/completions",
         json={
             "completion_id": "cmp_123",
-            "documents": [{"filename": "notice.html", "html": '<p id="p1">通知</p>'}],
+            "resource_path": "D:/resources/res_test",
             "messages": [{"role": "user", "content": "问题"}],
             "task_spec": {"fields": [{"name": "title"}]},
         },
@@ -190,7 +190,7 @@ def test_document_qa_chat_completion_rejects_task_spec_payload():
     assert response.status_code == 422
 
 
-def test_document_qa_chat_completion_rejects_empty_documents_before_streaming():
+def test_document_qa_chat_completion_rejects_legacy_documents_before_streaming():
     client = TestClient(create_app())
     response = client.post(
         "/v1/document-qa/chat/completions",

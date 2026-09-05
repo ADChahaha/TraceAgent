@@ -4,8 +4,7 @@
 by the extraction agent and by the backend replay view. PDF and DOCX use separate
 sub-packages (`pdf` / `docx`) because their source structures are different: PDF
 goes through MinerU/OCR, while DOCX is parsed from Word's document structure.
-Both are reached through the single HTTP entry `POST /v1/document-processor/process`
-and the single Python entry `processor.process(...)`.
+对外 HTTP 统一为 `POST /v1/document-resources`：先调用本模块的 `processor.process(...)` 解析，再由同级 document_resources 生成文档树和索引，返回资源路径与 HTML。本模块不再单独暴露解析 HTTP 入口。
 
 ## Scope
 

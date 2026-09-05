@@ -1,189 +1,64 @@
 # Agent Service Design
 
-这份文档描述 `agent service` 当前保留的两个能力：`document_processor` 和 `file_extraction_agent`。其中 `document_processor` 负责把上传 PDF/DOCX 标准化成语义 HTML；`file_extraction_agent` 在 `dev-qa` 分支上已经重构为多文档 QA chat completion agent，负责对 backend 提供的一组 HTML 文档进行可追溯问答。
-
-`agent service` 不访问 backend SQLite，不持久化多轮会话，也不决定前端任务状态。backend 是 task、append-only messages、events 和 replay 的持久化事实来源；agent 只执行一次 completion，并通过 SSE 返回过程事件。跨轮上下文由 backend 组装成 OpenAI 风格 chat messages，包含 `user`、`assistant` 的 `tool_calls` 和 `tool` 消息。
-
-## 1. 目标
-
-`agent/` 的目标是把“原始文件处理”和“文档 QA 执行”拆开：
+agent 在同一个进程中提供两个阶段：准备可复用的本机文档资源，以及基于资源路径执行一次问答。多轮会话、任务与事件持久化由 backend 管理。
 
 ```text
-原始 PDF/DOCX
-  -> document_processor 标准化为带 CSS 的 HTML 文档（filename + html）
-  -> backend 保存文档和对话状态
-  -> file_extraction_agent 接收 documents + append-only messages
-  -> agent 像 code agent 浏览代码仓库一样 ls/grep/read 文档
-  -> agent 用过程 model_message + inline evidence link 流式说明阅读发现
-  -> 最终 model_message 正文直接回答，并在被支撑句子后紧跟数字 evidence citation
-  -> backend 持久化事件并转发给前端
+POST /v1/document-resources（files）
+  → document_processor.process：PDF / DOCX → filename + html
+  → document_resources.prepare_resources：HTML → Markdown 文件树 → 文档 embedding 索引
+  → 返回 resource_path + documents，调用方保存路径和展示用 HTML
+
+POST /v1/document-qa/chat/completions（resource_path + messages）
+  → CompletionManager 校验资源并注册 completion
+  → graph 根据路径初始化执行状态、绑定工具
+  → 模型消息 / 完整工具结果批次
+  → manager 包装事件，ActiveCompletion 编码 SSE
+  → 释放本轮运行时，保留文档资源
 ```
 
-## 2. 与 Backend 的关系
+## 模块边界
 
-典型交互链路是：
+| 模块 | 职责 |
+| --- | --- |
+| routes/document_resources.py | 校验上传类型，在线程池中串联解析与资源准备，映射 HTTP 错误 |
+| service/document_processor | PDF 调 MinerU、DOCX 调 python-docx，输出带 CSS 的 HTML |
+| service/document_resources | 文档树、分块、embedding 模型与向量算法、资源落盘及校验加载 |
+| routes/file_extraction_agent.py | 路径问答、取消 HTTP 适配 |
+| service/file_extraction_agent/manager.py | completion 注册、取消、事件包装与 SSE；不生成文档状态 |
+| service/file_extraction_agent/core/graph.py | 从路径加载资源，构造无 task_id / completion_id 的 GraphState |
+| service/file_extraction_agent/core/loop.py | LangGraph 模型/工具循环；工具结果整批返回 |
+| service/file_extraction_agent/core/tools | ls / grep / read / search_embedding，消费已准备资源 |
+
+## 资源生命周期
+
+- 准备和问答共享本机文件系统。backend 只保存、回传路径，不需要读取 agent 磁盘。
+- `DOCUMENT_RESOURCES_ROOT` 指定资源根目录，默认 `agent/data/resources`。
+- 每次准备生成独立 `res_*` 目录；临时目录完成校验后才发布。解析或构建失败不返回半成品路径。
+- 资源含 `documents/`、`index/`、`manifest.json`。模型只能浏览 `documents/`，索引引用保存相对路径。
+- manifest 固定 embedding 模型、后端和分块配置。问答加载已有索引，仅对 query 做 embedding，不重建文档向量。
+- 问答完成、失败、取消都不删除资源。首版不做内容去重、自动过期和删除 API；资源管理不依赖 task_id。
+
+## 问答运行时
+
+`CompletionManager` 只在进程内保存 active completion；管理 ID 不进入 graph。GraphState 保存文件树、历史消息、运行配置、索引和 embedding 配置。
 
 ```text
-backend 读取上传 PDF/DOCX bytes
-  -> 调用 POST /v1/document-processor/process（file_type 判定 pdf/docx）
-  -> 拿到 filename + html
-  -> backend 保存 task documents、messages 和事件游标
-  -> 用户每次提问时，backend 生成 completion_id
-  -> 调用 POST /v1/document-qa/chat/completions
-       body = documents(filename + html) + OpenAI 风格 append-only messages + run_options
-  -> agent 返回 text/event-stream
-       completion.created
-       source_indexed
-       model_message / tool_started / tool_completed / tool_failed
-       completion.completed / completion.cancelled / completion.failed
-  -> backend 入库、转发给前端，并更新下一轮 append-only messages
+模型节点返回 AIMessage
+  → manager 输出 model_message 和 tool_started
+  → 工具节点并行执行，按共享 deadline 收集整批 ToolMessage
+  → 每项携带调用 ID、名称、参数和成功/失败结果
+  → manager 直接输出 tool_completed / tool_failed，不维护 pending 配对字典
 ```
 
-`agent service` 不负责：
+取消保持已发布调用的结果完整性：没有活动批次时立即唤醒 SSE consumer；已有批次时消费完结果再结束，不调用下一轮模型。队列按 FIFO 发出已提交事件，终态只提交一次。资源校验错误在 HTTP 响应开始前返回 422；执行异常通过 completion.failed 收口。
 
-- 前端任务创建、任务列表和断线续传。
-- 多轮 messages 的长期保存。
-- 用户上传文件的持久化。
-- replay HTML 的最终组装。
-- cancel 后的前端连接管理；它只提供 completion 级取消信号。
+## 对外契约与迁移
 
-## 3. 当前结构
+- 准备接口：`POST /v1/document-resources`，多文件 multipart，返回路径和各文件 HTML。
+- 问答接口：`POST /v1/document-qa/chat/completions`，用 resource_path 替换 documents，不接收任务 metadata。
+- 保留 healthz、能力查询及 completion cancel；completion GET 仍为占位接口。
+- 旧 `/v1/document-processor/process` 已删除，不保留旧问答 documents 输入。
+- 本次只修改 agent；backend 尚未适配，现有 backend 需后续切换上传及问答请求契约。
+- cancel 注册表依赖单进程，仍按单 worker 部署。
 
-```text
-agent/
-├── main.py
-├── routes/
-│   ├── document_processor.py
-│   └── file_extraction_agent.py
-├── docs/
-│   ├── API.md
-│   ├── DESIGN.md
-│   └── DEVLOG.md
-└── service/
-    ├── document_processor/
-    │   ├── processor.py
-    │   ├── schemas.py
-    │   └── docs/
-    │       ├── API.md
-    │       └── DESIGN.md
-    └── file_extraction_agent/
-        ├── manager.py
-        ├── schemas.py
-        ├── core/
-        │   ├── graph.py
-        │   ├── documents.py
-        │   ├── tools.py
-        │   ├── model.py
-        │   └── loop.py
-        └── docs/
-            └── DESIGN.md
-```
-
-`routes/` 只做 HTTP 协议适配，真实实现统一放在 `service/` 包内。
-
-## 4. 模块边界
-
-### `document_processor`
-
-输入是可读的 PDF 或 DOCX 文件对象。统一走唯一的公共入口
-`processor.process(file_obj, file_type=None)`，内部按类型分流：PDF 调
-MinerU，DOCX 调 `python-docx`。两者都在 `processor.py` 模块内，没有独立的
-DOCX 公共入口。
-
-```text
-PDF UploadFile / file-like object
-  -> processor.process(...) -> 校验 file-like、推断类型、分流
-  -> 调用 MinerU 解析 PDF bytes
-  -> 生成带 CSS 的完整 HTML 文档
-  -> 返回 ProcessResult(filename, html)
-```
-
-```text
-DOCX UploadFile / file-like object
-  -> processor.process(...) -> 校验 file-like、推断类型、分流到 DOCX
-  -> python-docx 解析 DOCX bytes
-  -> 按 Word body 原始顺序读取 paragraph/table
-  -> 只用 Word heading style 建 section；无 heading style 时保持 flat blocks
-  -> 生成带 CSS 的完整 HTML 文档
-  -> 返回 ProcessResult(filename, html)
-```
-
-失败语义：
-
-- 文件不可读、PDF 文件类型不是 PDF 或无法确认 PDF 时返回 422。
-- MinerU 或解析运行时失败时，错误向上抛给路由层。
-
-### `file_extraction_agent`
-
-输入是 backend 每轮提供的 `completion_id + documents + messages + run_options`。
-
-```text
-POST /v1/document-qa/chat/completions
-  -> route 解析 ChatCompletionRequest
-  -> completion_manager.create(...)（内含 prepare_completion_state 校验 completion_id/documents/messages/run_options）
-  -> documents 把多份 HTML 落盘成真实文件树（DocumentFileTree）
-  -> manager 组装 completion.created 和 source_indexed 事件字典（workspace_root + tree）
-  -> loop 绑定工具并通过唯一 LangGraph 循环执行模型/工具调用
-  -> loop 仅 yield AIMessage / ToolMessage；manager 包装 model_message 和工具事件
-  -> 过程 model_message 在阅读过程中内嵌真实 .md 文件路径 Markdown link
-  -> 最终 model_message 带 is_final=true，在被支撑句子后紧跟数字 evidence citation
-  -> ActiveCompletion 队列传递事件字典，按 type 判定终态，仅在 stream 输出边界分配 seq 并编码 SSE
-```
-
-`file_extraction_agent` 第一版只在内存 `CompletionManager` 注册表保存 active runtime，用于取消正在运行的 completion。它不保存历史 completion，也不支持多 worker 进程共享 cancel 状态。
-
-## 5. 主链路
-
-```text
-raw PDF/DOCX
-  -> document_processor
-  -> backend 持久化 documents + display_html
-  -> 用户提问
-  -> backend 调用 document QA chat completion
-  -> agent stream 输出阅读过程、工具调用和句尾数字 citation 的最终回答
-  -> backend 保存 events/messages
-  -> 下一轮用户提问时 backend 再传入更新后的 append-only messages
-```
-
-## 6. HTTP 入口
-
-当前对外保留这些路径：
-
-```text
-GET  /healthz
-POST /v1/document-processor/process
-POST /v1/document-qa/chat/completions
-GET  /v1/document-qa/chat/completions/{completion_id}
-POST /v1/document-qa/chat/completions/{completion_id}/cancel
-```
-
-旧字段抽取路径 `/v1/file-extraction-agent/extract/stream` 在本分支已删除。
-
-## 7. 运行时环境
-
-常见环境变量：
-
-- `BASE_URL`
-- `OPENAI_API_KEY`
-- `MODEL`
-- `MODEL_API_TRANSPORT`：只支持 `responses` 或 `chat_completions`，默认 `responses`
-- `TEMPERATURE`
-- `TOP_P`
-- `TOP_K`
-- `REASONING_EFFORT`
-- `MODEL_MAX_RETRIES`
-- `MODEL_REQUEST_TIMEOUT`
-- `MINERU_BIN`
-- `DOCUMENT_PROCESSOR_MINERU_LANG`
-
-`document_processor` 使用 MinerU 相关变量；`file_extraction_agent` 使用模型连接变量。
-
-## 8. 当前约束
-
-- `document_processor` 只处理 PDF 和 DOCX，不支持 legacy `.doc`。
-- `file_extraction_agent` 只处理 backend 预先整理好的 `documents(filename + html)`，不负责读取上传文件。
-- `file_extraction_agent` 接收的 `messages` 采用 OpenAI chat 结构；backend 会把上一轮 assistant 的 `tool_calls` 和对应 `tool` 结果一起重建回来。
-- QA completion 当前总是以 SSE 返回；非流式 chat completion 还没有实现。
-- `GET /v1/document-qa/chat/completions/{completion_id}` 当前是占位调试接口。
-- cancellation 由 runtime 管理：无活动批次时用队列 sentinel 唤醒 consumer；已发布工具调用时先配齐结果再收口。consumer 按 FIFO 输出已提交事件，producer 的迟到事件会被丢弃。
-- 第一版要求单进程/单 worker 部署；多 uvicorn worker 会让内存 `CompletionManager` 注册表不共享，导致 cancel 可能找不到目标 completion。
+接口示例见 [API.md](API.md)，资源细节见 [资源设计](../service/document_resources/docs/DESIGN.md)，问答细节见 [问答设计](../service/file_extraction_agent/docs/DESIGN.md)。

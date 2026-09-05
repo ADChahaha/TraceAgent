@@ -1,7 +1,6 @@
 # Document Processor API
 
-This document describes the Python and HTTP contract for
-`service.document_processor`。`process(...)` 是唯一公共入口，按类型分流：
+本模块提供内部 Python 解析接口。对外 HTTP 由文档资源 route 统一串联解析与索引构建，返回资源路径与 HTML。`process(...)` 是唯一公共入口，按类型分流：
 PDF 走 MinerU，DOCX 走 `python-docx`，两者返回同一个 `ProcessResult` 形状。
 
 ## Python Entry
@@ -32,71 +31,11 @@ Failures:
 - PDF MinerU failure: `MinerUConversionError`
 - DOCX parse failure: `python-docx` raises the underlying package exception.
 
-## HTTP
+## HTTP 边界
 
-### Health
+独立解析 HTTP 入口已合并到 `POST /v1/document-resources`，接收多个 files，完成解析、文档树和 embedding 后返回 resource_path 与 documents。请求示例和错误码见 [agent API](../../../docs/API.md)。
 
-```text
-GET /healthz
-```
-
-```json
-{"status": "ok"}
-```
-
-### Capabilities
-
-```text
-GET /v1/ocr/capabilities
-```
-
-```json
-{
-  "supported_file_types": ["pdf", "docx"],
-  "implemented_file_types": ["pdf", "docx"],
-  "engine": "mineru-pipeline,python-docx"
-}
-```
-
-### Process PDF / DOCX
-
-```text
-POST /v1/document-processor/process
-```
-
-`multipart/form-data` fields:
-
-- `file`: required PDF or DOCX upload.
-- `file_type`: optional, `pdf`/`.pdf` or `docx`/`.docx`; when omitted, the
-  filename suffix decides (`.pdf` / `.docx`).
-
-Response:
-
-```json
-{
-  "filename": "sample.pdf",
-  "html": "<!doctype html><html>..."
-}
-```
-
-Fields:
-
-- `filename`: source basename, or `document.pdf` / `document.docx`.
-- `html`: self-contained HTML document with CSS for display, plus the
-  h1-h6 / p / ul / ol / table structure skeleton for tree building.
-
-不再返回 `display_html` / `markdown` / `md_list` / `blocks` / `semantic_document`
-/ `meta_info` / `warnings`。引证粒度收敛到块级（HTML 里的块 id）。
-
-DOCX 的生成链路：
-
-```text
-python-docx Document
-  -> 按 Word body 原始顺序读取 paragraph/table
-  -> 仅 Word heading style 生成 heading block
-  -> 无 heading style 时保持 flat paragraph/table blocks
-  -> 输出带 CSS 的完整 HTML 文档
-```
+本模块仍只返回 ProcessResult(filename, html)，不承担资源目录或索引生命周期。
 
 ## HTML Contract
 

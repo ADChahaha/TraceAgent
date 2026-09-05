@@ -6,5 +6,7 @@
 - `test_tool_started_is_yielded_before_tool_execution`：工具结果执行前已向外产出开始调度事件。
 - `test_cancel_before_execution_does_not_call_model`：早取消不调用 provider。
 - `test_cancel_after_model_drains_tools_without_next_model`：模型调用已发布后取消，先返回工具回复且不请求下一轮模型。
-- `test_interrupted_batch_backfills_only_pending_call_ids`：同名批次部分完成后异常，仅为剩余调用补失败；取消时用 cancelled 收口。
+- `test_executor_failure_returns_entire_failed_batch`：执行器整体异常时返回完整失败批次；取消后不再调用模型，否则允许模型解释失败。
 - `test_closing_event_stream_closes_message_generator`：外层关闭传播到消息生成器，停止后续调用。
+
+所有图测试从已准备的 resource_path 进入，不再调用 manager 创建文档状态。

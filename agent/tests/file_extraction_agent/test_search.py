@@ -8,7 +8,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from service.file_extraction_agent.core.tools.embedding.search import (
+from service.document_resources.search import (
     Chunk,
     EmbeddingIndex,
     build_index,

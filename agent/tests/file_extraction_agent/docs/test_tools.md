@@ -33,3 +33,7 @@ GraphState 持有 DocumentFileTree
 
 - `test_search_embedding_returns_text_and_covered_files_sorted`：候选按相似度排序，保留正文、来源和覆盖文件。
 - `test_search_embedding_rejects_empty_query`：空查询返回 BAD_QUERY 失败结果。
+
+资源基础实现导入迁移到 `service.document_resources`。
+
+工具测试直接构造文档访问上下文，不再调用 manager 创建工作目录。

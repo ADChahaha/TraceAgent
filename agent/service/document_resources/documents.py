@@ -17,7 +17,7 @@ documents(filename + html)
 
 设计约定：
 
-- 每个 document 是 `workspace_root/<completion_id>/0001-<doc>` 目录。
+- 每个 document 是 `resource_path/documents/0001-<doc>` 目录。
 - section 是子目录；paragraph 是 `0001-xxx.md`，list 是 `0002-xxx.md`，
   table 是 `0003-xxx.md`（均写 markdown，表格整表一个文件）。
 - list/table 不再有行级 selector，只保留一个文件作为证据单元。
@@ -32,7 +32,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
-from service.file_extraction_agent.schemas import InputDocument
+from service.document_resources.schemas import InputDocument
 
 HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 BLOCK_TAGS = {"p", "ul", "ol", "table"}
