@@ -15,7 +15,7 @@ from service.file_extraction_agent.manager import (
     ActiveCompletion,
     CompletionManager,
 )
-from service.file_extraction_agent.schemas import DocumentQaMessage, InputDocument, ModelConfig, RunOptions
+from service.file_extraction_agent.schemas import DocumentQaMessage, ModelConfig, RunOptions
 
 
 @pytest.mark.parametrize("ending", ["completed", "failed", "cancelled"])

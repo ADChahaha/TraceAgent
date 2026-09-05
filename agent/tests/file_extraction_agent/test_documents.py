@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 
 from service.document_resources.documents import materialize_tree
-from service.file_extraction_agent.schemas import InputDocument
+from service.file_extraction_agent.core.tools.workspace import DocumentFileTree
+from service.document_resources.schemas import InputDocument
 
 
 @pytest.mark.parametrize("html, expected", [
@@ -14,7 +15,7 @@ from service.file_extraction_agent.schemas import InputDocument
     ('<table><tr><th>项目</th></tr><tr><td>A|B</td><td>100</td></tr></table>', ['| A\\|B | 100 |']),
 ])
 def test_table_preserves_merged_cells_and_wider_rows(tmp_path, html, expected):
-    materialize_tree([InputDocument(filename="fees.html", html=html)], tmp_path)
+    DocumentFileTree(materialize_tree([InputDocument(filename="fees.html", html=html)], tmp_path))
     rendered = next(tmp_path.rglob("*.md")).read_text(encoding="utf-8")
     for row in expected:
         assert row in rendered
@@ -56,7 +57,7 @@ def _documents():
 
 
 def test_materialize_tree_writes_real_files_for_multiple_documents(tmp_path):
-    tree = materialize_tree(_documents(), tmp_path)
+    tree = DocumentFileTree(materialize_tree(_documents(), tmp_path))
 
     assert tree.root == tmp_path
     assert tree.root.is_dir()
@@ -72,7 +73,7 @@ def test_materialize_tree_writes_real_files_for_multiple_documents(tmp_path):
 
 
 def test_tree_entries_respect_depth_and_file_kinds(tmp_path):
-    tree = materialize_tree(_documents(), tmp_path)
+    tree = DocumentFileTree(materialize_tree(_documents(), tmp_path))
 
     root_entries = tree.entries()
     assert [e.name for e in root_entries] == [
@@ -89,7 +90,7 @@ def test_tree_entries_respect_depth_and_file_kinds(tmp_path):
 
 
 def test_tree_writes_paragraph_list_and_table_as_markdown_files(tmp_path):
-    tree = materialize_tree(_documents(), tmp_path)
+    tree = DocumentFileTree(materialize_tree(_documents(), tmp_path))
 
     section = tree.entries(str(tmp_path / "001-contract-项目设计说明" / "001-项目设计说明"))
     names = [e.name for e in section]
@@ -110,7 +111,7 @@ def test_tree_writes_paragraph_list_and_table_as_markdown_files(tmp_path):
 
 
 def test_tree_writes_list_with_nested_markdown(tmp_path):
-    tree = materialize_tree(_documents(), tmp_path)
+    tree = DocumentFileTree(materialize_tree(_documents(), tmp_path))
 
     list_file = tmp_path / "001-contract-项目设计说明" / "001-项目设计说明" / "002-背景" / "001-第一项.md"
     content = tree.read(str(list_file))
@@ -121,7 +122,7 @@ def test_tree_writes_list_with_nested_markdown(tmp_path):
 
 
 def test_tree_writes_table_as_one_markdown_file(tmp_path):
-    tree = materialize_tree(_documents(), tmp_path)
+    tree = DocumentFileTree(materialize_tree(_documents(), tmp_path))
 
     table_file = tmp_path / "001-contract-项目设计说明" / "002-补充说明" / "002-费用明细.md"
     content = tree.read(str(table_file))
@@ -132,7 +133,7 @@ def test_tree_writes_table_as_one_markdown_file(tmp_path):
 
 
 def test_tree_orders_entries_by_numeric_prefix_not_filesystem(tmp_path):
-    tree = materialize_tree(
+    tree = DocumentFileTree(materialize_tree(
         [
             InputDocument(
                 filename="letters.html",
@@ -140,7 +141,7 @@ def test_tree_orders_entries_by_numeric_prefix_not_filesystem(tmp_path):
             )
         ],
         tmp_path,
-    )
+    ))
 
     section = tree.entries(str(tmp_path / "001-letters-Letters" / "001-Letters"))
     names = [e.name for e in section]
@@ -152,14 +153,14 @@ def test_tree_orders_entries_by_numeric_prefix_not_filesystem(tmp_path):
 
 
 def test_tree_read_rejects_paths_outside_workspace(tmp_path):
-    tree = materialize_tree([InputDocument(filename="a.html", html="<p>text</p>")], tmp_path)
+    tree = DocumentFileTree(materialize_tree([InputDocument(filename="a.html", html="<p>text</p>")], tmp_path))
 
     with pytest.raises(ValueError):
         tree.read(str(tmp_path.parent / "outside.md"))
 
 
 def test_tree_entries_reject_paths_outside_workspace(tmp_path):
-    tree = materialize_tree([InputDocument(filename="a.html", html="<p>text</p>")], tmp_path)
+    tree = DocumentFileTree(materialize_tree([InputDocument(filename="a.html", html="<p>text</p>")], tmp_path))
 
     with pytest.raises(ValueError):
         tree.entries(str(tmp_path.parent))
@@ -167,6 +168,6 @@ def test_tree_entries_reject_paths_outside_workspace(tmp_path):
 
 def test_materialize_tree_rejects_document_without_filename_or_html(tmp_path):
     with pytest.raises(ValueError, match="filename"):
-        materialize_tree([InputDocument(filename="", html="<p>x</p>")], tmp_path)
+        DocumentFileTree(materialize_tree([InputDocument(filename="", html="<p>x</p>")], tmp_path))
     with pytest.raises(ValueError, match="html"):
-        materialize_tree([InputDocument(filename="a.html", html="")], tmp_path)
+        DocumentFileTree(materialize_tree([InputDocument(filename="a.html", html="")], tmp_path))

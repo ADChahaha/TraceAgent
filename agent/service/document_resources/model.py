@@ -1,7 +1,7 @@
-"""Lazy embedding model wrapper for semantic search in document QA.
+"""文档资源生成阶段的 embedding 模型与 tokenizer 封装。
 
 `model.py` 负责真实 embedding 模型的惰性加载与 `tokenize` 函数构造，供
-资源准备与问答 `search_embedding` 工具使用。设计上
+资源准备使用；查询模型由 Agent 的 tools/embedding.py 管理。设计上
 **模块 import 时不加载任何重依赖**：`torch`、`sentence-transformers`、
 `openvino` 只在 `get_embedder` 真正被调用时才导入，因此单元测试无需安装
 这些包也能 import 本模块。
@@ -13,7 +13,7 @@ get_embedder(model_id, backend)
   -> 检查模块级缓存（按 model_id + backend 维度）
   -> 未命中时按需 import sentence_transformers 并构造 SentenceTransformer
   -> backend 为 openvino 时传 backend="openvino"（需 optimum-intel）
-  -> 返回的 encode() 已做 L2 归一化，供 search_top_k 直接点积
+  -> 返回编码器包装，文档向量由 search.build_index 做 L2 归一化后落盘
 
 get_tokenizer(model_id)
   -> 从句子编码器的 tokenizer 构造一个返回带字符 offsets 的 token 序列函数

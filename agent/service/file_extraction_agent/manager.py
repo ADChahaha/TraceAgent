@@ -15,7 +15,7 @@ from typing import Any, Iterable
 
 from langchain_core.messages import AIMessage, ToolMessage
 
-from service.document_resources import load_resource
+from service.file_extraction_agent.core.tools.workspace import source_index, validate_resource
 
 from service.file_extraction_agent.core.loop import run_qa_stream, _message_stop_signal, _terminal_stop_signals
 from service.file_extraction_agent.core.model import ChatModelFallbackChain, build_qa_model
@@ -32,11 +32,8 @@ def stream_completion_events(
 ) -> Iterable[dict[str, Any]]:
     """路径与消息 → graph 批次输出 → 业务事件；管理 ID 不进入 graph。"""
     stopped = lambda: should_stop is not None and should_stop()
-    document = load_resource(resource_path).document
     yield {"id": completion_id, "type": "completion.created", "status": "in_progress"}
-    yield {"type": "source_indexed", "tool": "source_index", "result": {
-        "ok": True, "workspace_root": str(document.root), "tree": _file_tree_lines(document),
-    }}
+    yield {"type": "source_indexed", "tool": "source_index", "result": source_index(resource_path)}
     outputs = run_qa_stream(
         resource_path=resource_path, messages=messages, qa_model=qa_model,
         run_options=run_options, should_stop=should_stop,
@@ -109,24 +106,6 @@ def _message_content_text(content: Any) -> str:
         if item.get("type") == "text" and isinstance(item.get("text"), str):
             parts.append(item["text"])
     return "".join(parts)
-
-
-def _file_tree_lines(document: Any) -> list[str]:
-    lines: list[str] = []
-
-    def walk(path: str | None, prefix: str) -> None:
-        entries = document.entries(path)
-        for index, entry in enumerate(entries):
-            current_last = index == len(entries) - 1
-            connector = "└── " if current_last else "├── "
-            suffix = "/" if entry.kind == "dir" else ""
-            lines.append(f"{prefix}{connector}{entry.name}{suffix}")
-            if entry.kind == "dir":
-                next_prefix = prefix + ("    " if current_last else "│   ")
-                walk(entry.path, next_prefix)
-
-    walk(None, "")
-    return lines
 
 
 def _sse(event: dict[str, Any]) -> str:
@@ -351,7 +330,7 @@ class CompletionManager:
             raise ValueError("completion_id must be a safe non-empty identifier")
         if not messages:
             raise ValueError("messages must be a non-empty list")
-        load_resource(resource_path)
+        validate_resource(resource_path)
         qa_model = build_qa_model(model_config)
         runtime = ActiveCompletion(completion_id, resource_path, qa_model, messages, run_options)
         with self._lock:

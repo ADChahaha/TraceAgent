@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from service.document_resources.schemas import InputDocument
 
 
 CompletionStatus = Literal[
@@ -85,7 +84,6 @@ class RunOptions:
 __all__ = [
     "CompletionStatus",
     "MessageRole",
-    "InputDocument",
     "DocumentQaMessage",
     "DocumentQaCompletionRequest",
     "ModelConfig",

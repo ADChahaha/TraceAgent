@@ -7,7 +7,16 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from service.document_resources.documents import order_key
+
+def order_key(name: str) -> int:
+    """提取文件名数字前缀，用于工具浏览时保留文档顺序。"""
+    digits = ""
+    for char in name:
+        if char.isdigit():
+            digits += char
+        else:
+            break
+    return int(digits) if digits else 0
 
 
 def run_tool(

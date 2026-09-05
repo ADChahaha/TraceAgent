@@ -5,6 +5,7 @@ import random
 from types import SimpleNamespace
 
 import pytest
+from service.document_resources.schemas import InputDocument
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
 from service.file_extraction_agent.core import loop as qa_module
@@ -15,9 +16,10 @@ from service.file_extraction_agent.core.loop import (
 )
 from service.file_extraction_agent.core.tools import build_tools
 from service.document_resources.documents import materialize_tree
+from service.file_extraction_agent.core.tools.workspace import DocumentFileTree
 from service.file_extraction_agent.schemas import RunOptions
 from types import SimpleNamespace
-from service.file_extraction_agent.schemas import DocumentQaMessage, InputDocument
+from service.file_extraction_agent.schemas import DocumentQaMessage
 
 
 def test_qa_stream_yields_only_original_messages(tmp_path, monkeypatch, resource_path):
@@ -593,4 +595,4 @@ def test_parallel_tool_executor_times_out_slow_call(tmp_path):
 
 def _prepare_test_state(*, documents, messages, workspace_root):
     """工具和 prompt 测试只准备文件树，不引入 completion 管理字段。"""
-    return SimpleNamespace(document=materialize_tree(documents, workspace_root), messages=messages, run_options=RunOptions())
+    return SimpleNamespace(document=DocumentFileTree(materialize_tree(documents, workspace_root)), messages=messages, run_options=RunOptions())

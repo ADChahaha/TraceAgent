@@ -10,7 +10,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 from service.file_extraction_agent.core.model import ChatModelFallbackChain, ModelCallAttempt
 
 from service.file_extraction_agent.manager import stream_completion_events
-from service.file_extraction_agent.schemas import DocumentQaMessage, InputDocument
+from service.file_extraction_agent.schemas import DocumentQaMessage
 
 
 def _scripted_model():

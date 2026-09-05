@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 
 import pytest
+from service.document_resources.schemas import InputDocument
 
 from service.file_extraction_agent.core.tools import (
     __all__ as tools_all,
@@ -13,9 +14,10 @@ from service.file_extraction_agent.core.tools import (
     build_tools,
 )
 from service.document_resources.documents import materialize_tree
+from service.file_extraction_agent.core.tools.workspace import DocumentFileTree
 from service.file_extraction_agent.schemas import RunOptions
 from types import SimpleNamespace
-from service.file_extraction_agent.schemas import DocumentQaMessage, InputDocument
+from service.file_extraction_agent.schemas import DocumentQaMessage
 
 
 def _state(tmp_path):
@@ -195,7 +197,7 @@ class _FakeEmbedder:
 def _fake_index():
     import numpy as np
 
-    from service.document_resources.search import Chunk, EmbeddingIndex
+    from service.file_extraction_agent.core.tools.embedding import Chunk, EmbeddingIndex
 
     chunks = [
         Chunk(document="contract.pdf", chunk_id="contract.pdf#c1", text="Either party may terminate with notice.", token_range=(0, 6), covered_files=["/abs/0001/docs/0001-termination.md"]),
@@ -258,4 +260,4 @@ def test_search_embedding_rejects_empty_query(tmp_path, monkeypatch):
 
 def _prepare_test_state(*, documents, messages, workspace_root):
     """工具和 prompt 测试只准备文件树，不引入 completion 管理字段。"""
-    return SimpleNamespace(document=materialize_tree(documents, workspace_root), messages=messages, run_options=RunOptions())
+    return SimpleNamespace(document=DocumentFileTree(materialize_tree(documents, workspace_root)), messages=messages, run_options=RunOptions())

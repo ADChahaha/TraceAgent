@@ -1,27 +1,7 @@
-"""Materialize semantic HTML documents into a real, on-disk file tree.
+"""HTML 文档 → 解析标题和段落/列表/表格 → 编号目录与 Markdown 文件 → 返回 Path。
 
-`DocumentFileTree` 是把上传的 HTML documents 落成一个真实目录树，每个
-paragraph / list / table 都写成一个 `.md` 文件，供 `ls` / `grep`(rg) /
-`read` 工具在真实文件系统上操作。没有 `path_id`、`evidence://` 或
-`sentence/row selector`；引证就用真实文件路径。
-
-实现步骤：
-
-```text
-documents(filename + html)
-  -> 解析每个 HTML 生成 HtmlNode 树
-  -> 按 h1-h6 层级建 section 目录，paragraph/list/table 各写一个 .md 文件
-  -> 目录 / 文件用数字前缀保序（0001-xxx / 0002-xxx）
-  -> DocumentFileTree.root / entries(path) / read(path) / scope_path(scope)
-```
-
-设计约定：
-
-- 每个 document 是 `resource_path/documents/0001-<doc>` 目录。
-- section 是子目录；paragraph 是 `0001-xxx.md`，list 是 `0002-xxx.md`，
-  table 是 `0003-xxx.md`（均写 markdown，表格整表一个文件）。
-- list/table 不再有行级 selector，只保留一个文件作为证据单元。
-- 排序靠文件名数字前缀，不靠 `os.listdir`。
+本模块只生成文件，不提供问答目录浏览和读取接口。非法 filename/html 抛 ValueError；
+文件访问由 file_extraction_agent 的工具层负责。
 """
 
 from __future__ import annotations
@@ -54,85 +34,6 @@ class HtmlNode:
     parent: "HtmlNode | None" = None
 
 
-@dataclass
-class FileEntry:
-    name: str
-    path: str
-    kind: str
-    order: int
-
-
-@dataclass
-class DocumentFileTree:
-    root: Path
-
-    def entries(self, path: str | None = None) -> list[FileEntry]:
-        """List one level of the tree at a directory path, sorted by order.
-
-        path may be a directory path (str) or None to use the tree root.
-        Returns FileEntry with name/path/kind(order). kind is "dir" or "md".
-        """
-
-        directory = self._resolve_directory(path)
-        entries: list[FileEntry] = []
-        for child in sorted(directory.iterdir(), key=lambda p: order_key(p.name)):
-            if child.is_dir():
-                entries.append(
-                    FileEntry(name=child.name, path=str(child), kind="dir", order=order_key(child.name))
-                )
-            elif child.is_file() and child.suffix == ".md":
-                entries.append(
-                    FileEntry(name=child.name, path=str(child), kind="md", order=order_key(child.name))
-                )
-        return sorted(entries, key=lambda entry: entry.order)
-
-    def read(self, path: str) -> str:
-        """Read the markdown content of a file path as UTF-8 text."""
-
-        resolved = self._resolve_file(path)
-        return resolved.read_text(encoding="utf-8")
-
-    def scope_path(self, scope: str | None = None) -> Path:
-        """Resolve a model-facing scope to a directory under the tree root.
-
-        Empty scope returns the root. Rejects `..` traversal outside the root.
-        """
-
-        if scope is None or not str(scope or "").strip():
-            return self.root
-        candidate = Path(str(scope)).resolve()
-        root = self.root.resolve()
-        if candidate == root:
-            return root
-        if root not in candidate.parents:
-            raise ValueError("scope escapes the document workspace")
-        if not candidate.exists() or not candidate.is_dir():
-            raise ValueError(f"scope is not a directory: {scope}")
-        return candidate
-
-    def _resolve_directory(self, path: str | None) -> Path:
-        if path is None or not str(path or "").strip():
-            return self.root
-        candidate = Path(str(path)).resolve()
-        root = self.root.resolve()
-        if candidate == root:
-            return root
-        if root not in candidate.parents:
-            raise ValueError("path escapes the document workspace")
-        if not candidate.exists() or not candidate.is_dir():
-            raise ValueError(f"path is not a directory: {path}")
-        return candidate
-
-    def _resolve_file(self, path: str) -> Path:
-        candidate = Path(str(path)).resolve()
-        root = self.root.resolve()
-        if root not in candidate.parents:
-            raise ValueError("file escapes the document workspace")
-        if not candidate.exists() or not candidate.is_file():
-            raise ValueError(f"file not found: {path}")
-        return candidate
-
-
 class _Parser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -160,8 +61,8 @@ class _Parser(HTMLParser):
             self.stack[-1].children.append(node)
 
 
-def materialize_tree(documents: list[InputDocument], workspace_root: Path) -> DocumentFileTree:
-    """Write documents to an on-disk file tree and return its accessor."""
+def materialize_tree(documents: list[InputDocument], workspace_root: Path) -> Path:
+    """校验 HTML 文档 → 按标题与内容块落盘 → 返回目录路径。"""
 
     source_documents = normalize_documents(documents)
     root = Path(workspace_root)
@@ -180,7 +81,7 @@ def materialize_tree(documents: list[InputDocument], workspace_root: Path) -> Do
         doc_dir.mkdir(parents=True, exist_ok=True)
         write_document_children(doc_dir, parsed_root, document_index)
 
-    return DocumentFileTree(root=root)
+    return root
 
 
 def normalize_documents(documents: list[InputDocument]) -> list[SourceDocument]:
@@ -419,8 +320,6 @@ def walk(node: HtmlNode):
 __all__ = [
     "SourceDocument",
     "HtmlNode",
-    "FileEntry",
-    "DocumentFileTree",
     "materialize_tree",
     "order_key",
 ]

@@ -1,12 +1,13 @@
 # 文档问答执行设计
 
-问答模块消费已准备的资源路径，执行一次模型/工具循环；资源生成由同级 `document_resources` 模块负责。
+问答模块消费已准备的资源路径，执行一次模型/工具循环。资源生成由同级 `document_resources` 负责；两包互不导入，通过磁盘文件格式交接。资源读取归工具层，Agent 的 embedding 能力集中在 `tools/embedding.py`。
 
 ```text
 resource_path + messages + 模型/运行配置
-  → CompletionManager 校验资源并注册 ActiveCompletion（管理 completion_id）
+  → CompletionManager 调 tools/workspace.validate_resource 预检并注册 ActiveCompletion
   → stream_completion_events 包装业务事件
-  → run_qa_stream 调 build_graph_state，加载资源并初始化图内状态
+  → run_qa_stream 调 build_graph_state，只保存路径、消息和运行参数
+  → build_tools 调 open_workspace，工具闭包共用 ToolWorkspace
   → LangGraph 模型节点 / 工具节点
   → AIMessage / list[ToolMessage]
   → manager 事件字典 → ActiveCompletion 队列 → 分配 seq 并编码 SSE
@@ -14,13 +15,13 @@ resource_path + messages + 模型/运行配置
 
 ## 执行输入与状态
 
-GraphState 保存 DocumentFileTree、messages、RunOptions、已加载的 EmbeddingIndex、embedding 模型及后端。它没有 completion_id、task_id、事件缓冲或取消状态。
+GraphState 只保存 resource_path、messages、RunOptions；不持有文件访问器、索引、embedding 配置、管理 ID 或取消状态。
 
-`build_graph_state(resource_path, messages, run_options)` 调用资源模块校验清单与索引，再构造执行状态。资源配置错误抛 ValueError；不生成文件树，不构建文档向量。
+`build_graph_state(resource_path, messages, run_options)` 校验执行输入。`build_tools` 根据路径创建 ToolWorkspace，包含工具侧 DocumentFileTree 与 EmbeddingResources；四个工具闭包共享该上下文。
 
-manager 负责输入合法性、资源预检、模型装配和 completion 注册。初始化失败不注册运行时；同一活动 completion_id 不可重复。HTTP route 在线程池中完成预检，避免阻塞异步事件循环。
+manager 负责输入合法性、问答模型装配和 completion 注册；资源预检委托工具层，source_indexed 的树数据由工具层提供。manager 不读取磁盘，也不持有 embedding 对象。初始化失败不注册运行时；同一活动 completion_id 不可重复。HTTP route 在线程池中完成预检，避免阻塞异步事件循环。
 
-route 在模块顶部直接导入 completion_manager；标准库与内部工具依赖也在顶部声明。仅资源模型封装保留 SentenceTransformer 的延迟导入，避免未使用 embedding 时加载其重依赖。
+route 在模块顶部直接导入 completion_manager；标准库与内部工具依赖也在顶部声明。生成端 model.py 与工具 embedding.py 分别保留 SentenceTransformer 的延迟导入，避免未使用 embedding 时加载其重依赖。
 
 ## 消息批次与事件
 
@@ -60,7 +61,23 @@ ActiveCompletion 的调用 ID 集合只用于取消时判断批次是否结清�
 
 ## 工具与引用
 
-工具各自使用单文件：`tools/ls.py`、`grep.py`、`read.py`、`embedding.py`。`embedding.py` 负责查询向量和已加载索引检索，模型与文档索引构建位于同级资源模块，不再保留 tools/embedding 子包。
+工具各自使用单文件：`tools/ls.py`、`grep.py`、`read.py`、`embedding.py`。共享文件访问在 `workspace.py`，异常结果归一化在 `base.py`。
+
+```text
+workspace.validate_resource(resource_path)
+  → 校验受管理绝对路径、documents 目录及内部链接
+  → embedding.load_index 校验清单版本、模型配置、向量维度/有限值和引用路径
+  → 无效资源抛 ValueError，HTTP 在 SSE 开始前返回 422
+
+search_embedding(query)
+  → 校验 query；使用工具上下文的 EmbeddingResources
+  → 首次加载 manifest.json、index.json、vectors.npy，后续复用本轮只读索引
+  → 根据清单的 model_id/backend 获取缓存查询模型
+  → encode([query])，归一化查询向量并计算 top-k
+  → 返回文本、分数与绝对文档引用；工具异常转换为 ok:false
+```
+
+HTTP 预检加载索引但不创建查询模型；实际工具执行时另建本轮上下文。`EmbeddingResources` 的锁保证并行查询只初始化一次索引和模型引用。查询模型按模型 ID 与后端缓存在 `embedding.py`；生成端模型缓存独立，不新增公共模型模块。问答不重建文档向量。
 
 - `ls(path="")`：逐层浏览资源的 documents 目录。
 - `grep(query, scope="", max_results=20)`：使用 ripgrep 查找 Markdown 候选行。

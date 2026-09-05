@@ -6,7 +6,6 @@ from service.file_extraction_agent.schemas import (
     CompletionStatus,
     DocumentQaCompletionRequest,
     DocumentQaMessage,
-    InputDocument,
     ModelConfig,
     RunOptions,
 )

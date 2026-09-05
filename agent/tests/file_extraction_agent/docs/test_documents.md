@@ -5,7 +5,7 @@
 - `test_table_preserves_merged_cells_and_wider_rows`：覆盖合并表头、跨行单元格、后续行更宽和单元格内竖线，确保内容不截断、不移列。
 
 这份测试覆盖新的「真实文件树」materialization。输入是多个带文件名的 HTML
-文档，输出是落盘的真实目录树（`DocumentFileTree`），每个 paragraph / list /
+文档，生成端返回落盘目录 Path，测试再用工具层 `DocumentFileTree` 包装，每个 paragraph / list /
 table 都写成一个 `.md` 文件，供 `ls` / `grep`(rg) / `read` 工具在真实文件
 系统上操作。
 
@@ -22,12 +22,13 @@ list[InputDocument](filename + html)
   -> 按 h1-h6 层级建 section 子目录
   -> paragraph/list/table 各写一个数字前缀 + slug 的 .md 文件（列表/表格整表一个文件）
   -> 目录/文件排序靠数字前缀，不靠 os.listdir
-  -> DocumentFileTree.root / entries(path) / read(path) / scope_path(scope)
+  -> 返回 Path，由工具层 DocumentFileTree 包装
+  -> entries(path) / read(path) / scope_path(scope)
 ```
 
 设计约定：
 
-- 每一个 document 是 workspace_root/\<completion_id\>/0001-\<doc\> 目录。
+- 每一个 document 是 workspace_root/001-\<doc\> 目录。
 - section 是子目录；paragraph 是 `0001-xxx.md`，list 是 `0002-xxx.md`，
   table 是 `0003-xxx.md`。数字前缀在同 section 内跨类型共享递增。
 - 没有 `path_id`、`evidence://` 或句/行级 selector；引证就用真实文件路径。

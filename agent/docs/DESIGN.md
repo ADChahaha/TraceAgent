@@ -9,8 +9,8 @@ POST /v1/document-resources（files）
   → 返回 resource_path + documents，调用方保存路径和展示用 HTML
 
 POST /v1/document-qa/chat/completions（resource_path + messages）
-  → CompletionManager 校验资源并注册 completion
-  → graph 根据路径初始化执行状态、绑定工具
+  → CompletionManager 委托工具层预检资源并注册 completion
+  → graph 保存路径和消息；build_tools 创建工具访问上下文
   → 模型消息 / 完整工具结果批次
   → manager 包装事件，ActiveCompletion 编码 SSE
   → 释放本轮运行时，保留文档资源
@@ -22,12 +22,15 @@ POST /v1/document-qa/chat/completions（resource_path + messages）
 | --- | --- |
 | routes/document_resources.py | 校验上传类型，在线程池中串联解析与资源准备，映射 HTTP 错误 |
 | service/document_processor | PDF 调 MinerU、DOCX 调 python-docx，输出带 CSS 的 HTML |
-| service/document_resources | 文档树、分块、embedding 模型与向量算法、资源落盘及校验加载 |
+| service/document_resources | HTML 转文件、文档分块和 embedding 索引构建、资源落盘与发布前自检 |
 | routes/file_extraction_agent.py | 路径问答、取消 HTTP 适配 |
 | service/file_extraction_agent/manager.py | completion 注册、取消、事件包装与 SSE；不生成文档状态 |
-| service/file_extraction_agent/core/graph.py | 从路径加载资源，构造无 task_id / completion_id 的 GraphState |
+| service/file_extraction_agent/core/graph.py | 构造仅含 resource_path、messages、RunOptions 的 GraphState |
 | service/file_extraction_agent/core/loop.py | LangGraph 模型/工具循环；工具结果整批返回 |
-| service/file_extraction_agent/core/tools | ls / grep / read / search_embedding，消费已准备资源 |
+| service/file_extraction_agent/core/tools/workspace.py | 资源目录预检、文件浏览与读取、文档树数据 |
+| service/file_extraction_agent/core/tools/embedding.py | 清单配置和索引读取、查询模型缓存、query 编码与检索 |
+
+两个业务包通过磁盘格式交接，互不导入。`document_resources` 只生成资源；问答读取由工具层负责。
 
 ## 资源生命周期
 
@@ -40,7 +43,7 @@ POST /v1/document-qa/chat/completions（resource_path + messages）
 
 ## 问答运行时
 
-`CompletionManager` 只在进程内保存 active completion；管理 ID 不进入 graph。GraphState 保存文件树、历史消息、运行配置、索引和 embedding 配置。
+`CompletionManager` 只在进程内保存 active completion；管理 ID 不进入 graph。GraphState 只保存资源路径、历史消息和运行配置。工具闭包持有 ToolWorkspace；其中的 EmbeddingResources 管理本轮索引与查询模型引用。
 
 ```text
 模型节点返回 AIMessage

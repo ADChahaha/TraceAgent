@@ -1,5 +1,5 @@
-"""文档资源准备与只读加载入口。"""
+"""HTML → 文档文件与 embedding 索引 → 返回已发布资源路径。"""
 
-from service.document_resources.resources import load_resource, prepare_resources
+from service.document_resources.resources import prepare_resources
 
-__all__ = ["prepare_resources", "load_resource"]
+__all__ = ["prepare_resources"]

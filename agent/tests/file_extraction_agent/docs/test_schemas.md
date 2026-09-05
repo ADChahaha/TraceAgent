@@ -1,6 +1,6 @@
 # test_schemas.py
 
-这组测试覆盖 `document-qa chat/completions` 的公开 schema。schema 不再描述字段抽取任务，而是描述一次 QA completion 所需的文档、append-only 历史消息、模型配置和运行预算。
+这组测试覆盖 `document-qa chat/completions` 的公开 schema。schema 不再描述字段抽取任务，而是描述一次 QA completion 所需的资源路径、append-only 历史消息、模型配置和运行预算。
 
 实现链路：
 

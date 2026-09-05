@@ -7,15 +7,14 @@
 实现链路：
 
 ```text
-GraphState 持有 DocumentFileTree
+资源生成端落盘 → 工具层 DocumentFileTree 包装目录 → 注入测试上下文
   -> build_tools(state) 暴露 ls/grep/read/search_embedding
   -> ls 只列出当前目录层的一个层级子项
   -> grep 用 ripgrep 在 scope 目录（默认根）跑，输出原样 stdout
   -> read 读取一个 .md 文件的 markdown 内容
 ```
 
-说明：测试通过 `prepare_completion_state` 用 `list[InputDocument]` 与
-`list[DocumentQaMessage]` 构造强类型输入，直接产出 `GraphState`。
+测试辅助函数 `_prepare_test_state` 使用资源包的 InputDocument 生成样本文件，再注入工具层 DocumentFileTree；不依赖 manager 或 graph 加载资源。
 
 ## 测试函数
 
@@ -29,11 +28,9 @@ GraphState 持有 DocumentFileTree
 - `test_grep_can_scope_to_directory`：验证 grep 可限定在某个 section 目录内搜索。
 - `test_grep_fails_gracefully_when_ripgrep_missing`：验证 rg 不在 PATH 时返回 `RIPGREP_MISSING` 错误。
 
-`test_search_embedding_returns_result_without_event_state`：直接工具调用返回检索结果，不依赖或创建事件缓冲。
+- `test_search_embedding_returns_result_without_event_state`：直接工具调用返回检索结果，不依赖或创建事件缓冲。
 
-- `test_search_embedding_returns_text_and_covered_files_sorted`：候选按相似度排序，保留正文、来源和覆盖文件。
+- `test_search_embedding_returns_text_and_covered_files_sorted`：用工具侧 Chunk/EmbeddingIndex 构造替身，验证候选按相似度排序，保留正文、来源和覆盖文件。
 - `test_search_embedding_rejects_empty_query`：空查询返回 BAD_QUERY 失败结果。
-
-资源基础实现导入迁移到 `service.document_resources`。
 
 工具测试直接构造文档访问上下文，不再调用 manager 创建工作目录。

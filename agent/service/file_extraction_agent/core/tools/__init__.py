@@ -1,4 +1,4 @@
-"""Unified surface for model-facing document-QA tools.
+"""根据执行输入绑定文档问答工具。
 
 `core/tools` 包把每个工具拆成独立文件：`ls.py` / `grep.py` / `read.py` /
 `embedding.py`（承载 `search_embedding`），共享骨架放 `base.py`。本 `__init__.py`
@@ -10,6 +10,7 @@ monkeypatch 与外部 import 使用。
 
 ```text
 build_tools(state)
+  -> state 含 resource_path 时调用 open_workspace 创建本轮工具上下文
   -> build_ls(state)          # langchain @tool 包裹，绑定 ls
   -> build_grep(state)        # 绑定 grep
   -> build_read(state)        # 绑定 read
@@ -48,12 +49,16 @@ from service.file_extraction_agent.core.tools.base import (
     run_tool,
 )
 
+from service.file_extraction_agent.core.tools.workspace import open_workspace
+
 VALID_KINDS = {"md"}
 
 
 def build_tools(state: Any) -> list[Any]:
-    """Build model-facing QA navigation tools bound to the current graph state."""
+    """路径执行输入或已注入工具上下文 → 四个共享上下文的文档工具。"""
 
+    if hasattr(state, "resource_path"):
+        state = open_workspace(state.resource_path)
     return [build_ls(state), build_grep(state), build_read(state), build_search_embedding(state)]
 
 

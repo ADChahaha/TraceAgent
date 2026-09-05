@@ -1,29 +1,7 @@
-"""Embedding index and cosine search for document-QA candidate recall.
+"""文档文本流 → tokenizer 分块 → 文档向量编码与归一化 → 返回待落盘的 EmbeddingIndex。
 
-`search.py` 提供纯 numpy 的向量检索层：把单个文档的文本流按固定 token 窗口
-加 overlap 切成 chunk（chunk 可在文档内部跨越多个 `.md` 块），对每个 chunk
-编码向量并建索引；查询时只对 query 编码一次，再用余弦相似度取 top-k。
-
-本模块**不依赖任何真实 embedding 模型或向量库**：embedder 和 tokenize 都是
-可注入的替身，便于单元测试。真实模型封装见 `model.py`，
-索引持久化与构建编排见 `resources.py`。
-
-实现步骤：
-
-```text
-streams: {document_name: [(md_path, text), ...]}
-  -> 遍历每个文档，经 tokenize 把各 .md 块文本合成带字符 offsets 的 token 流
-  -> tokenize 只是按字符连续的 token 序列，能同时给出每个 token 的字符区间
-  -> 按 chunk_size + overlap 在 token 级滑窗切 chunk
-  -> 每个 chunk 记录(document, chunk_id, text, token_range,
-      covered_files=[该 chunk 覆盖到的 .md 路径])
-  -> embedder.encode([chunk.text for chunk in chunks]) 得到 vectors
-  -> 返回 EmbeddingIndex(chunks, vectors)
-
-search_top_k(query_vec, index, top_k)
-  -> 与每个 chunk 向量做点积（前提：已 L2 归一化）
-  -> 按分数降序取 top_k，返回带 text/document/covered_files/chunk_id 的 dict 列表
-```
+本模块只构建索引。查询、已发布索引加载与结果排序由 Agent tools/embedding.py 负责。
+embedder 与 tokenize 可注入，方便独立验证文档覆盖范围和生成结果。
 """
 
 from __future__ import annotations
@@ -34,7 +12,7 @@ from typing import Any, Callable, Sequence
 import numpy as np
 
 # 字符级 tokenize 兜底：把文本按字符切成 (start, end) 区间。真实场景里由
-# tools.py 用模型 tokenizer 替换，以保证 chunk 语义与 embedding 输入一致。
+# resources.py 用模型 tokenizer 替换，以保证 chunk 语义与 embedding 输入一致。
 def _default_tokenizer(text: str) -> Sequence[tuple[int, int]]:
     return [(i, i + 1) for i in range(len(text))]
 
@@ -167,34 +145,6 @@ def build_index(
     return EmbeddingIndex(model_id=model_id, chunks=chunks, vectors=vectors, dimension=dimension)
 
 
-def search_top_k(query_vec: np.ndarray, index: EmbeddingIndex, top_k: int = 5) -> list[dict[str, Any]]:
-    """余弦检索，返回按分数降序的候选 chunk 列表。"""
-
-    if index.vectors.size == 0 or index.vectors.ndim != 2:
-        return []
-    query = np.asarray(query_vec, dtype=np.float32).reshape(-1)
-    _normalize(query)
-    if index.vectors.shape[1] != query.shape[0]:
-        raise ValueError("query dimension does not match index vectors")
-    scores = index.vectors @ query
-    order = np.argsort(-scores)[: max(0, top_k)]
-    results: list[dict[str, Any]] = []
-    for position in order:
-        score = float(scores[position])
-        chunk = index.chunks[int(position)]
-        results.append(
-            {
-                "score": score,
-                "document": chunk.document,
-                "chunk_id": chunk.chunk_id,
-                "text": chunk.text,
-                "token_range": list(chunk.token_range),
-                "covered_files": list(chunk.covered_files),
-            }
-        )
-    return results
-
-
 def _covered_files(
     char_range: tuple[int, int],
     segment_boundaries: list[tuple[int, int, str]],
@@ -231,5 +181,4 @@ __all__ = [
     "EmbeddingIndex",
     "build_index",
     "chunk_text",
-    "search_top_k",
 ]
