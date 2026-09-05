@@ -20,6 +20,8 @@ GraphState 保存 DocumentFileTree、messages、RunOptions、已加载的 Embedd
 
 manager 负责输入合法性、资源预检、模型装配和 completion 注册。初始化失败不注册运行时；同一活动 completion_id 不可重复。HTTP route 在线程池中完成预检，避免阻塞异步事件循环。
 
+route 在模块顶部直接导入 completion_manager；标准库与内部工具依赖也在顶部声明。仅资源模型封装保留 SentenceTransformer 的延迟导入，避免未使用 embedding 时加载其重依赖。
+
 ## 消息批次与事件
 
 ```text
@@ -57,6 +59,8 @@ ActiveCompletion 的调用 ID 集合只用于取消时判断批次是否结清�
 关闭事件流时关闭内层生成器。同步 provider 和工具线程不能强杀；请求 timeout 和工具 deadline 约束阻塞，超时线程的迟到结果不会再写事件。问答结束只释放运行时，不删除资源。
 
 ## 工具与引用
+
+工具各自使用单文件：`tools/ls.py`、`grep.py`、`read.py`、`embedding.py`。`embedding.py` 负责查询向量和已加载索引检索，模型与文档索引构建位于同级资源模块，不再保留 tools/embedding 子包。
 
 - `ls(path="")`：逐层浏览资源的 documents 目录。
 - `grep(query, scope="", max_results=20)`：使用 ripgrep 查找 Markdown 候选行。

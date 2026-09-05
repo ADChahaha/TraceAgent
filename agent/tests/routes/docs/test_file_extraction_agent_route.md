@@ -32,3 +32,5 @@ HTTP POST /v1/document-qa/chat/completions/{completion_id}/cancel
 `test_document_qa_completion_cancel_route_calls_manager`：取消路由按 completion ID 转发 manager，保留取消响应。
 
 测试调用与替身模型名称同步采用 qa 命名，验证行为保持原契约。
+
+路由测试替换模块顶部直接导入的 completion_manager 引用，验证创建、参数转发及取消不再依赖运行时动态导入。

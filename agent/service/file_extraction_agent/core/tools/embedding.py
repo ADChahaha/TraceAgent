@@ -18,6 +18,8 @@ except Exception:  # pragma: no cover
 
 from service.file_extraction_agent.core.tools.base import run_tool
 from service.document_resources.model import DEFAULT_EMBEDDING_MODEL
+from service.document_resources import model as embedding_model
+from service.document_resources.search import search_top_k
 
 DEFAULT_EMBEDDING_BACKEND = os.getenv("EMBEDDING_BACKEND", "openvino")
 
@@ -63,11 +65,9 @@ def _get_embedder(state: Any) -> Any:
     cached = getattr(state, "_embedder", None)
     if cached is not None:
         return cached
-    from service.document_resources.model import get_embedder
-
     model_id = getattr(state, "embedding_model", None) or DEFAULT_EMBEDDING_MODEL
     backend = getattr(state, "embedding_backend", None) or DEFAULT_EMBEDDING_BACKEND
-    embedder = get_embedder(model_id=model_id, backend=backend)
+    embedder = embedding_model.get_embedder(model_id=model_id, backend=backend)
     try:
         setattr(state, "_embedder", embedder)
     except Exception:
@@ -76,8 +76,6 @@ def _get_embedder(state: Any) -> Any:
 
 
 def _search_top_k(query_vec: Any, index: Any, top_k: int) -> list[dict[str, Any]]:
-    from service.document_resources.search import search_top_k
-
     return search_top_k(query_vec, index, top_k)
 
 

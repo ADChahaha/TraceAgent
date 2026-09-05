@@ -12,11 +12,7 @@ core/tools/
   -> ls.py          ls 工具
   -> grep.py        grep 工具（_run_ripgrep 用 rg 子进程）
   -> read.py        read 工具
-  -> embedding/     search_embedding 工具及其能力子包
-       __init__.py  工具 glue（_get_embedder）+ 转出
-       model.py     真实模型惰性封装
-       search.py    纯 numpy 分块/检索
-       index.py     索引持久化（_get_index）
+  -> embedding.py   search_embedding 工具；查询编码与已加载索引检索
 ```
 
 测试通过替换 `tools.embedding._get_embedder` / `tools.embedding._get_index` 来注入假 embedder 与假索引，替换 `tools.grep._run_ripgrep` 来注入假 rg 输出，使各工具的候选召回、事件顺序、参数校验都能离线验证。

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from importlib import import_module
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
+from service.file_extraction_agent.manager import completion_manager
 
 from service.file_extraction_agent.schemas import (
     DocumentQaMessage,
@@ -62,12 +62,10 @@ async def get_chat_completion(completion_id: str) -> dict[str, Any]:
 
 @router.post("/v1/document-qa/chat/completions/{completion_id}/cancel")
 async def cancel_chat_completion(completion_id: str) -> dict[str, Any]:
-    completion_manager = import_module("service.file_extraction_agent.manager").completion_manager
     return completion_manager.terminate(completion_id)
 
 
 def _create_chat_completion_stream(request: ChatCompletionRequest):
-    completion_manager = import_module("service.file_extraction_agent.manager").completion_manager
     return completion_manager.create(
         completion_id=request.completion_id,
         resource_path=request.resource_path,

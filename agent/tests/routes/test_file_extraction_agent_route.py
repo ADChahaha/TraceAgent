@@ -5,12 +5,11 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from main import create_app
+from routes import file_extraction_agent as qa_routes
 from service.file_extraction_agent.schemas import RunOptions
 
 
 def test_document_qa_chat_completion_route_calls_completion_manager(monkeypatch):
-    from service.file_extraction_agent import manager as manager_module
-
     seen_call: dict[str, object] = {}
 
     def fake_create(**kwargs):
@@ -19,7 +18,7 @@ def test_document_qa_chat_completion_route_calls_completion_manager(monkeypatch)
         yield 'event: completion.completed\ndata: {"id":"cmp_123"}\n\n'
 
     monkeypatch.setattr(
-        manager_module,
+        qa_routes,
         "completion_manager",
         SimpleNamespace(create=fake_create, terminate=lambda completion_id: {"id": completion_id, "status": "cancelling"}),
     )
@@ -67,8 +66,6 @@ def test_document_qa_chat_completion_route_rejects_memory_field():
 
 
 def test_document_qa_chat_completion_route_passes_run_options(monkeypatch):
-    from service.file_extraction_agent import manager as manager_module
-
     seen_call: dict[str, object] = {}
 
     def fake_create(**kwargs):
@@ -76,7 +73,7 @@ def test_document_qa_chat_completion_route_passes_run_options(monkeypatch):
         yield 'event: completion.completed\ndata: {}\n\n'
 
     monkeypatch.setattr(
-        manager_module,
+        qa_routes,
         "completion_manager",
         SimpleNamespace(create=fake_create, terminate=lambda completion_id: {"id": completion_id, "status": "cancelling"}),
     )
@@ -97,8 +94,6 @@ def test_document_qa_chat_completion_route_passes_run_options(monkeypatch):
 
 
 def test_document_qa_chat_completion_route_passes_model_overrides(monkeypatch):
-    from service.file_extraction_agent import manager as manager_module
-
     seen_call: dict[str, object] = {}
 
     def fake_create(**kwargs):
@@ -106,7 +101,7 @@ def test_document_qa_chat_completion_route_passes_model_overrides(monkeypatch):
         yield 'event: completion.completed\ndata: {}\n\n'
 
     monkeypatch.setattr(
-        manager_module,
+        qa_routes,
         "completion_manager",
         SimpleNamespace(create=fake_create, terminate=lambda completion_id: {"id": completion_id, "status": "cancelling"}),
     )
@@ -140,8 +135,6 @@ def test_document_qa_chat_completion_route_passes_model_overrides(monkeypatch):
 
 
 def test_document_qa_completion_cancel_route_calls_manager(monkeypatch):
-    from service.file_extraction_agent import manager as manager_module
-
     seen_call: dict[str, object] = {}
 
     def fake_terminate(completion_id):
@@ -149,7 +142,7 @@ def test_document_qa_completion_cancel_route_calls_manager(monkeypatch):
         return {"id": completion_id, "status": "cancelling"}
 
     monkeypatch.setattr(
-        manager_module,
+        qa_routes,
         "completion_manager",
         SimpleNamespace(create=lambda **kwargs: iter(()), terminate=fake_terminate),
     )

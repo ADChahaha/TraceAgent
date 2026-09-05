@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
+import subprocess
 from typing import Any, Callable
 
 try:
@@ -44,9 +46,6 @@ def _grep_output(state: Any, query: str, scope: str, max_results: int) -> str | 
 
 
 def _run_ripgrep(query: str, scope_dir: Path, max_results: int) -> str | None:
-    import shutil
-    import subprocess
-
     rg = shutil.which("rg")
     if rg is None:
         return None
