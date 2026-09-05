@@ -18,7 +18,7 @@ import numpy as np
 from service.document_resources import model
 from service.document_resources.documents import materialize_tree, order_key
 from service.document_resources.schemas import InputDocument
-from service.document_resources.search import Chunk, build_index
+from service.document_resources.index import Chunk, build_index
 
 
 def resources_root() -> Path:

@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from service.file_extraction_agent.core.tools.embedding import search_top_k
 
-from service.document_resources.search import (
+from service.document_resources.index import (
     Chunk,
     EmbeddingIndex,
     build_index,

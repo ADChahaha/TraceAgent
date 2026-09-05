@@ -7,3 +7,5 @@
 安装包还必须包含独立的 core/graph.py 建图模块与 completion_runtime.py 单轮运行时。
 
 消息、模型调用和工具执行模块 messages.py、model_invocation.py、executor.py 也必须随 wheel 安装。
+
+资源构建模块以 document_resources/index.py 打包，旧 search.py 不再出现在 wheel 中。

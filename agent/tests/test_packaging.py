@@ -25,11 +25,13 @@ def test_wheel_contains_resource_and_qa_modules(tmp_path):
     assert {
         "routes/document_resources.py", "service/document_resources/resources.py",
         "service/document_resources/model.py", "service/document_resources/documents.py",
+        "service/document_resources/index.py",
         "service/document_processor/docx/docx_processor.py", "service/file_extraction_agent/core/loop.py",
         "service/file_extraction_agent/core/tools/embedding.py",
         "service/file_extraction_agent/core/graph.py", "service/file_extraction_agent/completion_runtime.py",
         "service/file_extraction_agent/core/messages.py", "service/file_extraction_agent/core/model_invocation.py",
         "service/file_extraction_agent/core/executor.py",
     } <= names
+    assert "service/document_resources/search.py" not in names
     assert "routes/document_processor.py" not in names
     assert not any(name.startswith("service/file_extraction_agent/core/tools/embedding/") for name in names)

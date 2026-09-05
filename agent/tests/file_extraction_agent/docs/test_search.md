@@ -1,6 +1,6 @@
 # 向量算法测试
 
-文档分块与索引构建使用生成端实现；`search_top_k` 使用 Agent 的 `tools/embedding.py`，验证磁盘格式对应的数据可被查询端消费。
+文档分块与索引构建使用生成端 document_resources/index.py；`search_top_k` 使用 Agent 的 `tools/embedding.py`，验证磁盘格式对应的数据可被查询端消费。
 
 文本与字符偏移 → 固定 token 窗口分块 → 替身模型编码 → 余弦排序，验证生成端分块/构建与工具侧检索的衔接。
 

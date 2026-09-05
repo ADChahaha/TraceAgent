@@ -13,11 +13,11 @@ get_embedder(model_id, backend)
   -> 检查模块级缓存（按 model_id + backend 维度）
   -> 未命中时按需 import sentence_transformers 并构造 SentenceTransformer
   -> backend 为 openvino 时传 backend="openvino"（需 optimum-intel）
-  -> 返回编码器包装，文档向量由 search.build_index 做 L2 归一化后落盘
+  -> 返回编码器包装，文档向量由 index.build_index 做 L2 归一化后落盘
 
 get_tokenizer(model_id)
   -> 从句子编码器的 tokenizer 构造一个返回带字符 offsets 的 token 序列函数
-  -> 该函数的返回形如 [(start, end), ...]，供 search.chunk_text 使用
+  -> 该函数的返回形如 [(start, end), ...]，供 index.chunk_text 使用
 ```
 
 环境配置：

@@ -19,7 +19,7 @@ files（PDF / DOCX）
 ## 边界
 
 - 本包对外只导出 `prepare_resources`；`materialize_tree` 返回目录 Path，不返回问答访问器。
-- `documents.py` 负责 HTML 转文件；`search.py` 负责文档分块和索引构建；`model.py` 只供生成阶段加载模型与 tokenizer。
+- `documents.py` 负责 HTML 转文件；`index.py` 负责文档分块和索引构建；`model.py` 只供生成阶段加载模型与 tokenizer。
 - `_validate_prepared` 只校验本次临时产物，成功后才发布；不提供消费端 `load_resource`。生成包不导入 Agent 工具。
 - 两边遵守相同磁盘格式：manifest 版本 1，记录模型/后端；index/index.json 记录维度与 chunks，index/vectors.npy 保存归一化文档向量；covered_files 相对 documents 保存。
 
