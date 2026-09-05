@@ -14,8 +14,8 @@ def test_document_qa_chat_completion_route_calls_completion_manager(monkeypatch)
 
     def fake_create(**kwargs):
         seen_call.update(kwargs)
-        yield 'event: completion.created\ndata: {"id":"cmp_123"}\n\n'
-        yield 'event: completion.completed\ndata: {"id":"cmp_123"}\n\n'
+        yield 'event: completion.created\ndata: {"type":"completion.created","status":"in_progress"}\n\n'
+        yield 'event: completion.completed\ndata: {"type":"completion.completed","status":"completed"}\n\n'
 
     monkeypatch.setattr(
         qa_routes,
@@ -45,8 +45,8 @@ def test_document_qa_chat_completion_route_calls_completion_manager(monkeypatch)
     assert seen_call["messages"][0].content == "这份文件说了什么？"
     assert "memory" not in seen_call
     assert body == (
-        'event: completion.created\ndata: {"id":"cmp_123"}\n\n'
-        'event: completion.completed\ndata: {"id":"cmp_123"}\n\n'
+        'event: completion.created\ndata: {"type":"completion.created","status":"in_progress"}\n\n'
+        'event: completion.completed\ndata: {"type":"completion.completed","status":"completed"}\n\n'
     )
 
 

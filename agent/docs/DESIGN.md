@@ -12,7 +12,7 @@ POST /v1/document-qa/chat/completions（resource_path + messages）
   → CompletionManager 委托工具层预检资源并注册 completion
   → graph 保存路径和消息；build_tools 创建工具访问上下文
   → 模型消息 / 完整工具结果批次
-  → manager 包装事件，ActiveCompletion 编码 SSE
+  → manager 包装不含 completion ID 的事件，ActiveCompletion 编码 SSE
   → 释放本轮运行时，保留文档资源
 ```
 
@@ -27,7 +27,7 @@ POST /v1/document-qa/chat/completions（resource_path + messages）
 | service/file_extraction_agent/manager.py | completion 注册、取消、事件包装与 SSE；不生成文档状态 |
 | service/file_extraction_agent/core/graph.py | 构造仅含 resource_path、messages、RunOptions 的 GraphState |
 | service/file_extraction_agent/core/loop.py | LangGraph 模型/工具循环；工具结果整批返回 |
-| service/file_extraction_agent/core/tools/workspace.py | 资源目录预检、文件浏览与读取、文档树数据 |
+| service/file_extraction_agent/core/tools/workspace.py | 资源目录预检、文件浏览与读取 |
 | service/file_extraction_agent/core/tools/embedding.py | 清单配置和索引读取、查询模型缓存、query 编码与检索 |
 
 两个业务包通过磁盘格式交接，互不导入。`document_resources` 只生成资源；问答读取由工具层负责。

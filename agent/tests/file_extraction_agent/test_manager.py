@@ -38,11 +38,33 @@ def test_stream_numbers_messages_and_terminal_once(tmp_path, monkeypatch, ending
         messages=[DocumentQaMessage(role="user", content="问题")],
     ))
     events = [json.loads(frame.split("data: ", 1)[1]) for frame in frames]
+    assert all("id" not in event and "completion_id" not in event for event in events)
     assert [event["seq"] for event in events] == list(range(1, len(events) + 1))
     assert events[-1]["type"] == f"completion.{ending}"
     if ending == "failed":
         assert [event["tool"] for event in events if event["type"] == "tool_failed"] == ["qa"]
     assert sum(manager_module._terminal_status(event) is not None for event in events) == 1
+
+
+def test_startup_events_only_acknowledge_without_reading_documents(resource_path, monkeypatch):
+    from service.file_extraction_agent.core.tools.workspace import DocumentFileTree
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("启动通知不应遍历或读取文档")
+
+    monkeypatch.setattr(DocumentFileTree, "entries", forbidden)
+    monkeypatch.setattr(DocumentFileTree, "read", forbidden)
+    stream = manager_module.stream_completion_events(
+        resource_path=resource_path,
+        messages=[DocumentQaMessage(role="user", content="问题")], qa_model=object(),
+    )
+    try:
+        created = next(stream)
+        source = next(stream)
+        assert created == {"type": "completion.created", "status": "in_progress"}
+        assert source == {"type": "source_indexed", "tool": "source_index", "result": {"ok": True}}
+    finally:
+        stream.close()
 
 
 def test_runtime_cancel_drains_real_graph_batch_and_skips_next_model(tmp_path, monkeypatch, resource_path):
@@ -115,7 +137,7 @@ def test_manager_wraps_messages_and_pairs_same_name_calls(tmp_path, monkeypatch,
         AIMessage(content="答案", response_metadata={"finish_reason": "stop"}),
     ]
     monkeypatch.setattr(manager_module, "run_qa_stream", lambda *args, **kwargs: iter(model_messages))
-    events = list(manager_module.stream_completion_events(completion_id="cmp_test", resource_path=resource_path, messages=[DocumentQaMessage(role="user", content="问题")], qa_model=object()))
+    events = list(manager_module.stream_completion_events(resource_path=resource_path, messages=[DocumentQaMessage(role="user", content="问题")], qa_model=object()))
     assert [e["type"] for e in events] == [
         "completion.created", "source_indexed", "model_message", "tool_started", "tool_started",
         "tool_completed", "tool_failed", "model_message", "completion.completed",
@@ -127,7 +149,7 @@ def test_manager_wraps_messages_and_pairs_same_name_calls(tmp_path, monkeypatch,
 
 def test_graph_keeps_events_as_objects_until_stream_boundary(tmp_path, monkeypatch, resource_path):
     monkeypatch.setattr(manager_module, "run_qa_stream", lambda *args, **kwargs: iter([AIMessage(content="完成", response_metadata={"finish_reason": "stop"})]))
-    events = list(manager_module.stream_completion_events(completion_id="cmp_test", resource_path=resource_path, messages=[DocumentQaMessage(role="user", content="问题")], qa_model=object()))
+    events = list(manager_module.stream_completion_events(resource_path=resource_path, messages=[DocumentQaMessage(role="user", content="问题")], qa_model=object()))
     assert all(isinstance(event, dict) for event in events)
     assert [event["type"] for event in events] == [
         "completion.created", "source_indexed", "model_message", "completion.completed",
@@ -198,11 +220,11 @@ def test_create_completion_stream_builds_completion_input_and_runs_graph(monkeyp
         return "qa-model"
 
     def fake_stream_completion_events(*, qa_model, **kwargs):
-        captured["completion_id"] = kwargs["completion_id"]
+        captured["has_completion_id"] = "completion_id" in kwargs
         captured["document_root"] = kwargs["resource_path"]
         captured["messages"] = kwargs["messages"]
         captured["model"] = qa_model
-        yield {'id': 'cmp_123', 'type': 'completion.completed'}
+        yield {'type': 'completion.completed'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
     monkeypatch.setattr("service.file_extraction_agent.manager.stream_completion_events", fake_stream_completion_events)
@@ -217,8 +239,8 @@ def test_create_completion_stream_builds_completion_input_and_runs_graph(monkeyp
         )
     )
 
-    assert events == ['event: completion.completed\ndata: {"id":"cmp_123","type":"completion.completed"}\n\n']
-    assert captured["completion_id"] == "cmp_123"
+    assert events == ['event: completion.completed\ndata: {"type":"completion.completed"}\n\n']
+    assert captured["has_completion_id"] is False
     assert captured["document_root"] == resource_path
     assert captured["messages"][0].content == "问题"
     assert captured["model"] == "qa-model"
@@ -255,7 +277,7 @@ def test_create_completion_stream_registers_active_completion_before_iteration(m
     def fake_stream_completion_events(*, qa_model, **kwargs):
         del qa_model
         graph_called.set()
-        yield {'id': 'cmp_early_cancel', 'type': 'completion.completed'}
+        yield {'type': 'completion.completed'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
     monkeypatch.setattr("service.file_extraction_agent.manager.stream_completion_events", fake_stream_completion_events)
@@ -270,7 +292,7 @@ def test_create_completion_stream_registers_active_completion_before_iteration(m
 
     assert manager.terminate("cmp_early_cancel") == {"id": "cmp_early_cancel", "status": "cancelling"}
     assert _frames(stream) == [
-        'event: completion.cancelled\ndata: {"id":"cmp_early_cancel","type":"completion.cancelled","status":"cancelled"}\n\n'
+        'event: completion.cancelled\ndata: {"type":"completion.cancelled","status":"cancelled"}\n\n'
     ]
     assert not graph_called.is_set()
     assert manager.terminate("cmp_early_cancel") == {"id": "cmp_early_cancel", "status": "not_found"}
@@ -288,7 +310,7 @@ def test_create_completion_stream_cancel_does_not_wait_for_blocked_graph(monkeyp
         del qa_model
         graph_started.set()
         release_graph.wait(timeout=1.0)
-        yield {'id': 'cmp_blocked', 'type': 'completion.completed'}
+        yield {'type': 'completion.completed'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
     monkeypatch.setattr("service.file_extraction_agent.manager.stream_completion_events", fake_stream_completion_events)
@@ -321,7 +343,7 @@ def test_create_completion_stream_cancel_does_not_wait_for_blocked_graph(monkeyp
 
     assert time.monotonic() - started_at < 0.25
     assert events == [
-        'event: completion.cancelled\ndata: {"id":"cmp_blocked","type":"completion.cancelled","status":"cancelled"}\n\n'
+        'event: completion.cancelled\ndata: {"type":"completion.cancelled","status":"cancelled"}\n\n'
     ]
     assert manager.terminate("cmp_blocked") == {"id": "cmp_blocked", "status": "not_found"}
 
@@ -340,7 +362,7 @@ def test_create_completion_stream_flushes_committed_events_before_cancel(monkeyp
         second_event_reached_graph.set()
         yield {'type': 'tool_completed', 'tool': 'read'}
         release_graph.wait(timeout=1.0)
-        yield {'id': 'cmp_flush', 'type': 'completion.completed', 'status': 'completed'}
+        yield {'type': 'completion.completed', 'status': 'completed'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
     monkeypatch.setattr("service.file_extraction_agent.manager.stream_completion_events", fake_stream_completion_events)
@@ -367,7 +389,7 @@ def test_create_completion_stream_flushes_committed_events_before_cancel(monkeyp
     assert first_event == 'event: model_message\ndata: {"type":"model_message","content":"first"}\n\n'
     assert remaining_events == [
         'event: tool_completed\ndata: {"type":"tool_completed","tool":"read"}\n\n',
-        'event: completion.cancelled\ndata: {"id":"cmp_flush","type":"completion.cancelled","status":"cancelled"}\n\n',
+        'event: completion.cancelled\ndata: {"type":"completion.cancelled","status":"cancelled"}\n\n',
     ]
     assert manager.terminate("cmp_flush") == {"id": "cmp_flush", "status": "not_found"}
 
@@ -386,7 +408,7 @@ def test_should_stop_is_wired_to_cancel_requested(monkeypatch, resource_path):
         seen_should_stop["value"] = kwargs.get("should_stop")
         batch_running.set()
         release_batch.wait(timeout=1.0)
-        yield {'id': 'cmp_ws', 'type': 'completion.completed', 'status': 'completed'}
+        yield {'type': 'completion.completed', 'status': 'completed'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
     monkeypatch.setattr("service.file_extraction_agent.manager.stream_completion_events", fake_stream_completion_events)
@@ -431,9 +453,9 @@ def test_terminate_defers_cancel_until_active_tool_batch_settles(monkeypatch, re
         yield {"type": "model_message", "content": "读取", "tool_calls": [{"id": "deferred-read", "name": "read", "args": {}}]}
         batch_running.set()
         release_batch.wait(timeout=1.0)
-        yield {'id': 'cmp_deferred', 'type': 'tool_completed', 'tool': 'read', 'tool_call_id': 'deferred-read'}
+        yield {'type': 'tool_completed', 'tool': 'read', 'tool_call_id': 'deferred-read'}
 
-        yield {'id': 'cmp_deferred', 'type': 'completion.cancelled', 'status': 'cancelled'}
+        yield {'type': 'completion.cancelled', 'status': 'cancelled'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
     monkeypatch.setattr("service.file_extraction_agent.manager.stream_completion_events", fake_stream_completion_events)
@@ -465,10 +487,10 @@ def test_terminate_defers_cancel_until_active_tool_batch_settles(monkeypatch, re
 
     tool_events = [event for event in events if "tool_completed" in event]
     assert tool_events == [
-        'event: tool_completed\ndata: {"id":"cmp_deferred","type":"tool_completed","tool":"read","tool_call_id":"deferred-read"}\n\n'
+        'event: tool_completed\ndata: {"type":"tool_completed","tool":"read","tool_call_id":"deferred-read"}\n\n'
     ]
     assert events[-1] == (
-        'event: completion.cancelled\ndata: {"id":"cmp_deferred","type":"completion.cancelled","status":"cancelled"}\n\n'
+        'event: completion.cancelled\ndata: {"type":"completion.cancelled","status":"cancelled"}\n\n'
     )
     assert manager.terminate("cmp_deferred") == {"id": "cmp_deferred", "status": "not_found"}
 
@@ -483,7 +505,7 @@ def test_create_completion_stream_emits_only_one_terminal_event_when_cancel_race
     def fake_stream_completion_events(*, qa_model, **kwargs):
         del qa_model
         graph_can_complete.wait(timeout=1.0)
-        yield {'id': 'cmp_race', 'type': 'completion.completed', 'status': 'completed'}
+        yield {'type': 'completion.completed', 'status': 'completed'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
     monkeypatch.setattr("service.file_extraction_agent.manager.stream_completion_events", fake_stream_completion_events)
@@ -502,7 +524,7 @@ def test_create_completion_stream_emits_only_one_terminal_event_when_cancel_race
 
     terminal_events = [event for event in events if "completion." in event]
     assert terminal_events == [
-        'event: completion.cancelled\ndata: {"id":"cmp_race","type":"completion.cancelled","status":"cancelled"}\n\n'
+        'event: completion.cancelled\ndata: {"type":"completion.cancelled","status":"cancelled"}\n\n'
     ]
 
 
@@ -647,10 +669,10 @@ def test_completion_manager_create_runs_graph_and_returns_sse(monkeypatch, resou
         return "qa-model"
 
     def fake_stream_completion_events(*, qa_model, **kwargs):
-        captured["completion_id"] = kwargs["completion_id"]
+        captured["has_completion_id"] = "completion_id" in kwargs
         captured["messages"] = kwargs["messages"]
         captured["model"] = qa_model
-        yield {'id': 'cmp_mgr', 'type': 'completion.completed'}
+        yield {'type': 'completion.completed'}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
     monkeypatch.setattr("service.file_extraction_agent.manager.stream_completion_events", fake_stream_completion_events)
@@ -664,8 +686,8 @@ def test_completion_manager_create_runs_graph_and_returns_sse(monkeypatch, resou
         )
     )
 
-    assert events == ['event: completion.completed\ndata: {"id":"cmp_mgr","type":"completion.completed"}\n\n']
-    assert captured["completion_id"] == "cmp_mgr"
+    assert events == ['event: completion.completed\ndata: {"type":"completion.completed"}\n\n']
+    assert captured["has_completion_id"] is False
     assert captured["messages"][0].content == "问题"
     assert captured["model"] == "qa-model"
     assert captured["config"].model_name == "qa"
@@ -681,7 +703,7 @@ def test_completion_manager_create_registers_before_iteration_and_terminate_canc
     def fake_stream_completion_events(*, qa_model, **kwargs):
         del qa_model
         graph_called.set()
-        yield {'id': 'cmp_mgr_cancel', 'type': 'completion.completed'}
+        yield {'type': 'completion.completed'}
 
     manager = CompletionManager()
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
@@ -696,7 +718,7 @@ def test_completion_manager_create_registers_before_iteration_and_terminate_canc
 
     assert manager.terminate("cmp_mgr_cancel") == {"id": "cmp_mgr_cancel", "status": "cancelling"}
     assert _frames(stream) == [
-        'event: completion.cancelled\ndata: {"id":"cmp_mgr_cancel","type":"completion.cancelled","status":"cancelled"}\n\n'
+        'event: completion.cancelled\ndata: {"type":"completion.cancelled","status":"cancelled"}\n\n'
     ]
     assert not graph_called.is_set()
     assert manager.terminate("cmp_mgr_cancel") == {"id": "cmp_mgr_cancel", "status": "not_found"}

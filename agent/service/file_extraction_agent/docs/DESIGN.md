@@ -19,11 +19,13 @@ GraphState 只保存 resource_path、messages、RunOptions；不持有文件访�
 
 `build_graph_state(resource_path, messages, run_options)` 校验执行输入。`build_tools` 根据路径创建 ToolWorkspace，包含工具侧 DocumentFileTree 与 EmbeddingResources；四个工具闭包共享该上下文。
 
-manager 负责输入合法性、问答模型装配和 completion 注册；资源预检委托工具层，source_indexed 的树数据由工具层提供。manager 不读取磁盘，也不持有 embedding 对象。初始化失败不注册运行时；同一活动 completion_id 不可重复。HTTP route 在线程池中完成预检，避免阻塞异步事件循环。
+manager 负责输入合法性、问答模型装配和 completion 注册；资源预检委托工具层；source_indexed 只返回 result={"ok":true}，启动通知不遍历或读取文档。manager 不读取磁盘，也不持有 embedding 对象。初始化失败不注册运行时；同一活动 completion_id 不可重复。HTTP route 在线程池中完成预检，避免阻塞异步事件循环。
 
 route 在模块顶部直接导入 completion_manager；标准库与内部工具依赖也在顶部声明。生成端 model.py 与工具 embedding.py 分别保留 SentenceTransformer 的延迟导入，避免未使用 embedding 时加载其重依赖。
 
 ## 消息批次与事件
+
+每条 SSE 流已绑定本轮请求，所有 SSE 事件均不重复携带 completion ID；事件包装入口也不接收该参数。completion_id 仅供运行时注册、取消和状态查询使用。tool_call_id 及模型 tool_calls 内的 ID 仍保留，用于调用与结果配对。
 
 ```text
 模型节点调用 _invoke_model_message

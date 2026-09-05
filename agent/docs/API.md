@@ -75,13 +75,13 @@ SSE 按 seq 从 1 递增：
 
 ```text
 event: completion.created
-data: {"id":"cmp_123","type":"completion.created","status":"in_progress","seq":1}
+data: {"type":"completion.created","status":"in_progress","seq":1}
 ```
 
 | 事件 | 含义 |
 | --- | --- |
 | completion.created | 开始执行 |
-| source_indexed | 当前资源 documents 目录的 workspace_root 与 tree |
+| source_indexed | 启动确认，result 仅为 {"ok":true}，不携带资源路径或文档树 |
 | model_message | 可见正文、tool_calls、is_final 和可选 stop_signal |
 | tool_started | 已发布的工具调用 ID、名称与参数 |
 | tool_completed / tool_failed | 对应调用的结果 |
@@ -111,3 +111,5 @@ POST /v1/document-qa/chat/completions/{completion_id}/cancel
 - `MINERU_BIN`、`DOCUMENT_PROCESSOR_MINERU_LANG`：PDF 解析配置。
 
 旧 `/v1/document-processor/process`、专用 DOCX 路由和旧 OCR process 路由不再提供。
+
+SSE 事件不包含 completion ID，调用方使用发起请求时的 ID 关联该流；工具调用 ID 保留用于配对。completion.created 表示开始执行，source_indexed 仅确认启动，不返回文档内容。

@@ -15,7 +15,7 @@ from typing import Any, Iterable
 
 from langchain_core.messages import AIMessage, ToolMessage
 
-from service.file_extraction_agent.core.tools.workspace import source_index, validate_resource
+from service.file_extraction_agent.core.tools.workspace import validate_resource
 
 from service.file_extraction_agent.core.loop import run_qa_stream, _message_stop_signal, _terminal_stop_signals
 from service.file_extraction_agent.core.model import ChatModelFallbackChain, build_qa_model
@@ -26,14 +26,14 @@ _QUEUE_CANCEL = object()
 _QUEUE_DONE = object()
 
 def stream_completion_events(
-    *, completion_id: str, resource_path: str, messages: list[DocumentQaMessage],
+    *, resource_path: str, messages: list[DocumentQaMessage],
     qa_model: ChatModelFallbackChain | None = None,
     run_options: RunOptions | None = None, should_stop=None,
 ) -> Iterable[dict[str, Any]]:
     """路径与消息 → graph 批次输出 → 业务事件；管理 ID 不进入 graph。"""
     stopped = lambda: should_stop is not None and should_stop()
-    yield {"id": completion_id, "type": "completion.created", "status": "in_progress"}
-    yield {"type": "source_indexed", "tool": "source_index", "result": source_index(resource_path)}
+    yield {"type": "completion.created", "status": "in_progress"}
+    yield {"type": "source_indexed", "tool": "source_index", "result": {"ok": True}}
     outputs = run_qa_stream(
         resource_path=resource_path, messages=messages, qa_model=qa_model,
         run_options=run_options, should_stop=should_stop,
@@ -55,13 +55,13 @@ def stream_completion_events(
                 raise TypeError(f"unexpected graph output: {type(output).__name__}")
     except Exception as exc:
         yield {"type": "tool_failed", "tool": "qa", "result": {"ok": False, "errors": [{"message": str(exc)}]}}
-        yield _completion_event(completion_id, "cancelled" if stopped() else "failed", error=str(exc))
+        yield _completion_event("cancelled" if stopped() else "failed", error=str(exc))
         return
     finally:
         close = getattr(outputs, "close", None)
         if close is not None:
             close()
-    yield _completion_event(completion_id, "cancelled" if stopped() else "completed")
+    yield _completion_event("cancelled" if stopped() else "completed")
 
 
 def _model_message_event(message: AIMessage) -> dict[str, Any]:
@@ -186,11 +186,11 @@ class ActiveCompletion:
                     event = self.queue.get()
                     if event is _QUEUE_CANCEL:
                         if self.close_once("cancelled"):
-                            yield encode(_completion_event(self.completion_id, "cancelled"))
+                            yield encode(_completion_event("cancelled"))
                         return
                     if event is _QUEUE_DONE:
                         if self.close_once("completed"):
-                            yield encode(_completion_event(self.completion_id, "completed"))
+                            yield encode(_completion_event("completed"))
                         return
                     if not isinstance(event, dict):
                         continue
@@ -210,7 +210,7 @@ class ActiveCompletion:
         terminal_committed = False
         try:
             for event in stream_completion_events(
-                completion_id=self.completion_id, resource_path=self.resource_path,
+                resource_path=self.resource_path,
                 messages=self.messages, run_options=self.run_options, qa_model=self.model,
                 should_stop=lambda: self.cancel_requested,
             ):
@@ -221,7 +221,7 @@ class ActiveCompletion:
                     return
         except Exception as exc:
             terminal_committed = self.commit_terminal_event(
-                _completion_event(self.completion_id, "failed", error_message=str(exc)),
+                _completion_event("failed", error_message=str(exc)),
             )
         finally:
             if not terminal_committed:
@@ -369,8 +369,8 @@ class CompletionManager:
 completion_manager = CompletionManager()
 
 
-def _completion_event(completion_id: str, status: str, **fields: Any) -> dict[str, Any]:
-    return {"id": completion_id, "type": f"completion.{status}", "status": status, **fields}
+def _completion_event(status: str, **fields: Any) -> dict[str, Any]:
+    return {"type": f"completion.{status}", "status": status, **fields}
 
 
 def _terminal_status(event: dict[str, Any]) -> str | None:

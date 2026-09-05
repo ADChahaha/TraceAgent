@@ -1,5 +1,7 @@
 # test_file_extraction_agent_route.py
 
+请求 completion_id 仍传给 manager 注册运行时；SSE 替身及响应断言只保留事件状态，不重复返回 completion ID。
+
 `test_document_qa_chat_completion_route_calls_completion_manager` 检查资源路径传给 manager，且不传递 task_id。
 
 这份测试覆盖 `document-qa chat/completions` 的 HTTP 出口。route 层接收 backend 传来的 `completion_id + resource_path + append-only messages`，调用业务层 `completion_manager.create(...)`，并用 SSE 返回 QA agent 的过程事件。

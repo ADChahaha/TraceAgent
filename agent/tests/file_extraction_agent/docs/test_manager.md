@@ -6,7 +6,8 @@
 
 ## 测试函数
 
-- `test_stream_numbers_messages_and_terminal_once`：完成、失败、取消三种完整输出流均连续编号且仅有一个终态；问答执行失败的阶段名为 qa。
+- `test_stream_numbers_messages_and_terminal_once`：完成、失败、取消三种完整输出流均无 completion ID、连续编号且仅有一个终态；问答执行失败的阶段名为 qa。
+- `test_startup_events_only_acknowledge_without_reading_documents`：启动通知只返回状态和 ok，不遍历目录、读取文档或附带资源内容。
 - `test_runtime_cancel_drains_real_graph_batch_and_skips_next_model`：真实 LangGraph 并行同名工具执行中取消，等待匹配结果后关闭；不再请求模型，并保留资源目录。
 - `test_manager_wraps_messages_and_pairs_same_name_calls`：manager 将 AIMessage/ToolMessage 包装为模型、调度和结果事件，同名工具按 call ID 保留各自参数及失败状态。
 - `test_graph_keeps_events_as_objects_until_stream_boundary`：图执行器返回事件字典，开始、索引、终态顺序不变。
@@ -14,7 +15,7 @@
 - `test_stream_preserves_terminal_words_in_data`：正文含终态字样时仍输出后续真实终态。
 - `test_terminal_status_reads_only_event_type`：三种 completion 终态都只按字典的 type 取状态。
 - `test_terminal_detection_requires_exact_event_type`：正文、status 和前缀相似名称不会结束流。
-- `test_create_completion_stream_builds_completion_input_and_runs_graph`：用 fake model builder 和 fake stream graph 确认 `completion_manager.create(...)` 会传递 completion id、资源路径、messages 和 qa model。
+- `test_create_completion_stream_builds_completion_input_and_runs_graph`：用 fake model builder 和 fake stream graph 确认 `completion_manager.create(...)` 只传递资源路径、messages 和 qa model，completion ID 留在运行时管理层。
 - `test_create_completion_stream_validates_input_before_iteration`：确认 completion 输入校验发生在返回 SSE iterator 前，route 层可以把业务入参错误稳定映射为 422。
 - `test_create_completion_stream_registers_active_completion_before_iteration`：确认 active completion 会在返回 iterator 前注册，backend 立即调用 cancel 时不会因为流还没开始迭代而得到 `not_found`；早取消后 consumer 直接用 cancel sentinel 收口，不再启动 graph/provider producer。
 - `test_create_completion_stream_cancel_does_not_wait_for_blocked_graph`：确认 graph/provider 卡住时，`completion_manager.terminate(...)` 会通过 runtime queue 的 cancel sentinel 主动唤醒 SSE consumer，consumer 立即输出 `completion.cancelled`，不等待 producer 继续产出或 queue timeout 轮询。
@@ -35,4 +36,4 @@
 - `test_qa_records_text_from_responses_api_content_blocks`：只提取 Responses 内容块中的可见文本。
 - `test_qa_records_terminal_stop_message_as_final_answer`：合法终止消息标为最终回答。
 - `test_qa_records_model_message_content_and_tool_calls_without_reasoning`：保留工具调用和可见文本，不泄露推理。
-运行时测试通过真实 resource_path 进入，保留取消竞态、FIFO、终态唯一和消息包装覆盖。原每轮建树/清理测试由资源准备和损坏资源测试替代。
+事件替身和 SSE 断言均不携带 completion ID；取消/状态接口仍按 ID 定位运行时。运行时测试通过真实 resource_path 进入，保留取消竞态、FIFO、终态唯一和消息包装覆盖。原每轮建树/清理测试由资源准备和损坏资源测试替代。

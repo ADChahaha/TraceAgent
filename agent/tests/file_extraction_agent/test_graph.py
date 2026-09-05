@@ -29,7 +29,7 @@ def _scripted_model():
 
 
 def _input(resource_path):
-    return dict(completion_id="cmp_123", resource_path=resource_path,
+    return dict(resource_path=resource_path,
                 messages=[DocumentQaMessage(role="user", content="Can this contract be terminated early?")])
 
 

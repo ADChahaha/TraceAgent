@@ -1,7 +1,7 @@
 """资源路径 → 受管理目录校验 → 文档工具上下文；索引读取委托 embedding.py。
 
 open_workspace 创建文件访问器和本轮 embedding 访问器；validate_resource 额外校验
-索引以保留 HTTP 422 预检。source_index 提供树数据，manager 只包装业务事件。
+索引以保留 HTTP 422 预检。启动通知不遍历目录或返回文档树。
 非法目录、外部链接、损坏资源均以 ValueError 结束，不生成任何文件或向量。
 """
 
@@ -10,7 +10,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from service.file_extraction_agent.core.tools.embedding import EmbeddingResources
 from service.file_extraction_agent.core.tools.base import order_key
@@ -120,27 +119,3 @@ def open_workspace(resource_path: str) -> ToolWorkspace:
 def validate_resource(resource_path: str) -> None:
     """工具侧预检路径、清单、向量和引用；失败在 HTTP 开始前返回。"""
     open_workspace(resource_path).embedding.load_index()
-
-
-def source_index(resource_path: str) -> dict[str, Any]:
-    """浏览文档文件树 → 返回 source_indexed 事件需要的数据，不生成索引。"""
-    document = open_workspace(resource_path).document
-    return {"ok": True, "workspace_root": str(document.root), "tree": _tree_lines(document)}
-
-
-def _tree_lines(document: Any) -> list[str]:
-    lines: list[str] = []
-
-    def walk(path: str | None, prefix: str) -> None:
-        entries = document.entries(path)
-        for index, entry in enumerate(entries):
-            current_last = index == len(entries) - 1
-            connector = "└── " if current_last else "├── "
-            suffix = "/" if entry.kind == "dir" else ""
-            lines.append(f"{prefix}{connector}{entry.name}{suffix}")
-            if entry.kind == "dir":
-                next_prefix = prefix + ("    " if current_last else "│   ")
-                walk(entry.path, next_prefix)
-
-    walk(None, "")
-    return lines

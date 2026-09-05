@@ -9,4 +9,4 @@
 - `test_executor_failure_returns_entire_failed_batch`：执行器整体异常时返回完整失败批次；取消后不再调用模型，否则允许模型解释失败。
 - `test_closing_event_stream_closes_message_generator`：外层关闭传播到消息生成器，停止后续调用。
 
-所有图测试使用 conftest 生成的 resource_path；图执行通过工具层读取文件，manager 只包装工具层提供的资源树和消息事件。
+所有图测试使用 conftest 生成的 resource_path；图执行通过工具层读取文件，manager 只发出启动确认和消息事件，事件包装入口不再接收 completion ID。

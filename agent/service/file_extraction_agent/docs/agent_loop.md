@@ -4,7 +4,7 @@
 
 ```text
 ActiveCompletion 保存 completion_id、resource_path、messages、qa_model
-  → stream_completion_events 输出开始事件，调用工具层 source_index 获取资源树数据
+  → stream_completion_events 输出无 completion ID 的开始事件与 source_indexed(ok=true) 确认
   → run_qa_stream 根据 resource_path 调 build_graph_state，仅初始化执行输入
   → build_tools 创建工具上下文，文件访问与 embedding 缓存由工具层持有
   → build_qa_messages 保留完整历史，build_qa_graph 绑定工具并编译图
