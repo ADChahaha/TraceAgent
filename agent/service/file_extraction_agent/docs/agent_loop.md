@@ -9,7 +9,7 @@ manager 保存 completion_id → CompletionRuntime 映射
   → run_qa_stream 调 open_workspace(resource_path)，build_tools 绑定工具上下文
   → RunOptions 在构图时绑定工具执行器，文件访问与 embedding 缓存由工具层持有
   → messages.build_qa_messages(messages) 保留完整历史
-  → graph.build_qa_graph 接收 model_invocation 与 executor 的执行函数，以 MessagesState 编译图
+  → loop 调 graph.stream_qa_graph；graph 绑定 model_invocation / executor，以 MessagesState 编译并运行图
   → 模型节点返回 AIMessage
   → completion_runtime 包装 model_message / tool_started
   → 工具节点并行执行整批调用，返回 list[ToolMessage]
@@ -20,9 +20,11 @@ manager 保存 completion_id → CompletionRuntime 映射
 ## 取消和失败
 
 - 无活动工具批次时，取消 sentinel 立即唤醒 consumer；已有批次则先配齐结果。
-- `run_qa_stream` 在工具批次返回后检查 should_stop，不再请求下一轮模型。
+- graph 在模型调用前后检查 should_stop，丢弃未发布的迟到响应；已发布工具批次配齐结果后停止，不再请求下一轮模型。
 - 工具普通异常和超时转为对应 ToolMessage；执行器整体异常转为整批失败结果。
 - 模型调用失败耗尽尝试后向 completion_runtime 抛异常，输出 tool_failed（tool=qa）及 completion.failed；取消优先以 cancelled 收口。
 - 关闭外层流时 await aclose 内层生成器并取消生产协程，工具内迟到线程结果不再写事件。问答结束保留文档资源。
 
 管理 ID 不进入 graph；执行细节和取消锁语义见 [DESIGN.md](DESIGN.md)。
+
+loop 只组装 Agent 输入、转发输出和关闭内层生成器；图节点、Command 路由、更新转换、递归保护及图流关闭全部归 graph。RunOptions 仅配置工具共享超时，不再包含工具调用次数上限。

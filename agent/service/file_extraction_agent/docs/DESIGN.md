@@ -8,10 +8,10 @@ resource_path + messages + 模型/运行配置
   → completion_runtime.stream_completion_events 包装业务事件
   → run_qa_stream 用 resource_path 调 open_workspace，build_tools 绑定 ToolWorkspace
   → messages.build_qa_messages 转换历史消息
-  → graph.build_qa_graph 绑定 RunOptions、模型/工具执行函数与节点路由
+  → graph.stream_qa_graph 调 build_qa_graph，绑定 RunOptions、执行函数和停止信号
   → 仅 messages 进入 LangGraph
   → LangGraph 模型节点 / 工具节点
-  → AIMessage / list[ToolMessage]
+  → graph 将节点更新转换成 AIMessage / list[ToolMessage]，loop 原样转发
   → completion_runtime 事件字典 → CompletionRuntime 队列 → 分配 seq 并输出事件字典
   → 传输适配层负责响应消息编码
 ```
@@ -30,7 +30,11 @@ CompletionStream 是 manager 返回的托管迭代器。gRPC 使用 async for �
 
 图内只使用 LangGraph MessagesState 保存消息，不再定义自有 GraphState。资源路径、运行参数、工具访问器和 embedding 缓存均在图状态之外。
 
-`run_qa_stream` 校验非空消息和资源路径，然后调用 open_workspace(resource_path) 创建 ToolWorkspace；build_tools(workspace) 让四个工具闭包共享文档访问器和 EmbeddingResources。build_qa_messages(messages) 转换完整历史；build_qa_graph(model, tools, run_options) 将工具超时绑定到执行闭包。建图逻辑独立放在 core/graph.py，包括 agent/tools 节点、条件路由与 compile；loop.py 从 model_invocation.py 与 executor.py 注入 invoke_model/execute_tools 两个执行函数并消费图更新，graph.py 不反向导入 loop.py。执行器只接收工具调用、工具集合和 timeout。无效输入抛 ValueError；工具失败与取消仍遵守原批次契约。
+`run_qa_stream` 是 Agent 接口：校验非空消息和资源路径 → open_workspace 创建 ToolWorkspace → build_tools 绑定四个共享工具 → build_qa_messages 转换完整历史 → 调用 graph.stream_qa_graph 并转发结果。loop 不解析图更新、不决定节点路由；关闭接口流时通过 aclosing 关闭内层生成器。
+
+graph.py 完整封装 LangGraph：build_qa_graph 绑定模型、工具执行器、超时和 should_stop → 以 MessagesState 编译 agent/tools 节点 → 节点通过 Command 提交消息及下一跳 → stream_qa_graph 消费 updates，转换为 AIMessage/完整 ToolMessage 批次 → finally 关闭图流。取消前后的检查、工具 ID 校验和执行器整体异常处理都在 graph 内，直接运行编译图也遵守批次契约。无效输入或工具 ID 抛 ValueError；模型尝试耗尽抛 RuntimeError。
+
+RunOptions 只保留 tool_execution_timeout，默认 60 秒；删除从未参与执行的 max_tool_calls。LangGraph 的递归保护仍为 10000，由 graph 内部配置。
 
 manager 负责输入合法性、问答模型装配和 completion 注册；资源预检委托工具层；source_indexed 只返回 result={"ok":true}，启动通知不遍历或读取文档。manager 不读取磁盘，也不持有 embedding 对象。初始化失败不注册运行时；同一活动 completion_id 不可重复。异步 gRPC 适配层通过 asyncio.to_thread 完成预检和初始化；首事件前的参数错误通过 await context.abort 映射 INVALID_ARGUMENT，其他初始化错误映射 INTERNAL。初始化与取消在锁内交接流，取消后的迟到结果在线程内关闭，停服时也不留下注册项。
 
@@ -38,7 +42,9 @@ route 在模块顶部直接导入 completion_manager；标准库与内部工具�
 
 ## 循环职责拆分
 
-- loop.py：校验输入 → 初始化工具和消息 → 建图 → 消费 updates → 转发 AIMessage/完整工具批次 → 检查取消 → finally 关闭图流。
+- loop.py：校验输入 → 初始化工具和消息 → 调用 graph.stream_qa_graph → 转发输出并传播关闭。
+- graph.py：绑定依赖 → 构建并运行 MessagesState 图 → 节点路由与停止检查 → 转换节点更新 → 关闭图流。
+- contracts.py：声明模型/工具 Protocol、ModelCallAttempt、AgentOutput 和 JSON 类型。消息使用 LangChain 的具体类型；外部动态工具结果先以 object 接收，再由 messages 归一化为 JsonValue。
 - messages.py：完整历史 → 系统提示与角色/工具参数转换 → 模型输入；响应 → 终止信号校验，不完整响应抛 RuntimeError。JSON 归一化供工具结果封装复用。
 - model_invocation.py：模型与消息 → astream/ainvoke 尝试 → 聚合消息 → messages 校验 → 成功返回；失败通过 asyncio.sleep 随机退避，最多五次，耗尽后抛 RuntimeError。
 - executor.py：调用列表和工具集合 → create_task 并发 ainvoke → asyncio.wait 共享 deadline 收集 → 按原顺序封装 ToolMessage；异常/超时转失败结果，不等待迟到线程。
@@ -73,7 +79,7 @@ route 在模块顶部直接导入 completion_manager；标准库与内部工具�
   → terminate 在同一锁内设置取消标志
      ├─ 无活动批次：入队取消 sentinel，立即唤醒 consumer
      └─ 有活动批次：延迟取消，让该批次结果先提交
-  → loop 在整批结果 yield 后检查 should_stop，不再调用下一轮模型
+  → graph 工具节点返回整批结果；下一模型调用前再次检查 should_stop，取消后不再调用模型
   → CompletionRuntime 输出 completion.cancelled
 ```
 
@@ -90,6 +96,8 @@ CompletionRuntime 的调用 ID 集合只用于取消时判断批次是否结清�
 工具对模型暴露 async coroutine；executor 优先 await ainvoke。文件浏览、ripgrep 与本地 embedding 使用 asyncio.to_thread 执行同步叶子操作，事件循环不承担磁盘等待或推理计算。
 
 工具各自使用单文件：`tools/ls.py`、`grep.py`、`read.py`、`embedding.py`。共享文件访问在 `workspace.py`，异常结果归一化在 `base.py`。
+
+run_tool 只接收 execute 操作，正常返回结果，普通异常转为 ok:false。工具工厂直接使用必需的 LangChain @tool，返回 BaseTool；不保留缺依赖时退化为普通函数的分支。查询编码器使用 Embedder 协议，索引和工作区使用具体类型。
 
 ```text
 workspace.validate_resource(resource_path)
@@ -110,7 +118,7 @@ RPC 预检加载索引但不创建查询模型；实际工具执行时另建本�
 - `ls(path="")`：逐层浏览资源的 documents 目录。
 - `grep(query, scope="", max_results=20)`：使用 ripgrep 查找 Markdown 候选行。
 - `read(path)`：读取真实 Markdown 文件，拒绝文档目录之外的路径。
-- `search_embedding(query, top_k=5, scope="")`：沿用资源记录的模型编码 query，从已加载索引召回文本及 covered_files。scope 当前保留参数，尚未限制语义召回范围。
+- `search_embedding(query, top_k=5)`：沿用资源记录的模型编码 query，从已加载索引召回文本及 covered_files；删除从未参与过滤的 scope 参数。
 
 Markdown 文件树由资源模块创建：文档标题作为顶层目录后缀，h1–h6 按层级建目录；paragraph、list、table 分别作为文件。排序使用数字前缀；合并表格单元格展开为 Markdown。内部 index/manifest 不暴露给浏览工具。
 

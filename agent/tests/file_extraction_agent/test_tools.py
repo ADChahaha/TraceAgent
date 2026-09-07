@@ -74,6 +74,11 @@ def test_build_tools_exposes_qa_navigation_tools_only(tmp_path):
     assert all(inspect.iscoroutinefunction(tool.coroutine) for tool in tools)
 
 
+def test_embedding_tool_does_not_advertise_unused_scope(tmp_path):
+    search = next(tool for tool in build_tools(_state(tmp_path)) if tool.name == "search_embedding")
+    assert set(search.args) == {"query", "top_k"}
+
+
 def test_module_exports_qa_helpers_only():
     assert "_ls" in tools_all
     assert "_tree" not in tools_all
@@ -84,6 +89,17 @@ def test_module_exports_qa_helpers_only():
     assert "_review_evidences" not in tools_all
     assert "_write_field" not in tools_all
     assert "_submit_result" not in tools_all
+
+
+def test_run_tool_only_needs_operation_and_normalizes_failure():
+    from service.file_extraction_agent.core.tools.base import run_tool
+
+    assert run_tool(lambda: {"ok": True, "text": "正文"}) == {"ok": True, "text": "正文"}
+
+    def fail():
+        raise ValueError("读取失败")
+
+    assert run_tool(fail) == {"ok": False, "errors": [{"message": "读取失败"}]}
 
 
 def test_internal_tool_helpers_do_not_accept_reason_parameter(tmp_path):
@@ -212,7 +228,7 @@ def _fake_index():
 def _install_fake_index(monkeypatch):
     fake_embedder = _FakeEmbedder()
 
-    def fake_get_index(state, embedder, scope=""):
+    def fake_get_index(state):
         return _fake_index()
 
     monkeypatch.setattr("service.file_extraction_agent.core.tools.embedding._get_index", fake_get_index)
@@ -225,7 +241,7 @@ def test_search_embedding_returns_text_and_covered_files_sorted(tmp_path, monkey
     state = _state(tmp_path)
     _install_fake_index(monkeypatch)
 
-    result = _search_embedding(state, query="payment", top_k=3, scope="")
+    result = _search_embedding(state, query="payment", top_k=3)
 
     assert result["ok"] is True
     assert result["query"] == "payment"
@@ -242,7 +258,7 @@ def test_search_embedding_returns_result_without_event_state(tmp_path, monkeypat
     state = _state(tmp_path)
     _install_fake_index(monkeypatch)
 
-    result = _search_embedding(state, query="payment", top_k=1, scope="")
+    result = _search_embedding(state, query="payment", top_k=1)
     assert result["ok"] is True
     assert not hasattr(state, "events")
 
@@ -253,7 +269,7 @@ def test_search_embedding_rejects_empty_query(tmp_path, monkeypatch):
         "service.file_extraction_agent.core.tools.embedding._get_embedder", lambda state: _fake_embedder
     )
 
-    result = _search_embedding(state, query="   ", top_k=3, scope="")
+    result = _search_embedding(state, query="   ", top_k=3)
 
     assert result["ok"] is False
     assert result["errors"][0]["code"] == "BAD_QUERY"

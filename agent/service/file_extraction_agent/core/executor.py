@@ -7,42 +7,37 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
-from typing import Any
+from collections.abc import Sequence
 
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import ToolCall, ToolMessage
+
+from service.file_extraction_agent.core.contracts import AsyncTool, Tool
 
 from service.file_extraction_agent.core.messages import _plain_json
 
 
 async def _execute_tools_parallel(
-    tool_calls: list[dict[str, Any]],
-    tools: list[Any],
+    tool_calls: list[ToolCall],
+    tools: Sequence[Tool],
     timeout: float = 60.0,
-) -> list[Any]:
+) -> list[ToolMessage]:
     """并行调用工具 → 按共享期限收集结果 → 按原始 ID 返回 ToolMessage。
 
     普通异常与超时转失败消息；不等待迟到线程，不写共享事件或 action。
     """
-    tool_map = {getattr(tool, "name", getattr(tool, "__name__", "")): tool for tool in tools}
+    tool_map = {tool.name: tool for tool in tools}
 
-    async def run_one(call: dict[str, Any]) -> Any:
+    async def run_one(call: ToolCall) -> object:
         selected = tool_map.get(call["name"])
         if selected is None:
             raise ValueError(f"unknown tool: {call['name']}")
-        execute = getattr(selected, "ainvoke", None)
-        if callable(execute):
-            return await execute(call.get("args") or {})
-        if inspect.iscoroutinefunction(selected):
-            return await selected(**(call.get("args") or {}))
-        execute = getattr(selected, "invoke", None)
-        if callable(execute):
-            return await asyncio.to_thread(execute, call.get("args") or {})
-        return await asyncio.to_thread(selected, **(call.get("args") or {}))
+        if isinstance(selected, AsyncTool):
+            return await selected.ainvoke(call["args"])
+        return await asyncio.to_thread(selected.invoke, call["args"])
 
     tasks = [asyncio.create_task(run_one(call)) for call in tool_calls]
-    ordered = []
+    ordered: list[ToolMessage] = []
     try:
         if not tasks:
             return []
@@ -61,13 +56,20 @@ async def _execute_tools_parallel(
                 raw = {"ok": False, "errors": [{"message": str(exc)}]}
             result = _plain_json(raw)
             failed = isinstance(result, dict) and result.get("ok") is False
-            ordered.append(ToolMessage(
-                content=json.dumps(result, ensure_ascii=False) if isinstance(result, dict) else str(result or ""),
-                artifact=result,
-                status="error" if failed else "success",
-                tool_call_id=call["id"], name=call["name"],
-                additional_kwargs={"tool_args": call["args"]},
-            ))
+            ordered.append(
+                ToolMessage(
+                    content=(
+                        json.dumps(result, ensure_ascii=False)
+                        if isinstance(result, dict)
+                        else str(result or "")
+                    ),
+                    artifact=result,
+                    status="error" if failed else "success",
+                    tool_call_id=call["id"],
+                    name=call["name"],
+                    additional_kwargs={"tool_args": call["args"]},
+                )
+            )
     finally:
         for task in tasks:
             if not task.done():

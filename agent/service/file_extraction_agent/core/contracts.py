@@ -1,0 +1,69 @@
+"""核心边界类型：消息与工具输入 → 异步模型/工具协议 → 明确的消息和 JSON 输出。
+
+这里只声明调用契约，不装配依赖或执行流程；SDK 动态结果在 messages 中归一化。
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from dataclasses import dataclass
+from typing import Protocol, TypeAlias, runtime_checkable
+
+from langchain_core.messages import AIMessage, BaseMessage, BaseMessageChunk, ToolCall, ToolMessage
+from pydantic import JsonValue
+
+JsonObject: TypeAlias = dict[str, JsonValue]
+AgentOutput: TypeAlias = AIMessage | list[ToolMessage]
+StopCheck: TypeAlias = Callable[[], bool]
+
+
+@runtime_checkable
+class AsyncTool(Protocol):
+    @property
+    def name(self) -> str: ...
+
+    def ainvoke(self, input: dict[str, object]) -> Awaitable[object]: ...
+
+
+class SyncTool(Protocol):
+    @property
+    def name(self) -> str: ...
+
+    def invoke(self, input: dict[str, object]) -> object: ...
+
+
+Tool: TypeAlias = AsyncTool | SyncTool
+
+
+class ChatModel(Protocol):
+    def astream(self, input: Sequence[BaseMessage]) -> AsyncIterator[BaseMessageChunk]: ...
+
+    def ainvoke(self, input: Sequence[BaseMessage]) -> Awaitable[BaseMessage]: ...
+
+
+@dataclass
+class ModelCallAttempt:
+    name: str
+    model: ChatModel
+    use_stream: bool
+
+
+@runtime_checkable
+class ModelAttempts(Protocol):
+    def model_call_attempts(self) -> list[ModelCallAttempt]: ...
+
+
+BoundModel: TypeAlias = ChatModel | ModelAttempts
+
+
+class QaModel(Protocol):
+    def bind_tools(self, tools: Sequence[Tool]) -> BoundModel: ...
+
+
+ModelInvoker: TypeAlias = Callable[[BoundModel, Sequence[BaseMessage]], Awaitable[AIMessage]]
+
+
+class ToolExecutor(Protocol):
+    def __call__(
+        self, tool_calls: list[ToolCall], tools: Sequence[Tool], timeout: float = 60.0
+    ) -> Awaitable[list[ToolMessage]]: ...

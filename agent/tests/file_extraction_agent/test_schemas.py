@@ -113,5 +113,21 @@ def test_model_config_defaults_disable_sdk_retries_for_outer_backoff():
     assert config.max_retries == 0
 
 
-def test_run_options_defaults_to_tool_budget_only():
-    assert RunOptions().max_tool_calls == 200
+def test_run_options_only_configures_tool_timeout():
+    from dataclasses import fields
+
+    assert [field.name for field in fields(RunOptions)] == ["tool_execution_timeout"]
+    assert RunOptions().tool_execution_timeout == 60.0
+
+
+def test_protocol_removes_tool_budget_without_reusing_field_number():
+    from agent_proto import agent_pb2 as pb
+    from google.protobuf.descriptor_pb2 import DescriptorProto
+
+    descriptor = pb.RunOptions.DESCRIPTOR
+    assert list(descriptor.fields_by_name) == ["tool_execution_timeout"]
+    assert descriptor.fields_by_name["tool_execution_timeout"].number == 2
+    message = DescriptorProto()
+    descriptor.CopyToProto(message)
+    assert "max_tool_calls" in message.reserved_name
+    assert any(r.start <= 1 < r.end for r in message.reserved_range)

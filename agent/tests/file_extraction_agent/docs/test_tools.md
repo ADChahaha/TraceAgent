@@ -19,6 +19,7 @@
 ## 测试函数
 
 - `test_build_tools_exposes_qa_navigation_tools_only`：验证四个导航工具均暴露协程实现，模型不再看到 `inspect` 或字段抽取工具。
+- `test_embedding_tool_does_not_advertise_unused_scope`：语义检索仅向模型暴露实际使用的 query、top_k 参数，移除不参与过滤的 scope。
 - `test_module_exports_qa_helpers_only`：验证模块公开 helper 切换到 `_ls/_grep/_read`，且 `_inspect` 已删除。
 - `test_internal_tool_helpers_do_not_accept_reason_parameter`：验证工具 helper 不接收旧 `reason` 参数。
 - `test_ls_and_read_use_real_file_paths`：验证 ls 返回真实目录项，read 接受绝对 `.md` 文件路径并返回正文。
@@ -34,3 +35,11 @@
 - `test_search_embedding_rejects_empty_query`：空查询返回 BAD_QUERY 失败结果。
 
 工具测试直接构造文档访问上下文，不再调用 manager 创建工作目录。
+
+## 简化工具执行入口
+
+索引替身 `_get_index(state)` 只接收工作区，索引加载不依赖查询编码器或检索范围。
+
+语义检索测试只传 query 和 top_k，不再传入无效的 scope。
+
+- `test_run_tool_only_needs_operation_and_normalizes_failure`：执行入口只接收操作，成功结果原样返回，异常转为统一失败对象。

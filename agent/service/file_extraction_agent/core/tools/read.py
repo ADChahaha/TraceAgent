@@ -4,29 +4,24 @@ from __future__ import annotations
 
 import asyncio
 
-from typing import Any, Callable
+from typing import TYPE_CHECKING
 
-try:
-    from langchain_core.tools import tool
-except Exception:  # pragma: no cover
-    def tool(function=None, *args: Any, **kwargs: Any):  # type: ignore[no-redef]
-        if function is None:
-            return lambda wrapped: wrapped
-        return function
+from langchain_core.tools import BaseTool, tool
+from service.file_extraction_agent.core.contracts import JsonObject
+
+if TYPE_CHECKING:
+    from service.file_extraction_agent.core.tools.workspace import ToolWorkspace
 
 from service.file_extraction_agent.core.tools.base import run_tool
 
 
-def _read(state: Any, path: str) -> dict[str, Any]:
+def _read(state: ToolWorkspace, path: str) -> JsonObject:
     return run_tool(
-        state,
-        "read",
-        {"path": path},
-        lambda: _locator_error(state, path) or _read_result(state, path),
+        lambda: _locator_error(path) or _read_result(state, path),
     )
 
 
-def _read_result(state: Any, path: str) -> dict[str, Any]:
+def _read_result(state: ToolWorkspace, path: str) -> JsonObject:
     try:
         text = state.document.read(path)
     except ValueError as exc:
@@ -34,8 +29,7 @@ def _read_result(state: Any, path: str) -> dict[str, Any]:
     return {"ok": True, "path": path, "text": text}
 
 
-def _locator_error(state: Any, path: str) -> dict[str, Any] | None:
-    del state
+def _locator_error(path: str) -> JsonObject | None:
     if not isinstance(path, str) or not path.strip():
         return {
             "ok": False,
@@ -49,9 +43,9 @@ def _locator_error(state: Any, path: str) -> dict[str, Any] | None:
     return None
 
 
-def build_read(state: Any) -> Callable:
+def build_read(state: ToolWorkspace) -> BaseTool:
     @tool
-    async def read(path: str) -> dict[str, Any]:
+    async def read(path: str) -> JsonObject:
         """Read one .md block file.
 
         path MUST be an absolute path to a .md file under the workspace root,

@@ -122,11 +122,11 @@ def test_chat_preserves_history_options_and_model_defaults(rpc, manager, monkeyp
         pb.QaMessage(role="assistant", content="", tool_calls_json=json.dumps(history)),
         pb.QaMessage(role="tool", content="结果", tool_call_id="a", name="read"),
     ]
-    list(rpc.ChatCompletion(request(messages=messages, run_options=pb.RunOptions(max_tool_calls=0),
+    list(rpc.ChatCompletion(request(messages=messages, run_options=pb.RunOptions(tool_execution_timeout=0),
                                    model_config=pb.ModelConfig(top_k=0, temperature=0)), timeout=5))
     assert seen["messages"][0].tool_calls == history
     assert seen["messages"][1].tool_call_id == "a"
-    assert seen["run_options"] == RunOptions(max_tool_calls=0)
+    assert seen["run_options"] == RunOptions(tool_execution_timeout=0)
     assert seen["config"].top_k == 0
     assert seen["config"].api_transport == "responses"
     assert seen["config"].request_timeout is None

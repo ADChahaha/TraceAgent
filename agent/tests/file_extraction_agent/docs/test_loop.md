@@ -28,3 +28,4 @@ messages.py 的 build_qa_messages 直接接收消息列表；独立 graph.py 的
 执行输入改为资源路径；`test_qa_stream_yields_only_original_messages` 验证模型消息和整批工具结果。工具与 prompt 测试仅构造文件树，不依赖 manager 初始化状态。
 
 测试使用协程与异步迭代器驱动实际 Agent 链路；模型替身提供 astream/ainvoke，取消等待使用事件循环。
+工具执行替身通过 `run_tool(execute)` 归一化失败；不再传入未使用的状态、工具名或参数。

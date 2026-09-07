@@ -9,6 +9,11 @@
 - `test_executor_failure_returns_entire_failed_batch`：executor.py 执行器整体异常时返回完整失败批次；取消后不再调用模型，否则允许模型解释失败。
 - `test_closing_event_stream_closes_message_generator`：外层关闭传播到消息生成器，停止后续调用。
 
-所有图测试使用 conftest 生成的 resource_path；图执行通过工具层读取文件，completion_runtime 只发出启动确认和消息事件，事件包装入口不再接收 completion ID。
+事件链路测试使用 conftest 生成的 resource_path；图执行通过工具层读取文件，completion_runtime 只发出启动确认和消息事件，事件包装入口不接收 completion ID。独立图契约测试注入执行器，直接验证节点行为。
 
 测试使用协程与异步迭代器驱动实际 Agent 链路；模型替身提供 astream/ainvoke，取消等待使用事件循环。
+
+## graph 独立契约
+
+- `test_graph_owns_cancellation_and_drains_published_batch`：直接运行编译图，覆盖模型前、模型中、模型输出后及工具批次后取消；已发布批次结果齐全，取消后不再调用模型。
+- `test_graph_rejects_invalid_tool_ids_before_execution`：空 ID 或重复 ID 在图内报错，工具不会执行。

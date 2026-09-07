@@ -51,3 +51,4 @@ CompletionStream 托管迭代与 close，传输断连仅通知绑定的 runtime�
 测试使用协程与异步迭代器驱动实际 Agent 链路；模型替身提供 astream/ainvoke，取消等待使用事件循环。
 
 断连测试验证生产协程的 finally 观察停止信号，提前断连不会创建生产协程。
+模型构造替身检查 SDK 的 `timeout` 参数（`request_timeout` 的别名），默认请求超时仍为 8 秒。

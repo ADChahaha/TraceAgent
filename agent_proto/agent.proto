@@ -29,7 +29,8 @@ message QaMessage {
   optional string name = 5;
 }
 message RunOptions {
-  optional int32 max_tool_calls = 1;
+  reserved 1;
+  reserved "max_tool_calls";
   optional double tool_execution_timeout = 2;
 }
 message ModelConfig {

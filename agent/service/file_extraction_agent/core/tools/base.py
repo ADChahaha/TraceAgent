@@ -5,7 +5,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Callable
+
+from service.file_extraction_agent.core.contracts import JsonObject, JsonValue
+
+if TYPE_CHECKING:
+    from service.file_extraction_agent.core.tools.workspace import FileEntry
 
 
 def order_key(name: str) -> int:
@@ -20,19 +25,16 @@ def order_key(name: str) -> int:
 
 
 def run_tool(
-    state: Any,
-    tool_name: str,
-    args: dict[str, Any],
-    execute: Callable[[], Any],
-) -> Any:
-    """执行工具并归一化异常；保留现有调用签名，不修改执行上下文。"""
+    execute: Callable[[], JsonObject],
+) -> JsonObject:
+    """执行操作并返回结果；普通异常转换成失败对象。"""
     try:
         return execute()
     except Exception as exc:
         return {"ok": False, "errors": [{"message": str(exc)}]}
 
 
-def expose_entries(entries: list[Any]) -> list[dict[str, Any]]:
+def expose_entries(entries: list[FileEntry]) -> list[JsonValue]:
     return [
         {"name": entry.name, "path": entry.path, "kind": entry.kind, "order": entry.order}
         for entry in entries

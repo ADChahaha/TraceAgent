@@ -9,27 +9,25 @@ from __future__ import annotations
 import asyncio
 
 import json
-import os
 import threading
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
+from numpy.typing import NDArray
 
-try:
-    from langchain_core.tools import tool
-except Exception:  # pragma: no cover
-    def tool(function=None, *args: Any, **kwargs: Any):  # type: ignore[no-redef]
-        if function is None:
-            return lambda wrapped: wrapped
-        return function
+from langchain_core.tools import BaseTool, tool
+from service.file_extraction_agent.core.contracts import JsonObject, JsonValue
+
+if TYPE_CHECKING:
+    from service.file_extraction_agent.core.tools.workspace import ToolWorkspace
 
 from service.file_extraction_agent.core.tools.base import run_tool
 
-DEFAULT_EMBEDDING_MODEL = "hotchpotch/bekko-embedding-v1-a8m"
 
-DEFAULT_EMBEDDING_BACKEND = os.getenv("EMBEDDING_BACKEND", "openvino")
+class Embedder(Protocol):
+    def encode(self, sentences: list[str]) -> NDArray[np.float32]: ...
 
 
 @dataclass
@@ -50,25 +48,26 @@ class EmbeddingIndex:
 
     model_id: str
     chunks: list[Chunk]
-    vectors: np.ndarray
+    vectors: NDArray[np.float32]
     dimension: int = 0
 
 
-_model_cache: dict[tuple[str, str], Any] = {}
+_model_cache: dict[tuple[str, str], Embedder] = {}
 _model_lock = threading.Lock()
 
 
-def get_embedder(*, model_id: str, backend: str) -> Any:
+def get_embedder(*, model_id: str, backend: str) -> Embedder:
     """按清单配置惰性创建查询编码器，按模型与后端缓存，不加载文档生成模块。"""
     key = (model_id, backend)
     with _model_lock:
         if key not in _model_cache:
             from sentence_transformers import SentenceTransformer
 
-            options = {"trust_remote_code": True}
-            if backend == "openvino":
-                options["backend"] = "openvino"
-            _model_cache[key] = SentenceTransformer(model_id, **options)
+            _model_cache[key] = SentenceTransformer(
+                model_id,
+                trust_remote_code=True,
+                backend="openvino" if backend == "openvino" else "torch",
+            )
         return _model_cache[key]
 
 
@@ -80,7 +79,7 @@ class EmbeddingResources:
         self.model_id: str | None = None
         self.backend: str | None = None
         self._index: EmbeddingIndex | None = None
-        self._model: Any = None
+        self._model: Embedder | None = None
         self._lock = threading.RLock()
 
     def load_index(self) -> EmbeddingIndex:
@@ -105,7 +104,11 @@ class EmbeddingResources:
             raise ValueError("index model does not match manifest")
         vectors = np.load(self.path / "index" / "vectors.npy", allow_pickle=False, mmap_mode="r")
         chunks = [Chunk(**item) for item in meta["chunks"]]
-        if vectors.ndim != 2 or vectors.shape != (len(chunks), meta["dimension"]) or not np.isfinite(vectors).all():
+        if (
+            vectors.ndim != 2
+            or vectors.shape != (len(chunks), meta["dimension"])
+            or not np.isfinite(vectors).all()
+        ):
             raise ValueError("invalid index vectors")
         document_root = (self.path / "documents").resolve()
         resolved_chunks = []
@@ -115,23 +118,30 @@ class EmbeddingResources:
             files = []
             for relative in chunk.covered_files:
                 file = (document_root / relative).resolve()
-                if Path(relative).is_absolute() or not file.is_relative_to(document_root) or not file.is_file():
+                if (
+                    Path(relative).is_absolute()
+                    or not file.is_relative_to(document_root)
+                    or not file.is_file()
+                ):
                     raise ValueError("invalid index document reference")
                 files.append(str(file))
             resolved_chunks.append(replace(chunk, covered_files=files))
         self.model_id, self.backend = model_id, backend
         return EmbeddingIndex(model_id, resolved_chunks, vectors, meta["dimension"])
 
-    def get_model(self) -> Any:
+    def get_model(self) -> Embedder:
         """先取得清单配置，再创建查询模型；不编码文档、不重建索引。"""
         with self._lock:
             self.load_index()
             if self._model is None:
+                assert self.model_id is not None and self.backend is not None
                 self._model = get_embedder(model_id=self.model_id, backend=self.backend)
             return self._model
 
 
-def search_top_k(query_vec: np.ndarray, index: EmbeddingIndex, top_k: int = 5) -> list[dict[str, Any]]:
+def search_top_k(
+    query_vec: NDArray[np.float32], index: EmbeddingIndex, top_k: int = 5
+) -> list[JsonValue]:
     """余弦检索，返回按分数降序的候选 chunk 列表。"""
 
     if index.vectors.size == 0 or index.vectors.ndim != 2:
@@ -142,7 +152,7 @@ def search_top_k(query_vec: np.ndarray, index: EmbeddingIndex, top_k: int = 5) -
         raise ValueError("query dimension does not match index vectors")
     scores = index.vectors @ query
     order = np.argsort(-scores)[: max(0, top_k)]
-    results: list[dict[str, Any]] = []
+    results: list[JsonValue] = []
     for position in order:
         score = float(scores[position])
         chunk = index.chunks[int(position)]
@@ -159,7 +169,7 @@ def search_top_k(query_vec: np.ndarray, index: EmbeddingIndex, top_k: int = 5) -
     return results
 
 
-def _normalize(matrix: np.ndarray) -> None:
+def _normalize(matrix: NDArray[np.float32]) -> None:
     if matrix.ndim == 1:
         norm = np.linalg.norm(matrix)
         if norm > 0:
@@ -170,48 +180,38 @@ def _normalize(matrix: np.ndarray) -> None:
     matrix /= norms
 
 
-def _get_index(state: Any, embedder: Any, scope: str = "") -> Any:
+def _get_index(state: ToolWorkspace) -> EmbeddingIndex:
     """加载或复用工具上下文中的已有索引，问答期间不构建文档向量。"""
     return state.embedding.load_index()
 
 
 def _search_embedding(
-    state: Any,
+    state: ToolWorkspace,
     *,
     query: str,
     top_k: int = 5,
-    scope: str = "",
-) -> dict[str, Any]:
-    def execute() -> dict[str, Any]:
+) -> JsonObject:
+    def execute() -> JsonObject:
         if not isinstance(query, str) or not query.strip():
             return {"ok": False, "errors": [{"code": "BAD_QUERY", "message": "query is required"}]}
         top_k_bounded = max(1, min(int(top_k or 5), 20))
         embedder = _get_embedder(state)
-        index = _get_index(state, embedder, scope)
+        index = _get_index(state)
         query_vec = embedder.encode([query])
-        results = _search_top_k(query_vec, index, top_k_bounded)
-        return {"ok": True, "query": query, "scope": scope, "results": results}
+        results = search_top_k(query_vec, index, top_k_bounded)
+        return {"ok": True, "query": query, "results": results}
 
-    return run_tool(
-        state,
-        "search_embedding",
-        {"query": query, "top_k": top_k, "scope": scope},
-        execute,
-    )
+    return run_tool(execute)
 
 
-def _get_embedder(state: Any) -> Any:
+def _get_embedder(state: ToolWorkspace) -> Embedder:
     """使用工具上下文的清单配置，返回本轮缓存的查询模型。"""
     return state.embedding.get_model()
 
 
-def _search_top_k(query_vec: Any, index: Any, top_k: int) -> list[dict[str, Any]]:
-    return search_top_k(query_vec, index, top_k)
-
-
-def build_search_embedding(state: Any) -> Callable:
+def build_search_embedding(state: ToolWorkspace) -> BaseTool:
     @tool
-    async def search_embedding(query: str, top_k: int = 5, scope: str = "") -> dict[str, Any]:
+    async def search_embedding(query: str, top_k: int = 5) -> JsonObject:
         """Semantic search across chunks using embeddings.
 
         Returns up to top_k text chunks that are semantically (not just
@@ -225,7 +225,7 @@ def build_search_embedding(state: Any) -> Callable:
         file before citing it in your answer.
         """
 
-        return await asyncio.to_thread(_search_embedding, state, query=query, top_k=top_k, scope=scope)
+        return await asyncio.to_thread(_search_embedding, state, query=query, top_k=top_k)
 
     return search_embedding
 

@@ -51,12 +51,10 @@ class QaMessage(_message.Message):
     def __init__(self, role: _Optional[str] = ..., content: _Optional[str] = ..., tool_calls_json: _Optional[str] = ..., tool_call_id: _Optional[str] = ..., name: _Optional[str] = ...) -> None: ...
 
 class RunOptions(_message.Message):
-    __slots__ = ("max_tool_calls", "tool_execution_timeout")
-    MAX_TOOL_CALLS_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ("tool_execution_timeout",)
     TOOL_EXECUTION_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
-    max_tool_calls: int
     tool_execution_timeout: float
-    def __init__(self, max_tool_calls: _Optional[int] = ..., tool_execution_timeout: _Optional[float] = ...) -> None: ...
+    def __init__(self, tool_execution_timeout: _Optional[float] = ...) -> None: ...
 
 class ModelConfig(_message.Message):
     __slots__ = ("provider", "base_url", "api_key", "model_name", "api_transport", "temperature", "top_p", "top_k", "reasoning_effort", "max_retries", "request_timeout")

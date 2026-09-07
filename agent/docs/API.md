@@ -50,7 +50,7 @@ ChatCompletion 为服务端流 RPC。输入转换为现有 DocumentQaMessage、R
 - resource_path：必须指向受管理根目录下的完整资源；缺失、损坏、版本错误或引用越界均拒绝，不自动重建。
 - messages：非空，支持 system/user/assistant/tool，保留完整历史，不自动摘要或裁剪。tool 必须有 tool_call_id。
 - QaMessage.tool_calls_json：可选 JSON 数组，内容为原历史工具调用；tool_call_id、name 使用独立字段。
-- run_options：可选，未传字段沿用业务默认值（max_tool_calls=200、tool_execution_timeout=60）；显式 0 不会被替换成默认值。
+- run_options：可选，只提供 tool_execution_timeout，默认 60 秒；显式 0 不会被替换成默认值。已删除 max_tool_calls。
 - model_config：可选，字段与内部 ModelConfig 对应；未提供时沿用模型环境配置。嵌套配置优先于兼容的扁平 base_url/api_key/openai_api_key/model/api_transport/temperature/top_p/top_k。
 - 可选标量使用 protobuf presence 区分“未传”和零值。stream 字段保留，但该 RPC 始终流式返回。
 - 不定义旧 documents、metadata、memory、task_spec 字段；protobuf 的未知字段处理遵循协议自身规则，不提供旧 JSON 请求兼容。

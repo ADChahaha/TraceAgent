@@ -152,3 +152,64 @@ async def test_closing_event_stream_closes_message_generator(resource_path, monk
     assert (await anext(stream))["type"] == "model_message"
     await stream.aclose()
     assert closed == [True]
+
+
+@pytest.mark.parametrize("cancel_at", ["before_model", "during_model", "after_model", "after_tools"])
+async def test_graph_owns_cancellation_and_drains_published_batch(cancel_at):
+    from langchain_core.messages import HumanMessage
+    from service.file_extraction_agent.core.graph import build_qa_graph
+
+    stopped = cancel_at == "before_model"
+    model, _ = _scripted_model()
+    calls = [
+        {"id": "a", "name": "read", "args": {"path": "first"}},
+        {"id": "b", "name": "read", "args": {"path": "second"}},
+    ]
+
+    async def invoke_model(model, messages):
+        nonlocal stopped
+        if cancel_at == "during_model":
+            stopped = True
+        return AIMessage(content="读取", tool_calls=calls)
+
+    invoke = AsyncMock(side_effect=invoke_model)
+    execute = AsyncMock(return_value=[
+        ToolMessage(content="正文", tool_call_id=call["id"]) for call in calls
+    ])
+    graph = build_qa_graph(model, [], invoke_model=invoke, execute_tools=execute,
+                           should_stop=lambda: stopped)
+    updates = graph.astream({"messages": [HumanMessage(content="问题")]}, stream_mode="updates")
+    published = []
+    async for update in updates:
+        for node, batch in update.items():
+            if batch["messages"]:
+                published.append((node, batch["messages"]))
+                if (node == "agent" and cancel_at == "after_model") or (
+                    node == "tools" and cancel_at == "after_tools"
+                ):
+                    stopped = True
+    if cancel_at in {"before_model", "during_model"}:
+        assert published == []
+        execute.assert_not_called()
+        assert invoke.call_count == (cancel_at == "during_model")
+    else:
+        assert [node for node, _ in published] == ["agent", "tools"]
+        assert [message.tool_call_id for message in published[1][1]] == ["a", "b"]
+        assert invoke.call_count == execute.call_count == 1
+
+
+@pytest.mark.parametrize("ids", [["", "b"], ["a", "a"]])
+async def test_graph_rejects_invalid_tool_ids_before_execution(ids):
+    from langchain_core.messages import HumanMessage
+    from service.file_extraction_agent.core.graph import build_qa_graph
+
+    model, _ = _scripted_model()
+    invoke = AsyncMock(side_effect=[
+        AIMessage(content="读取", tool_calls=[{"id": id_, "name": "read", "args": {}} for id_ in ids]),
+        AIMessage(content="结束", response_metadata={"finish_reason": "stop"}),
+    ])
+    execute = AsyncMock(return_value=[])
+    graph = build_qa_graph(model, [], invoke_model=invoke, execute_tools=execute)
+    with pytest.raises(ValueError, match="unique non-empty IDs"):
+        await graph.ainvoke({"messages": [HumanMessage(content="问题")]})
+    execute.assert_not_called()

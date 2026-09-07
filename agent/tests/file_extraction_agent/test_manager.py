@@ -743,7 +743,7 @@ def test_build_chat_model_builds_responses_transport_by_default(monkeypatch):
     assert [attempt.use_stream for attempt in attempts] == [True, False]
     assert [kwargs["use_responses_api"] for kwargs in captured] == [True, True]
     assert [kwargs["streaming"] for kwargs in captured] == [True, False]
-    assert [kwargs["request_timeout"] for kwargs in captured] == [8.0, 8.0]
+    assert [kwargs["timeout"] for kwargs in captured] == [8.0, 8.0]
 
 
 def test_build_chat_model_builds_chat_completions_transport_when_configured(monkeypatch):

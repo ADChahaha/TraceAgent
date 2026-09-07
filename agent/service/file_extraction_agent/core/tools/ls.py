@@ -4,29 +4,24 @@ from __future__ import annotations
 
 import asyncio
 
-from typing import Any, Callable
+from typing import TYPE_CHECKING
 
-try:
-    from langchain_core.tools import tool
-except Exception:  # pragma: no cover
-    def tool(function=None, *args: Any, **kwargs: Any):  # type: ignore[no-redef]
-        if function is None:
-            return lambda wrapped: wrapped
-        return function
+from langchain_core.tools import BaseTool, tool
+from service.file_extraction_agent.core.contracts import JsonObject
+
+if TYPE_CHECKING:
+    from service.file_extraction_agent.core.tools.workspace import ToolWorkspace
 
 from service.file_extraction_agent.core.tools.base import expose_entries, run_tool
 
 
-def _ls(state: Any, path: str = "") -> dict[str, Any]:
+def _ls(state: ToolWorkspace, path: str = "") -> JsonObject:
     return run_tool(
-        state,
-        "ls",
-        {"path": path},
         lambda: _ls_result(state, path),
     )
 
 
-def _ls_result(state: Any, path: str) -> dict[str, Any]:
+def _ls_result(state: ToolWorkspace, path: str) -> JsonObject:
     entries = state.document.entries(path or None)
     lines = [f"{entry.name}/" if entry.kind == "dir" else entry.name for entry in entries]
     return {
@@ -37,9 +32,9 @@ def _ls_result(state: Any, path: str) -> dict[str, Any]:
     }
 
 
-def build_ls(state: Any) -> Callable:
+def build_ls(state: ToolWorkspace) -> BaseTool:
     @tool
-    async def ls(path: str = "") -> dict[str, Any]:
+    async def ls(path: str = "") -> JsonObject:
         """List one level of the document workspace at a directory path.
 
         Use this to see document structure. Leave path empty for the root,

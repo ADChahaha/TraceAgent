@@ -88,7 +88,7 @@ async def test_tool_timeout_emits_one_matching_result_and_discards_late_success(
 
         def invoke(self, args):
             try:
-                return run_tool(state, self.name, args, lambda: (release.wait(2), {"ok": True})[1])
+                return run_tool(lambda: (release.wait(2), {"ok": True})[1])
             finally:
                 finished.set()
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -25,7 +25,7 @@ class DocumentQaMessage(BaseModel):
 
     role: MessageRole
     content: str
-    tool_calls: list[dict[str, Any]] | None = None
+    tool_calls: list[dict[str, object]] | None = None
     tool_call_id: str | None = None
     name: str | None = None
 
@@ -77,7 +77,6 @@ class ModelConfig:
 
 @dataclass
 class RunOptions:
-    max_tool_calls: int = 200
     tool_execution_timeout: float = 60.0
 
 

@@ -3,17 +3,34 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import TypedDict
 
 from langchain_core.messages import AIMessage
+from langchain_core.language_models import LanguageModelInput
+from langchain_core.outputs import ChatResult
 from langchain_openai import ChatOpenAI
+from openai import BaseModel as OpenAIModel
+from pydantic import SecretStr
+
+from service.file_extraction_agent.core.contracts import JsonObject, ModelCallAttempt, Tool
 
 from service.file_extraction_agent.schemas import ModelConfig
 
-
 DEFAULT_MODEL_REQUEST_TIMEOUT_SECONDS = 8.0
+
+
+class ChatModelOptions(TypedDict, total=False):
+    model: str
+    temperature: float
+    max_retries: int
+    timeout: float
+    base_url: str
+    api_key: SecretStr
+    top_p: float
+    reasoning_effort: str
+    extra_body: JsonObject
 
 
 def build_qa_model(config: ModelConfig | None) -> "ChatModelFallbackChain":
@@ -36,21 +53,21 @@ def build_chat_model(config: ModelConfig, model_name: str) -> "ChatModelFallback
         raise ValueError("model_name is required")
     transport = _normalize_api_transport(config.api_transport)
 
-    kwargs: dict[str, Any] = {
+    kwargs: ChatModelOptions = {
         "model": model_name,
         "temperature": config.temperature,
         "max_retries": config.max_retries,
     }
-    kwargs["request_timeout"] = config.request_timeout or DEFAULT_MODEL_REQUEST_TIMEOUT_SECONDS
+    kwargs["timeout"] = config.request_timeout or DEFAULT_MODEL_REQUEST_TIMEOUT_SECONDS
     if config.base_url:
         kwargs["base_url"] = config.base_url
     if config.api_key:
-        kwargs["api_key"] = config.api_key
+        kwargs["api_key"] = SecretStr(config.api_key)
     if config.top_p is not None:
         kwargs["top_p"] = config.top_p
     if config.reasoning_effort:
         kwargs["reasoning_effort"] = config.reasoning_effort
-    extra_body: dict[str, Any] = {}
+    extra_body: JsonObject = {}
     if config.top_k is not None:
         extra_body["top_k"] = config.top_k
     if _should_enable_deepseek_thinking(config, model_name):
@@ -69,7 +86,7 @@ def build_chat_model(config: ModelConfig, model_name: str) -> "ChatModelFallback
         [
             ModelCallAttempt(
                 name=name,
-                model=model_cls(**{**kwargs, "use_responses_api": use_responses_api, "streaming": streaming}),
+                model=model_cls(**kwargs, use_responses_api=use_responses_api, streaming=streaming),
                 use_stream=streaming,
             )
             for name, use_responses_api, streaming in _transport_attempt_specs(transport)
@@ -77,15 +94,8 @@ def build_chat_model(config: ModelConfig, model_name: str) -> "ChatModelFallback
     )
 
 
-@dataclass
-class ModelCallAttempt:
-    name: str
-    model: Any
-    use_stream: bool
-
-
 class ChatModelFallbackChain:
-    """Ordered model-call fallbacks for API family and streaming transport."""
+    """按配置保存模型尝试顺序，绑定工具后生成独立的调用链。"""
 
     def __init__(self, attempts: list[ModelCallAttempt]):
         if not attempts:
@@ -96,11 +106,11 @@ class ChatModelFallbackChain:
     def attempts(self) -> list[ModelCallAttempt]:
         return list(self._attempts)
 
-    def bind_tools(self, tools: list[Any], *args: Any, **kwargs: Any) -> "ChatModelFallbackChain":
+    def bind_tools(self, tools: Sequence[Tool]) -> "ChatModelFallbackChain":
         bound_attempts = []
         for attempt in self._attempts:
             bind_tools = getattr(attempt.model, "bind_tools", None)
-            bound_model = bind_tools(tools, *args, **kwargs) if callable(bind_tools) else attempt.model
+            bound_model = bind_tools(tools) if callable(bind_tools) else attempt.model
             bound_attempts.append(
                 ModelCallAttempt(
                     name=attempt.name,
@@ -136,16 +146,18 @@ def _normalize_api_transport(value: str | None) -> str:
 
 
 class DeepSeekReasoningChatOpenAI(ChatOpenAI):
-    """ChatOpenAI variant that round-trips DeepSeek thinking content for tools."""
+    """响应中保存 DeepSeek reasoning_content，再随工具调用历史传回模型。"""
 
     def _create_chat_result(
         self,
-        response: dict | Any,
-        generation_info: dict | None = None,
-    ):
+        response: dict[str, object] | OpenAIModel,
+        generation_info: dict[str, object] | None = None,
+    ) -> ChatResult:
         result = super()._create_chat_result(response, generation_info)
         response_dict = response if isinstance(response, dict) else response.model_dump()
         choices = response_dict.get("choices") or []
+        if not isinstance(choices, list):
+            raise TypeError("model response choices must be a list")
         for generation, choice in zip(result.generations, choices, strict=False):
             message = choice.get("message") or {}
             reasoning_content = message.get("reasoning_content")
@@ -155,11 +167,11 @@ class DeepSeekReasoningChatOpenAI(ChatOpenAI):
 
     def _get_request_payload(
         self,
-        input_: Any,
+        input_: LanguageModelInput,
         *,
         stop: list[str] | None = None,
-        **kwargs: Any,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
         messages = self._convert_input(input_).to_messages()
         for payload_message, source_message in zip(

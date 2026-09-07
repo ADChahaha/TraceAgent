@@ -1,6 +1,6 @@
 # test_schemas.py
 
-这组测试覆盖 `document-qa chat/completions` 的公开 schema。schema 不再描述字段抽取任务，而是描述一次 QA completion 所需的资源路径、append-only 历史消息、模型配置和运行预算。
+这组测试覆盖文档问答的公开 schema：资源路径、append-only 历史消息、模型配置和工具执行超时。
 
 实现链路：
 
@@ -9,7 +9,7 @@ backend 传入 completion_id + resource_path + messages
   -> DocumentQaCompletionRequest 校验资源路径字段
   -> DocumentQaMessage 保留 user/assistant/system/tool 消息和 assistant tool_calls
   -> 拒绝 memory 字段，避免每轮重写摘要破坏 prompt cache
-  -> manager 用 RunOptions 和 ModelConfig 继续控制模型与工具预算
+  -> manager 用 ModelConfig 配置模型，graph 用 RunOptions 配置工具超时
 ```
 
 ## 测试函数
@@ -20,7 +20,8 @@ backend 传入 completion_id + resource_path + messages
 - `test_completion_status_values_match_public_events`：验证 completion 状态枚举和公开事件语义一致。
 - `test_model_config_keeps_model_transport_and_sampling_options`：验证模型配置保留 base URL、key、模型名、API transport、采样参数、重试和超时。
 - `test_model_config_defaults_disable_sdk_retries_for_outer_backoff`：验证模型配置默认关闭 SDK 内部重试，默认使用 Responses API transport，并由外层 provider attempt 和随机指数退避统一控制。
-- `test_run_options_defaults_to_tool_budget_only`：验证运行预算默认只保留工具调用上限。
+- `test_run_options_only_configures_tool_timeout`：运行参数只有工具执行超时，默认 60 秒。
+- `test_protocol_removes_tool_budget_without_reusing_field_number`：共享协议删除工具调用上限，保留原字段名和编号，超时继续使用编号 2。
 
 请求改为 resource_path；不再向 manager 传 documents 或 task_id，历史消息与模型配置测试保留。
 

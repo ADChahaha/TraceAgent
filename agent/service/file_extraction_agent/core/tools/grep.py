@@ -7,38 +7,39 @@ import asyncio
 from pathlib import Path
 import shutil
 import subprocess
-from typing import Any, Callable
+from typing import TYPE_CHECKING
 
-try:
-    from langchain_core.tools import tool
-except Exception:  # pragma: no cover
-    def tool(function=None, *args: Any, **kwargs: Any):  # type: ignore[no-redef]
-        if function is None:
-            return lambda wrapped: wrapped
-        return function
+from langchain_core.tools import BaseTool, tool
+from service.file_extraction_agent.core.contracts import JsonObject
+
+if TYPE_CHECKING:
+    from service.file_extraction_agent.core.tools.workspace import ToolWorkspace
 
 from service.file_extraction_agent.core.tools.base import run_tool
 
 
 def _grep(
-    state: Any,
+    state: ToolWorkspace,
     *,
     query: str,
     scope: str = "",
     max_results: int = 20,
-) -> dict[str, Any]:
-    def execute() -> dict[str, Any]:
+) -> JsonObject:
+    def execute() -> JsonObject:
         if not isinstance(query, str) or not query.strip():
             return {"ok": False, "errors": [{"code": "BAD_QUERY", "message": "query is required"}]}
         output = _grep_output(state, query, scope, max_results)
         if output is None:
-            return {"ok": False, "errors": [{"code": "RIPGREP_MISSING", "message": "ripgrep not found on PATH"}]}
+            return {
+                "ok": False,
+                "errors": [{"code": "RIPGREP_MISSING", "message": "ripgrep not found on PATH"}],
+            }
         return {"ok": True, "query": query, "scope": scope, "output": output}
 
-    return run_tool(state, "grep", {"query": query, "scope": scope, "max_results": max_results}, execute)
+    return run_tool(execute)
 
 
-def _grep_output(state: Any, query: str, scope: str, max_results: int) -> str | None:
+def _grep_output(state: ToolWorkspace, query: str, scope: str, max_results: int) -> str | None:
     try:
         scope_dir = state.document.scope_path(scope or None)
     except ValueError as exc:
@@ -63,9 +64,9 @@ def _run_ripgrep(query: str, scope_dir: Path, max_results: int) -> str | None:
     return completed.stdout
 
 
-def build_grep(state: Any) -> Callable:
+def build_grep(state: ToolWorkspace) -> BaseTool:
     @tool
-    async def grep(query: str, scope: str = "", max_results: int = 20) -> dict[str, Any]:
+    async def grep(query: str, scope: str = "", max_results: int = 20) -> JsonObject:
         """Full-text search across readable blocks using ripgrep.
 
         Use for targeted lookups: dates, names, amounts, specific terms.
@@ -75,7 +76,9 @@ def build_grep(state: Any) -> Callable:
         max_results: default 20, max 50.
         """
 
-        return await asyncio.to_thread(_grep, state, query=query, scope=scope, max_results=max_results)
+        return await asyncio.to_thread(
+            _grep, state, query=query, scope=scope, max_results=max_results
+        )
 
     return grep
 
