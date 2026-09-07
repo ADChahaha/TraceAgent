@@ -127,7 +127,3 @@ async def _create_stream(**kwargs):
 
 async def cancel_chat_completion(request, context):
     return pb.CompletionResponse(**completion_manager.terminate(request.completion_id))
-
-
-async def get_chat_completion(request, context):
-    return pb.CompletionResponse(id=request.completion_id, status="not_implemented")

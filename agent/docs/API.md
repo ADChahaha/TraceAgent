@@ -96,7 +96,7 @@ CancelCompletion
 
 ## 状态、能力和错误
 
-- GetCompletion：保留占位语义，返回请求 ID 与 status=not_implemented。
+- agent 不提供问答查询接口；本轮进展与终态通过 ChatCompletion 事件流返回，历史查询由 backend 管理。
 - GetCapabilities：返回 PDF/DOCX 支持情况及 engine。
 - 标准 grpc.health.v1.Health/Check：服务名为空或 traceagent.v1.AgentService 时返回 SERVING，仅用于进程探活，不检查模型可用性。
 

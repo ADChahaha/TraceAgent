@@ -257,11 +257,24 @@ def test_duplicate_id_does_not_cancel_existing_stream(rpc, manager, monkeypatch)
         stream.cancel()
 
 
-def test_cancel_unknown_and_get_placeholder(rpc, manager):
-    """未知取消返回 not_found，查询接口保留 not_implemented。"""
+def test_cancel_unknown_returns_not_found(rpc, manager):
+    """未知取消返回 not_found。"""
     query = pb.CompletionRequest(completion_id="missing")
     assert rpc.CancelCompletion(query, timeout=2).status == "not_found"
-    assert rpc.GetCompletion(query, timeout=2).status == "not_implemented"
+
+
+def test_completion_query_is_not_exposed(rpc, rpc_channel):
+    """协议和客户端不暴露问答查询，旧 RPC 路径也不注册处理器。"""
+    assert "GetCompletion" not in pb.DESCRIPTOR.services_by_name["AgentService"].methods_by_name
+    assert not hasattr(rpc, "GetCompletion")
+    query = rpc_channel.unary_unary(
+        "/traceagent.v1.AgentService/GetCompletion",
+        request_serializer=pb.CompletionRequest.SerializeToString,
+        response_deserializer=pb.CompletionResponse.FromString,
+    )
+    with pytest.raises(grpc.RpcError) as error:
+        query(pb.CompletionRequest(completion_id="missing"), timeout=2)
+    assert error.value.code() == grpc.StatusCode.UNIMPLEMENTED
 
 
 def test_legacy_request_fields_are_not_in_protocol():

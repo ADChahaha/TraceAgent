@@ -10,7 +10,8 @@
 - `test_cancel_returns_before_tool_batch_and_stream_drains`：取消 RPC 先返回 cancelling，工具结果补齐后原流仅发一个取消终态。
 - `test_transport_cancel_or_deadline_cleans_runtime`：RPC 取消和超时唤醒阻塞消费者并释放注册项，后台观察停止信号。
 - `test_duplicate_id_does_not_cancel_existing_stream`：重复 ID 请求失败，原运行时仍可独立取消。
-- `test_cancel_unknown_and_get_placeholder`：未知取消返回 not_found，查询接口保留 not_implemented。
+- `test_cancel_unknown_returns_not_found`：未知取消返回 not_found。
+- `test_completion_query_is_not_exposed`：共享协议及客户端不暴露问答查询，旧 RPC 路径返回 UNIMPLEMENTED。
 - `test_legacy_request_fields_are_not_in_protocol`：检查 protobuf 字段集合，新契约只接收资源路径，不定义旧业务字段。
 
 ## 异步并发与关闭回归

@@ -45,7 +45,7 @@ ChatCompletion（resource_path + messages）
 main.py 读取监听地址、阻塞工作线程数和消息上限
   → asyncio.run 创建事件循环，启动 grpc.aio.Server 与异步标准 Health
   → PrepareResources 的解析/资源构建、ChatCompletion 的初始化通过 asyncio.to_thread 执行
-  → 取消、查询和探活直接在事件循环处理
+  → 取消、能力查询和探活直接在事件循环处理
   → routes 转换 protobuf 与业务对象，保留参数缺省值及显式零值
   → producer 入队后用 call_soon_threadsafe 唤醒 asyncio.Event
   → runtime.astream 按 FIFO 分配 seq，routes 用 async for 编码 CompletionEvent
@@ -85,7 +85,7 @@ main.py 读取监听地址、阻塞工作线程数和消息上限
 
 - 准备接口：`PrepareResources`，一次发送多个 filename/bytes，返回路径和各文件 HTML。
 - 问答接口：`ChatCompletion`，resource_path + messages 输入，CompletionEvent 服务端流输出。
-- 采用标准 gRPC Health 探活；GetCapabilities、CancelCompletion 迁移为 RPC；GetCompletion 保留 not_implemented。
+- 采用标准 gRPC Health 探活；业务 RPC 仅提供 PrepareResources、ChatCompletion、CancelCompletion、GetCapabilities。问答进展与终态由事件流交付，不提供问答查询 RPC。
 - 不再提供 FastAPI、HTTP 路由和 SSE；旧问答 documents 输入不保留。
 - 本次迁移 agent 及其启动脚本/CI 配套；backend 代码未改，旧 HTTP 客户端需后续适配。
 - cancel 注册表依赖单进程；多个 RPC 协程共享 manager，多进程之间不共享取消状态。

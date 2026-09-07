@@ -50,11 +50,6 @@ class AgentServiceStub:
                 request_serializer=agent__proto_dot_agent__pb2.CompletionRequest.SerializeToString,
                 response_deserializer=agent__proto_dot_agent__pb2.CompletionResponse.FromString,
                 _registered_method=True)
-        self.GetCompletion = channel.unary_unary(
-                '/traceagent.v1.AgentService/GetCompletion',
-                request_serializer=agent__proto_dot_agent__pb2.CompletionRequest.SerializeToString,
-                response_deserializer=agent__proto_dot_agent__pb2.CompletionResponse.FromString,
-                _registered_method=True)
         self.GetCapabilities = channel.unary_unary(
                 '/traceagent.v1.AgentService/GetCapabilities',
                 request_serializer=agent__proto_dot_agent__pb2.Empty.SerializeToString,
@@ -84,12 +79,6 @@ class AgentServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def GetCompletion(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
     def GetCapabilities(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -111,11 +100,6 @@ def add_AgentServiceServicer_to_server(servicer, server):
             ),
             'CancelCompletion': grpc.unary_unary_rpc_method_handler(
                     servicer.CancelCompletion,
-                    request_deserializer=agent__proto_dot_agent__pb2.CompletionRequest.FromString,
-                    response_serializer=agent__proto_dot_agent__pb2.CompletionResponse.SerializeToString,
-            ),
-            'GetCompletion': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetCompletion,
                     request_deserializer=agent__proto_dot_agent__pb2.CompletionRequest.FromString,
                     response_serializer=agent__proto_dot_agent__pb2.CompletionResponse.SerializeToString,
             ),
@@ -205,33 +189,6 @@ class AgentService:
             request,
             target,
             '/traceagent.v1.AgentService/CancelCompletion',
-            agent__proto_dot_agent__pb2.CompletionRequest.SerializeToString,
-            agent__proto_dot_agent__pb2.CompletionResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def GetCompletion(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/traceagent.v1.AgentService/GetCompletion',
             agent__proto_dot_agent__pb2.CompletionRequest.SerializeToString,
             agent__proto_dot_agent__pb2.CompletionResponse.FromString,
             options,
