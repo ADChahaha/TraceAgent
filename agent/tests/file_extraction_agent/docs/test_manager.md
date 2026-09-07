@@ -1,15 +1,15 @@
 # test_manager.py
 
-执行链路：manager 委托工具层预检资源路径和索引 → 注册独立 completion_runtime.CompletionRuntime → 接收模型消息和工具结果批次 → 锁内队列提交 → consumer 分配 seq 并返回事件字典 → 移除注册表，保留资源。
+执行链路：manager 委托工具层预检资源路径和索引 → 注册独立 completion_runtime.CompletionRuntime → 接收模型消息和工具结果批次 → 锁内队列提交 → consumer 分配 seq 并返回事件字典 → 运行时通过 on_close 移除注册表，保留资源。
 
-CompletionStream 托管迭代与 close，传输断连仅通知绑定的 runtime；测试覆盖未迭代就关闭、断连唤醒和 ID 复用后的隔离。
+测试消费 manager.create(...) 返回的运行时：迭代其 stream()，断连仅调用运行时 disconnect；测试覆盖未迭代就关闭（runtime.close）、断连唤醒和 ID 复用后的隔离。
 
 取消批次按已提交模型事件中的调用 ID 跟踪；工具结果先配齐再关闭。事件内容断言归一化掉 seq 后比较，独立完整流测试验证序号连续及终态唯一。事件转换只提取可见文本，异常与超时结果保留原始调用 ID。
 
 ## 测试函数
 
 - `test_disconnect_before_iteration_does_not_start_producer`：注册回调后立即断开，首次迭代不创建 producer，仍清理注册项。
-- `test_unstarted_stream_close_removes_registration`：预检注册后尚未迭代就关闭，仍移除注册项且不启动执行。
+- `test_unstarted_stream_close_removes_registration`：预检注册后尚未迭代就关闭，runtime.close() 仍移除注册项且不启动执行。
 - `test_disconnect_wakes_consumer_and_stops_producer`：断连唤醒阻塞 consumer 并设置 producer 停止信号；旧回调不取消复用相同 ID 的新运行时。
 - `test_runtime_yields_event_objects_with_sequence`：运行时逐条输出带连续 seq 的事件字典，保留正文换行并完成收尾；不输出 SSE 文本。
 - `test_manager_keeps_id_outside_runtime_and_cleans_only_matching_entry`：CompletionRuntime 构造函数和对象不接收或保存 ID；ID 仅保存在注册表和 manager 的流清理闭包；一轮结束只清理对应注册项，另一轮仍可按 ID 取消并清理。

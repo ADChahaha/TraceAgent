@@ -23,7 +23,7 @@ manager 保存 completion_id → CompletionRuntime 映射
 - graph 在模型调用前后检查 should_stop，丢弃未发布的迟到响应；已发布工具批次配齐结果后停止，不再请求下一轮模型。
 - 工具普通异常和超时转为对应 ToolMessage；执行器整体异常转为整批失败结果。
 - 模型调用失败耗尽尝试后向 completion_runtime 抛异常，输出 tool_failed（tool=qa）及 completion.failed；取消优先以 cancelled 收口。
-- 关闭外层流时 await aclose 内层生成器并取消生产协程，工具内迟到线程结果不再写事件。问答结束保留文档资源。
+- 关闭事件流时先 disconnect 再 await aclose 事件生成器并取消生产协程，工具内迟到线程结果不再写事件；runtime 通知 manager 移除注册项。问答结束保留文档资源。
 
 管理 ID 不进入 graph；执行细节和取消锁语义见 [DESIGN.md](DESIGN.md)。
 

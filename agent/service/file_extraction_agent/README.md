@@ -14,7 +14,7 @@ completion_id + resource_refs + messages + 模型/运行配置
 
 ## 文件与职责
 
-- `manager.py`：创建、注册、查找运行时，转发取消/状态查询，流结束后移除注册项。
+- `manager.py`：创建、注册、查找运行时，转发取消/状态查询，注入运行时收尾时移除注册项的闭包。
 - `completion_runtime.py`：单轮运行时、事件包装、生产协程、队列、异步事件等待与取消收尾。
 - `core/loop.py`：初始化依赖、消费图更新、转发批次、检查取消并关闭流。
 - `core/messages.py`：提示词、历史消息转换、响应校验与终止信号解析。
@@ -32,7 +32,7 @@ completion_id + resource_refs + messages + 模型/运行配置
 from service.file_extraction_agent.manager import completion_manager
 from service.file_extraction_agent.schemas import DocumentQaMessage, ResourceRef
 
-stream = completion_manager.create(
+runtime = completion_manager.create(
     completion_id="cmp_001",
     resource_path=[
         ResourceRef(type="documents", location="s3://res_example/documents"),
@@ -40,7 +40,7 @@ stream = completion_manager.create(
     ],
     messages=[DocumentQaMessage(role="user", content="付款期限是多少？")],
 )
-for frame in stream:
+for frame in runtime.stream():
     print(frame)
 ```
 

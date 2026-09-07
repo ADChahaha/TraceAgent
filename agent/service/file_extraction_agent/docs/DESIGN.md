@@ -29,13 +29,13 @@ resource_refs([{type, location}]) + messages + 模型/运行配置
 
 ## 运行时与注册表
 
-`manager.py` 只管理 CompletionManager：校验请求与资源 → 创建模型和 CompletionRuntime → 注册到 ID 映射 → 转发 stream/terminate/get_status → 由 CompletionStream.close 移除注册项（包括从未迭代的流）。completion_id 只保存在 manager 的注册表键和流清理闭包中；清理时同时核对 ID 与运行时对象身份，避免误删其他注册项。
+`manager.py` 只管理 CompletionManager：校验请求与资源 → 创建模型和 CompletionRuntime → 注册到 ID 映射 → 转发 stream/terminate/get_status → 运行时收尾时通过注入的 on_close 移除注册项（包括从未迭代的流）。completion_id 只保存在 manager 的注册表键和注入闭包中；清理时同时核对 ID 与运行时对象身份，避免误删其他注册项。CompletionRuntime 不接收或保存 completion_id，也不导入 manager。
 
-`completion_runtime.py` 管理单轮 CompletionRuntime，以及 stream_completion_events 和事件转换：producer 协程执行异步 loop → 提交业务事件到锁保护的队列 → consumer 按 FIFO 编号输出事件字典 → 完成/失败/取消时唯一收尾。它不负责传输编码，不接收或保存 completion_id，不导入 manager，也不维护全局注册表。生产 Task 使用名称 qa-completion，不为每轮创建线程。
+`completion_runtime.py` 管理单轮 CompletionRuntime，以及 stream_completion_events 和事件转换：producer 协程执行异步 loop → 提交业务事件到锁保护的队列 → consumer 按 FIFO 编号输出事件字典 → 完成/失败/取消时唯一收尾。manager 通过 on_close 注入移除注册项的闭包，runtime 在 stream 生成器结束或 close() 时幂等通知一次。它不负责传输编码，不接收或保存 completion_id，不导入 manager，也不维护全局注册表。生产 Task 使用名称 qa-completion，不为每轮创建线程。
 
-CompletionStream 是 manager 返回的托管迭代器。gRPC 使用 async for 消费 runtime.astream()，在 finally 中 await aclose()；stream() 同样返回异步迭代器；close() 仅供初始化线程关闭尚未开始的流，同一流只由一个消费者读取。消费者结束或主动关闭时按对象身份移除注册项，即使从未迭代也执行清理。gRPC 回调只调用该流绑定的 disconnect，不跨线程关闭生成器，也不按可复用的 completion_id 查找运行时。
+调用方（gRPC 路由）通过 runtime.stream() 消费事件字典：async for 消费 runtime.astream()，在 finally 中先 disconnect 再 await aclose()；stream() 每次调用返回独立的异步迭代器，同一运行时只应被一个消费者读取，且只消费一次 stream() 结果。close() 仅供初始化线程关闭尚未开始的流。消费者结束或主动关闭时按对象身份移除注册项，即使从未迭代也执行清理。gRPC 回调只调用运行时绑定的 disconnect，不跨线程关闭生成器，也不按可复用的 completion_id 查找运行时。
 
-异步消费链路：astream 绑定当前循环的 asyncio.Event → producer 在锁内提交队列并 call_soon_threadsafe 唤醒 Event → 协程 get_nowait 按 FIFO 取事件，空队列 await Event → 分配 seq 并输出字典 → 关闭时取消并等待 producer 清理，再结束本轮。等待不占执行器线程，取消和唯一终态仍由原队列与锁裁定。
+异步消费链路：astream 绑定当前循环的 asyncio.Event → producer 在锁内提交队列并 call_soon_threadsafe 唤醒 Event → 协程 get_nowait 按 FIFO 取事件，空队列 await Event → 分配 seq 并输出字典 → 关闭时取消并等待 producer 清理，再通知 manager 收尾。等待不占执行器线程，取消和唯一终态仍由原队列与锁裁定。
 
 ## 执行输入与状态
 
@@ -96,11 +96,11 @@ route 在模块顶部直接导入 completion_manager；标准库与内部工具�
 
 CompletionRuntime 的调用 ID 集合只用于取消时判断批次是否结清，不保存调用参数、不承担消息配对。consumer 按 FIFO 输出已提交事件，终态与 close 均唯一；取消后的迟到模型事件会被拒收。
 
-关闭事件流时 await aclose 内层生成器，取消并等待 producer，取消传播到图、模型流和工具协程。模型请求使用原生 astream/ainvoke，重试退避使用 asyncio.sleep；请求 timeout 和工具共享 deadline 保持不变。同步文件操作与本地 embedding 通过 to_thread 执行，取消后不等待线程，迟到结果不会再写事件。问答结束只释放运行时，不删除资源。
+关闭事件流时先 disconnect 再 await aclose 事件生成器，取消并等待 producer，取消传播到图、模型流和工具协程。模型请求使用原生 astream/ainvoke，重试退避使用 asyncio.sleep；请求 timeout 和工具共享 deadline 保持不变。同步文件操作与本地 embedding 通过 to_thread 执行，取消后不等待线程，迟到结果不会再写事件。问答结束只释放运行时，不删除资源。
 
 业务 terminate 立即返回 cancelling，维持上述批次契约。RPC 断连/deadline 的 disconnect 则设置取消标志、关闭逻辑运行时并入队 sentinel 唤醒 consumer；连接已不可用，不等待批次补齐或尝试保证终态送达。已经完成的运行时不会被断连回调改写终态。
 
-首次迭代在同一运行时锁内判断 closed/cancel_requested 并启动 producer；若断连先发生，不再创建生产 Task，托管流直接清理。
+首次迭代在同一运行时锁内判断 closed/cancel_requested 并启动 producer；若断连先发生，不再创建生产 Task，流生成器直接收尾并由 runtime 通知 manager 清理。
 
 ## 工具与引用
 

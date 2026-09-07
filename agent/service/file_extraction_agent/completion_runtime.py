@@ -12,7 +12,7 @@ import queue
 import threading
 from dataclasses import asdict, is_dataclass
 from contextlib import aclosing
-from typing import Any, AsyncIterator, Iterable
+from typing import Any, AsyncIterator, Callable, Iterable
 
 from langchain_core.messages import AIMessage, ToolMessage
 
@@ -126,26 +126,28 @@ class CompletionRuntime:
     持有该 completion 专属的 resource_path、messages、qa_model、事件通道 queue 与同步锁。
     它自己完成生产、消费与收尾：
 
-    astream()（gRPC 消费入口）
+    stream() / astream()（消费入口）
       -> 绑定当前事件循环的 Event，再通过 create_task 启动 producer
       -> 提交队列后通知消费者，按 FIFO 分配 seq 并 yield 字典
-      -> finally 断连、取消并等待 producer 清理，解除事件循环绑定
-
-    stream() 是 astream() 的别名，两者均返回异步迭代器。
+      -> finally 断连、取消并等待 producer 清理，解除事件循环绑定，通知 manager 收尾
 
     _produce()
       -> async for 消费 stream_completion_events(resource_path=..., qa_model=...) 的事件字典
       -> 用 commit_* / commit_terminal_event 投进 queue；异常投 completion.failed；
          兜底 commit_done
 
-    terminate() / get_status()：取消 / 查询状态。
+    terminate() / get_status() / close()：取消 / 查询状态 / 同步关闭未开始的流。
+
+    on_close 由 manager 注入（remove 闭包），runtime 不接收或保存 completion_id，也不
+    导入 manager。stream() 生成器结束或 close() 时通过 _notify_closed 恰好通知一次。
 
     事件通道 + 终态裁定由 _lock 线性化：cancel 前已提交的事件按 FIFO 先发，cancel
     之后的新事件被拒收；terminal 只提交一次；close_once 保证终态唯一。
     """
 
     def __init__(self, resource_path: ResourceRefs, qa_model: ChatModelFallbackChain,
-                 messages: list[DocumentQaMessage], run_options: RunOptions | None = None) -> None:
+                 messages: list[DocumentQaMessage], run_options: RunOptions | None = None,
+                 on_close: Callable[[], None] | None = None) -> None:
         self.resource_path = resource_path
         self.messages = messages
         self.run_options = run_options
@@ -160,6 +162,8 @@ class CompletionRuntime:
         self.queue: queue.Queue[dict[str, Any] | object] = queue.Queue()
         self._async_loop: asyncio.AbstractEventLoop | None = None
         self._async_ready: asyncio.Event | None = None
+        self._on_close: Callable[[], None] | None = on_close
+        self._closed_notified = False
 
     def _enqueue(self, event: dict[str, Any] | object) -> None:
         """持锁提交 FIFO 事件，再通过事件循环唤醒异步消费者。"""
@@ -167,17 +171,32 @@ class CompletionRuntime:
         if self._async_loop is not None:
             self._async_loop.call_soon_threadsafe(self._async_ready.set)
 
+    def _notify_closed(self) -> None:
+        """幂等通知 manager 移除注册项；不持锁调用回调。"""
+        with self._lock:
+            if self._closed_notified:
+                return
+            self._closed_notified = True
+            callback = self._on_close
+        if callback is not None:
+            callback()
+
     async def astream(self) -> AsyncIterator[dict[str, Any]]:
         """生产协程提交事件 → Event 唤醒消费者 → FIFO 编号输出；等待不占工作线程。"""
         producer = None
         ready = asyncio.Event()
         with self._lock:
             if self.closed:
-                return
-            self._async_loop = asyncio.get_running_loop()
-            self._async_ready = ready
-            if not self.cancel_requested:
-                producer = asyncio.create_task(self._produce(), name="qa-completion")
+                closed = True
+            else:
+                closed = False
+                self._async_loop = asyncio.get_running_loop()
+                self._async_ready = ready
+                if not self.cancel_requested:
+                    producer = asyncio.create_task(self._produce(), name="qa-completion")
+        if closed:
+            self._notify_closed()
+            return
         next_seq = 1
         try:
             while True:
@@ -209,9 +228,15 @@ class CompletionRuntime:
                 if not producer.done():
                     producer.cancel()
                 await asyncio.gather(producer, return_exceptions=True)
+            self._notify_closed()
 
     def stream(self) -> AsyncIterator[dict[str, Any]]:
         return self.astream()
+
+    def close(self) -> None:
+        """同步关闭尚未开始迭代的流：断开并通知 manager 移除注册项。"""
+        self.disconnect()
+        self._notify_closed()
 
     async def _produce(self) -> None:
         terminal_committed = False

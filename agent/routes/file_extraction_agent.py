@@ -2,7 +2,7 @@
 
 输入错误在首事件前返回 INVALID_ARGUMENT，初始化异常返回 INTERNAL；
 执行异常保留 completion.failed。业务取消立即返回，RPC 断连则通知本轮
-CompletionStream 并由 consumer finally 清理，避免旧 ID 回调误取消新问答。
+CompletionRuntime 并由事件流 finally 清理，避免旧 ID 回调误取消新问答。
 """
 
 import asyncio
@@ -75,7 +75,7 @@ def event_message(event: dict[str, Any]) -> pb.CompletionEvent:
 
 async def create_chat_completion(request, context) -> AsyncIterator[pb.CompletionEvent]:
     try:
-        stream = await _create_stream(
+        runtime = await _create_runtime(
             completion_id=request.completion_id,
             resource_path=request.resource_path,
             messages=_messages(request),
@@ -87,32 +87,34 @@ async def create_chat_completion(request, context) -> AsyncIterator[pb.Completio
     except Exception as exc:
         await context.abort(grpc.StatusCode.INTERNAL, f"completion initialization failed: {exc}")
 
+    events = runtime.stream()
     try:
-        context.add_done_callback(lambda _: stream.disconnect())
+        context.add_done_callback(lambda _: runtime.disconnect())
         if context.done():
             return
-        async for event in stream:
+        async for event in events:
             if context.done():
                 return
             yield event_message(event)
     finally:
-        await stream.aclose()
+        runtime.disconnect()
+        await events.aclose()
 
 
-async def _create_stream(**kwargs):
-    """线程初始化 → 交接流；取消与交接互斥，迟到结果在线程内关闭。"""
+async def _create_runtime(**kwargs):
+    """线程初始化 → 交接运行时；取消与交接互斥，迟到结果在线程内关闭。"""
     lock = threading.Lock()
     abandoned = False
-    stream = None
+    runtime = None
 
     def initialize():
-        nonlocal stream
+        nonlocal runtime
         created = completion_manager.create(**kwargs)
         with lock:
             if abandoned:
                 created.close()
             else:
-                stream = created
+                runtime = created
         return created
 
     try:
@@ -120,8 +122,8 @@ async def _create_stream(**kwargs):
     except asyncio.CancelledError:
         with lock:
             abandoned = True
-            if stream is not None:
-                stream.close()
+            if runtime is not None:
+                runtime.close()
         raise
 
 

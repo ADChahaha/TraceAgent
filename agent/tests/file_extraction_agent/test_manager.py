@@ -59,7 +59,7 @@ async def test_stream_numbers_messages_and_terminal_once(tmp_path, monkeypatch, 
             run_options=RunOptions(),
             resource_path=resource_path,
             messages=[DocumentQaMessage(role="user", content="问题")],
-        )
+        ).stream()
     ]
     events = frames
     assert all(("id" not in event and "completion_id" not in event for event in events))
@@ -116,16 +116,16 @@ async def test_manager_keeps_id_outside_runtime_and_cleans_only_matching_entry(r
     }
     try:
         assert all((not hasattr(runtime, "completion_id") for runtime in manager._completions.values()))
-        [item async for item in streams["first"]]
+        [item async for item in streams["first"].stream()]
         assert manager.get_status("first") is None
         assert manager.get_status("second")["status"] == "in_progress"
         assert manager.terminate("second")["status"] == "cancelling"
-        [item async for item in streams["second"]]
+        [item async for item in streams["second"].stream()]
         assert manager.get_status("second") is None
     finally:
         for cid, stream in streams.items():
             manager.terminate(cid)
-            [item async for item in stream]
+            [item async for item in stream.stream()]
 
 
 async def test_startup_events_only_acknowledge_without_reading_documents(resource_path, monkeypatch):
@@ -192,7 +192,7 @@ async def test_runtime_cancel_drains_real_graph_batch_and_skips_next_model(
         run_options=RunOptions(),
         resource_path=resource_path,
         messages=[DocumentQaMessage(role="user", content="问题")],
-    )
+    ).stream()
     frames = []
     done = asyncio.Event()
 
@@ -327,7 +327,7 @@ async def test_stream_preserves_runtime_failure_with_special_characters(tmp_path
             run_options=RunOptions(),
             resource_path=resource_path,
             messages=[DocumentQaMessage(role="user", content="问题")],
-        )
+        ).stream()
     )
     assert len(frames) == 1
     assert frames[0]["type"] == "completion.failed"
@@ -350,7 +350,7 @@ async def test_stream_preserves_terminal_words_in_data(tmp_path, monkeypatch, ma
             run_options=RunOptions(),
             resource_path=resource_path,
             messages=[DocumentQaMessage(role="user", content="问题")],
-        )
+        ).stream()
     )
     assert frames == [ordinary, terminal]
 
@@ -399,7 +399,7 @@ async def test_create_completion_stream_builds_completion_input_and_runs_graph(m
             resource_path=resource_path,
             messages=[DocumentQaMessage(role="user", content="问题")],
             model_config=ModelConfig(model_name="qa"),
-        )
+        ).stream()
     )
     assert events == [{"type": "completion.completed"}]
     assert captured["has_completion_id"] is False
@@ -452,7 +452,7 @@ async def test_create_completion_stream_registers_completion_runtime_before_iter
         resource_path=resource_path,
         messages=[DocumentQaMessage(role="user", content="问题")],
         model_config=ModelConfig(model_name="qa"),
-    )
+    ).stream()
     assert manager.terminate("cmp_early_cancel") == {"id": "cmp_early_cancel", "status": "cancelling"}
     assert await _frames(stream) == [{"type": "completion.cancelled", "status": "cancelled"}]
     assert not graph_called.is_set()
@@ -484,7 +484,7 @@ async def test_create_completion_stream_cancel_does_not_wait_for_blocked_graph(m
         resource_path=resource_path,
         messages=[DocumentQaMessage(role="user", content="问题")],
         model_config=ModelConfig(model_name="qa"),
-    )
+    ).stream()
     events: list[str] = []
     stream_done = asyncio.Event()
 
@@ -534,7 +534,7 @@ async def test_create_completion_stream_flushes_committed_events_before_cancel(m
             resource_path=resource_path,
             messages=[DocumentQaMessage(role="user", content="问题")],
             model_config=ModelConfig(model_name="qa"),
-        )
+        ).stream()
     )
     first_event = _without_seq(await anext(stream))
     assert await wait_event(second_event_reached_graph, timeout=0.5)
@@ -579,7 +579,7 @@ async def test_should_stop_is_wired_to_cancel_requested(monkeypatch, resource_pa
         resource_path=resource_path,
         messages=[DocumentQaMessage(role="user", content="问题")],
         model_config=ModelConfig(model_name="qa"),
-    )
+    ).stream()
     stream_done = asyncio.Event()
 
     async def consume_stream():
@@ -629,7 +629,7 @@ async def test_terminate_defers_cancel_until_active_tool_batch_settles(monkeypat
         resource_path=resource_path,
         messages=[DocumentQaMessage(role="user", content="问题")],
         model_config=ModelConfig(model_name="qa"),
-    )
+    ).stream()
     events: list[str] = []
     stream_done = asyncio.Event()
 
@@ -676,7 +676,7 @@ async def test_create_completion_stream_emits_only_one_terminal_event_when_cance
         resource_path=resource_path,
         messages=[DocumentQaMessage(role="user", content="问题")],
         model_config=ModelConfig(model_name="qa"),
-    )
+    ).stream()
     assert manager.terminate("cmp_race") == {"id": "cmp_race", "status": "cancelling"}
     graph_can_complete.set()
     events = await _frames(stream)
@@ -813,7 +813,7 @@ async def test_completion_manager_create_runs_graph_and_returns_events(monkeypat
             resource_path=resource_path,
             messages=[DocumentQaMessage(role="user", content="问题")],
             model_config=ModelConfig(model_name="qa"),
-        )
+        ).stream()
     )
     assert events == [{"type": "completion.completed"}]
     assert captured["has_completion_id"] is False
@@ -847,7 +847,7 @@ async def test_completion_manager_create_registers_before_iteration_and_terminat
         resource_path=resource_path,
         messages=[DocumentQaMessage(role="user", content="问题")],
         model_config=ModelConfig(model_name="qa"),
-    )
+    ).stream()
     assert manager.terminate("cmp_mgr_cancel") == {"id": "cmp_mgr_cancel", "status": "cancelling"}
     assert await _frames(stream) == [{"type": "completion.cancelled", "status": "cancelled"}]
     assert not graph_called.is_set()
@@ -927,9 +927,9 @@ async def test_unstarted_stream_close_removes_registration(resource_path, monkey
         resource_path=resource_path,
         messages=[DocumentQaMessage(role="user", content="问题")],
     )
-    await stream.aclose()
+    stream.close()
     assert manager.get_status("early_close") is None
-    assert [item async for item in stream] == []
+    assert [item async for item in stream.stream()] == []
 
 
 async def test_disconnect_wakes_consumer_and_stops_producer(resource_path, monkeypatch):
@@ -958,7 +958,7 @@ async def test_disconnect_wakes_consumer_and_stops_producer(resource_path, monke
     events = []
 
     async def consume():
-        events.extend([item async for item in stream])
+        events.extend([item async for item in stream.stream()])
         done.set()
 
     consumer = asyncio.create_task(consume())
@@ -976,7 +976,7 @@ async def test_disconnect_wakes_consumer_and_stops_producer(resource_path, monke
             stream.disconnect()
             assert manager.get_status("disconnect")["status"] == "in_progress"
         finally:
-            await replacement.aclose()
+            replacement.close()
     finally:
         release.set()
         await asyncio.wait_for(consumer, 2)
@@ -1001,7 +1001,7 @@ async def test_disconnect_before_iteration_does_not_start_producer(resource_path
 
     monkeypatch.setattr(runtime_module.CompletionRuntime, "_produce", forbidden)
     stream.disconnect()
-    assert [item async for item in stream] == []
+    assert [item async for item in stream.stream()] == []
     assert manager.get_status("disconnect_early") is None
 
 

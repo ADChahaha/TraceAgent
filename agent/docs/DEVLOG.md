@@ -1,4 +1,27 @@
-last updated: 2026-09-07 20:47:41
+last updated: 2026-09-07 23:09:11
+
+## 2026-09-07 23:09:11
+
+### 已完成工作
+
+- 重构：删除 `CompletionStream` 包装类，收尾职责并入 `CompletionRuntime`。
+- `CompletionManager.create()` 现直接返回 `CompletionRuntime`；通过注入的 `on_close` 闭包（id + 对象身份核对）在流结束时移除注册项。
+- `CompletionRuntime` 新增 `_on_close`/`_notify_closed()`（幂等）与同步 `close()`；`stream()`/`astream()` 生成器在 `finally` 中触发通知。
+- `routes/file_extraction_agent.py` 改为持有 `runtime.stream()` 单一生成器，`finally` 中先 `disconnect()` 再 `await events.aclose()`。
+- 测试从 `manager.create(...)` 直接迭代改为 `.stream()`；`stream.aclose()` 改为 `runtime.close()`（未迭代）或生成器 `aclose()`。
+- 同步 `DESIGN.md`、`agent_loop.md`、`README.md`、`API.md` 及对应测试文档。全量测试 209 passed。
+
+### 当前进展
+
+- 注册/移除职责仍全在 manager 层：remove 闭包由 manager 定义并注入，runtime 不接收 completion_id、不导入 manager。
+
+### 遇到的问题
+
+- threading.Lock 不可重入：`_notify_closed` 不能在被调用方已持锁时加锁，astream 开头改为先取锁内判断、锁外通知。
+
+### 下一步
+
+- 观察 runtime 直接暴露 stream() 后调用方是否出现重复消费；必要时在 astream 入口加防重入守卫。
 
 ## 2026-09-07 20:47:41
 
