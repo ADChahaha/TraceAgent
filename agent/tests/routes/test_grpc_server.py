@@ -22,18 +22,27 @@ def test_entrypoint_provides_grpc_server():
     assert not hasattr(main, "app"), "迁移后不再启动 FastAPI 应用"
 
 
-def test_health_and_capabilities(rpc, rpc_channel):
-    """标准 Health 与能力查询均可通过真实 RPC 读取。"""
+def test_health(rpc_channel):
+    """标准 Health 可通过真实 RPC 读取。"""
     probe = health_pb2_grpc.HealthStub(rpc_channel)
     for service in ("", "traceagent.v1.AgentService"):
         assert probe.Check(health_pb2.HealthCheckRequest(service=service), timeout=2).status == health_pb2.HealthCheckResponse.SERVING
-    result = rpc.GetCapabilities(pb.Empty(), timeout=2)
-    assert list(result.supported_file_types) == ["pdf", "docx"]
-    assert list(result.implemented_file_types) == ["pdf", "docx"]
+
+
+def test_capabilities_is_not_exposed(rpc, rpc_channel):
+    """能力查询及其专用消息已移除，旧 RPC 路径不再注册。"""
+    assert "GetCapabilities" not in pb.DESCRIPTOR.services_by_name["AgentService"].methods_by_name
+    assert not hasattr(rpc, "GetCapabilities")
+    assert "CapabilitiesResponse" not in pb.DESCRIPTOR.message_types_by_name
+    assert "Empty" not in pb.DESCRIPTOR.message_types_by_name
+    query = rpc_channel.unary_unary("/traceagent.v1.AgentService/GetCapabilities")
+    with pytest.raises(grpc.RpcError) as error:
+        query(b"", timeout=2)
+    assert error.value.code() == grpc.StatusCode.UNIMPLEMENTED
 
 
 def test_blocking_preparation_keeps_control_rpcs_responsive(monkeypatch, rpc_server_factory):
-    """单线程执行器忙于文档解析时，事件循环仍可取消、查询和探活。"""
+    """单线程执行器忙于文档解析时，事件循环仍可取消和探活。"""
     from routes import document_resources
     started = threading.Event()
     release = threading.Event()
@@ -53,7 +62,6 @@ def test_blocking_preparation_keeps_control_rpcs_responsive(monkeypatch, rpc_ser
         try:
             assert started.wait(2)
             assert stub.CancelCompletion(pb.CompletionRequest(completion_id="missing"), timeout=1).status == "not_found"
-            assert stub.GetCapabilities(pb.Empty(), timeout=1).supported_file_types
             assert health_pb2_grpc.HealthStub(channel).Check(
                 health_pb2.HealthCheckRequest(), timeout=1).status == health_pb2.HealthCheckResponse.SERVING
         finally:

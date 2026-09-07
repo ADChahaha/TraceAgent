@@ -16,7 +16,7 @@
 
 ## 异步并发与关闭回归
 
-- `test_many_waiting_streams_keep_control_rpcs_available`：二十条问答流同时等待时，控制 RPC 仍可响应，流数量不受旧 worker 槽限制。
+- `test_many_waiting_streams_keep_control_rpcs_available`：二十条问答流同时等待时，取消 RPC 仍可响应，流数量不受旧 worker 槽限制。
 - `test_initialization_cleanup_survives_event_loop_shutdown`：初始化期间客户端取消，随后事件循环关闭，迟到的初始化结果仍会释放注册项。
 
 事件替身使用异步生成器，与生产协程一致；同步 RPC 客户端的跨线程测试信号通过 await 等待。

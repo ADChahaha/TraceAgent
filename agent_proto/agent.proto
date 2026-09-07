@@ -6,9 +6,7 @@ service AgentService {
   rpc PrepareResources(PrepareResourcesRequest) returns (PrepareResourcesResponse);
   rpc ChatCompletion(ChatCompletionRequest) returns (stream CompletionEvent);
   rpc CancelCompletion(CompletionRequest) returns (CompletionResponse);
-  rpc GetCapabilities(Empty) returns (CapabilitiesResponse);
 }
-message Empty {}
 message UploadedFile {
   string filename = 1;
   bytes content = 2;
@@ -91,9 +89,4 @@ message CompletionRequest { string completion_id = 1; }
 message CompletionResponse {
   string id = 1;
   string status = 2;
-}
-message CapabilitiesResponse {
-  repeated string supported_file_types = 1;
-  repeated string implemented_file_types = 2;
-  string engine = 3;
 }

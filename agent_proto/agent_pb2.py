@@ -24,41 +24,37 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x17\x61gent_proto/agent.proto\x12\rtraceagent.v1\"\x07\n\x05\x45mpty\"1\n\x0cUploadedFile\x12\x10\n\x08\x66ilename\x18\x01 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\x0c\"E\n\x17PrepareResourcesRequest\x12*\n\x05\x66iles\x18\x01 \x03(\x0b\x32\x1b.traceagent.v1.UploadedFile\"*\n\x08\x44ocument\x12\x10\n\x08\x66ilename\x18\x01 \x01(\t\x12\x0c\n\x04html\x18\x02 \x01(\t\"]\n\x18PrepareResourcesResponse\x12\x15\n\rresource_path\x18\x01 \x01(\t\x12*\n\tdocuments\x18\x02 \x03(\x0b\x32\x17.traceagent.v1.Document\"\xa4\x01\n\tQaMessage\x12\x0c\n\x04role\x18\x01 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t\x12\x1c\n\x0ftool_calls_json\x18\x03 \x01(\tH\x00\x88\x01\x01\x12\x19\n\x0ctool_call_id\x18\x04 \x01(\tH\x01\x88\x01\x01\x12\x11\n\x04name\x18\x05 \x01(\tH\x02\x88\x01\x01\x42\x12\n\x10_tool_calls_jsonB\x0f\n\r_tool_call_idB\x07\n\x05_name\"|\n\nRunOptions\x12\x1b\n\x0emax_tool_calls\x18\x01 \x01(\x05H\x00\x88\x01\x01\x12#\n\x16tool_execution_timeout\x18\x02 \x01(\x01H\x01\x88\x01\x01\x42\x11\n\x0f_max_tool_callsB\x19\n\x17_tool_execution_timeout\"\xc3\x03\n\x0bModelConfig\x12\x15\n\x08provider\x18\x01 \x01(\tH\x00\x88\x01\x01\x12\x15\n\x08\x62\x61se_url\x18\x02 \x01(\tH\x01\x88\x01\x01\x12\x14\n\x07\x61pi_key\x18\x03 \x01(\tH\x02\x88\x01\x01\x12\x17\n\nmodel_name\x18\x04 \x01(\tH\x03\x88\x01\x01\x12\x1a\n\rapi_transport\x18\x05 \x01(\tH\x04\x88\x01\x01\x12\x18\n\x0btemperature\x18\x06 \x01(\x01H\x05\x88\x01\x01\x12\x12\n\x05top_p\x18\x07 \x01(\x01H\x06\x88\x01\x01\x12\x12\n\x05top_k\x18\x08 \x01(\x05H\x07\x88\x01\x01\x12\x1d\n\x10reasoning_effort\x18\t \x01(\tH\x08\x88\x01\x01\x12\x18\n\x0bmax_retries\x18\n \x01(\x05H\t\x88\x01\x01\x12\x1c\n\x0frequest_timeout\x18\x0b \x01(\x01H\n\x88\x01\x01\x42\x0b\n\t_providerB\x0b\n\t_base_urlB\n\n\x08_api_keyB\r\n\x0b_model_nameB\x10\n\x0e_api_transportB\x0e\n\x0c_temperatureB\x08\n\x06_top_pB\x08\n\x06_top_kB\x13\n\x11_reasoning_effortB\x0e\n\x0c_max_retriesB\x12\n\x10_request_timeout\"\xc3\x04\n\x15\x43hatCompletionRequest\x12\x15\n\rcompletion_id\x18\x01 \x01(\t\x12\x15\n\rresource_path\x18\x02 \x01(\t\x12*\n\x08messages\x18\x03 \x03(\x0b\x32\x18.traceagent.v1.QaMessage\x12.\n\x0brun_options\x18\x04 \x01(\x0b\x32\x19.traceagent.v1.RunOptions\x12\x30\n\x0cmodel_config\x18\x05 \x01(\x0b\x32\x1a.traceagent.v1.ModelConfig\x12\x15\n\x08\x62\x61se_url\x18\x06 \x01(\tH\x00\x88\x01\x01\x12\x14\n\x07\x61pi_key\x18\x07 \x01(\tH\x01\x88\x01\x01\x12\x1b\n\x0eopenai_api_key\x18\x08 \x01(\tH\x02\x88\x01\x01\x12\x12\n\x05model\x18\t \x01(\tH\x03\x88\x01\x01\x12\x1a\n\rapi_transport\x18\n \x01(\tH\x04\x88\x01\x01\x12\x18\n\x0btemperature\x18\x0b \x01(\x01H\x05\x88\x01\x01\x12\x12\n\x05top_p\x18\x0c \x01(\x01H\x06\x88\x01\x01\x12\x12\n\x05top_k\x18\r \x01(\x05H\x07\x88\x01\x01\x12\x13\n\x06stream\x18\x0e \x01(\x08H\x08\x88\x01\x01\x42\x0b\n\t_base_urlB\n\n\x08_api_keyB\x11\n\x0f_openai_api_keyB\x08\n\x06_modelB\x10\n\x0e_api_transportB\x0e\n\x0c_temperatureB\x08\n\x06_top_pB\x08\n\x06_top_kB\t\n\x07_streamR\tdocumentsR\x08metadataR\x06memoryR\ttask_spec\"7\n\x08ToolCall\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x11\n\targs_json\x18\x03 \x01(\t\"\xff\x03\n\x0f\x43ompletionEvent\x12\x0c\n\x04type\x18\x01 \x01(\t\x12\x0b\n\x03seq\x18\x02 \x01(\x04\x12\x13\n\x06status\x18\x03 \x01(\tH\x00\x88\x01\x01\x12\x14\n\x07\x63ontent\x18\x04 \x01(\tH\x01\x88\x01\x01\x12\x11\n\x04tool\x18\x05 \x01(\tH\x02\x88\x01\x01\x12\x19\n\x0ctool_call_id\x18\x06 \x01(\tH\x03\x88\x01\x01\x12\x16\n\targs_json\x18\x07 \x01(\tH\x04\x88\x01\x01\x12\x18\n\x0bresult_json\x18\x08 \x01(\tH\x05\x88\x01\x01\x12+\n\ntool_calls\x18\t \x03(\x0b\x32\x17.traceagent.v1.ToolCall\x12\x1c\n\x0ftool_call_count\x18\n \x01(\rH\x06\x88\x01\x01\x12\x15\n\x08is_final\x18\x0b \x01(\x08H\x07\x88\x01\x01\x12\x18\n\x0bstop_signal\x18\x0c \x01(\tH\x08\x88\x01\x01\x12\x12\n\x05\x65rror\x18\r \x01(\tH\t\x88\x01\x01\x12\x1a\n\rerror_message\x18\x0e \x01(\tH\n\x88\x01\x01\x42\t\n\x07_statusB\n\n\x08_contentB\x07\n\x05_toolB\x0f\n\r_tool_call_idB\x0c\n\n_args_jsonB\x0e\n\x0c_result_jsonB\x12\n\x10_tool_call_countB\x0b\n\t_is_finalB\x0e\n\x0c_stop_signalB\x08\n\x06_errorB\x10\n\x0e_error_message\"*\n\x11\x43ompletionRequest\x12\x15\n\rcompletion_id\x18\x01 \x01(\t\"0\n\x12\x43ompletionResponse\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t\"d\n\x14\x43\x61pabilitiesResponse\x12\x1c\n\x14supported_file_types\x18\x01 \x03(\t\x12\x1e\n\x16implemented_file_types\x18\x02 \x03(\t\x12\x0e\n\x06\x65ngine\x18\x03 \x01(\t2\xf4\x02\n\x0c\x41gentService\x12\x63\n\x10PrepareResources\x12&.traceagent.v1.PrepareResourcesRequest\x1a\'.traceagent.v1.PrepareResourcesResponse\x12X\n\x0e\x43hatCompletion\x12$.traceagent.v1.ChatCompletionRequest\x1a\x1e.traceagent.v1.CompletionEvent0\x01\x12W\n\x10\x43\x61ncelCompletion\x12 .traceagent.v1.CompletionRequest\x1a!.traceagent.v1.CompletionResponse\x12L\n\x0fGetCapabilities\x12\x14.traceagent.v1.Empty\x1a#.traceagent.v1.CapabilitiesResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x17\x61gent_proto/agent.proto\x12\rtraceagent.v1\"1\n\x0cUploadedFile\x12\x10\n\x08\x66ilename\x18\x01 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\x0c\"E\n\x17PrepareResourcesRequest\x12*\n\x05\x66iles\x18\x01 \x03(\x0b\x32\x1b.traceagent.v1.UploadedFile\"*\n\x08\x44ocument\x12\x10\n\x08\x66ilename\x18\x01 \x01(\t\x12\x0c\n\x04html\x18\x02 \x01(\t\"]\n\x18PrepareResourcesResponse\x12\x15\n\rresource_path\x18\x01 \x01(\t\x12*\n\tdocuments\x18\x02 \x03(\x0b\x32\x17.traceagent.v1.Document\"\xa4\x01\n\tQaMessage\x12\x0c\n\x04role\x18\x01 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t\x12\x1c\n\x0ftool_calls_json\x18\x03 \x01(\tH\x00\x88\x01\x01\x12\x19\n\x0ctool_call_id\x18\x04 \x01(\tH\x01\x88\x01\x01\x12\x11\n\x04name\x18\x05 \x01(\tH\x02\x88\x01\x01\x42\x12\n\x10_tool_calls_jsonB\x0f\n\r_tool_call_idB\x07\n\x05_name\"|\n\nRunOptions\x12\x1b\n\x0emax_tool_calls\x18\x01 \x01(\x05H\x00\x88\x01\x01\x12#\n\x16tool_execution_timeout\x18\x02 \x01(\x01H\x01\x88\x01\x01\x42\x11\n\x0f_max_tool_callsB\x19\n\x17_tool_execution_timeout\"\xc3\x03\n\x0bModelConfig\x12\x15\n\x08provider\x18\x01 \x01(\tH\x00\x88\x01\x01\x12\x15\n\x08\x62\x61se_url\x18\x02 \x01(\tH\x01\x88\x01\x01\x12\x14\n\x07\x61pi_key\x18\x03 \x01(\tH\x02\x88\x01\x01\x12\x17\n\nmodel_name\x18\x04 \x01(\tH\x03\x88\x01\x01\x12\x1a\n\rapi_transport\x18\x05 \x01(\tH\x04\x88\x01\x01\x12\x18\n\x0btemperature\x18\x06 \x01(\x01H\x05\x88\x01\x01\x12\x12\n\x05top_p\x18\x07 \x01(\x01H\x06\x88\x01\x01\x12\x12\n\x05top_k\x18\x08 \x01(\x05H\x07\x88\x01\x01\x12\x1d\n\x10reasoning_effort\x18\t \x01(\tH\x08\x88\x01\x01\x12\x18\n\x0bmax_retries\x18\n \x01(\x05H\t\x88\x01\x01\x12\x1c\n\x0frequest_timeout\x18\x0b \x01(\x01H\n\x88\x01\x01\x42\x0b\n\t_providerB\x0b\n\t_base_urlB\n\n\x08_api_keyB\r\n\x0b_model_nameB\x10\n\x0e_api_transportB\x0e\n\x0c_temperatureB\x08\n\x06_top_pB\x08\n\x06_top_kB\x13\n\x11_reasoning_effortB\x0e\n\x0c_max_retriesB\x12\n\x10_request_timeout\"\xc3\x04\n\x15\x43hatCompletionRequest\x12\x15\n\rcompletion_id\x18\x01 \x01(\t\x12\x15\n\rresource_path\x18\x02 \x01(\t\x12*\n\x08messages\x18\x03 \x03(\x0b\x32\x18.traceagent.v1.QaMessage\x12.\n\x0brun_options\x18\x04 \x01(\x0b\x32\x19.traceagent.v1.RunOptions\x12\x30\n\x0cmodel_config\x18\x05 \x01(\x0b\x32\x1a.traceagent.v1.ModelConfig\x12\x15\n\x08\x62\x61se_url\x18\x06 \x01(\tH\x00\x88\x01\x01\x12\x14\n\x07\x61pi_key\x18\x07 \x01(\tH\x01\x88\x01\x01\x12\x1b\n\x0eopenai_api_key\x18\x08 \x01(\tH\x02\x88\x01\x01\x12\x12\n\x05model\x18\t \x01(\tH\x03\x88\x01\x01\x12\x1a\n\rapi_transport\x18\n \x01(\tH\x04\x88\x01\x01\x12\x18\n\x0btemperature\x18\x0b \x01(\x01H\x05\x88\x01\x01\x12\x12\n\x05top_p\x18\x0c \x01(\x01H\x06\x88\x01\x01\x12\x12\n\x05top_k\x18\r \x01(\x05H\x07\x88\x01\x01\x12\x13\n\x06stream\x18\x0e \x01(\x08H\x08\x88\x01\x01\x42\x0b\n\t_base_urlB\n\n\x08_api_keyB\x11\n\x0f_openai_api_keyB\x08\n\x06_modelB\x10\n\x0e_api_transportB\x0e\n\x0c_temperatureB\x08\n\x06_top_pB\x08\n\x06_top_kB\t\n\x07_streamR\tdocumentsR\x08metadataR\x06memoryR\ttask_spec\"7\n\x08ToolCall\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x11\n\targs_json\x18\x03 \x01(\t\"\xff\x03\n\x0f\x43ompletionEvent\x12\x0c\n\x04type\x18\x01 \x01(\t\x12\x0b\n\x03seq\x18\x02 \x01(\x04\x12\x13\n\x06status\x18\x03 \x01(\tH\x00\x88\x01\x01\x12\x14\n\x07\x63ontent\x18\x04 \x01(\tH\x01\x88\x01\x01\x12\x11\n\x04tool\x18\x05 \x01(\tH\x02\x88\x01\x01\x12\x19\n\x0ctool_call_id\x18\x06 \x01(\tH\x03\x88\x01\x01\x12\x16\n\targs_json\x18\x07 \x01(\tH\x04\x88\x01\x01\x12\x18\n\x0bresult_json\x18\x08 \x01(\tH\x05\x88\x01\x01\x12+\n\ntool_calls\x18\t \x03(\x0b\x32\x17.traceagent.v1.ToolCall\x12\x1c\n\x0ftool_call_count\x18\n \x01(\rH\x06\x88\x01\x01\x12\x15\n\x08is_final\x18\x0b \x01(\x08H\x07\x88\x01\x01\x12\x18\n\x0bstop_signal\x18\x0c \x01(\tH\x08\x88\x01\x01\x12\x12\n\x05\x65rror\x18\r \x01(\tH\t\x88\x01\x01\x12\x1a\n\rerror_message\x18\x0e \x01(\tH\n\x88\x01\x01\x42\t\n\x07_statusB\n\n\x08_contentB\x07\n\x05_toolB\x0f\n\r_tool_call_idB\x0c\n\n_args_jsonB\x0e\n\x0c_result_jsonB\x12\n\x10_tool_call_countB\x0b\n\t_is_finalB\x0e\n\x0c_stop_signalB\x08\n\x06_errorB\x10\n\x0e_error_message\"*\n\x11\x43ompletionRequest\x12\x15\n\rcompletion_id\x18\x01 \x01(\t\"0\n\x12\x43ompletionResponse\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t2\xa6\x02\n\x0c\x41gentService\x12\x63\n\x10PrepareResources\x12&.traceagent.v1.PrepareResourcesRequest\x1a\'.traceagent.v1.PrepareResourcesResponse\x12X\n\x0e\x43hatCompletion\x12$.traceagent.v1.ChatCompletionRequest\x1a\x1e.traceagent.v1.CompletionEvent0\x01\x12W\n\x10\x43\x61ncelCompletion\x12 .traceagent.v1.CompletionRequest\x1a!.traceagent.v1.CompletionResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'agent_proto.agent_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_EMPTY']._serialized_start=42
-  _globals['_EMPTY']._serialized_end=49
-  _globals['_UPLOADEDFILE']._serialized_start=51
-  _globals['_UPLOADEDFILE']._serialized_end=100
-  _globals['_PREPARERESOURCESREQUEST']._serialized_start=102
-  _globals['_PREPARERESOURCESREQUEST']._serialized_end=171
-  _globals['_DOCUMENT']._serialized_start=173
-  _globals['_DOCUMENT']._serialized_end=215
-  _globals['_PREPARERESOURCESRESPONSE']._serialized_start=217
-  _globals['_PREPARERESOURCESRESPONSE']._serialized_end=310
-  _globals['_QAMESSAGE']._serialized_start=313
-  _globals['_QAMESSAGE']._serialized_end=477
-  _globals['_RUNOPTIONS']._serialized_start=479
-  _globals['_RUNOPTIONS']._serialized_end=603
-  _globals['_MODELCONFIG']._serialized_start=606
-  _globals['_MODELCONFIG']._serialized_end=1057
-  _globals['_CHATCOMPLETIONREQUEST']._serialized_start=1060
-  _globals['_CHATCOMPLETIONREQUEST']._serialized_end=1639
-  _globals['_TOOLCALL']._serialized_start=1641
-  _globals['_TOOLCALL']._serialized_end=1696
-  _globals['_COMPLETIONEVENT']._serialized_start=1699
-  _globals['_COMPLETIONEVENT']._serialized_end=2210
-  _globals['_COMPLETIONREQUEST']._serialized_start=2212
-  _globals['_COMPLETIONREQUEST']._serialized_end=2254
-  _globals['_COMPLETIONRESPONSE']._serialized_start=2256
-  _globals['_COMPLETIONRESPONSE']._serialized_end=2304
-  _globals['_CAPABILITIESRESPONSE']._serialized_start=2306
-  _globals['_CAPABILITIESRESPONSE']._serialized_end=2406
-  _globals['_AGENTSERVICE']._serialized_start=2409
-  _globals['_AGENTSERVICE']._serialized_end=2781
+  _globals['_UPLOADEDFILE']._serialized_start=42
+  _globals['_UPLOADEDFILE']._serialized_end=91
+  _globals['_PREPARERESOURCESREQUEST']._serialized_start=93
+  _globals['_PREPARERESOURCESREQUEST']._serialized_end=162
+  _globals['_DOCUMENT']._serialized_start=164
+  _globals['_DOCUMENT']._serialized_end=206
+  _globals['_PREPARERESOURCESRESPONSE']._serialized_start=208
+  _globals['_PREPARERESOURCESRESPONSE']._serialized_end=301
+  _globals['_QAMESSAGE']._serialized_start=304
+  _globals['_QAMESSAGE']._serialized_end=468
+  _globals['_RUNOPTIONS']._serialized_start=470
+  _globals['_RUNOPTIONS']._serialized_end=594
+  _globals['_MODELCONFIG']._serialized_start=597
+  _globals['_MODELCONFIG']._serialized_end=1048
+  _globals['_CHATCOMPLETIONREQUEST']._serialized_start=1051
+  _globals['_CHATCOMPLETIONREQUEST']._serialized_end=1630
+  _globals['_TOOLCALL']._serialized_start=1632
+  _globals['_TOOLCALL']._serialized_end=1687
+  _globals['_COMPLETIONEVENT']._serialized_start=1690
+  _globals['_COMPLETIONEVENT']._serialized_end=2201
+  _globals['_COMPLETIONREQUEST']._serialized_start=2203
+  _globals['_COMPLETIONREQUEST']._serialized_end=2245
+  _globals['_COMPLETIONRESPONSE']._serialized_start=2247
+  _globals['_COMPLETIONRESPONSE']._serialized_end=2295
+  _globals['_AGENTSERVICE']._serialized_start=2298
+  _globals['_AGENTSERVICE']._serialized_end=2592
 # @@protoc_insertion_point(module_scope)

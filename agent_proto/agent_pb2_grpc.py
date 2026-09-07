@@ -50,11 +50,6 @@ class AgentServiceStub:
                 request_serializer=agent__proto_dot_agent__pb2.CompletionRequest.SerializeToString,
                 response_deserializer=agent__proto_dot_agent__pb2.CompletionResponse.FromString,
                 _registered_method=True)
-        self.GetCapabilities = channel.unary_unary(
-                '/traceagent.v1.AgentService/GetCapabilities',
-                request_serializer=agent__proto_dot_agent__pb2.Empty.SerializeToString,
-                response_deserializer=agent__proto_dot_agent__pb2.CapabilitiesResponse.FromString,
-                _registered_method=True)
 
 
 class AgentServiceServicer:
@@ -79,12 +74,6 @@ class AgentServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def GetCapabilities(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
 
 def add_AgentServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -102,11 +91,6 @@ def add_AgentServiceServicer_to_server(servicer, server):
                     servicer.CancelCompletion,
                     request_deserializer=agent__proto_dot_agent__pb2.CompletionRequest.FromString,
                     response_serializer=agent__proto_dot_agent__pb2.CompletionResponse.SerializeToString,
-            ),
-            'GetCapabilities': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetCapabilities,
-                    request_deserializer=agent__proto_dot_agent__pb2.Empty.FromString,
-                    response_serializer=agent__proto_dot_agent__pb2.CapabilitiesResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -191,33 +175,6 @@ class AgentService:
             '/traceagent.v1.AgentService/CancelCompletion',
             agent__proto_dot_agent__pb2.CompletionRequest.SerializeToString,
             agent__proto_dot_agent__pb2.CompletionResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def GetCapabilities(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/traceagent.v1.AgentService/GetCapabilities',
-            agent__proto_dot_agent__pb2.Empty.SerializeToString,
-            agent__proto_dot_agent__pb2.CapabilitiesResponse.FromString,
             options,
             channel_credentials,
             insecure,

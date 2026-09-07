@@ -18,6 +18,3 @@ class AgentService(agent_pb2_grpc.AgentServiceServicer):
 
     async def CancelCompletion(self, request, context):
         return await file_extraction_agent.cancel_chat_completion(request, context)
-
-    async def GetCapabilities(self, request, context):
-        return await document_resources.capabilities(request, context)

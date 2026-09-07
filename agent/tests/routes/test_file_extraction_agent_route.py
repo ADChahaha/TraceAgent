@@ -34,7 +34,7 @@ def request(**fields):
 
 
 def test_many_waiting_streams_keep_control_rpcs_available(rpc, manager, monkeypatch):
-    """二十条活动流等待时，取消和能力查询仍能立即处理。"""
+    """二十条活动流等待时，取消仍能立即处理。"""
     release = threading.Event()
 
     async def events(**kwargs):
@@ -48,7 +48,6 @@ def test_many_waiting_streams_keep_control_rpcs_available(rpc, manager, monkeypa
             stream = rpc.ChatCompletion(request(completion_id=f"many{i}"), timeout=10)
             streams.append(stream)
             assert next(stream).type == "completion.created"
-        assert rpc.GetCapabilities(pb.Empty(), timeout=1).supported_file_types
         assert rpc.CancelCompletion(pb.CompletionRequest(completion_id="many0"), timeout=1).status == "cancelling"
         assert next(streams[0]).type == "completion.cancelled"
     finally:

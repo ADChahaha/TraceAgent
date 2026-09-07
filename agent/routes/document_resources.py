@@ -57,10 +57,3 @@ def _prepare(request):
         resource_path=path,
         documents=[pb.Document(filename=doc.filename, html=doc.html) for doc in documents],
     )
-
-
-async def capabilities(request, context):
-    return pb.CapabilitiesResponse(
-        supported_file_types=["pdf", "docx"], implemented_file_types=["pdf", "docx"],
-        engine="mineru-pipeline,python-docx",
-    )

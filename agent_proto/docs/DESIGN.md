@@ -11,7 +11,7 @@ agent_proto/agent.proto
 ```
 
 - Python 导入名为 agent_proto，网络服务名为 traceagent.v1.AgentService。
-- 业务方法为 PrepareResources、ChatCompletion、CancelCompletion、GetCapabilities；不提供问答查询。旧 GetCompletion 调用返回 UNIMPLEMENTED，调用方应通过原问答流接收进展与终态。
+- 业务方法为 PrepareResources、ChatCompletion、CancelCompletion；不提供问答查询或能力查询。旧 GetCompletion、GetCapabilities 调用返回 UNIMPLEMENTED；问答进展与终态由原事件流交付，探活使用标准 Health 服务。
 - 运行依赖只有 grpcio 和 protobuf；协议源码和生成绑定一起随独立 wheel 发布，不复制进 agent wheel。
 - agent 声明 traceagent-protocol 依赖；本仓库安装时先提供本地共享包，避免依赖不存在的公共发布版本。backend 业务代码本次不改。
 - 包含生成代码的目录本身映射为 Python 包 agent_proto；setuptools 仅打包该包，不发现 agent/backend。

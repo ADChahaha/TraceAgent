@@ -94,10 +94,9 @@ CancelCompletion
 
 模型请求与工具调度使用协程。无活动工具批次时，取消终态发出后会取消生产协程并关闭模型流；已有工具批次仍先完成收尾。取消本地协程不保证远端模型服务立即停止计算。工具内同步文件操作、OCR 和 embedding 不能通过协程取消强行终止；客户端放弃资源准备 RPC 后，完成时可能留下已发布资源。
 
-## 状态、能力和错误
+## 探活和错误
 
 - agent 不提供问答查询接口；本轮进展与终态通过 ChatCompletion 事件流返回，历史查询由 backend 管理。
-- GetCapabilities：返回 PDF/DOCX 支持情况及 engine。
 - 标准 grpc.health.v1.Health/Check：服务名为空或 traceagent.v1.AgentService 时返回 SERVING，仅用于进程探活，不检查模型可用性。
 
 | 情况 | 响应 |

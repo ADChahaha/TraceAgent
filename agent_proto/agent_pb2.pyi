@@ -6,10 +6,6 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
-class Empty(_message.Message):
-    __slots__ = ()
-    def __init__(self) -> None: ...
-
 class UploadedFile(_message.Message):
     __slots__ = ("filename", "content")
     FILENAME_FIELD_NUMBER: _ClassVar[int]
@@ -175,13 +171,3 @@ class CompletionResponse(_message.Message):
     id: str
     status: str
     def __init__(self, id: _Optional[str] = ..., status: _Optional[str] = ...) -> None: ...
-
-class CapabilitiesResponse(_message.Message):
-    __slots__ = ("supported_file_types", "implemented_file_types", "engine")
-    SUPPORTED_FILE_TYPES_FIELD_NUMBER: _ClassVar[int]
-    IMPLEMENTED_FILE_TYPES_FIELD_NUMBER: _ClassVar[int]
-    ENGINE_FIELD_NUMBER: _ClassVar[int]
-    supported_file_types: _containers.RepeatedScalarFieldContainer[str]
-    implemented_file_types: _containers.RepeatedScalarFieldContainer[str]
-    engine: str
-    def __init__(self, supported_file_types: _Optional[_Iterable[str]] = ..., implemented_file_types: _Optional[_Iterable[str]] = ..., engine: _Optional[str] = ...) -> None: ...
