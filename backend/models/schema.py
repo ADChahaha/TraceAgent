@@ -27,6 +27,7 @@ SCHEMA_SQL = [
         id TEXT PRIMARY KEY,
         task_id TEXT NOT NULL,
         status TEXT NOT NULL,
+        agent_completion_id TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         completed_at TEXT,
