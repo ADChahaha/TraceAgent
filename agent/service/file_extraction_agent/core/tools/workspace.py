@@ -1,7 +1,7 @@
 """资源路径 → 受管理目录校验 → 文档工具上下文；索引读取委托 embedding.py。
 
 open_workspace 创建文件访问器和本轮 embedding 访问器；validate_resource 额外校验
-索引以保留 HTTP 422 预检。启动通知不遍历目录或返回文档树。
+索引以支持流开始前的资源预检。启动通知不遍历目录或返回文档树。
 非法目录、外部链接、损坏资源均以 ValueError 结束，不生成任何文件或向量。
 """
 
@@ -117,5 +117,5 @@ def open_workspace(resource_path: str) -> ToolWorkspace:
 
 
 def validate_resource(resource_path: str) -> None:
-    """工具侧预检路径、清单、向量和引用；失败在 HTTP 开始前返回。"""
+    """工具侧预检路径、清单、向量和引用；失败在首个响应事件前返回。"""
     open_workspace(resource_path).embedding.load_index()

@@ -12,14 +12,15 @@ def test_agent_pyproject_declares_direct_runtime_dependencies():
     pyproject = _load_pyproject()
     dependency_names = _dependency_names(pyproject["project"]["dependencies"])
 
-    assert {"langchain-core", "pydantic", "starlette"} <= dependency_names
+    assert {"langchain-core", "pydantic", "grpcio", "protobuf", "grpcio-health-checking"} <= dependency_names
+    assert not {"fastapi", "starlette", "uvicorn", "python-multipart"} & dependency_names
 
 
 def test_agent_pyproject_declares_direct_test_dependencies():
     pyproject = _load_pyproject()
     dev_dependency_names = _dependency_names(pyproject["project"]["optional-dependencies"]["dev"])
 
-    assert {"httpx", "pytest"} <= dev_dependency_names
+    assert {"grpcio-tools", "pytest"} <= dev_dependency_names
 
 
 def _load_pyproject() -> dict:

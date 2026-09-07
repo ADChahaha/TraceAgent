@@ -1,18 +1,19 @@
-"""上传文件 → 解析 HTML → 文档树和索引 → 返回完整资源路径与原文。"""
+"""上传 bytes → 校验文件类型 → processor.process → prepare_resources → protobuf 响应。
+
+PDF/DOCX 解析和资源构建在 gRPC worker 中同步执行。输入错误映射
+INVALID_ARGUMENT；解析与构建异常映射 INTERNAL，原资源发布逻辑负责清理半成品。
+"""
 
 from dataclasses import dataclass
+from io import BytesIO
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
-from pydantic import BaseModel
-from starlette.concurrency import run_in_threadpool
+import grpc
 
+from agent_proto import agent_pb2 as pb
 from service.document_processor import processor
 from service.document_resources import prepare_resources
 from service.document_resources.schemas import InputDocument
-
-
-router = APIRouter(tags=["document-resources"])
 
 
 @dataclass
@@ -27,44 +28,33 @@ class UploadFileProxy:
         return self.file.seek(*args)
 
 
-class ResourceResponse(BaseModel):
-    resource_path: str
-    documents: list[InputDocument]
-
-
-@router.get("/healthz")
-async def healthz():
-    return {"status": "ok"}
-
-
-@router.get("/v1/ocr/capabilities")
-async def capabilities():
-    return {"supported_file_types": ["pdf", "docx"], "implemented_file_types": ["pdf", "docx"],
-            "engine": "mineru-pipeline,python-docx"}
-
-
-@router.post("/v1/document-resources", response_model=ResourceResponse)
-async def create_document_resource(files: list[UploadFile] = File(...)) -> ResourceResponse:
+def create_document_resource(request, context):
     try:
-        if not files:
+        if not request.files:
             raise ValueError("files must be non-empty")
-        for file in files:
-            processor.detect_file_type(file_type=None, filename=file.filename or "")
-            await file.seek(0)
-        proxies = [UploadFileProxy(file.filename or "", file.file) for file in files]
-        return await run_in_threadpool(_prepare, proxies)
+        for file in request.files:
+            processor.detect_file_type(file_type=None, filename=file.filename)
+        documents = []
+        for file in request.files:
+            with BytesIO(file.content) as content:
+                try:
+                    result = processor.process(UploadFileProxy(file.filename, content))
+                except Exception as exc:
+                    raise RuntimeError(f"document parsing failed for {file.filename}: {exc}") from exc
+            documents.append(InputDocument(filename=result.filename, html=result.html))
+        path = prepare_resources(documents)
+        return pb.PrepareResourcesResponse(
+            resource_path=path,
+            documents=[pb.Document(filename=doc.filename, html=doc.html) for doc in documents],
+        )
     except (processor.InvalidFileObjectError, processor.UnsupportedFileTypeError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"document resource preparation failed: {exc}") from exc
+        context.abort(grpc.StatusCode.INTERNAL, f"document resource preparation failed: {exc}")
 
 
-def _prepare(files: list[UploadFileProxy]) -> ResourceResponse:
-    documents = []
-    for file in files:
-        try:
-            result = processor.process(file)
-        except Exception as exc:
-            raise RuntimeError(f"document parsing failed for {file.filename}: {exc}") from exc
-        documents.append(InputDocument(filename=result.filename, html=result.html))
-    return ResourceResponse(resource_path=prepare_resources(documents), documents=documents)
+def capabilities(request, context):
+    return pb.CapabilitiesResponse(
+        supported_file_types=["pdf", "docx"], implemented_file_types=["pdf", "docx"],
+        engine="mineru-pipeline,python-docx",
+    )

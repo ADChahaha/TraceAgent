@@ -1,6 +1,6 @@
 # 文档资源设计
 
-本模块负责把解析后的 HTML 准备成可跨轮复用的本机资源。HTTP 层将文件解析与资源准备合并为 `POST /v1/document-resources`；问答接口只接收返回的路径。
+本模块负责把解析后的 HTML 准备成可跨轮复用的本机资源。gRPC 层通过 `PrepareResources` 串联文件解析与资源准备；问答接口只接收返回的路径。
 
 ```text
 files（PDF / DOCX）
@@ -32,4 +32,4 @@ files（PDF / DOCX）
 
 ## 接口选择
 
-准备接口同步返回，backend 继续使用后台文档线程等待。内部解析与资源构建保持独立模块，HTTP 调用方无需传输解析中间产物。
+PrepareResources 同步返回，调用方等待完整资源发布。内部解析与资源构建保持独立模块，gRPC 调用方无需传输解析中间产物；backend 尚未适配新协议。

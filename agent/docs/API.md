@@ -1,115 +1,113 @@
-# Agent Service API
+# Agent gRPC API
 
-先上传一组 PDF / DOCX，准备完成后保存返回的资源路径；每轮问答只回传路径及完整历史 messages。
-
-```text
-files → POST /v1/document-resources → resource_path + documents
-resource_path + messages → POST /v1/document-qa/chat/completions → SSE
-```
-
-两个接口部署在同一个 agent 服务中，共用本机资源目录。backend 无需访问 agent 磁盘。**当前 backend 尚未切换到下面的新契约。**
-
-## 文档解析与资源准备
-
-```http
-POST /v1/document-resources
-Content-Type: multipart/form-data
-```
-
-重复使用 `files` 字段上传一个或多个 PDF / DOCX；文件类型由后缀判断，不接收 task_id。同步等待全部文件解析、文件树生成、分块及文档 embedding 完成。
-
-```bash
-curl -X POST http://127.0.0.1:8001/v1/document-resources \
-  -F "files=@contract.pdf" -F "files=@appendix.docx"
-```
-
-成功返回 200：
-
-```json
-{
-  "resource_path": "D:/TraceAgent/agent/data/resources/res_abc",
-  "documents": [
-    {"filename": "contract.pdf", "html": "<html>...</html>"},
-    {"filename": "appendix.docx", "html": "<html>...</html>"}
-  ]
-}
-```
-
-HTML 用于原文展示；路径用于后续问答。资源发布后不会被 completion 清理，首版没有删除接口或自动过期。
-
-- 缺少文件、后缀不支持等输入错误：422。
-- 解析或资源准备失败：500，detail 标明阶段或文件及原因；不返回可用路径。
-- 任一文件失败则整组失败。调用方的 HTTP 超时需覆盖 OCR 和 embedding 的准备耗时。
-
-## 路径问答
-
-```http
-POST /v1/document-qa/chat/completions
-Content-Type: application/json
-Accept: text/event-stream
-```
-
-```json
-{
-  "completion_id": "cmp_123",
-  "resource_path": "D:/TraceAgent/agent/data/resources/res_abc",
-  "messages": [{"role": "user", "content": "付款条件是什么？"}],
-  "run_options": {"tool_execution_timeout": 60},
-  "model_config": {
-    "base_url": "https://example.com/v1",
-    "api_key": "...",
-    "model_name": "model",
-    "api_transport": "responses"
-  }
-}
-```
-
-- completion_id 必填，1–128 位，以字母或数字开头，其余允许字母、数字、下划线和短横线；活动 ID 不可重复。
-- resource_path 必须是本服务受管理目录下的已发布完整资源，不能传任意本机目录。
-- messages 非空，支持 OpenAI 风格 user / assistant / tool 历史；assistant 可携带 tool_calls，tool 必须携带 tool_call_id。不自动摘要或裁剪。
-- 模型配置可省略，沿用环境配置；api_transport 支持 responses / chat_completions。
-- 不再接收 documents、metadata.task_id 或 workspace_root。stream 保留兼容字段，当前仍始终返回 SSE。
-- 资源缺失、损坏、引用越界、清单版本不支持等在流开始前返回 422，不自动重建。
-
-SSE 按 seq 从 1 递增：
+服务名为 `traceagent.v1.AgentService`，协议见 [agent.proto](../../agent_proto/agent.proto)。调用方先准备文档，再保存资源路径并用于每轮问答：
 
 ```text
-event: completion.created
-data: {"type":"completion.created","status":"in_progress","seq":1}
+PrepareResources(files) → 解析与索引构建 → resource_path + documents
+ChatCompletion(resource_path + messages) → 校验资源 → 单轮执行 → CompletionEvent 流
+CancelCompletion(completion_id) → 立即确认取消请求 → 原问答流随后收尾
 ```
 
-| 事件 | 含义 |
+agent 的 HTTP 路由已移除。backend 尚未适配 gRPC，以下示例使用生成的 Python 客户端。
+
+## 准备文档和问答
+
+先安装仓库根目录的共享包（`pip install -e ./agent_proto`）。agent 和后端均从 agent_proto 导入协议，调用方不需要安装 agent 业务包：
+
+```python
+from pathlib import Path
+import grpc
+from agent_proto import agent_pb2 as pb, agent_pb2_grpc
+
+with grpc.insecure_channel("127.0.0.1:8001", options=[
+    ("grpc.max_send_message_length", 64 * 1024 * 1024),
+    ("grpc.max_receive_message_length", 64 * 1024 * 1024),
+]) as channel:
+    client = agent_pb2_grpc.AgentServiceStub(channel)
+    source = Path("contract.docx")
+    resource = client.PrepareResources(pb.PrepareResourcesRequest(files=[
+        pb.UploadedFile(filename=source.name, content=source.read_bytes()),
+    ]), timeout=1200)
+    stream = client.ChatCompletion(pb.ChatCompletionRequest(
+        completion_id="cmp_001",
+        resource_path=resource.resource_path,
+        messages=[pb.QaMessage(role="user", content="付款期限是多少？")],
+    ), timeout=300)
+    for event in stream:
+        if event.type == "model_message":
+            print(event.content)
+        if event.type.startswith("completion."):
+            print(event.type)
+```
+
+PrepareResources 为一元 RPC：一次传入全部文件的 filename/bytes，按后缀选择 PDF 或 DOCX；等待全部解析和资源发布后返回 resource_path 与 documents(filename/html)。没有分块上传。请求、响应各受配置消息上限约束，上传 bytes 与返回 HTML 都要计入大小。任一文件处理失败则整组失败，不返回可用路径；已发布资源不会随问答结束删除。
+
+## 问答请求
+
+ChatCompletion 为服务端流 RPC。输入转换为现有 DocumentQaMessage、RunOptions 和 ModelConfig，然后交给 CompletionManager：
+
+- completion_id：1–128 位，以字母或数字开头，其余允许字母、数字、下划线、短横线；活动 ID 不可重复。
+- resource_path：必须指向受管理根目录下的完整资源；缺失、损坏、版本错误或引用越界均拒绝，不自动重建。
+- messages：非空，支持 system/user/assistant/tool，保留完整历史，不自动摘要或裁剪。tool 必须有 tool_call_id。
+- QaMessage.tool_calls_json：可选 JSON 数组，内容为原历史工具调用；tool_call_id、name 使用独立字段。
+- run_options：可选，未传字段沿用业务默认值（max_tool_calls=200、tool_execution_timeout=60）；显式 0 不会被替换成默认值。
+- model_config：可选，字段与内部 ModelConfig 对应；未提供时沿用模型环境配置。嵌套配置优先于兼容的扁平 base_url/api_key/openai_api_key/model/api_transport/temperature/top_p/top_k。
+- 可选标量使用 protobuf presence 区分“未传”和零值。stream 字段保留，但该 RPC 始终流式返回。
+- 不定义旧 documents、metadata、memory、task_spec 字段；protobuf 的未知字段处理遵循协议自身规则，不提供旧 JSON 请求兼容。
+
+## 问答事件
+
+运行时逐条 yield 事件字典，接口层转换为 CompletionEvent，gRPC 自行分帧；不再套 SSE 文本。seq 从 1 连续递增，每条流绑定一个 completion，不重复携带 completion_id。
+
+| type | 内容 |
 | --- | --- |
-| completion.created | 开始执行 |
-| source_indexed | 启动确认，result 仅为 {"ok":true}，不携带资源路径或文档树 |
-| model_message | 可见正文、tool_calls、is_final 和可选 stop_signal |
-| tool_started | 已发布的工具调用 ID、名称与参数 |
-| tool_completed / tool_failed | 对应调用的结果 |
-| completion.completed / completion.cancelled / completion.failed | 唯一终态 |
+| completion.created | 开始执行，status=in_progress |
+| source_indexed | 启动确认，result_json 为 `{"ok":true}`，不返回文档树 |
+| model_message | content、tool_calls、tool_call_count、is_final、可选 stop_signal |
+| tool_started | tool、tool_call_id、args_json |
+| tool_completed / tool_failed | 对应调用的 args_json、result_json |
+| completion.completed / completion.cancelled / completion.failed | 唯一业务终态、status、可选 error/error_message |
 
-最终回答由 is_final=true 标记，在结论句后引用真实 Markdown 路径。取消已发布工具批次时，先配齐结果再结束。
+args_json、result_json 及 ToolCall.args_json 用 JSON 字符串保留动态结构、大整数和 null；客户端用 json.loads 解码。其余固定字段使用 protobuf 类型，可选字段可用 HasField 判断。最终回答由 is_final=true 标记；工具调用 ID 仍用于配对，模型引用 documents 下的真实 Markdown 路径。
 
-问答执行层异常的 tool_failed 事件使用 `tool: "qa"` 标记阶段；具体工具失败仍使用 read、grep 等实际工具名称。
+## 取消与连接生命周期
 
-## 取消与查询
-
-```http
-POST /v1/document-qa/chat/completions/{completion_id}/cancel
+```python
+response = client.CancelCompletion(
+    pb.CompletionRequest(completion_id="cmp_001"), timeout=2,
+)
+print(response.status)
 ```
 
-返回 `{"id":"cmp_123","status":"cancelling"}`；未找到活动 completion 时返回 not_found。已取消或结束的 completion 不会删除文档资源。
+业务取消立即返回 cancelling，不等待模型或工具退出。重复取消返回当前状态；完成先发生时返回实际终态，注册项移除后返回 not_found。
 
-`GET /v1/document-qa/chat/completions/{completion_id}` 仍返回 `{"status":"not_implemented"}`。
+```text
+CancelCompletion
+  → manager 找到本轮 runtime → 锁内设置取消标志 → 返回
+  → 原问答流按 FIFO 发出已提交事件
+  → 无活动工具批次：立即唤醒 consumer
+  → 有活动工具批次：先配齐结果，不再请求下一轮模型
+  → completion.cancelled → 关闭流、移除注册项
+```
 
-`GET /healthz` 返回 `{"status":"ok"}`；`GET /v1/ocr/capabilities` 返回 PDF / DOCX 支持情况。
+要接收收尾事件，保持原问答流打开。客户端直接 stream.cancel()、断连或 deadline 到期，表示放弃这条 RPC：回调绑定本轮 CompletionStream，通知 runtime 停止后续生产并唤醒 consumer，由 finally 关闭内层迭代器并清理注册项。连接已断时不保证发送业务终态，也不等待工具结果补齐。
 
-## 部署配置
+逻辑取消不保证底层同步模型请求或工具线程立即物理停止；它们继续受自身 timeout/deadline 约束。资源准备也是同步操作，客户端放弃 RPC 不保证正在执行的 OCR/embedding 立即停止，完成后可能留下已发布资源。
 
-- `DOCUMENT_RESOURCES_ROOT`：持久资源根目录。
-- `EMBEDDING_MODEL`、`EMBEDDING_BACKEND`、`EMBEDDING_CHUNK_SIZE`、`EMBEDDING_CHUNK_OVERLAP`：准备阶段配置；查询使用资源清单记录的配置。
-- `BASE_URL`、`OPENAI_API_KEY`、`MODEL`、`MODEL_API_TRANSPORT`：问答模型配置。
-- `MINERU_BIN`、`DOCUMENT_PROCESSOR_MINERU_LANG`：PDF 解析配置。
+## 状态、能力和错误
 
-旧 `/v1/document-processor/process`、专用 DOCX 路由和旧 OCR process 路由不再提供。
+- GetCompletion：保留占位语义，返回请求 ID 与 status=not_implemented。
+- GetCapabilities：返回 PDF/DOCX 支持情况及 engine。
+- 标准 grpc.health.v1.Health/Check：服务名为空或 traceagent.v1.AgentService 时返回 SERVING，仅用于进程探活，不检查模型可用性。
 
-SSE 事件不包含 completion ID，调用方使用发起请求时的 ID 关联该流；工具调用 ID 保留用于配对。completion.created 表示开始执行，source_indexed 仅确认启动，不返回文档内容。
+| 情况 | 响应 |
+| --- | --- |
+| 上传类型/参数、消息或资源校验失败，活动 ID 重复 | INVALID_ARGUMENT，首事件前返回 |
+| 文档解析、资源准备或问答初始化异常 | INTERNAL |
+| 开始执行后的模型/工具循环异常 | 原流的 completion.failed；普通工具失败可继续执行 |
+| 消息超过配置上限、长任务槽已满 | RESOURCE_EXHAUSTED |
+| 客户端直接取消或 deadline 到期 | 客户端观察 CANCELLED / DEADLINE_EXCEEDED |
+
+每次 RPC 应设置符合 OCR、embedding 或问答耗时的 deadline；取消请求使用独立短超时。不要盲目重试资源准备或问答创建：响应丢失时服务端可能已执行，本版不提供持久幂等或事件重放。
+
+部署参数、消息上限和协议生成命令见 [README](../README.md)。问答内存队列仍未设置容量上限；本次未引入多实例路由、持久任务或新的资源生命周期。

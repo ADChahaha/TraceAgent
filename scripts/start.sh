@@ -79,8 +79,8 @@ start_service() {
   fi
 }
 
-start_service "agent    http://${AGENT_HOST}:${AGENT_PORT}" \
-  python -m uvicorn --app-dir agent main:app --host "$AGENT_HOST" --port "$AGENT_PORT"
+start_service "agent    gRPC ${AGENT_HOST}:${AGENT_PORT}" \
+  python agent/main.py --host "$AGENT_HOST" --port "$AGENT_PORT"
 
 start_service "backend  http://${BACKEND_HOST}:${BACKEND_PORT}" \
   env AGENT_SERVICE_BASE_URL="$AGENT_SERVICE_BASE_URL" \
@@ -92,7 +92,7 @@ start_service "frontend http://${FRONTEND_HOST}:${FRONTEND_PORT}" \
 
 echo
 echo "TraceAgent is running:"
-echo "  agent:    http://${AGENT_HOST}:${AGENT_PORT}"
+echo "  agent:    gRPC ${AGENT_HOST}:${AGENT_PORT}"
 echo "  backend:  http://${BACKEND_HOST}:${BACKEND_PORT}"
 echo "  frontend: http://${FRONTEND_HOST}:${FRONTEND_PORT}"
 echo

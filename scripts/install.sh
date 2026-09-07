@@ -15,8 +15,8 @@ fi
 
 cd "$ROOT_DIR"
 
-echo "Installing agent..."
-python -m pip install -e agent
+echo "Installing shared protocol and agent..."
+python -m pip install -e ./agent_proto -e agent
 
 echo "Installing backend..."
 python -m pip install -e backend

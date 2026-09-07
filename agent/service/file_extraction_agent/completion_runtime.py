@@ -1,4 +1,4 @@
-"""单轮问答：执行模型/工具循环 → 包装事件 → 队列提交 → SSE 输出与取消收尾。
+"""单轮问答：执行模型/工具循环 → 包装事件 → 队列提交 → 事件输出与取消收尾。
 
 CompletionRuntime 独立持有输入、模型、生产线程、锁与事件队列。已发布工具批次先配齐
 结果再取消，终态只提交一次；本模块不维护运行时注册表，也不导入 CompletionManager。
@@ -107,12 +107,6 @@ def _message_content_text(content: Any) -> str:
     return "".join(parts)
 
 
-def _sse(event: dict[str, Any]) -> str:
-    event_type = event.get("type", "message")
-    data = json.dumps(_plain(event), ensure_ascii=False, separators=(",", ":"))
-    return f"event: {event_type}\ndata: {data}\n\n"
-
-
 def _plain(value: Any) -> Any:
     if is_dataclass(value) and not isinstance(value, type):
         return asdict(value)
@@ -132,7 +126,7 @@ class CompletionRuntime:
 
     stream()
       -> 首次迭代时启动 producer 线程（target=_produce）
-      -> 循环 queue.get() 取事件：普通事件编码为 SSE 后 yield；_QUEUE_CANCEL/_QUEUE_DONE/终态事件
+      -> 循环 queue.get() 取事件：普通事件分配 seq 后以字典 yield；_QUEUE_CANCEL/_QUEUE_DONE/终态事件
          则 close_once 后收口并结束
       -> finally 确保终态唯一并释放运行时（注册表移除由 CompletionManager 托管）
 
@@ -162,42 +156,45 @@ class CompletionRuntime:
         self._pending_tool_ids: set[str] = set()
         self.queue: queue.Queue[dict[str, Any] | object] = queue.Queue()
 
-    def stream(self) -> Iterable[str]:
-        def run() -> Iterable[str]:
+    def stream(self) -> Iterable[dict[str, Any]]:
+        def run() -> Iterable[dict[str, Any]]:
             next_seq = 1
 
-            def encode(event: dict[str, Any]) -> str:
+            def number(event: dict[str, Any]) -> dict[str, Any]:
                 nonlocal next_seq
-                frame = _sse({**event, "seq": next_seq})
+                frame = _plain({**event, "seq": next_seq})
                 next_seq += 1
                 return frame
 
-            if not self.should_cancel():
-                producer = threading.Thread(
-                    target=self._produce,
-                    name="qa-completion",
-                    daemon=True,
-                )
-                producer.start()
+            with self._lock:
+                if self.closed:
+                    return
+                if not self.cancel_requested:
+                    producer = threading.Thread(
+                        target=self._produce,
+                        name="qa-completion",
+                        daemon=True,
+                    )
+                    producer.start()
             try:
                 while True:
                     event = self.queue.get()
                     if event is _QUEUE_CANCEL:
                         if self.close_once("cancelled"):
-                            yield encode(_completion_event("cancelled"))
+                            yield number(_completion_event("cancelled"))
                         return
                     if event is _QUEUE_DONE:
                         if self.close_once("completed"):
-                            yield encode(_completion_event("completed"))
+                            yield number(_completion_event("completed"))
                         return
                     if not isinstance(event, dict):
                         continue
                     status = _terminal_status(event)
                     if status is not None:
                         if self.close_once(status):
-                            yield encode(event)
+                            yield number(event)
                         return
-                    yield encode(event)
+                    yield number(event)
             finally:
                 if not self.is_closed():
                     self.close_once("cancelled")
@@ -224,6 +221,16 @@ class CompletionRuntime:
         finally:
             if not terminal_committed:
                 self.commit_done()
+
+    def disconnect(self) -> None:
+        """连接已断：停止后续生产并唤醒 consumer；不等待工具批次补齐。"""
+        with self._lock:
+            if self.closed:
+                return
+            self.cancel_requested = True
+            self.closed = True
+            self.status = "cancelled"
+            self.queue.put(_QUEUE_CANCEL)
 
     def terminate(self) -> str:
         with self._lock:

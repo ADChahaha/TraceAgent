@@ -1,0 +1,100 @@
+syntax = "proto3";
+package traceagent.v1;
+
+// 文件准备和单轮问答共享同一服务进程及本机资源目录。
+service AgentService {
+  rpc PrepareResources(PrepareResourcesRequest) returns (PrepareResourcesResponse);
+  rpc ChatCompletion(ChatCompletionRequest) returns (stream CompletionEvent);
+  rpc CancelCompletion(CompletionRequest) returns (CompletionResponse);
+  rpc GetCompletion(CompletionRequest) returns (CompletionResponse);
+  rpc GetCapabilities(Empty) returns (CapabilitiesResponse);
+}
+message Empty {}
+message UploadedFile {
+  string filename = 1;
+  bytes content = 2;
+}
+message PrepareResourcesRequest { repeated UploadedFile files = 1; }
+message Document {
+  string filename = 1;
+  string html = 2;
+}
+message PrepareResourcesResponse {
+  string resource_path = 1;
+  repeated Document documents = 2;
+}
+message QaMessage {
+  string role = 1;
+  string content = 2;
+  // 完整历史工具调用数组，保留现有消息转换器支持的 JSON 结构。
+  optional string tool_calls_json = 3;
+  optional string tool_call_id = 4;
+  optional string name = 5;
+}
+message RunOptions {
+  optional int32 max_tool_calls = 1;
+  optional double tool_execution_timeout = 2;
+}
+message ModelConfig {
+  optional string provider = 1;
+  optional string base_url = 2;
+  optional string api_key = 3;
+  optional string model_name = 4;
+  optional string api_transport = 5;
+  optional double temperature = 6;
+  optional double top_p = 7;
+  optional int32 top_k = 8;
+  optional string reasoning_effort = 9;
+  optional int32 max_retries = 10;
+  optional double request_timeout = 11;
+}
+message ChatCompletionRequest {
+  string completion_id = 1;
+  string resource_path = 2;
+  repeated QaMessage messages = 3;
+  RunOptions run_options = 4;
+  ModelConfig model_config = 5;
+  // 保留原有模型覆盖字段；嵌套 model_config 存在时优先使用。
+  optional string base_url = 6;
+  optional string api_key = 7;
+  optional string openai_api_key = 8;
+  optional string model = 9;
+  optional string api_transport = 10;
+  optional double temperature = 11;
+  optional double top_p = 12;
+  optional int32 top_k = 13;
+  // 兼容原请求字段；该 RPC 始终流式返回。
+  optional bool stream = 14;
+  reserved "documents", "metadata", "memory", "task_spec";
+}
+message ToolCall {
+  string id = 1;
+  string name = 2;
+  string args_json = 3;
+}
+message CompletionEvent {
+  string type = 1;
+  uint64 seq = 2;
+  optional string status = 3;
+  optional string content = 4;
+  optional string tool = 5;
+  optional string tool_call_id = 6;
+  optional string args_json = 7;
+  optional string result_json = 8;
+  repeated ToolCall tool_calls = 9;
+  optional uint32 tool_call_count = 10;
+  optional bool is_final = 11;
+  optional string stop_signal = 12;
+  optional string error = 13;
+  optional string error_message = 14;
+}
+message CompletionRequest { string completion_id = 1; }
+message CompletionResponse {
+  string id = 1;
+  string status = 2;
+}
+message CapabilitiesResponse {
+  repeated string supported_file_types = 1;
+  repeated string implemented_file_types = 2;
+  string engine = 3;
+}

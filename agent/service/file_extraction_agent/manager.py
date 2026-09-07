@@ -1,6 +1,6 @@
 """问答注册表：校验输入与资源 → 装配模型 → 注册 CompletionRuntime → 流结束后移除。
 
-CompletionManager 根据 completion_id 查找、取消或查询运行时；SSE、线程、队列和
+CompletionManager 根据 completion_id 查找、取消或查询运行时；事件流、线程、队列和
 单轮终态由 completion_runtime.py 负责。注册表仅在单进程中有效，问答结束保留资源。
 """
 
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 import threading
-from typing import Any, Iterable
+from typing import Any, Callable, Iterator
 
 from service.file_extraction_agent.completion_runtime import CompletionRuntime
 from service.file_extraction_agent.core.model import build_qa_model
@@ -16,13 +16,49 @@ from service.file_extraction_agent.core.tools.workspace import validate_resource
 from service.file_extraction_agent.schemas import DocumentQaMessage, ModelConfig, RunOptions
 
 
+class CompletionStream(Iterator[dict[str, Any]]):
+    """托管事件迭代器：消费 runtime → 关闭内层流 → 按对象身份移除注册项。
+
+    disconnect 供传输层回调使用，只唤醒运行时，不跨线程关闭生成器。
+    close 由消费者调用；即使从未迭代，也会释放注册项。
+    """
+
+    def __init__(self, runtime: CompletionRuntime, remove: Callable[[], None]) -> None:
+        self._runtime = runtime
+        self._events = iter(runtime.stream())
+        self._remove = remove
+        self._closed = False
+
+    def __next__(self) -> dict[str, Any]:
+        if self._closed:
+            raise StopIteration
+        try:
+            return next(self._events)
+        except BaseException:
+            self.close()
+            raise
+
+    def disconnect(self) -> None:
+        self._runtime.disconnect()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self.disconnect()
+        try:
+            self._events.close()
+        finally:
+            self._remove()
+
+
 class CompletionManager:
     """进程内多个 document-QA chat completion 的注册表与协调。
 
     create(...) 装配 路径 + model，构造一个 CompletionRuntime（单 completion 的
-    运行时）并注册，返回其 stream() 产出的 SSE 流；terminate / get_status 转发到
+    运行时）并注册，返回其 stream() 产出的事件字典流；terminate / get_status 转发到
     对应 runtime；stream 结束后由托管包装从注册表移除。单实例持有注册表 + 锁，
-    应按单进程单实例部署（多 uvicorn worker 不同进程间不共享 cancel 状态）。
+    应按单进程单实例部署；同进程 gRPC worker 共享注册表，多进程不共享 cancel 状态。
     """
 
     def __init__(self) -> None:
@@ -37,7 +73,7 @@ class CompletionManager:
         messages: list[DocumentQaMessage],
         model_config: ModelConfig | None = None,
         run_options: RunOptions | None = None,
-    ) -> Iterable[str]:
+    ) -> CompletionStream:
         if not isinstance(completion_id, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", completion_id) is None:
             raise ValueError("completion_id must be a safe non-empty identifier")
         if not messages:
@@ -66,17 +102,14 @@ class CompletionManager:
             return None
         return {"id": completion_id, "status": runtime.get_status()}
 
-    def _managed_stream(self, completion_id: str, runtime: CompletionRuntime) -> Iterable[str]:
+    def _managed_stream(self, completion_id: str, runtime: CompletionRuntime) -> CompletionStream:
         """闭包绑定 ID 与运行时，流结束只移除仍指向该对象的注册项。"""
-        def run() -> Iterable[str]:
-            try:
-                yield from runtime.stream()
-            finally:
-                with self._lock:
-                    if self._completions.get(completion_id) is runtime:
-                        self._completions.pop(completion_id, None)
+        def remove() -> None:
+            with self._lock:
+                if self._completions.get(completion_id) is runtime:
+                    self._completions.pop(completion_id, None)
 
-        return run()
+        return CompletionStream(runtime, remove)
 
 
 completion_manager = CompletionManager()

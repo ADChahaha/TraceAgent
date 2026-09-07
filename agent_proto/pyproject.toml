@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "traceagent-protocol"
+version = "0.1.0"
+description = "Shared gRPC contract for TraceAgent services."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["grpcio>=1.83.1,<2", "protobuf>=7.35.1,<8"]
+
+[project.optional-dependencies]
+dev = ["grpcio-tools==1.83.1"]
+
+[tool.setuptools]
+packages = ["agent_proto"]
+package-dir = { agent_proto = "." }
+
+[tool.setuptools.package-data]
+agent_proto = ["*.proto", "*.pyi"]

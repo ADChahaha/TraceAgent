@@ -1,51 +1,67 @@
 # Agent Service
 
-agent 提供文档准备与路径问答两个 HTTP 入口。文档准备将 PDF / DOCX 解析成 HTML，并生成可跨轮复用的 Markdown 文件树与 embedding 索引；问答读取资源路径并通过 SSE 输出回答。
+agent 在单个进程中提供 gRPC 文档准备与路径问答。文档准备把 PDF/DOCX 转为 HTML、Markdown 文件树和 embedding 索引；问答复用本机资源，通过服务端流逐条返回 protobuf 事件。
 
 ```text
-上传 files → POST /v1/document-resources → resource_path + documents（filename/html）
-提交 resource_path + messages → POST /v1/document-qa/chat/completions → SSE
+PrepareResources(files: filename + bytes)
+  → document_processor.process → document_resources.prepare_resources
+  → resource_path + documents(filename/html)
+
+ChatCompletion(completion_id + resource_path + messages)
+  → CompletionManager → 模型/工具循环 → 带 seq 的事件字典
+  → gRPC CompletionEvent 流 → 清理本轮注册项，保留文档资源
 ```
 
-两个入口部署在同一个 agent 服务中，共用本机资源目录。backend 保存、回传路径，无需读取 agent 磁盘。本次只改 agent，backend 仍需后续适配新接口。
+本次只迁移 agent；backend 仍使用旧 HTTP 客户端，尚不能调用新服务。
 
-## 启动
+## 启动与探活
+
+从 agent 目录运行：
 
 ```bash
 conda activate agent-gate
-pip install -e ".[dev,embeddings]"
-python -m uvicorn main:app --host 127.0.0.1 --port 8001
+pip install -e ../agent_proto -e ".[dev,embeddings]"
+python main.py --host 127.0.0.1 --port 8001
 ```
 
-准备阶段必须安装 embedding 依赖；PDF 需要 MinerU，DOCX 使用 python-docx。默认 embedding 后端为 OpenVINO。
-
-启动前配置问答模型的 `BASE_URL`、`OPENAI_API_KEY`、`MODEL`，可选 `MODEL_API_TRANSPORT=responses` 或 `chat_completions`。PDF 语言使用 `DOCUMENT_PROCESSOR_MINERU_LANG`（默认 japan，中文可设 ch）。
-
-资源目录由 `DOCUMENT_RESOURCES_ROOT` 配置，默认 `agent/data/resources`。`EMBEDDING_MODEL`、`EMBEDDING_BACKEND`、分块参数在准备阶段记录到资源清单；查询沿用记录的模型配置。资源不会随问答结束删除，首版无自动过期或删除接口。
-
-completion cancel 依赖进程内注册表，使用单 worker。启动后 `GET /healthz` 探活，`GET /docs` 查看 OpenAPI。
-
-## 模块
-
-| 目录 | 职责 |
-| --- | --- |
-| routes | HTTP 校验、线程池调度和错误映射 |
-| service/document_processor | PDF / DOCX → HTML |
-| service/document_resources | HTML → 文档树、embedding 索引、资源清单；路径加载 |
-| service/file_extraction_agent | 路径问答、模型/工具循环、事件和取消管理 |
-
-问答工具为 ls / grep / read / search_embedding。模型引用 documents 目录下真实 Markdown 路径，最终回答以 is_final=true 标记。agent 不存储多轮会话或 backend 数据库。
-
-## 文档与验证
-
-- [HTTP API](docs/API.md)：上传和问答请求示例、响应与错误。
-- [服务设计](docs/DESIGN.md)：模块边界和生命周期。
-- [资源设计](service/document_resources/docs/DESIGN.md)：本地资源准备与加载。
-- [问答设计](service/file_extraction_agent/docs/DESIGN.md)：批次消息、工具与取消。
+另一个终端可执行：
 
 ```bash
 conda activate agent-gate
+python main.py --check-health 127.0.0.1:8001 --timeout 5
+```
+
+探活使用标准 `grpc.health.v1.Health/Check`，成功输出 SERVING、退出码为 0，失败为 1。不再提供 HTTP 路由或 OpenAPI 页面。仓库根目录的 `scripts/start.sh` 已改用 gRPC 入口；它仍会启动未迁移的 backend。
+
+| 参数 / 环境变量 | 默认值 | 用途 |
+| --- | --- | --- |
+| `--host` / `AGENT_HOST` | 127.0.0.1 | 监听地址 |
+| `--port` / `AGENT_PORT` | 8001 | gRPC 端口 |
+| `--workers` / `AGENT_GRPC_WORKERS` | 16 | 同一进程内的 RPC worker 数，至少 3 |
+| `--max-message-bytes` / `AGENT_GRPC_MAX_MESSAGE_BYTES` | 67108864 | 单条请求和响应的 64 MiB 上限 |
+
+资源准备与问答最多占用 workers−2 个槽，达到容量即返回 RESOURCE_EXHAUSTED，预留线程处理取消、查询和探活。客户端也须配置足够的消息接收上限，尤其是多文档 HTML 响应。当前使用明文 gRPC，与原本机服务部署边界一致。
+
+准备阶段需要 embedding 依赖；PDF 使用 MinerU，DOCX 使用 python-docx。默认 embedding 后端为 OpenVINO。问答模型配置 `BASE_URL`、`OPENAI_API_KEY`、`MODEL`；可选 `MODEL_API_TRANSPORT=responses` 或 `chat_completions`。PDF 语言由 `DOCUMENT_PROCESSOR_MINERU_LANG` 指定，默认 japan。
+
+资源根目录为 `DOCUMENT_RESOURCES_ROOT`，默认 agent/data/resources；资源不会随问答完成、失败或取消而删除。注册表仍在单进程内，多进程和跨机器资源调度不在本次迁移范围。
+
+## 协议与验证
+
+共享协议位于与 agent、backend 同级的 [agent_proto](../agent_proto/README.md)，协议源为 [agent.proto](../agent_proto/agent.proto)。源码和绑定由独立的 traceagent-protocol wheel 发布，agent wheel 只声明依赖。后端可独立安装共享包。修改协议后，从仓库根目录重新生成：
+
+```bash
+conda activate agent-gate
+python -m grpc_tools.protoc -I. --python_out=. --pyi_out=. --grpc_python_out=. agent_proto/agent.proto
+cd agent
 python -m pytest tests -q
 ```
 
-测试包含真实 DOCX 解析、替身 embedding、路径复用、取消竞态及 wheel 安装包内容验证；不依赖真实 provider 或下载 embedding 模型。
+dev 依赖固定代码生成器版本，测试会重新生成并比对绑定；不要手工修改生成文件。
+
+- [gRPC API](docs/API.md)：客户端示例、事件和错误。
+- [服务设计](docs/DESIGN.md)：通信、线程与生命周期边界。
+- [资源设计](service/document_resources/docs/DESIGN.md)：资源构建和发布。
+- [问答设计](service/file_extraction_agent/docs/DESIGN.md)：模型、工具批次与取消。
+
+测试使用真实 RPC 和 DOCX，模型与 embedding 使用替身；不要求下载模型或访问真实 provider。

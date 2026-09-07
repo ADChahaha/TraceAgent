@@ -14,5 +14,5 @@ agent/pyproject.toml
 
 ## 测试函数
 
-- `test_agent_pyproject_declares_direct_runtime_dependencies`：验证 `langchain-core`、`pydantic`、`starlette` 这些 agent 运行时代码直接 import 的包被显式写入 `project.dependencies`。
-- `test_agent_pyproject_declares_direct_test_dependencies`：验证 `httpx` 和 `pytest` 写入 `project.optional-dependencies.dev`，保证 `fastapi.testclient` 相关测试在干净开发环境中可运行。
+- `test_agent_pyproject_declares_direct_runtime_dependencies`：显式声明 grpcio、protobuf、标准探活及原业务依赖，移除 agent 的 HTTP 服务直接依赖。
+- `test_agent_pyproject_declares_direct_test_dependencies`：声明 grpcio-tools 与 pytest，确保协议生成校验和 RPC 测试可在开发环境运行。

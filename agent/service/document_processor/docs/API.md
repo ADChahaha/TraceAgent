@@ -1,6 +1,6 @@
 # Document Processor API
 
-本模块提供内部 Python 解析接口。对外 HTTP 由文档资源 route 统一串联解析与索引构建，返回资源路径与 HTML。`process(...)` 是唯一公共入口，按类型分流：
+本模块提供内部 Python 解析接口。对外 gRPC 由文档资源适配层 统一串联解析与索引构建，返回资源路径与 HTML。`process(...)` 是唯一公共入口，按类型分流：
 PDF 走 MinerU，DOCX 走 `python-docx`，两者返回同一个 `ProcessResult` 形状。
 
 ## Python Entry
@@ -31,9 +31,9 @@ Failures:
 - PDF MinerU failure: `MinerUConversionError`
 - DOCX parse failure: `python-docx` raises the underlying package exception.
 
-## HTTP 边界
+## gRPC 边界
 
-独立解析 HTTP 入口已合并到 `POST /v1/document-resources`，接收多个 files，完成解析、文档树和 embedding 后返回 resource_path 与 documents。请求示例和错误码见 [agent API](../../../docs/API.md)。
+对外通过 `PrepareResources` 接收多个 filename/bytes，完成解析、文档树和 embedding 后返回 resource_path 与 documents。请求示例和错误码见 [agent API](../../../docs/API.md)。
 
 本模块仍只返回 ProcessResult(filename, html)，不承担资源目录或索引生命周期。
 

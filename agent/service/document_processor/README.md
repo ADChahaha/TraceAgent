@@ -23,9 +23,7 @@ print(pdf_result.filename)
 print(pdf_result.html)
 ```
 
-HTTP endpoints:
-
-- `POST /v1/document-processor/process` (PDF/DOCX, dispatched by `file_type` or filename suffix)
+网络入口为 gRPC `PrepareResources`：先调用本模块解析 PDF/DOCX，再建立资源目录和索引；本模块的 Python 接口不变。
 
 ## Pipeline
 

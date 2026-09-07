@@ -1,105 +1,105 @@
-"""HTTP routes for document QA chat completions."""
+"""protobuf 请求 → 业务校验与模型配置 → manager 事件流 → protobuf 响应。
 
-from __future__ import annotations
+输入错误在首事件前返回 INVALID_ARGUMENT，初始化异常返回 INTERNAL；
+执行异常保留 completion.failed。业务取消立即返回，RPC 断连则通知本轮
+CompletionStream 并由 consumer finally 清理，避免旧 ID 回调误取消新问答。
+"""
 
-from typing import Any
+import json
+from dataclasses import fields
+from typing import Any, Iterable
 
-from fastapi import APIRouter, HTTPException, status
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
-from starlette.concurrency import run_in_threadpool
+import grpc
+
+from agent_proto import agent_pb2 as pb
 from service.file_extraction_agent.manager import completion_manager
-
-from service.file_extraction_agent.schemas import (
-    DocumentQaMessage,
-    ModelConfig,
-    RunOptions,
-)
+from service.file_extraction_agent.schemas import DocumentQaMessage, ModelConfig, RunOptions
 
 
-router = APIRouter(tags=["document-qa"])
+def _options(message, schema):
+    return schema(**{field.name: getattr(message, field.name)
+                     for field in fields(schema) if message.HasField(field.name)})
 
 
-class ChatCompletionRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    completion_id: str
-    resource_path: str
-    messages: list[DocumentQaMessage]
-    stream: bool = True
-    run_options: RunOptions | None = None
-    model_config_override: ModelConfig | None = Field(
-        default=None,
-        alias="model_config",
-    )
-    base_url: str | None = None
-    api_key: str | None = None
-    openai_api_key: str | None = None
-    model: str | None = None
-    api_transport: str | None = None
-    temperature: float | None = None
-    top_p: float | None = None
-    top_k: int | None = None
+def _messages(request):
+    messages = []
+    for message in request.messages:
+        values = {"role": message.role, "content": message.content}
+        for field in ("tool_call_id", "name"):
+            if message.HasField(field):
+                values[field] = getattr(message, field)
+        if message.HasField("tool_calls_json"):
+            values["tool_calls"] = json.loads(message.tool_calls_json)
+        messages.append(DocumentQaMessage.model_validate(values))
+    return messages
 
 
-@router.post("/v1/document-qa/chat/completions")
-async def create_chat_completion(request: ChatCompletionRequest) -> StreamingResponse:
-    try:
-        stream = await run_in_threadpool(_create_chat_completion_stream, request)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=str(exc),
-        ) from exc
-    return StreamingResponse(stream, media_type="text/event-stream")
-
-
-@router.get("/v1/document-qa/chat/completions/{completion_id}")
-async def get_chat_completion(completion_id: str) -> dict[str, Any]:
-    del completion_id
-    return {"status": "not_implemented"}
-
-
-@router.post("/v1/document-qa/chat/completions/{completion_id}/cancel")
-async def cancel_chat_completion(completion_id: str) -> dict[str, Any]:
-    return completion_manager.terminate(completion_id)
-
-
-def _create_chat_completion_stream(request: ChatCompletionRequest):
-    return completion_manager.create(
-        completion_id=request.completion_id,
-        resource_path=request.resource_path,
-        messages=request.messages,
-        run_options=request.run_options,
-        model_config=_model_config(request),
-    )
-
-
-def _model_config(request: ChatCompletionRequest) -> ModelConfig | None:
-    if request.model_config_override is not None:
-        return request.model_config_override
-
-    if not any(
-        value is not None
-        for value in (
-            request.base_url,
-            request.api_key,
-            request.openai_api_key,
-            request.model,
-            request.api_transport,
-            request.temperature,
-            request.top_p,
-            request.top_k,
-        )
-    ):
+def _model_config(request):
+    if request.HasField("model_config"):
+        return _options(request.model_config, ModelConfig)
+    names = ("base_url", "api_key", "openai_api_key", "model", "api_transport",
+             "temperature", "top_p", "top_k")
+    values = {name: getattr(request, name) for name in names if request.HasField(name)}
+    if not values:
         return None
-
     return ModelConfig(
-        base_url=request.base_url,
-        api_key=request.api_key or request.openai_api_key,
-        model_name=request.model or "",
-        api_transport=request.api_transport or "responses",
-        temperature=request.temperature if request.temperature is not None else 0.0,
-        top_p=request.top_p,
-        top_k=request.top_k,
+        base_url=values.get("base_url"),
+        api_key=values.get("api_key") or values.get("openai_api_key"),
+        model_name=values.get("model") or "",
+        api_transport=values.get("api_transport") or "responses",
+        temperature=values.get("temperature", 0.0),
+        top_p=values.get("top_p"), top_k=values.get("top_k"),
     )
+
+
+def _json(value):
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+
+
+def event_message(event: dict[str, Any]) -> pb.CompletionEvent:
+    """固定字段按 protobuf 类型传输，动态 args/result 保留 JSON 的数值和空值。"""
+    values = {key: value for key, value in event.items()
+              if key not in {"args", "result", "tool_calls"}}
+    for name in ("args", "result"):
+        if name in event:
+            values[f"{name}_json"] = _json(event[name])
+    if "tool_calls" in event:
+        values["tool_calls"] = [
+            pb.ToolCall(id=call["id"], name=call["name"], args_json=_json(call["args"]))
+            for call in event["tool_calls"]
+        ]
+    return pb.CompletionEvent(**values)
+
+
+def create_chat_completion(request, context) -> Iterable[pb.CompletionEvent]:
+    try:
+        stream = completion_manager.create(
+            completion_id=request.completion_id,
+            resource_path=request.resource_path,
+            messages=_messages(request),
+            run_options=_options(request.run_options, RunOptions) if request.HasField("run_options") else None,
+            model_config=_model_config(request),
+        )
+    except ValueError as exc:
+        context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+    except Exception as exc:
+        context.abort(grpc.StatusCode.INTERNAL, f"completion initialization failed: {exc}")
+
+    try:
+        if not context.add_callback(stream.disconnect):
+            stream.disconnect()
+            return
+        for event in stream:
+            if not context.is_active():
+                return
+            yield event_message(event)
+    finally:
+        stream.close()
+
+
+def cancel_chat_completion(request, context):
+    return pb.CompletionResponse(**completion_manager.terminate(request.completion_id))
+
+
+def get_chat_completion(request, context):
+    return pb.CompletionResponse(id=request.completion_id, status="not_implemented")

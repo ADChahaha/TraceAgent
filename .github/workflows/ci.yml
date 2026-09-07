@@ -22,7 +22,7 @@ jobs:
       - name: Install agent with OCR dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e "agent[dev]"
+          python -m pip install -e ./agent_proto -e "agent[dev]"
 
       - name: Verify OCR dependency imports
         env:
@@ -31,7 +31,9 @@ jobs:
           python - <<'PY'
           import importlib.metadata
           import shutil
-          import fastapi
+          import grpc
+          from grpc_health.v1 import health_pb2
+          from agent_proto import agent_pb2, agent_pb2_grpc
           import langchain_openai
           import langgraph
           import onnxruntime
@@ -53,12 +55,7 @@ jobs:
         env:
           PYTHONPATH: agent
         run: |
-          pytest \
-            agent/tests/document_processor \
-            agent/tests/file_extraction_agent \
-            agent/tests/routes \
-            agent/tests/test_pyproject_dependencies.py \
-            -q
+          python -m pytest agent/tests -q
 
   backend:
     name: Backend tests without real agent calls
@@ -180,6 +177,17 @@ jobs:
             return 1
           }
 
-          wait_for_url http://127.0.0.1:8001/healthz
+          agent_ready=false
+          for _ in {1..30}; do
+            if python agent/main.py --check-health 127.0.0.1:8001 --timeout 2; then
+              agent_ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$agent_ready" != true ]]; then
+            echo "Timed out waiting for agent gRPC health"
+            exit 1
+          fi
           wait_for_url http://127.0.0.1:8000/healthz
           wait_for_url http://127.0.0.1:3000/

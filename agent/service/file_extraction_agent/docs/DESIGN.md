@@ -12,14 +12,17 @@ resource_path + messages + 模型/运行配置
   → 仅 messages 进入 LangGraph
   → LangGraph 模型节点 / 工具节点
   → AIMessage / list[ToolMessage]
-  → completion_runtime 事件字典 → CompletionRuntime 队列 → 分配 seq 并编码 SSE
+  → completion_runtime 事件字典 → CompletionRuntime 队列 → 分配 seq 并输出事件字典
+  → 传输适配层负责响应消息编码
 ```
 
 ## 运行时与注册表
 
-`manager.py` 只管理 CompletionManager：校验请求与资源 → 创建模型和 CompletionRuntime → 注册到 ID 映射 → 转发 stream/terminate/get_status → 在流 finally 中移除注册项。completion_id 只保存在 manager 的注册表键和流清理闭包中；清理时同时核对 ID 与运行时对象身份，避免误删其他注册项。
+`manager.py` 只管理 CompletionManager：校验请求与资源 → 创建模型和 CompletionRuntime → 注册到 ID 映射 → 转发 stream/terminate/get_status → 由 CompletionStream.close 移除注册项（包括从未迭代的流）。completion_id 只保存在 manager 的注册表键和流清理闭包中；清理时同时核对 ID 与运行时对象身份，避免误删其他注册项。
 
-`completion_runtime.py` 管理单轮 CompletionRuntime，以及 stream_completion_events、事件转换和 SSE 编码：后台 producer 执行 loop → 提交业务事件到锁保护的队列 → consumer 按 FIFO 编号输出 → 完成/失败/取消时唯一收尾。它不接收或保存 completion_id，不导入 manager，也不维护全局注册表。后台线程使用固定名称 qa-completion，名称只用于调试。
+`completion_runtime.py` 管理单轮 CompletionRuntime，以及 stream_completion_events 和事件转换：后台 producer 执行 loop → 提交业务事件到锁保护的队列 → consumer 按 FIFO 编号输出事件字典 → 完成/失败/取消时唯一收尾。它不负责传输编码，不接收或保存 completion_id，不导入 manager，也不维护全局注册表。后台线程使用固定名称 qa-completion，名称只用于调试。
+
+CompletionStream 是 manager 返回的托管迭代器，包装 runtime.stream()。消费者结束或主动 close 时关闭内层生成器并按对象身份移除注册项；即使从未调用 next，也执行清理。gRPC 回调只调用该流绑定的 disconnect，不跨线程关闭生成器，也不按可复用的 completion_id 查找运行时。
 
 ## 执行输入与状态
 
@@ -27,7 +30,7 @@ resource_path + messages + 模型/运行配置
 
 `run_qa_stream` 校验非空消息和资源路径，然后调用 open_workspace(resource_path) 创建 ToolWorkspace；build_tools(workspace) 让四个工具闭包共享文档访问器和 EmbeddingResources。build_qa_messages(messages) 转换完整历史；build_qa_graph(model, tools, run_options) 将工具超时绑定到执行闭包。建图逻辑独立放在 core/graph.py，包括 agent/tools 节点、条件路由与 compile；loop.py 从 model_invocation.py 与 executor.py 注入 invoke_model/execute_tools 两个执行函数并消费图更新，graph.py 不反向导入 loop.py。执行器只接收工具调用、工具集合和 timeout。无效输入抛 ValueError；工具失败与取消仍遵守原批次契约。
 
-manager 负责输入合法性、问答模型装配和 completion 注册；资源预检委托工具层；source_indexed 只返回 result={"ok":true}，启动通知不遍历或读取文档。manager 不读取磁盘，也不持有 embedding 对象。初始化失败不注册运行时；同一活动 completion_id 不可重复。HTTP route 在线程池中完成预检，避免阻塞异步事件循环。
+manager 负责输入合法性、问答模型装配和 completion 注册；资源预检委托工具层；source_indexed 只返回 result={"ok":true}，启动通知不遍历或读取文档。manager 不读取磁盘，也不持有 embedding 对象。初始化失败不注册运行时；同一活动 completion_id 不可重复。gRPC 服务方法在 worker 中完成预检；首事件前的参数错误映射 INVALID_ARGUMENT。
 
 route 在模块顶部直接导入 completion_manager；标准库与内部工具依赖也在顶部声明。生成端 model.py 与工具 embedding.py 分别保留 SentenceTransformer 的延迟导入，避免未使用 embedding 时加载其重依赖。
 
@@ -40,7 +43,7 @@ route 在模块顶部直接导入 completion_manager；标准库与内部工具�
 
 ## 消息批次与事件
 
-每条 SSE 流已绑定本轮请求，所有 SSE 事件均不重复携带 completion ID；事件包装入口也不接收该参数。completion_id 仅供运行时注册、取消和状态查询使用。tool_call_id 及模型 tool_calls 内的 ID 仍保留，用于调用与结果配对。
+每条 gRPC 流已绑定本轮请求，所有事件均不重复携带 completion ID；事件包装入口也不接收该参数。completion_id 仅供运行时注册、取消和状态查询使用。tool_call_id 及模型 tool_calls 内的 ID 仍保留，用于调用与结果配对。
 
 ```text
 模型节点调用 model_invocation._invoke_model_message
@@ -76,6 +79,10 @@ CompletionRuntime 的调用 ID 集合只用于取消时判断批次是否结清�
 
 关闭事件流时关闭内层生成器。同步 provider 和工具线程不能强杀；请求 timeout 和工具 deadline 约束阻塞，超时线程的迟到结果不会再写事件。问答结束只释放运行时，不删除资源。
 
+业务 terminate 立即返回 cancelling，维持上述批次契约。RPC 断连/deadline 的 disconnect 则设置取消标志、关闭逻辑运行时并入队 sentinel 唤醒 consumer；连接已不可用，不等待批次补齐或尝试保证终态送达。已经完成的运行时不会被断连回调改写终态。
+
+首次迭代在同一运行时锁内判断 closed/cancel_requested 并启动 producer；若断连先发生，不再创建线程，托管流直接清理。
+
 ## 工具与引用
 
 工具各自使用单文件：`tools/ls.py`、`grep.py`、`read.py`、`embedding.py`。共享文件访问在 `workspace.py`，异常结果归一化在 `base.py`。
@@ -84,7 +91,7 @@ CompletionRuntime 的调用 ID 集合只用于取消时判断批次是否结清�
 workspace.validate_resource(resource_path)
   → 校验受管理绝对路径、documents 目录及内部链接
   → embedding.load_index 校验清单版本、模型配置、向量维度/有限值和引用路径
-  → 无效资源抛 ValueError，HTTP 在 SSE 开始前返回 422
+  → 无效资源抛 ValueError，gRPC 在首事件前返回 INVALID_ARGUMENT
 
 search_embedding(query)
   → 校验 query；使用工具上下文的 EmbeddingResources
@@ -94,7 +101,7 @@ search_embedding(query)
   → 返回文本、分数与绝对文档引用；工具异常转换为 ok:false
 ```
 
-HTTP 预检加载索引但不创建查询模型；实际工具执行时另建本轮上下文。`EmbeddingResources` 的锁保证并行查询只初始化一次索引和模型引用。查询模型按模型 ID 与后端缓存在 `embedding.py`；生成端模型缓存独立，不新增公共模型模块。问答不重建文档向量。
+RPC 预检加载索引但不创建查询模型；实际工具执行时另建本轮上下文。`EmbeddingResources` 的锁保证并行查询只初始化一次索引和模型引用。查询模型按模型 ID 与后端缓存在 `embedding.py`；生成端模型缓存独立，不新增公共模型模块。问答不重建文档向量。
 
 - `ls(path="")`：逐层浏览资源的 documents 目录。
 - `grep(query, scope="", max_results=20)`：使用 ripgrep 查找 Markdown 候选行。
@@ -109,6 +116,6 @@ Markdown 文件树由资源模块创建：文档标题作为顶层目录后缀�
 
 每轮历史完全来自调用方的 append-only messages，保留 assistant tool_calls 和 tool 结果，不摘要或裁剪。资源路径跨轮稳定；任务与路径的关联由 backend 管理。
 
-本次只完成 agent 契约：问答 HTTP 输入从 documents 改为 resource_path，不接收任务 metadata。backend 尚未迁移。active completion 注册表仍是单进程内存，部署使用单 worker。
+本次将 agent 对外传输改为 gRPC；问答仍接收 resource_path，不接收任务 metadata。backend 尚未迁移。active completion 注册表仍是单进程内存，多个 RPC worker 线程共享一个 manager。
 
 接口见 [agent API](../../../docs/API.md)，资源准备见 [资源设计](../../document_resources/docs/DESIGN.md)。

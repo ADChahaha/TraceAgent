@@ -19,6 +19,20 @@ from service.file_extraction_agent.manager import (
 from service.file_extraction_agent.schemas import DocumentQaMessage, ModelConfig, RunOptions
 
 
+def test_runtime_yields_event_objects_with_sequence(resource_path, monkeypatch):
+    """运行时直接输出事件对象，传输编码由接口层负责。"""
+    monkeypatch.setattr(runtime_module, "stream_completion_events", lambda **kwargs: iter([
+        {"type": "model_message", "content": "你好\n世界"},
+        {"type": "completion.completed", "status": "completed"},
+    ]))
+    runtime = CompletionRuntime(resource_path, object(), [DocumentQaMessage(role="user", content="问题")])
+    assert list(runtime.stream()) == [
+        {"type": "model_message", "content": "你好\n世界", "seq": 1},
+        {"type": "completion.completed", "status": "completed", "seq": 2},
+    ]
+    assert runtime.is_closed()
+
+
 @pytest.mark.parametrize("ending", ["completed", "failed", "cancelled"])
 def test_stream_numbers_messages_and_terminal_once(tmp_path, monkeypatch, ending, resource_path):
     import json
@@ -38,7 +52,7 @@ def test_stream_numbers_messages_and_terminal_once(tmp_path, monkeypatch, ending
         resource_path=resource_path,
         messages=[DocumentQaMessage(role="user", content="问题")],
     ))
-    events = [json.loads(frame.split("data: ", 1)[1]) for frame in frames]
+    events = frames
     assert all("id" not in event and "completion_id" not in event for event in events)
     assert [event["seq"] for event in events] == list(range(1, len(events) + 1))
     assert events[-1]["type"] == f"completion.{ending}"
@@ -57,7 +71,7 @@ def test_completion_runtime_streams_without_manager(resource_path, monkeypatch):
     runtime = completion_runtime.CompletionRuntime(
         resource_path, object(), [DocumentQaMessage(role="user", content="问题")],
     )
-    events = [json.loads(frame.split("data: ", 1)[1]) for frame in runtime.stream()]
+    events = list(runtime.stream())
     assert [event["type"] for event in events] == [
         "completion.created", "source_indexed", "model_message", "completion.completed",
     ]
@@ -159,7 +173,7 @@ def test_runtime_cancel_drains_real_graph_batch_and_skips_next_model(tmp_path, m
         release.set()
         thread.join(2)
     assert done.is_set()
-    events = [json.loads(frame.split("data: ", 1)[1]) for frame in frames]
+    events = frames
     results = [event for event in events if event["type"] == "tool_completed"]
     assert [(e["tool_call_id"], e["result"]["text"]) for e in results] == [("read-1", "first"), ("read-2", "second")]
     assert events[-1]["type"] == "completion.cancelled"
@@ -199,7 +213,7 @@ def test_graph_keeps_events_as_objects_until_stream_boundary(tmp_path, monkeypat
     ]
 
 
-def test_stream_encodes_runtime_failure_with_special_characters(tmp_path, monkeypatch, resource_path):
+def test_stream_preserves_runtime_failure_with_special_characters(tmp_path, monkeypatch, resource_path):
     import json
     error = '失败：第一行\n第二行\t"引号"\\路径'
 
@@ -214,9 +228,8 @@ def test_stream_encodes_runtime_failure_with_special_characters(tmp_path, monkey
         messages=[DocumentQaMessage(role="user", content="问题")],
     ))
     assert len(frames) == 1
-    event_line, data_line, _, _ = frames[0].split("\n")
-    assert event_line == "event: completion.failed"
-    assert json.loads(data_line.removeprefix("data: "))["error_message"] == error
+    assert frames[0]["type"] == "completion.failed"
+    assert frames[0]["error_message"] == error
 
 
 
@@ -237,7 +250,7 @@ def test_stream_preserves_terminal_words_in_data(tmp_path, monkeypatch, marker, 
         resource_path=resource_path,
         messages=[DocumentQaMessage(role="user", content="问题")],
     ))
-    assert [json.loads(frame.split("data: ", 1)[1]) for frame in frames] == [ordinary, terminal]
+    assert frames == [ordinary, terminal]
 
 
 @pytest.mark.parametrize("status", ["completed", "cancelled", "failed"])
@@ -282,7 +295,7 @@ def test_create_completion_stream_builds_completion_input_and_runs_graph(monkeyp
         )
     )
 
-    assert events == ['event: completion.completed\ndata: {"type":"completion.completed"}\n\n']
+    assert events == [{'type': 'completion.completed'}]
     assert captured["has_completion_id"] is False
     assert captured["document_root"] == resource_path
     assert captured["messages"][0].content == "问题"
@@ -335,7 +348,7 @@ def test_create_completion_stream_registers_completion_runtime_before_iteration(
 
     assert manager.terminate("cmp_early_cancel") == {"id": "cmp_early_cancel", "status": "cancelling"}
     assert _frames(stream) == [
-        'event: completion.cancelled\ndata: {"type":"completion.cancelled","status":"cancelled"}\n\n'
+        {'type': 'completion.cancelled', 'status': 'cancelled'}
     ]
     assert not graph_called.is_set()
     assert manager.terminate("cmp_early_cancel") == {"id": "cmp_early_cancel", "status": "not_found"}
@@ -386,7 +399,7 @@ def test_create_completion_stream_cancel_does_not_wait_for_blocked_graph(monkeyp
 
     assert time.monotonic() - started_at < 0.25
     assert events == [
-        'event: completion.cancelled\ndata: {"type":"completion.cancelled","status":"cancelled"}\n\n'
+        {'type': 'completion.cancelled', 'status': 'cancelled'}
     ]
     assert manager.terminate("cmp_blocked") == {"id": "cmp_blocked", "status": "not_found"}
 
@@ -429,10 +442,10 @@ def test_create_completion_stream_flushes_committed_events_before_cancel(monkeyp
     finally:
         release_graph.set()
 
-    assert first_event == 'event: model_message\ndata: {"type":"model_message","content":"first"}\n\n'
+    assert first_event == {'type': 'model_message', 'content': 'first'}
     assert remaining_events == [
-        'event: tool_completed\ndata: {"type":"tool_completed","tool":"read"}\n\n',
-        'event: completion.cancelled\ndata: {"type":"completion.cancelled","status":"cancelled"}\n\n',
+        {'type': 'tool_completed', 'tool': 'read'},
+        {'type': 'completion.cancelled', 'status': 'cancelled'},
     ]
     assert manager.terminate("cmp_flush") == {"id": "cmp_flush", "status": "not_found"}
 
@@ -528,12 +541,12 @@ def test_terminate_defers_cancel_until_active_tool_batch_settles(monkeypatch, re
         release_batch.set()
         consumer_thread.join(timeout=1.0)
 
-    tool_events = [event for event in events if "tool_completed" in event]
+    tool_events = [event for event in events if event["type"] == "tool_completed"]
     assert tool_events == [
-        'event: tool_completed\ndata: {"type":"tool_completed","tool":"read","tool_call_id":"deferred-read"}\n\n'
+        {'type': 'tool_completed', 'tool': 'read', 'tool_call_id': 'deferred-read'}
     ]
     assert events[-1] == (
-        'event: completion.cancelled\ndata: {"type":"completion.cancelled","status":"cancelled"}\n\n'
+        {'type': 'completion.cancelled', 'status': 'cancelled'}
     )
     assert manager.terminate("cmp_deferred") == {"id": "cmp_deferred", "status": "not_found"}
 
@@ -565,9 +578,9 @@ def test_create_completion_stream_emits_only_one_terminal_event_when_cancel_race
     graph_can_complete.set()
     events = _frames(stream)
 
-    terminal_events = [event for event in events if "completion." in event]
+    terminal_events = [event for event in events if event["type"].startswith("completion.")]
     assert terminal_events == [
-        'event: completion.cancelled\ndata: {"type":"completion.cancelled","status":"cancelled"}\n\n'
+        {'type': 'completion.cancelled', 'status': 'cancelled'}
     ]
 
 
@@ -704,7 +717,7 @@ def test_normalize_model_config_rejects_untyped_dict_input():
 
 
 
-def test_completion_manager_create_runs_graph_and_returns_sse(monkeypatch, resource_path):
+def test_completion_manager_create_runs_graph_and_returns_events(monkeypatch, resource_path):
     captured = {}
 
     def fake_build_qa_model(config):
@@ -729,7 +742,7 @@ def test_completion_manager_create_runs_graph_and_returns_sse(monkeypatch, resou
         )
     )
 
-    assert events == ['event: completion.completed\ndata: {"type":"completion.completed"}\n\n']
+    assert events == [{'type': 'completion.completed'}]
     assert captured["has_completion_id"] is False
     assert captured["messages"][0].content == "问题"
     assert captured["model"] == "qa-model"
@@ -761,7 +774,7 @@ def test_completion_manager_create_registers_before_iteration_and_terminate_canc
 
     assert manager.terminate("cmp_mgr_cancel") == {"id": "cmp_mgr_cancel", "status": "cancelling"}
     assert _frames(stream) == [
-        'event: completion.cancelled\ndata: {"type":"completion.cancelled","status":"cancelled"}\n\n'
+        {'type': 'completion.cancelled', 'status': 'cancelled'}
     ]
     assert not graph_called.is_set()
     assert manager.terminate("cmp_mgr_cancel") == {"id": "cmp_mgr_cancel", "status": "not_found"}
@@ -859,13 +872,82 @@ def test_qa_records_model_message_content_and_tool_calls_without_reasoning(tmp_p
 
 
 
-def _without_seq(frame):
-    import json
-    event_line, data = frame.split("\ndata: ", 1)
-    payload = json.loads(data)
-    payload.pop("seq", None)
-    return event_line + "\ndata: " + json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n\n"
+def test_unstarted_stream_close_removes_registration(resource_path, monkeypatch):
+    """预检后客户端已断开时，尚未开始迭代也能清理注册项。"""
+    monkeypatch.setattr(manager_module, "build_qa_model", lambda config: object())
+    manager = CompletionManager()
+    stream = manager.create(completion_id="early_close", resource_path=resource_path,
+                            messages=[DocumentQaMessage(role="user", content="问题")])
+    stream.close()
+    assert manager.get_status("early_close") is None
+    assert list(stream) == []
+
+
+def test_disconnect_wakes_consumer_and_stops_producer(resource_path, monkeypatch):
+    """断连立即唤醒消费者，旧流的断连回调不影响复用 ID 的新流。"""
+    started = threading.Event()
+    release = threading.Event()
+    done = threading.Event()
+    observed_stop = []
+
+    def blocked(**kwargs):
+        started.set()
+        assert release.wait(3)
+        observed_stop.append(kwargs["should_stop"]())
+        return iter(())
+
+    monkeypatch.setattr(manager_module, "build_qa_model", lambda config: object())
+    monkeypatch.setattr(runtime_module, "stream_completion_events", blocked)
+    manager = CompletionManager()
+    stream = manager.create(completion_id="disconnect", resource_path=resource_path,
+                            messages=[DocumentQaMessage(role="user", content="问题")])
+    events = []
+
+    def consume():
+        events.extend(stream)
+        done.set()
+
+    consumer = threading.Thread(target=consume, daemon=True)
+    consumer.start()
+    try:
+        assert started.wait(2)
+        stream.disconnect()
+        assert done.wait(1)
+        assert manager.get_status("disconnect") is None
+        replacement = manager.create(completion_id="disconnect", resource_path=resource_path,
+                                     messages=[DocumentQaMessage(role="user", content="新问题")])
+        try:
+            stream.disconnect()
+            assert manager.get_status("disconnect")["status"] == "in_progress"
+        finally:
+            replacement.close()
+    finally:
+        release.set()
+        consumer.join(2)
+    deadline = time.monotonic() + 2
+    while not observed_stop and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert observed_stop == [True]
+
+
+def test_disconnect_before_iteration_does_not_start_producer(resource_path, monkeypatch):
+    """RPC 注册回调后立即断开，首次迭代不得再创建生产线程。"""
+    monkeypatch.setattr(manager_module, "build_qa_model", lambda config: object())
+    manager = CompletionManager()
+    stream = manager.create(completion_id="disconnect_early", resource_path=resource_path,
+                            messages=[DocumentQaMessage(role="user", content="问题")])
+    def forbidden(*args, **kwargs):
+        raise AssertionError("disconnected stream must not start a producer")
+    monkeypatch.setattr(runtime_module.threading, "Thread", forbidden)
+    stream.disconnect()
+    assert list(stream) == []
+    assert manager.get_status("disconnect_early") is None
+
+
+def _without_seq(event):
+    assert isinstance(event, dict)
+    return {key: value for key, value in event.items() if key != "seq"}
 
 
 def _frames(stream):
-    return [_without_seq(frame) for frame in stream]
+    return [_without_seq(event) for event in stream]
