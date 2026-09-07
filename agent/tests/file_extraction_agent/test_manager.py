@@ -151,7 +151,7 @@ async def test_startup_events_only_acknowledge_without_reading_documents(resourc
 
 
 async def test_runtime_cancel_drains_real_graph_batch_and_skips_next_model(
-    tmp_path, monkeypatch, resource_path
+    tmp_path, monkeypatch, resource_path, s3_store
 ):
     import json
     from unittest.mock import Mock, AsyncMock
@@ -220,7 +220,15 @@ async def test_runtime_cancel_drains_real_graph_batch_and_skips_next_model(
     assert events[-1]["type"] == "completion.cancelled"
     assert [event["seq"] for event in events] == list(range(1, len(events) + 1))
     assert provider.ainvoke.call_count == 1
-    assert Path(resource_path).is_dir()
+    assert _resource_exists(resource_path, s3_store)
+
+
+def _resource_exists(resource_refs, s3_store) -> bool:
+    from service.object_store import parse_resource_path
+
+    documents_location = next(ref.location for ref in resource_refs if ref.type == "documents")
+    bucket, _ = parse_resource_path(documents_location)
+    return s3_store.get_object(bucket, "manifest.json") is not None
 
 
 async def test_manager_wraps_messages_and_pairs_same_name_calls(tmp_path, monkeypatch, resource_path):

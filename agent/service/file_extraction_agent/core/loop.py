@@ -15,12 +15,12 @@ from service.file_extraction_agent.core.graph import stream_qa_graph
 from service.file_extraction_agent.core.messages import build_qa_messages
 from service.file_extraction_agent.core.tools import build_tools
 from service.file_extraction_agent.core.tools.workspace import open_workspace
-from service.file_extraction_agent.schemas import DocumentQaMessage, RunOptions
+from service.file_extraction_agent.schemas import DocumentQaMessage, ResourceRefs, RunOptions
 
 
 async def run_qa_stream(
     *,
-    resource_path: str,
+    resource_path: ResourceRefs,
     messages: list[DocumentQaMessage],
     qa_model: QaModel,
     run_options: RunOptions | None = None,
@@ -29,7 +29,7 @@ async def run_qa_stream(
     """校验路径和消息 → 初始化共享工具上下文 → 委托 graph 执行 → 输出消息或工具批次。"""
     if not messages:
         raise ValueError("messages must be a non-empty list")
-    if not isinstance(resource_path, str) or not resource_path.strip():
+    if not resource_path:
         raise ValueError("resource_path is required")
     if should_stop is not None and should_stop():
         return

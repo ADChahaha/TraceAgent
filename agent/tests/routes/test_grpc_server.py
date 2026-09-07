@@ -47,10 +47,11 @@ def test_blocking_preparation_keeps_control_rpcs_responsive(monkeypatch, rpc_ser
     started = threading.Event()
     release = threading.Event()
 
-    def blocked(documents):
+    def blocked(documents, raw_files=None):
+        from service.object_store import ResourceRef
         started.set()
         release.wait(5)
-        return "resource"
+        return [ResourceRef(type="documents", location="s3://res_blocked/documents")]
 
     monkeypatch.setattr(document_resources, "prepare_resources", blocked)
     monkeypatch.setattr(document_resources.processor, "process",

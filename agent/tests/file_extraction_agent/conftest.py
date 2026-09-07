@@ -1,4 +1,4 @@
-"""用轻量 embedding 准备真实资源路径，供问答运行时测试复用。"""
+"""用轻量 embedding 准备真实资源，返回资源定位数组，供问答运行时测试复用。"""
 
 import numpy as np
 import pytest

@@ -1,20 +1,31 @@
 # 文档问答执行设计
 
-问答模块消费已准备的资源路径，执行一次模型/工具循环。资源生成由同级 `document_resources` 负责；两包互不导入，通过磁盘文件格式交接。资源读取归工具层，Agent 的 embedding 能力集中在 `tools/embedding.py`。
+问答模块消费已准备的资源定位数组，执行一次模型/工具循环。资源生成由同级 `document_resources` 负责；两包互不导入，通过 storage 服务交接。资源读取归工具层，Agent 的 embedding 能力集中在 `tools/embedding.py`。
 
 ```text
-resource_path + messages + 模型/运行配置
-  → CompletionManager 调 tools/workspace.validate_resource 预检并注册 CompletionRuntime
-  → completion_runtime.stream_completion_events 包装业务事件
-  → run_qa_stream 用 resource_path 调 open_workspace，build_tools 绑定 ToolWorkspace
-  → messages.build_qa_messages 转换历史消息
-  → graph.stream_qa_graph 调 build_qa_graph，绑定 RunOptions、执行函数和停止信号
-  → 仅 messages 进入 LangGraph
-  → LangGraph 模型节点 / 工具节点
-  → graph 将节点更新转换成 AIMessage / list[ToolMessage]，loop 原样转发
-  → completion_runtime 事件字典 → CompletionRuntime 队列 → 分配 seq 并输出事件字典
-  → 传输适配层负责响应消息编码
+resource_refs([{type, location}]) + messages + 模型/运行配置
+  -> CompletionManager 调 tools/workspace.validate_resource 预检并注册 CompletionRuntime
+  -> completion_runtime.stream_completion_events 包装业务事件
+  -> run_qa_stream 用 resource_refs 调 open_workspace，build_tools 绑定 ToolWorkspace
+  -> messages.build_qa_messages 转换历史消息
+  -> graph.stream_qa_graph 调 build_qa_graph，绑定 RunOptions、执行函数和停止信号
+  -> 仅 messages 进入 LangGraph
+  -> LangGraph 模型节点 / 工具节点
+  -> graph 将节点更新转换成 AIMessage / list[ToolMessage]，loop 原样转发
+  -> completion_runtime 事件字典 → CompletionRuntime 队列 → 分配 seq 并输出事件字典
+  -> 传输适配层负责响应消息编码
 ```
+
+## 存储访问
+
+- 工具层通过 `service/object_store.S3ObjectStore`（boto3，endpoint 指向 storage 服务，
+  `S3_ENDPOINT_URL` 配置，默认 `http://localhost:9000`）读取资源。
+- `open_workspace(resource_refs)` 解析资源定位数组：按 type 找到 documents 与 index 的
+  `s3://<bucket>[/<key>]` 位置，打开 S3ObjectStore，构造 `DocumentFileTree` 与
+  `EmbeddingResources`。
+- `DocumentFileTree` 按 key 前缀浏览/读取 .md 对象，越界校验改为「key 前缀 + 拒绝
+  `..`/绝对路径」。
+- `grep` 用纯 Python 遍历 .md 对象并按正则匹配，不再依赖 ripgrep 子进程。
 
 ## 运行时与注册表
 
@@ -30,7 +41,7 @@ CompletionStream 是 manager 返回的托管迭代器。gRPC 使用 async for �
 
 图内只使用 LangGraph MessagesState 保存消息，不再定义自有 GraphState。资源路径、运行参数、工具访问器和 embedding 缓存均在图状态之外。
 
-`run_qa_stream` 是 Agent 接口：校验非空消息和资源路径 → open_workspace 创建 ToolWorkspace → build_tools 绑定四个共享工具 → build_qa_messages 转换完整历史 → 调用 graph.stream_qa_graph 并转发结果。loop 不解析图更新、不决定节点路由；关闭接口流时通过 aclosing 关闭内层生成器。
+`run_qa_stream` 是 Agent 接口：校验非空消息和资源定位数组 → open_workspace 创建 ToolWorkspace → build_tools 绑定四个共享工具 → build_qa_messages 转换完整历史 → 调用 graph.stream_qa_graph 并转发结果。loop 不解析图更新、不决定节点路由；关闭接口流时通过 aclosing 关闭内层生成器。
 
 graph.py 完整封装 LangGraph：build_qa_graph 绑定模型、工具执行器、超时和 should_stop → 以 MessagesState 编译 agent/tools 节点 → 节点通过 Command 提交消息及下一跳 → stream_qa_graph 消费 updates，转换为 AIMessage/完整 ToolMessage 批次 → finally 关闭图流。取消前后的检查、工具 ID 校验和执行器整体异常处理都在 graph 内，直接运行编译图也遵守批次契约。无效输入或工具 ID 抛 ValueError；模型尝试耗尽抛 RuntimeError。
 
@@ -93,30 +104,30 @@ CompletionRuntime 的调用 ID 集合只用于取消时判断批次是否结清�
 
 ## 工具与引用
 
-工具对模型暴露 async coroutine；executor 优先 await ainvoke。文件浏览、ripgrep 与本地 embedding 使用 asyncio.to_thread 执行同步叶子操作，事件循环不承担磁盘等待或推理计算。
+工具对模型暴露 async coroutine；executor 优先 await ainvoke。文件浏览、纯 Python 搜索与本地 embedding 使用 asyncio.to_thread 执行同步叶子操作，事件循环不承担磁盘等待或推理计算。
 
 工具各自使用单文件：`tools/ls.py`、`grep.py`、`read.py`、`embedding.py`。共享文件访问在 `workspace.py`，异常结果归一化在 `base.py`。
 
 run_tool 只接收 execute 操作，正常返回结果，普通异常转为 ok:false。工具工厂直接使用必需的 LangChain @tool，返回 BaseTool；不保留缺依赖时退化为普通函数的分支。查询编码器使用 Embedder 协议，索引和工作区使用具体类型。
 
 ```text
-workspace.validate_resource(resource_path)
-  → 校验受管理绝对路径、documents 目录及内部链接
-  → embedding.load_index 校验清单版本、模型配置、向量维度/有限值和引用路径
-  → 无效资源抛 ValueError，gRPC 在首事件前返回 INVALID_ARGUMENT
+workspace.validate_resource(resource_refs)
+  -> 校验 documents/index 定位都存在且同 bucket
+  -> embedding.load_index 校验清单版本、模型配置、向量维度/有限值和引用路径
+  -> 无效资源抛 ValueError，gRPC 在首事件前返回 INVALID_ARGUMENT
 
 search_embedding(query)
-  → 校验 query；使用工具上下文的 EmbeddingResources
-  → 首次加载 manifest.json、index.json、vectors.npy，后续复用本轮只读索引
-  → 根据清单的 model_id/backend 获取缓存查询模型
-  → encode([query])，归一化查询向量并计算 top-k
-  → 返回文本、分数与绝对文档引用；工具异常转换为 ok:false
+  -> 校验 query；使用工具上下文的 EmbeddingResources
+  -> 从 storage 服务读取 manifest.json、index.json、vectors.npy（BytesIO 加载）
+  -> 根据清单的 model_id/backend 获取缓存查询模型
+  -> encode([query])，归一化查询向量并计算 top-k
+  -> 返回文本、分数与文档 key 引用；工具异常转换为 ok:false
 ```
 
 RPC 预检加载索引但不创建查询模型；实际工具执行时另建本轮上下文。`EmbeddingResources` 的锁保证并行查询只初始化一次索引和模型引用。查询模型按模型 ID 与后端缓存在 `embedding.py`；生成端模型缓存独立，不新增公共模型模块。问答不重建文档向量。
 
 - `ls(path="")`：逐层浏览资源的 documents 目录。
-- `grep(query, scope="", max_results=20)`：使用 ripgrep 查找 Markdown 候选行。
+- `grep(query, scope="", max_results=20)`：纯 Python 遍历 .md 对象并按正则匹配候选行。
 - `read(path)`：读取真实 Markdown 文件，拒绝文档目录之外的路径。
 - `search_embedding(query, top_k=5)`：沿用资源记录的模型编码 query，从已加载索引召回文本及 covered_files；删除从未参与过滤的 scope 参数。
 
@@ -126,8 +137,8 @@ Markdown 文件树由资源模块创建：文档标题作为顶层目录后缀�
 
 ## 跨轮与部署
 
-每轮历史完全来自调用方的 append-only messages，保留 assistant tool_calls 和 tool 结果，不摘要或裁剪。资源路径跨轮稳定；任务与路径的关联由 backend 管理。
+每轮历史完全来自调用方的 append-only messages，保留 assistant tool_calls 和 tool 结果，不摘要或裁剪。资源定位数组跨轮稳定；任务与定位的关联由 backend 管理。
 
-本次将 agent 对外传输改为 gRPC；问答仍接收 resource_path，不接收任务 metadata。backend 尚未迁移。active completion 注册表仍是单进程内存，多个 RPC 协程共享一个 manager。
+本次将 agent 对外传输改为 gRPC；问答仍接收资源定位数组，不接收任务 metadata。backend 尚未迁移。active completion 注册表仍是单进程内存，多个 RPC 协程共享一个 manager。
 
 接口见 [agent API](../../../docs/API.md)，资源准备见 [资源设计](../../document_resources/docs/DESIGN.md)。

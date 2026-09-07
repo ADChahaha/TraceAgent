@@ -6,10 +6,12 @@ agent 在同一个进程中提供两个阶段：准备可复用的本机文档�
 PrepareResources（files: filename + bytes）
   → document_processor.process：PDF / DOCX → filename + html
   → document_resources.prepare_resources：HTML → Markdown 文件树 → 文档 embedding 索引
-  → 返回 resource_path + documents，调用方保存路径和展示用 HTML
+  → 发布到独立的 storage 服务（S3 兼容），返回资源定位数组 [{type, location}]
+     type ∈ {documents, index, raw}，location 为 s3://<bucket>[/<key>]
 
-ChatCompletion（resource_path + messages）
+ChatCompletion（resource_refs + messages）
   → CompletionManager 委托工具层预检资源并注册 completion
+  → 经 S3ObjectStore（boto3）从 storage 服务读取资源
   → 路径创建工具上下文，运行配置绑定执行器，图内只保存 messages
   → 模型消息 / 完整工具结果批次
   → completion_runtime 输出不含 completion ID、带 seq 的事件字典，由传输层编码
@@ -25,7 +27,7 @@ ChatCompletion（resource_path + messages）
 | routes/__init__.py | 注册异步业务方法，通过 async for 转发问答流 |
 | routes/document_resources.py | 在线程中校验上传类型、解析与准备资源，回到事件循环映射 RPC 错误 |
 | service/document_processor | PDF 调 MinerU、DOCX 调 python-docx，输出带 CSS 的 HTML |
-| service/document_resources | HTML 转文件、文档分块和 embedding 索引构建、资源落盘与发布前自检 |
+| service/document_resources | HTML 转文件、文档分块和 embedding 索引构建、发布到 storage 服务 |
 | routes/file_extraction_agent.py | 路径问答、取消 gRPC 适配；固定字段转 protobuf，动态字段保留 JSON |
 | service/file_extraction_agent/manager.py | completion 创建、注册、查找、取消转发与流结束后的移除 |
 | service/file_extraction_agent/completion_runtime.py | 单轮执行、事件字典输出、生产协程与取消收尾 |
@@ -35,10 +37,11 @@ ChatCompletion（resource_path + messages）
 | service/file_extraction_agent/core/model_invocation.py | 模型调用、流式聚合、重试与退避 |
 | service/file_extraction_agent/core/executor.py | 工具并行执行、共享超时与 ToolMessage 封装 |
 | service/file_extraction_agent/core/graph.py | LangGraph 建图与执行、节点路由、取消边界、更新转换和图流关闭 |
-| service/file_extraction_agent/core/tools/workspace.py | 资源目录预检、文件浏览与读取 |
-| service/file_extraction_agent/core/tools/embedding.py | 清单配置和索引读取、查询模型缓存、query 编码与检索 |
+| service/file_extraction_agent/core/tools/workspace.py | 资源定位解析、S3ObjectStore 读取、文件浏览与读取 |
+| service/file_extraction_agent/core/tools/embedding.py | 清单配置和索引读取（经 storage 服务）、查询模型缓存、query 编码与检索 |
+| service/object_store.py | ObjectStore 接口 + S3ObjectStore（boto3）+ s3:// URL 解析 |
 
-两个业务包通过磁盘格式交接，互不导入。`document_resources` 只生成资源；问答读取由工具层负责。
+两个业务包通过 storage 服务交接，互不导入。`document_resources` 只生成并发布资源；问答读取由工具层经 S3ObjectStore 负责。
 
 ## 传输与部署
 
@@ -61,16 +64,18 @@ main.py 读取监听地址、阻塞工作线程数和消息上限
 
 ## 资源生命周期
 
-- 准备和问答共享本机文件系统。backend 只保存、回传路径，不需要读取 agent 磁盘。
-- `DOCUMENT_RESOURCES_ROOT` 指定资源根目录，默认 `agent/data/resources`。
-- 每次准备生成独立 `res_*` 目录；临时目录完成校验后才发布。解析或构建失败不返回半成品路径。
-- 资源含 `documents/`、`index/`、`manifest.json`。模型只能浏览 `documents/`，索引引用保存相对路径。
+- 资源和问答都通过独立的 storage 服务（S3 兼容 HTTP，仓库顶层 `storage/` 目录）存取。
+- 每次准备生成独立 bucket `res_*`；本机临时目录完成校验后才发布到 storage 服务，失败不发布半成品。
+- 资源含 `documents/`、`index/`、`manifest.json`，以及 `raw/<filename>` 原始文件。
+  模型只能浏览 `documents/`，索引引用保存相对路径。
 - manifest 固定 embedding 模型、后端和分块配置。问答加载已有索引，仅对 query 做 embedding，不重建文档向量。
 - 问答完成、失败、取消都不删除资源。首版不做内容去重、自动过期和删除 API；资源管理不依赖 task_id。
+- agent 通过 `service/object_store.S3ObjectStore`（boto3）访问 storage 服务，
+  endpoint 由 `S3_ENDPOINT_URL` 配置，默认 `http://localhost:9000`。
 
 ## 问答运行时
 
-`CompletionManager` 只在进程内保存 active completion；管理 ID 不进入 graph。图使用 LangGraph MessagesState，仅保存消息；resource_path 用于创建工具上下文，RunOptions 在构图时绑定工具执行器。工具闭包持有 ToolWorkspace；其中的 EmbeddingResources 管理本轮索引与查询模型引用。
+`CompletionManager` 只在进程内保存 active completion；管理 ID 不进入 graph。图使用 LangGraph MessagesState，仅保存消息；resource_refs 用于创建工具上下文（经 S3ObjectStore 读取资源），RunOptions 在构图时绑定工具执行器。工具闭包持有 ToolWorkspace；其中的 EmbeddingResources 管理本轮索引与查询模型引用。
 
 ```text
 模型节点返回 AIMessage
@@ -84,8 +89,8 @@ main.py 读取监听地址、阻塞工作线程数和消息上限
 
 ## 对外契约与迁移
 
-- 准备接口：`PrepareResources`，一次发送多个 filename/bytes，返回路径和各文件 HTML。
-- 问答接口：`ChatCompletion`，resource_path + messages 输入，CompletionEvent 服务端流输出。
+- 准备接口：`PrepareResources`，一次发送多个 filename/bytes，返回资源定位数组和路径各文件 HTML。
+- 问答接口：`ChatCompletion`，resource_refs（[{type, location}]）+ messages 输入，CompletionEvent 服务端流输出。
 - 采用标准 gRPC Health 探活；业务 RPC 仅提供 PrepareResources、ChatCompletion、CancelCompletion。问答进展与终态由事件流交付，不提供问答查询或能力查询 RPC。
 - 不再提供 FastAPI、HTTP 路由和 SSE；旧问答 documents 输入不保留。
 - 本次迁移 agent 及其启动脚本/CI 配套；backend 代码未改，旧 HTTP 客户端需后续适配。

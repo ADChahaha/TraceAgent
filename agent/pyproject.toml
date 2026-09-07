@@ -13,6 +13,7 @@ dependencies = [
     "grpcio>=1.83.1,<2",
     "grpcio-health-checking>=1.83.1,<1.84",
     "protobuf>=7.35.1,<8",
+    "boto3>=1.35,<2",
     "hdbscan>=0.8,<1",
     "langchain-core>=0.3,<1",
     "langgraph>=0.2,<1",

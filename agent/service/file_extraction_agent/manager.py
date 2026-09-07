@@ -13,7 +13,7 @@ from typing import Any, Callable, AsyncIterator
 from service.file_extraction_agent.completion_runtime import CompletionRuntime
 from service.file_extraction_agent.core.model import build_qa_model
 from service.file_extraction_agent.core.tools.workspace import validate_resource
-from service.file_extraction_agent.schemas import DocumentQaMessage, ModelConfig, RunOptions
+from service.file_extraction_agent.schemas import DocumentQaMessage, ModelConfig, ResourceRefs, RunOptions
 
 
 class CompletionStream(AsyncIterator[dict[str, Any]]):
@@ -81,7 +81,7 @@ class CompletionManager:
         self,
         *,
         completion_id: str,
-        resource_path: str,
+        resource_path: ResourceRefs,
         messages: list[DocumentQaMessage],
         model_config: ModelConfig | None = None,
         run_options: RunOptions | None = None,

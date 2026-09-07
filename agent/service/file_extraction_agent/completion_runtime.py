@@ -19,7 +19,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from service.file_extraction_agent.core.loop import run_qa_stream
 from service.file_extraction_agent.core.messages import _message_stop_signal, _terminal_stop_signals
 from service.file_extraction_agent.core.model import ChatModelFallbackChain
-from service.file_extraction_agent.schemas import DocumentQaMessage, RunOptions
+from service.file_extraction_agent.schemas import DocumentQaMessage, ResourceRefs, RunOptions
 
 
 _QUEUE_CANCEL = object()
@@ -27,7 +27,7 @@ _QUEUE_DONE = object()
 
 
 async def stream_completion_events(
-    *, resource_path: str, messages: list[DocumentQaMessage],
+    *, resource_path: ResourceRefs, messages: list[DocumentQaMessage],
     qa_model: ChatModelFallbackChain | None = None,
     run_options: RunOptions | None = None, should_stop=None,
 ) -> AsyncIterator[dict[str, Any]]:
@@ -144,7 +144,7 @@ class CompletionRuntime:
     之后的新事件被拒收；terminal 只提交一次；close_once 保证终态唯一。
     """
 
-    def __init__(self, resource_path: str, qa_model: ChatModelFallbackChain,
+    def __init__(self, resource_path: ResourceRefs, qa_model: ChatModelFallbackChain,
                  messages: list[DocumentQaMessage], run_options: RunOptions | None = None) -> None:
         self.resource_path = resource_path
         self.messages = messages

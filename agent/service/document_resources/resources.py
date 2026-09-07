@@ -1,7 +1,11 @@
-"""HTML → 临时文档树与 embedding 索引 → 写清单并校验产物 → 原子发布资源路径。
+"""HTML → 临时文档树与 embedding 索引 → 校验产物 → 原子发布到对象存储。
 
-prepare_resources 调用 materialize_tree、build_index；准备异常清理自己的临时目录。
-已发布资源由 Agent 工具读取，本模块不提供消费端加载接口。
+prepare_resources 调用 materialize_tree、build_index，先在本机临时目录构建并校验，
+然后把整棵产物（documents 文件树、index、manifest）以及原始文件 bytes 写入
+ObjectStore（bucket = res_*），最后返回资源定位数组 [{type, location}]。
+
+已发布资源由 Agent 工具从 ObjectStore 读取，本模块不提供消费端加载接口。
+准备异常清理自己的临时目录，不发布半成品。
 """
 
 from __future__ import annotations
@@ -12,9 +16,11 @@ import shutil
 import uuid
 from dataclasses import asdict
 from pathlib import Path
+from typing import Iterable
 
 import numpy as np
 
+from service.object_store import ObjectStore, ResourceRef, build_s3_object_store
 from service.document_resources import model
 from service.document_resources.documents import materialize_tree, order_key
 from service.document_resources.schemas import InputDocument
@@ -25,14 +31,17 @@ def resources_root() -> Path:
     return Path(os.getenv("DOCUMENT_RESOURCES_ROOT", str(Path(__file__).resolve().parents[2] / "data" / "resources"))).resolve()
 
 
-def prepare_resources(documents: list[InputDocument]) -> str:
+def prepare_resources(
+    documents: list[InputDocument],
+    raw_files: Iterable[tuple[str, bytes]] | None = None,
+) -> list[ResourceRef]:
+    """构建资源并发布到对象存储，返回资源定位数组。"""
     if not documents or any(not doc.filename.strip() or not doc.html.strip() for doc in documents):
         raise ValueError("documents require non-empty filename and html")
     parent = resources_root()
     parent.mkdir(parents=True, exist_ok=True)
     resource_id = f"res_{uuid.uuid4().hex}"
     temporary = parent / f".building-{resource_id}"
-    destination = parent / resource_id
     temporary.mkdir()
     try:
         document = materialize_tree(documents, temporary / "documents")
@@ -58,13 +67,45 @@ def prepare_resources(documents: list[InputDocument]) -> str:
             "documents": [doc.filename for doc in documents],
         })
         _validate_prepared(temporary)
-        temporary.rename(destination)
+        store = build_s3_object_store()
+        _publish_to_store(store, resource_id, temporary, raw_files or [])
     except BaseException:
-        # 只清理本次创建且仍位于受管理根目录下的临时目录。
         if temporary.resolve().parent == parent and not temporary.is_symlink():
             shutil.rmtree(temporary, ignore_errors=True)
         raise
-    return str(destination)
+    finally:
+        if temporary.resolve().parent == parent and not temporary.is_symlink():
+            shutil.rmtree(temporary, ignore_errors=True)
+    return _resource_refs(resource_id, [filename for filename, _ in (raw_files or [])])
+
+
+def _publish_to_store(
+    store: ObjectStore,
+    resource_id: str,
+    temporary: Path,
+    raw_files: Iterable[tuple[str, bytes]],
+) -> None:
+    """把临时产物整树上传到对象存储 bucket，并写入原始文件。"""
+    store.create_bucket(resource_id)
+    for path in temporary.rglob("*"):
+        if not path.is_file():
+            continue
+        key = path.relative_to(temporary).as_posix()
+        store.put_object(resource_id, key, path.read_bytes())
+    for filename, data in raw_files:
+        if not filename or not data:
+            raise ValueError("raw files require non-empty filename and bytes")
+        store.put_object(resource_id, f"raw/{filename}", data)
+
+
+def _resource_refs(resource_id: str, raw_filenames: list[str]) -> list[ResourceRef]:
+    refs = [
+        ResourceRef(type="documents", location=f"s3://{resource_id}/documents"),
+        ResourceRef(type="index", location=f"s3://{resource_id}/index"),
+    ]
+    for filename in raw_filenames:
+        refs.append(ResourceRef(type="raw", location=f"s3://{resource_id}/raw/{filename}"))
+    return refs
 
 
 def _validate_prepared(path: Path) -> None:

@@ -60,29 +60,44 @@ def test_tools_read_prepared_files_without_builder(resource_path, monkeypatch):
     listing = _ls(context)
     assert listing["ok"]
     assert [entry["name"] for entry in listing["entries"]] == ["001-contract-合同"]
-    path = next((Path(resource_path) / "documents").rglob("*.md"))
-    assert "terminate" in _read(context, str(path))["text"]
-    assert not _read(context, str(Path(resource_path) / "manifest.json"))["ok"]
+    md_key = next(e.path for e in _all_md(context))
+    assert "terminate" in _read(context, md_key)["text"]
+    assert not _read(context, "manifest.json")["ok"]
+
+
+def _all_md(context):
+    result = []
+
+    def collect(prefix):
+        for entry in context.document.entries(prefix):
+            if entry.kind == "dir":
+                collect(entry.path)
+            else:
+                result.append(entry)
+
+    for top in context.document.entries():
+        if top.kind == "dir":
+            collect(top.path)
+    return result
 
 
 @pytest.mark.parametrize("damage", ["version", "vectors", "reference"])
-def test_tool_preflight_rejects_damaged_resource(resource_path, damage):
+def test_tool_preflight_rejects_damaged_resource(resource_path, s3_store, damage):
     import json
-    import numpy as np
+
+    from tests.conftest import resource_bucket
     from service.file_extraction_agent.core.tools.workspace import validate_resource
 
-    path = Path(resource_path)
+    bucket = resource_bucket(resource_path)
     if damage == "version":
-        manifest = path / "manifest.json"
-        data = json.loads(manifest.read_text(encoding="utf-8"))
-        data["version"] = -1
-        manifest.write_text(json.dumps(data), encoding="utf-8")
+        manifest = json.loads(s3_store.get_object(bucket, "manifest.json").decode("utf-8"))
+        manifest["version"] = -1
+        s3_store.put_object(bucket, "manifest.json", json.dumps(manifest).encode("utf-8"))
     elif damage == "vectors":
-        np.save(path / "index" / "vectors.npy", np.array([[float("nan")]]))
+        s3_store.put_object(bucket, "index/vectors.npy", b"corrupt")
     else:
-        index = path / "index" / "index.json"
-        data = json.loads(index.read_text(encoding="utf-8"))
-        data["chunks"][0]["covered_files"] = ["../../outside.md"]
-        index.write_text(json.dumps(data), encoding="utf-8")
+        index = json.loads(s3_store.get_object(bucket, "index/index.json").decode("utf-8"))
+        index["chunks"][0]["covered_files"] = ["../../outside.md"]
+        s3_store.put_object(bucket, "index/index.json", json.dumps(index).encode("utf-8"))
     with pytest.raises(ValueError):
         validate_resource(resource_path)

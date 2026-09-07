@@ -1,4 +1,29 @@
-last updated: 2026-09-07 17:40:55
+last updated: 2026-09-07 20:47:41
+
+## 2026-09-07 20:47:41
+
+### 已完成工作
+
+- agent 资源存储改为独立 storage 服务（仓库顶层 storage/，纯 Python FastAPI 的 S3 兼容 HTTP 服务），agent 通过 boto3（S3ObjectStore）读写。
+- agent_proto 的 PrepareResourcesResponse/ChatCompletionRequest 的 resource_path 从 string 改为 repeated ResourceRef [{type, location}]，type ∈ {documents, index, raw}，location 为 s3://<bucket>[/<key>]，重新生成 pb2。
+- 写侧 document_resources.prepare_resources 接收 raw_files，把文件树+索引+manifest+原始文件发布到 storage 服务，返回 ResourceRef 数组。
+- 读侧 workspace/embedding/grep/ls/read 全部改为经 S3ObjectStore 读取；grep 从 ripgrep 改为纯 Python 正则搜索；越界校验从路径包含改为 key 前缀。
+- 强类型：本次涉及文件的 Any 清理为 ResourceRefs（ResourceRefProtocol + Sequence），storage 侧 ObjectStore/DirectoryObjectStore 均强类型。
+- storage 服务新增 storage/docs/DESIGN.md、storage/tests/test_storage_api.py 及测试文档。
+- TDD 验证后全量测试：agent 209 passed，storage 7 passed。
+
+### 当前进展
+
+- backend 尚未适配新协议（resource_path 数组）；前端未动。
+
+### 遇到的问题
+
+- storage 服务最初返回 JSON，boto3 无法解析 S3 wire 协议而报 500；改为 XML 列表 + ETag/Content-Length 后通过。
+- agent 测试需要真实 storage 服务：新增 tests/conftest.py 的 session 级 storage_server fixture。
+
+### 下一步
+
+- backend 适配 gRPC 新 resource_path 数组；可选：storage 服务补签名鉴权。
 
 ## 2026-09-07 17:40:55
 

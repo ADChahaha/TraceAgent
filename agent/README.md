@@ -1,14 +1,14 @@
 # Agent Service
 
-agent 在单个进程中提供 gRPC 文档准备与路径问答。文档准备把 PDF/DOCX 转为 HTML、Markdown 文件树和 embedding 索引；问答复用本机资源，通过服务端流逐条返回 protobuf 事件。
+agent 在单个进程中提供 gRPC 文档准备与路径问答。文档准备把 PDF/DOCX 转为 HTML、Markdown 文件树和 embedding 索引，并发布到独立的 storage 服务（S3 兼容）；问答复用 storage 中的资源，通过服务端流逐条返回 protobuf 事件。
 
 ```text
 PrepareResources(files: filename + bytes)
   → document_processor.process → document_resources.prepare_resources
-  → resource_path + documents(filename/html)
+  → 发布到 storage 服务 → resource_path([{type, location}]) + documents(filename/html)
 
 ChatCompletion(completion_id + resource_path + messages)
-  → CompletionManager → 模型/工具循环 → 带 seq 的事件字典
+  → CompletionManager → 经 S3ObjectStore 读取资源 → 模型/工具循环 → 带 seq 的事件字典
   → gRPC CompletionEvent 流 → 清理本轮注册项，保留文档资源
 ```
 
@@ -44,7 +44,9 @@ python main.py --check-health 127.0.0.1:8001 --timeout 5
 
 准备阶段需要 embedding 依赖；PDF 使用 MinerU，DOCX 使用 python-docx。默认 embedding 后端为 OpenVINO。问答模型配置 `BASE_URL`、`OPENAI_API_KEY`、`MODEL`；可选 `MODEL_API_TRANSPORT=responses` 或 `chat_completions`。PDF 语言由 `DOCUMENT_PROCESSOR_MINERU_LANG` 指定，默认 japan。
 
-资源根目录为 `DOCUMENT_RESOURCES_ROOT`，默认 agent/data/resources；资源不会随问答完成、失败或取消而删除。注册表仍在单进程内，多进程和跨机器资源调度不在本次迁移范围。
+资源发布到独立的 storage 服务（仓库顶层 `storage/`，S3 兼容 HTTP）。agent 通过 boto3
+（`S3_ENDPOINT_URL`，默认 `http://localhost:9000`）访问；先启动 storage 服务再启动 agent。
+资源不会随问答完成、失败或取消而删除。注册表仍在单进程内，多进程和跨机器资源调度不在本次迁移范围。
 
 ## 协议与验证
 

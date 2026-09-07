@@ -5,9 +5,9 @@
 - `test_table_preserves_merged_cells_and_wider_rows`：覆盖合并表头、跨行单元格、后续行更宽和单元格内竖线，确保内容不截断、不移列。
 
 这份测试覆盖新的「真实文件树」materialization。输入是多个带文件名的 HTML
-文档，生成端返回落盘目录 Path，测试再用工具层 `DocumentFileTree` 包装，每个 paragraph / list /
-table 都写成一个 `.md` 文件，供 `ls` / `grep`(rg) / `read` 工具在真实文件
-系统上操作。
+文档，生成端返回落盘目录 Path，测试再用 `DocumentFileTree.from_local_dir` 把该目录
+当作桶包装，每个 paragraph / list / table 都写成一个 `.md` 文件，供 `ls / grep / read`
+工具按 key 路径操作。
 
 边界已强类型化：`materialize_tree` 只接受
 `documents: list[InputDocument]`，不再接受 dict / duck-typed object；
@@ -22,8 +22,8 @@ list[InputDocument](filename + html)
   -> 按 h1-h6 层级建 section 子目录
   -> paragraph/list/table 各写一个数字前缀 + slug 的 .md 文件（列表/表格整表一个文件）
   -> 目录/文件排序靠数字前缀，不靠 os.listdir
-  -> 返回 Path，由工具层 DocumentFileTree 包装
-  -> entries(path) / read(path) / scope_path(scope)
+  -> 返回 Path，由 DocumentFileTree.from_local_dir 当作一个桶包装
+  -> entries(path) / read(path) / scope_path(scope) 按 key 前缀操作
 ```
 
 设计约定：
@@ -42,8 +42,8 @@ list[InputDocument](filename + html)
 - `test_tree_writes_list_with_nested_markdown`：确认 list 转成 Markdown bullet，嵌套 item 保留缩进层级。
 - `test_tree_writes_table_as_one_markdown_file`：确认整张 table 作为一个 .md 文件输出 Markdown 表（表头 + 分隔行 + 数据行）。
 - `test_tree_orders_entries_by_numeric_prefix_not_filesystem`：确认排序靠数字前缀，不靠文件系统枚举顺序。
-- `test_tree_read_rejects_paths_outside_workspace`：确认 `read` 拒绝超出 workspace 根目录的文件路径。
-- `test_tree_entries_reject_paths_outside_workspace`：确认 `entries` 拒绝超出 workspace 根目录的目录路径。
+- `test_tree_read_rejects_paths_outside_workspace`：确认 `read` 拒绝 `..`/绝对路径逃逸。
+- `test_tree_entries_reject_paths_outside_workspace`：确认 `entries` 拒绝绝对路径或 `..` 逃逸。
 - `test_materialize_tree_rejects_document_without_filename_or_html`：确认缺 filename 或空 html 会抛 ValueError。
 
 资源基础实现导入已迁移到 `service.document_resources`；原测试行为保持不变。

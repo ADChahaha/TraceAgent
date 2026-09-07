@@ -26,7 +26,7 @@ def _ls_result(state: ToolWorkspace, path: str) -> JsonObject:
     lines = [f"{entry.name}/" if entry.kind == "dir" else entry.name for entry in entries]
     return {
         "ok": True,
-        "path": path or str(state.document.root),
+        "path": path or state.document.root_key,
         "entries": expose_entries(entries),
         "text": "\n".join(lines),
     }

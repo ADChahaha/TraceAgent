@@ -1,12 +1,14 @@
-"""`grep` tool: full-text search across readable blocks using ripgrep."""
+"""`grep` tool: full-text search across readable blocks using pure Python search.
+
+在 ObjectStore 下按 key 前缀遍历 .md 对象，用正则匹配内容并返回候选行。
+不再依赖 ripgrep 子进程。
+"""
 
 from __future__ import annotations
 
 import asyncio
+import re
 
-from pathlib import Path
-import shutil
-import subprocess
 from typing import TYPE_CHECKING
 
 from langchain_core.tools import BaseTool, tool
@@ -29,50 +31,47 @@ def _grep(
         if not isinstance(query, str) or not query.strip():
             return {"ok": False, "errors": [{"code": "BAD_QUERY", "message": "query is required"}]}
         output = _grep_output(state, query, scope, max_results)
-        if output is None:
-            return {
-                "ok": False,
-                "errors": [{"code": "RIPGREP_MISSING", "message": "ripgrep not found on PATH"}],
-            }
         return {"ok": True, "query": query, "scope": scope, "output": output}
 
     return run_tool(execute)
 
 
-def _grep_output(state: ToolWorkspace, query: str, scope: str, max_results: int) -> str | None:
+def _grep_output(state: ToolWorkspace, query: str, scope: str, max_results: int) -> str:
     try:
-        scope_dir = state.document.scope_path(scope or None)
+        prefix = state.document.scope_path(scope or None)
     except ValueError as exc:
         return str(exc)
     bounded = max(1, min(int(max_results or 20), 50))
-    return _run_ripgrep(query, scope_dir, bounded)
-
-
-def _run_ripgrep(query: str, scope_dir: Path, max_results: int) -> str | None:
-    rg = shutil.which("rg")
-    if rg is None:
-        return None
-    command = [rg, "-n", "--color", "never", "--max-count", str(max_results), query, "."]
-    completed = subprocess.run(
-        command,
-        cwd=str(scope_dir),
-        capture_output=True,
-        text=True,
-    )
-    if completed.returncode not in (0, 1):
-        return completed.stderr.strip() or "ripgrep failed"
-    return completed.stdout
+    try:
+        pattern = re.compile(re.escape(query), re.IGNORECASE)
+    except re.error:
+        return "invalid query"
+    keys = state.document.store.list_objects(state.document.bucket, prefix=prefix)
+    lines: list[str] = []
+    for key in sorted(keys):
+        if not key.endswith(".md"):
+            continue
+        data = state.document.store.get_object(state.document.bucket, key)
+        if data is None:
+            continue
+        content = data.decode("utf-8")
+        for index, line in enumerate(content.splitlines(), start=1):
+            if pattern.search(line):
+                lines.append(f"{key}:{index}:{line}")
+            if len(lines) >= bounded:
+                return "\n".join(lines)
+    return "\n".join(lines)
 
 
 def build_grep(state: ToolWorkspace) -> BaseTool:
     @tool
     async def grep(query: str, scope: str = "", max_results: int = 20) -> JsonObject:
-        """Full-text search across readable blocks using ripgrep.
+        """Full-text search across readable blocks.
 
         Use for targeted lookups: dates, names, amounts, specific terms.
         Results are candidates only — NOT final evidence. Always read a
         candidate before citing it in your answer.
-        scope: optional directory path to limit search to a section.
+        scope: optional key prefix path to limit search to a section.
         max_results: default 20, max 50.
         """
 
@@ -83,4 +82,4 @@ def build_grep(state: ToolWorkspace) -> BaseTool:
     return grep
 
 
-__all__ = ["build_grep", "_grep", "_grep_output", "_run_ripgrep"]
+__all__ = ["build_grep", "_grep", "_grep_output"]

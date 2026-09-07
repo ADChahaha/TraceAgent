@@ -14,7 +14,7 @@ from service.file_extraction_agent.schemas import (
 def test_completion_request_accepts_resource_path_and_append_only_messages():
     request = DocumentQaCompletionRequest(
         completion_id="cmp_123",
-        resource_path="D:/resources/res_test",
+        resource_path=[{"type": "documents", "location": "s3://res_test/documents"}],
         messages=[
             {"role": "user", "content": "上一轮问题"},
             {"role": "assistant", "content": "上一轮回答摘要"},
@@ -23,7 +23,7 @@ def test_completion_request_accepts_resource_path_and_append_only_messages():
     )
 
     assert request.completion_id == "cmp_123"
-    assert request.resource_path == "D:/resources/res_test"
+    assert request.resource_path[0].location == "s3://res_test/documents"
     assert request.messages[-1] == DocumentQaMessage(role="user", content="可以提前终止吗？")
     assert not hasattr(request, "memory")
 
@@ -32,7 +32,7 @@ def test_completion_request_rejects_memory_field():
     with pytest.raises(ValueError, match="memory"):
         DocumentQaCompletionRequest(
             completion_id="cmp_123",
-            resource_path="D:/resources/res_test",
+            resource_path=[{"type": "documents", "location": "s3://res_test/documents"}],
             messages=[{"role": "user", "content": "问题"}],
             memory={"prior_answers": ["会破坏 append-only prompt cache"]},
         )
@@ -41,7 +41,7 @@ def test_completion_request_rejects_memory_field():
 def test_completion_request_accepts_openai_tool_messages():
     request = DocumentQaCompletionRequest(
         completion_id="cmp_123",
-        resource_path="D:/resources/res_test",
+        resource_path=[{"type": "documents", "location": "s3://res_test/documents"}],
         messages=[
             {"role": "user", "content": "看通知期限"},
             {

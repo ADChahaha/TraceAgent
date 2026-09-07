@@ -1,12 +1,16 @@
 # Agent gRPC API
 
-服务名为 `traceagent.v1.AgentService`，协议见 [agent.proto](../../agent_proto/agent.proto)。调用方先准备文档，再保存资源路径并用于每轮问答：
+服务名为 `traceagent.v1.AgentService`，协议见 [agent.proto](../../agent_proto/agent.proto)。调用方先准备文档，再保存资源定位数组并用于每轮问答：
 
 ```text
-PrepareResources(files) → 解析与索引构建 → resource_path + documents
+PrepareResources(files) → 解析与索引构建 → resource_path([{type, location}]) + documents
 ChatCompletion(resource_path + messages) → 校验资源 → 单轮执行 → CompletionEvent 流
 CancelCompletion(completion_id) → 立即确认取消请求 → 原问答流随后收尾
 ```
+
+`resource_path` 是 `repeated ResourceRef`，每项 `{type, location}`，location 为
+`s3://<bucket>[/<key>]`。type 取值：`documents`（Markdown 文件树）、`index`（embedding 索引）、
+`raw`（原始上传文件，每个文件一项）。资源发布在独立的 storage 服务上。
 
 agent 的 HTTP 路由已移除。backend 尚未适配 gRPC，以下示例使用生成的 Python 客户端。
 
@@ -40,14 +44,14 @@ with grpc.insecure_channel("127.0.0.1:8001", options=[
             print(event.type)
 ```
 
-PrepareResources 为一元 RPC：一次传入全部文件的 filename/bytes，按后缀选择 PDF 或 DOCX；等待全部解析和资源发布后返回 resource_path 与 documents(filename/html)。没有分块上传。请求、响应各受配置消息上限约束，上传 bytes 与返回 HTML 都要计入大小。任一文件处理失败则整组失败，不返回可用路径；已发布资源不会随问答结束删除。
+PrepareResources 为一元 RPC：一次传入全部文件的 filename/bytes，按后缀选择 PDF 或 DOCX；等待全部解析和资源发布后返回 resource_path（[{type, location}] 数组）与 documents(filename/html)。没有分块上传。请求、响应各受配置消息上限约束，上传 bytes 与返回 HTML 都要计入大小。任一文件处理失败则整组失败，不返回可用定位；已发布资源不会随问答结束删除。
 
 ## 问答请求
 
 ChatCompletion 为服务端流 RPC。输入转换为现有 DocumentQaMessage、RunOptions 和 ModelConfig，然后交给 CompletionManager：
 
 - completion_id：1–128 位，以字母或数字开头，其余允许字母、数字、下划线、短横线；活动 ID 不可重复。
-- resource_path：必须指向受管理根目录下的完整资源；缺失、损坏、版本错误或引用越界均拒绝，不自动重建。
+- resource_path：repeated ResourceRef，必须同时包含 documents 与 index 定位（同 bucket）；缺失、损坏、版本错误或引用越界均拒绝，不自动重建。
 - messages：非空，支持 system/user/assistant/tool，保留完整历史，不自动摘要或裁剪。tool 必须有 tool_call_id。
 - QaMessage.tool_calls_json：可选 JSON 数组，内容为原历史工具调用；tool_call_id、name 使用独立字段。
 - run_options：可选，只提供 tool_execution_timeout，默认 60 秒；显式 0 不会被替换成默认值。已删除 max_tool_calls。
@@ -68,7 +72,7 @@ ChatCompletion 为服务端流 RPC。输入转换为现有 DocumentQaMessage、R
 | tool_completed / tool_failed | 对应调用的 args_json、result_json |
 | completion.completed / completion.cancelled / completion.failed | 唯一业务终态、status、可选 error/error_message |
 
-args_json、result_json 及 ToolCall.args_json 用 JSON 字符串保留动态结构、大整数和 null；客户端用 json.loads 解码。其余固定字段使用 protobuf 类型，可选字段可用 HasField 判断。最终回答由 is_final=true 标记；工具调用 ID 仍用于配对，模型引用 documents 下的真实 Markdown 路径。
+args_json、result_json 及 ToolCall.args_json 用 JSON 字符串保留动态结构、大整数和 null；客户端用 json.loads 解码。其余固定字段使用 protobuf 类型，可选字段可用 HasField 判断。最终回答由 is_final=true 标记；工具调用 ID 仍用于配对，模型引用 documents 下的真实 Markdown key 路径。
 
 ## 取消与连接生命周期
 

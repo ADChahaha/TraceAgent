@@ -16,8 +16,14 @@ message Document {
   string filename = 1;
   string html = 2;
 }
+// 资源定位：type 表示组成部分（raw=原始文件 / documents=文件树 / index=embedding 索引），
+// location 是 s3://<bucket>[/<key>] 形式的定位串。
+message ResourceRef {
+  string type = 1;
+  string location = 2;
+}
 message PrepareResourcesResponse {
-  string resource_path = 1;
+  repeated ResourceRef resource_path = 1;
   repeated Document documents = 2;
 }
 message QaMessage {
@@ -48,7 +54,7 @@ message ModelConfig {
 }
 message ChatCompletionRequest {
   string completion_id = 1;
-  string resource_path = 2;
+  repeated ResourceRef resource_path = 2;
   repeated QaMessage messages = 3;
   RunOptions run_options = 4;
   ModelConfig model_config = 5;

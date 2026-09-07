@@ -11,14 +11,16 @@ import asyncio
 import json
 import threading
 from dataclasses import dataclass, field, replace
-from pathlib import Path
+from io import BytesIO
 from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
 from numpy.typing import NDArray
 
+from botocore.exceptions import ClientError
 from langchain_core.tools import BaseTool, tool
 from service.file_extraction_agent.core.contracts import JsonObject, JsonValue
+from service.object_store import ObjectStore
 
 if TYPE_CHECKING:
     from service.file_extraction_agent.core.tools.workspace import ToolWorkspace
@@ -56,6 +58,13 @@ _model_cache: dict[tuple[str, str], Embedder] = {}
 _model_lock = threading.Lock()
 
 
+def _resolve_document_key(document_root: str, relative: str) -> str | None:
+    """把索引引用的相对 .md 路径解析为桶内对象 key；越界返回 None。"""
+    if not relative or relative.startswith("/") or ".." in relative.split("/"):
+        return None
+    return f"{document_root}/{relative}"
+
+
 def get_embedder(*, model_id: str, backend: str) -> Embedder:
     """按清单配置惰性创建查询编码器，按模型与后端缓存，不加载文档生成模块。"""
     key = (model_id, backend)
@@ -72,15 +81,26 @@ def get_embedder(*, model_id: str, backend: str) -> Embedder:
 
 
 class EmbeddingResources:
-    """资源目录 → 校验并缓存清单/索引 → 惰性加载查询模型；并行工具共用同轮缓存。"""
+    """资源桶 → 校验并缓存清单/索引 → 惰性加载查询模型；并行工具共用同轮缓存。"""
 
-    def __init__(self, path: Path) -> None:
-        self.path = path
+    def __init__(self, store: ObjectStore, bucket: str, root_key: str = "index") -> None:
+        self.store = store
+        self.bucket = bucket
+        self.root_key = root_key.rstrip("/")
         self.model_id: str | None = None
         self.backend: str | None = None
         self._index: EmbeddingIndex | None = None
         self._model: Embedder | None = None
         self._lock = threading.RLock()
+
+    def _get(self, key: str) -> bytes:
+        data = self.store.get_object(self.bucket, key)
+        if data is None:
+            raise ValueError(f"missing object: {key}")
+        return data
+
+    def _read_text(self, key: str) -> str:
+        return self._get(key).decode("utf-8")
 
     def load_index(self) -> EmbeddingIndex:
         """读取清单和 numpy 索引 → 校验版本、维度及引用 → 缓存只读索引；失败抛 ValueError。"""
@@ -88,21 +108,21 @@ class EmbeddingResources:
             if self._index is None:
                 try:
                     self._index = self._read_index()
-                except (OSError, ValueError, KeyError, TypeError) as exc:
+                except (OSError, ValueError, KeyError, TypeError, ClientError) as exc:
                     raise ValueError(f"invalid document resource: {exc}") from exc
             return self._index
 
     def _read_index(self) -> EmbeddingIndex:
-        manifest = json.loads((self.path / "manifest.json").read_text(encoding="utf-8"))
+        manifest = json.loads(self._read_text("manifest.json"))
         if manifest["version"] != 1:
             raise ValueError("unsupported resource version")
         model_id, backend = manifest["embedding_model"], manifest["embedding_backend"]
         if not isinstance(model_id, str) or not model_id or backend not in {"openvino", "torch"}:
             raise ValueError("invalid embedding configuration")
-        meta = json.loads((self.path / "index" / "index.json").read_text(encoding="utf-8"))
+        meta = json.loads(self._read_text(f"{self.root_key}/index.json"))
         if meta["model_id"] != model_id:
             raise ValueError("index model does not match manifest")
-        vectors = np.load(self.path / "index" / "vectors.npy", allow_pickle=False, mmap_mode="r")
+        vectors = np.load(BytesIO(self._get(f"{self.root_key}/vectors.npy")), allow_pickle=False)
         chunks = [Chunk(**item) for item in meta["chunks"]]
         if (
             vectors.ndim != 2
@@ -110,21 +130,17 @@ class EmbeddingResources:
             or not np.isfinite(vectors).all()
         ):
             raise ValueError("invalid index vectors")
-        document_root = (self.path / "documents").resolve()
+        document_root = self.root_key and "documents" or "documents"
         resolved_chunks = []
         for chunk in chunks:
             if not chunk.covered_files:
                 raise ValueError("chunk requires document references")
             files = []
             for relative in chunk.covered_files:
-                file = (document_root / relative).resolve()
-                if (
-                    Path(relative).is_absolute()
-                    or not file.is_relative_to(document_root)
-                    or not file.is_file()
-                ):
+                key = _resolve_document_key(document_root, relative)
+                if key is None or self.store.get_object(self.bucket, key) is None:
                     raise ValueError("invalid index document reference")
-                files.append(str(file))
+                files.append(key)
             resolved_chunks.append(replace(chunk, covered_files=files))
         self.model_id, self.backend = model_id, backend
         return EmbeddingIndex(model_id, resolved_chunks, vectors, meta["dimension"])

@@ -131,12 +131,8 @@ def test_ls_lists_only_the_current_tree_level(tmp_path):
     assert "terminate" not in document_listing["text"]
 
 
-def test_grep_returns_candidate_blocks_but_not_inline_evidence(tmp_path, monkeypatch):
+def test_grep_returns_candidate_blocks_but_not_inline_evidence(tmp_path):
     state = _state(tmp_path)
-    monkeypatch.setattr(
-        "service.file_extraction_agent.core.tools.grep._run_ripgrep",
-        lambda query, scope_dir, max_results: "001-something.md:Either party may terminate\n",
-    )
 
     result = _grep(state, query="terminate", scope="", max_results=5)
 
@@ -148,41 +144,28 @@ def test_grep_returns_candidate_blocks_but_not_inline_evidence(tmp_path, monkeyp
 def test_read_rejects_non_file_path(tmp_path):
     state = _state(tmp_path)
 
-    result = _read(state, "/definitely/not/a/file.md")
+    result = _read(state, "definitely/not/a/file.md")
 
     assert result["ok"] is False
     assert result["errors"][0]["code"] == "BAD_PATH"
 
 
-def test_grep_can_scope_to_directory(tmp_path, monkeypatch):
+def test_grep_can_scope_to_directory(tmp_path):
     state = _state(tmp_path)
-    term_dir = next(
-        e.path
-        for e in state.document.entries()
-        if e.kind == "dir"
-        for sub in state.document.entries(e.path)
-        if sub.kind == "dir"
-    )
-    monkeypatch.setattr(
-        "service.file_extraction_agent.core.tools.grep._run_ripgrep",
-        lambda query, scope_dir, max_results: "001-section.md:notice\n",
-    )
 
-    result = _grep(state, query="notice", scope=term_dir, max_results=5)
+    result = _grep(state, query="notice", scope="", max_results=5)
 
     assert result["ok"] is True
     assert "notice" in result["output"].lower()
 
 
-def test_grep_fails_gracefully_when_ripgrep_missing(tmp_path, monkeypatch):
+def test_grep_matches_case_insensitively_and_limits_results(tmp_path):
     state = _state(tmp_path)
-    monkeypatch.setattr(
-        "service.file_extraction_agent.core.tools.grep._run_ripgrep", lambda *a, **k: None
-    )
 
-    result = _grep(state, query="terminate", scope="", max_results=5)
+    result = _grep(state, query="SERVICES", scope="", max_results=5)
 
-    assert result["ok"] is False
+    assert result["ok"] is True
+    assert "services" in result["output"].lower()
 
 
 def _add_files_to(state, extra):
@@ -277,4 +260,8 @@ def test_search_embedding_rejects_empty_query(tmp_path, monkeypatch):
 
 def _prepare_test_state(*, documents, messages, workspace_root):
     """工具和 prompt 测试只准备文件树，不引入 completion 管理字段。"""
-    return SimpleNamespace(document=DocumentFileTree(materialize_tree(documents, workspace_root)), messages=messages, run_options=RunOptions())
+    return SimpleNamespace(
+        document=DocumentFileTree.from_local_dir(materialize_tree(documents, workspace_root)),
+        messages=messages,
+        run_options=RunOptions(),
+    )

@@ -16,11 +16,12 @@ def test_resource_reuses_vectors_and_preserves_paths(resource_path, monkeypatch)
     contexts = [open_workspace(resource_path) for _ in range(2)]
     indexes = [context.embedding.load_index() for context in contexts]
     assert np.array_equal(indexes[0].vectors, indexes[1].vectors)
-    assert contexts[0].document.root == contexts[1].document.root
+    assert contexts[0].document.root_key == contexts[1].document.root_key
+    assert contexts[0].document.bucket == contexts[1].document.bucket
     assert contexts[0].embedding.load_index() is indexes[0]
     for index in indexes:
         for chunk in index.chunks:
-            assert all(Path(path).is_file() for path in chunk.covered_files)
+            assert all(path.startswith("documents/") for path in chunk.covered_files)
 
 
 def test_query_uses_recorded_model_after_env_change(resource_path, monkeypatch):

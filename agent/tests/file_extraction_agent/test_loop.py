@@ -605,7 +605,7 @@ async def test_parallel_tool_executor_times_out_slow_call(tmp_path):
 def _prepare_test_state(*, documents, messages, workspace_root):
     """工具和 prompt 测试只准备文件树，不引入 completion 管理字段。"""
     return SimpleNamespace(
-        document=DocumentFileTree(materialize_tree(documents, workspace_root)),
+        document=DocumentFileTree.from_local_dir(materialize_tree(documents, workspace_root)),
         messages=messages,
         run_options=RunOptions(),
     )

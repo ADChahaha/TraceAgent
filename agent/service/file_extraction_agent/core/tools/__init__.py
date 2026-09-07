@@ -3,7 +3,7 @@
 `core/tools` 包把每个工具拆成独立文件：`ls.py` / `grep.py` / `read.py` /
 `embedding.py`（承载 `search_embedding`），共享骨架放 `base.py`。本 `__init__.py`
 对外提供统一接口 `build_tools(workspace)`，并转出各工具的 `_ls/_grep/_read/
-_search_embedding` 及可替身点 `_run_ripgrep/_get_embedder/_get_index`，供测试
+_search_embedding` 及可替身点 `_get_embedder/_get_index`，供测试
 monkeypatch 与外部 import 使用。
 
 实现步骤：
@@ -33,7 +33,6 @@ from service.file_extraction_agent.core.tools.embedding import (
 from service.file_extraction_agent.core.tools.grep import (
     _grep,
     _grep_output,
-    _run_ripgrep,
     build_grep,
 )
 from service.file_extraction_agent.core.tools.ls import _ls, _ls_result, build_ls
@@ -75,7 +74,6 @@ __all__ = [
     "_locator_error",
     "_get_embedder",
     "_get_index",
-    "_run_ripgrep",
     "run_tool",
     "expose_entries",
     "order_key",

@@ -45,15 +45,17 @@ def _prepare(request):
     for file in request.files:
         processor.detect_file_type(file_type=None, filename=file.filename)
     documents = []
+    raw_files = []
     for file in request.files:
+        raw_files.append((file.filename, bytes(file.content)))
         with BytesIO(file.content) as content:
             try:
                 result = processor.process(UploadFileProxy(file.filename, content))
             except Exception as exc:
                 raise RuntimeError(f"document parsing failed for {file.filename}: {exc}") from exc
         documents.append(InputDocument(filename=result.filename, html=result.html))
-    path = prepare_resources(documents)
+    refs = prepare_resources(documents, raw_files=raw_files)
     return pb.PrepareResourcesResponse(
-        resource_path=path,
+        resource_path=[pb.ResourceRef(type=ref.type, location=ref.location) for ref in refs],
         documents=[pb.Document(filename=doc.filename, html=doc.html) for doc in documents],
     )

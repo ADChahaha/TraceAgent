@@ -3,9 +3,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Protocol, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class ResourceRefProtocol(Protocol):
+    """资源定位项的结构化协议：type + location（S3 URL）。
+
+    agent_proto 的 ResourceRef 消息与 schemas.ResourceRef 都满足该结构，
+    下游用 ResourceRefs 类型即可同时接受两者。
+    """
+
+    type: str
+    location: str
+
+
+ResourceRefs = Sequence[ResourceRefProtocol]
 
 
 CompletionStatus = Literal[
@@ -40,11 +54,18 @@ class DocumentQaMessage(BaseModel):
         return self
 
 
+class ResourceRef(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: str
+    location: str
+
+
 class DocumentQaCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     completion_id: str
-    resource_path: str
+    resource_path: list[ResourceRef]
     messages: list[DocumentQaMessage]
     stream: bool = True
     run_options: "RunOptions | None" = None
@@ -53,7 +74,7 @@ class DocumentQaCompletionRequest(BaseModel):
     def validate_request(self) -> "DocumentQaCompletionRequest":
         if not self.completion_id.strip():
             raise ValueError("completion_id is required")
-        if not self.resource_path.strip():
+        if not self.resource_path:
             raise ValueError("resource_path is required")
         if not self.messages:
             raise ValueError("messages must be a non-empty list")
@@ -85,6 +106,9 @@ __all__ = [
     "MessageRole",
     "DocumentQaMessage",
     "DocumentQaCompletionRequest",
+    "ResourceRef",
+    "ResourceRefProtocol",
+    "ResourceRefs",
     "ModelConfig",
     "ModelApiTransport",
     "RunOptions",

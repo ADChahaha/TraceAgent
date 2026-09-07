@@ -15,7 +15,7 @@ from service.document_resources.schemas import InputDocument
     ('<table><tr><th>项目</th></tr><tr><td>A|B</td><td>100</td></tr></table>', ['| A\\|B | 100 |']),
 ])
 def test_table_preserves_merged_cells_and_wider_rows(tmp_path, html, expected):
-    DocumentFileTree(materialize_tree([InputDocument(filename="fees.html", html=html)], tmp_path))
+    DocumentFileTree.from_local_dir(materialize_tree([InputDocument(filename="fees.html", html=html)], tmp_path))
     rendered = next(tmp_path.rglob("*.md")).read_text(encoding="utf-8")
     for row in expected:
         assert row in rendered
@@ -57,23 +57,22 @@ def _documents():
 
 
 def test_materialize_tree_writes_real_files_for_multiple_documents(tmp_path):
-    tree = DocumentFileTree(materialize_tree(_documents(), tmp_path))
+    tree = DocumentFileTree.from_local_dir(materialize_tree(_documents(), tmp_path))
 
-    assert tree.root == tmp_path
-    assert tree.root.is_dir()
+    assert Path(tmp_path).is_dir()
     doc_dirs = [entry for entry in tree.entries() if entry.kind == "dir"]
     assert [entry.name for entry in doc_dirs] == [
         "001-contract-项目设计说明",
         "002-contract-项目设计说明",
     ]
     assert [entry.path for entry in doc_dirs] == [
-        str(tmp_path / "001-contract-项目设计说明"),
-        str(tmp_path / "002-contract-项目设计说明"),
+        "001-contract-项目设计说明",
+        "002-contract-项目设计说明",
     ]
 
 
 def test_tree_entries_respect_depth_and_file_kinds(tmp_path):
-    tree = DocumentFileTree(materialize_tree(_documents(), tmp_path))
+    tree = DocumentFileTree.from_local_dir(materialize_tree(_documents(), tmp_path))
 
     root_entries = tree.entries()
     assert [e.name for e in root_entries] == [
@@ -81,7 +80,7 @@ def test_tree_entries_respect_depth_and_file_kinds(tmp_path):
         "002-contract-项目设计说明",
     ]
 
-    doc_entries = tree.entries(str(tmp_path / "001-contract-项目设计说明"))
+    doc_entries = tree.entries("001-contract-项目设计说明")
     assert [e.name for e in doc_entries] == [
         "001-项目设计说明",
         "002-补充说明",
@@ -90,31 +89,30 @@ def test_tree_entries_respect_depth_and_file_kinds(tmp_path):
 
 
 def test_tree_writes_paragraph_list_and_table_as_markdown_files(tmp_path):
-    tree = DocumentFileTree(materialize_tree(_documents(), tmp_path))
+    tree = DocumentFileTree.from_local_dir(materialize_tree(_documents(), tmp_path))
 
-    section = tree.entries(str(tmp_path / "001-contract-项目设计说明" / "001-项目设计说明"))
+    section = tree.entries("001-contract-项目设计说明/001-项目设计说明")
     names = [e.name for e in section]
     assert names == [
         "001-背景",
         "002-背景",
     ]
 
-    first_section = tree.entries(str(tmp_path / "001-contract-项目设计说明" / "001-项目设计说明" / "001-背景"))
+    first_section = tree.entries("001-contract-项目设计说明/001-项目设计说明/001-背景")
     assert [e.name for e in first_section] == [
         "001-这个项目最初是为了抽取字段.md",
         "002-这个项目最初是为了验证重名段落.md",
     ]
     assert [e.kind for e in first_section] == ["md", "md"]
 
-    read = tree.read(str(tmp_path / "001-contract-项目设计说明" / "001-项目设计说明" / "001-背景" / "001-这个项目最初是为了抽取字段.md"))
+    read = tree.read("001-contract-项目设计说明/001-项目设计说明/001-背景/001-这个项目最初是为了抽取字段.md")
     assert read == "这个项目最初是为了抽取字段。"
 
 
 def test_tree_writes_list_with_nested_markdown(tmp_path):
-    tree = DocumentFileTree(materialize_tree(_documents(), tmp_path))
+    tree = DocumentFileTree.from_local_dir(materialize_tree(_documents(), tmp_path))
 
-    list_file = tmp_path / "001-contract-项目设计说明" / "001-项目设计说明" / "002-背景" / "001-第一项.md"
-    content = tree.read(str(list_file))
+    content = tree.read("001-contract-项目设计说明/001-项目设计说明/002-背景/001-第一项.md")
 
     assert "- 第一项" in content
     assert "- 第二项 子项" in content
@@ -122,10 +120,9 @@ def test_tree_writes_list_with_nested_markdown(tmp_path):
 
 
 def test_tree_writes_table_as_one_markdown_file(tmp_path):
-    tree = DocumentFileTree(materialize_tree(_documents(), tmp_path))
+    tree = DocumentFileTree.from_local_dir(materialize_tree(_documents(), tmp_path))
 
-    table_file = tmp_path / "001-contract-项目设计说明" / "002-补充说明" / "002-费用明细.md"
-    content = tree.read(str(table_file))
+    content = tree.read("001-contract-项目设计说明/002-补充说明/002-费用明细.md")
 
     assert "费用明细" in content
     assert "| 项目 | 金额 |" in content
@@ -133,7 +130,7 @@ def test_tree_writes_table_as_one_markdown_file(tmp_path):
 
 
 def test_tree_orders_entries_by_numeric_prefix_not_filesystem(tmp_path):
-    tree = DocumentFileTree(materialize_tree(
+    tree = DocumentFileTree.from_local_dir(materialize_tree(
         [
             InputDocument(
                 filename="letters.html",
@@ -143,7 +140,7 @@ def test_tree_orders_entries_by_numeric_prefix_not_filesystem(tmp_path):
         tmp_path,
     ))
 
-    section = tree.entries(str(tmp_path / "001-letters-Letters" / "001-Letters"))
+    section = tree.entries("001-letters-Letters/001-Letters")
     names = [e.name for e in section]
 
     assert names == [
@@ -153,14 +150,14 @@ def test_tree_orders_entries_by_numeric_prefix_not_filesystem(tmp_path):
 
 
 def test_tree_read_rejects_paths_outside_workspace(tmp_path):
-    tree = DocumentFileTree(materialize_tree([InputDocument(filename="a.html", html="<p>text</p>")], tmp_path))
+    tree = DocumentFileTree.from_local_dir(materialize_tree([InputDocument(filename="a.html", html="<p>text</p>")], tmp_path))
 
     with pytest.raises(ValueError):
         tree.read(str(tmp_path.parent / "outside.md"))
 
 
 def test_tree_entries_reject_paths_outside_workspace(tmp_path):
-    tree = DocumentFileTree(materialize_tree([InputDocument(filename="a.html", html="<p>text</p>")], tmp_path))
+    tree = DocumentFileTree.from_local_dir(materialize_tree([InputDocument(filename="a.html", html="<p>text</p>")], tmp_path))
 
     with pytest.raises(ValueError):
         tree.entries(str(tmp_path.parent))
@@ -168,6 +165,6 @@ def test_tree_entries_reject_paths_outside_workspace(tmp_path):
 
 def test_materialize_tree_rejects_document_without_filename_or_html(tmp_path):
     with pytest.raises(ValueError, match="filename"):
-        DocumentFileTree(materialize_tree([InputDocument(filename="", html="<p>x</p>")], tmp_path))
+        DocumentFileTree.from_local_dir(materialize_tree([InputDocument(filename="", html="<p>x</p>")], tmp_path))
     with pytest.raises(ValueError, match="html"):
-        DocumentFileTree(materialize_tree([InputDocument(filename="a.html", html="")], tmp_path))
+        DocumentFileTree.from_local_dir(materialize_tree([InputDocument(filename="a.html", html="")], tmp_path))

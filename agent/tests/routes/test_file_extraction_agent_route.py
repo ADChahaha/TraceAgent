@@ -27,7 +27,9 @@ def manager(monkeypatch):
 
 
 def request(**fields):
-    values = dict(completion_id="cmp_rpc", resource_path="D:/resources/res_test",
+    values = dict(completion_id="cmp_rpc",
+                  resource_path=[pb.ResourceRef(type="documents", location="s3://res_test/documents"),
+                                 pb.ResourceRef(type="index", location="s3://res_test/index")],
                   messages=[pb.QaMessage(role="user", content="问题")])
     values.update(fields)
     return pb.ChatCompletionRequest(**values)

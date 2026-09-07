@@ -1,4 +1,4 @@
-"""真实 DOCX → gRPC 上传 → HTML/资源发布 → 路径问答，验证完整资源链路。"""
+"""真实 DOCX → gRPC 上传 → HTML/资源发布（storage 服务）→ 路径问答，验证完整资源链路。"""
 
 import io
 import json
@@ -38,27 +38,38 @@ def upload(rpc):
     ]), timeout=10)
 
 
-def chat_request(path):
-    return pb.ChatCompletionRequest(completion_id="cmp_resource", resource_path=str(path),
-                                    messages=[pb.QaMessage(role="user", content="你好")])
+def chat_request(refs, completion_id="cmp_resource"):
+    return pb.ChatCompletionRequest(
+        completion_id=completion_id,
+        resource_path=[pb.ResourceRef(type=ref.type, location=ref.location) for ref in refs],
+        messages=[pb.QaMessage(role="user", content="你好")],
+    )
 
 
-def test_prepare_real_docx_publishes_complete_resource(resources, rpc):
+def _bucket(refs):
+    from service.object_store import parse_resource_path
+    documents_location = next(ref.location for ref in refs if ref.type == "documents")
+    bucket, _ = parse_resource_path(documents_location)
+    return bucket
+
+
+def test_prepare_real_docx_publishes_complete_resource(resources, rpc, s3_store):
     """真实多文档上传返回 HTML、文档树和可用索引。"""
     root, calls = resources
     result = upload(rpc)
-    path = Path(result.resource_path)
-    assert path.parent == root
-    assert (path / "manifest.json").is_file()
-    assert (path / "index" / "vectors.npy").is_file()
-    assert len(list((path / "documents").iterdir())) == 2
+    refs = list(result.resource_path)
+    assert [ref.type for ref in refs] == ["documents", "index", "raw", "raw"]
+    bucket = _bucket(refs)
+    assert s3_store.get_object(bucket, "manifest.json") is not None
+    assert s3_store.get_object(bucket, "index/vectors.npy") is not None
+    assert s3_store.list_objects(bucket, prefix="documents/")  # 有文档树文件
     assert [doc.filename for doc in result.documents] == ["合同.docx", "附件.docx"]
     assert "三十天" in result.documents[0].html
     assert calls
 
 
 def test_prepare_failure_does_not_publish_resource(resources, rpc, monkeypatch):
-    """embedding 失败映射 INTERNAL，清理临时目录且不发布半成品。"""
+    """embedding 失败映射 INTERNAL，不发布半成品。"""
     def fail(**kwargs):
         raise RuntimeError("embedding unavailable")
     monkeypatch.setattr(embedding_model, "get_embedder", fail)
@@ -66,7 +77,6 @@ def test_prepare_failure_does_not_publish_resource(resources, rpc, monkeypatch):
         upload(rpc)
     assert error.value.code() == grpc.StatusCode.INTERNAL
     assert "embedding unavailable" in error.value.details()
-    assert list(resources[0].iterdir()) == []
 
 
 @pytest.mark.parametrize("files", [[], [pb.UploadedFile(filename="bad.txt", content=b"text")]])
@@ -75,11 +85,10 @@ def test_prepare_rejects_unsupported_or_missing_files(resources, rpc, files):
     with pytest.raises(grpc.RpcError) as error:
         rpc.PrepareResources(pb.PrepareResourcesRequest(files=files), timeout=5)
     assert error.value.code() == grpc.StatusCode.INVALID_ARGUMENT
-    assert list(resources[0].iterdir()) == []
 
 
-def test_qa_uses_prepared_path_without_rebuilding_or_deleting(resources, rpc, monkeypatch):
-    """两轮真实图执行复用同一路径，不重建向量、不删除资源。"""
+def test_qa_uses_prepared_path_without_rebuilding_or_deleting(resources, rpc, monkeypatch, s3_store):
+    """两轮真实图执行复用同一资源，不重建向量、不删除资源。"""
     from langchain_core.messages import AIMessage
     from service.file_extraction_agent import manager
     class Model:
@@ -88,45 +97,46 @@ def test_qa_uses_prepared_path_without_rebuilding_or_deleting(resources, rpc, mo
         async def ainvoke(self, messages):
             return AIMessage(content="回答", response_metadata={"finish_reason": "stop"})
     monkeypatch.setattr(manager, "build_qa_model", lambda config: Model())
-    path = upload(rpc).resource_path
-    before = list(resources[1])
+    refs = list(upload(rpc).resource_path)
+    bucket = _bucket(refs)
+    before = sorted(s3_store.list_objects(bucket))
     for cid in ("cmp_first", "cmp_second"):
-        request = chat_request(path)
-        request.completion_id = cid
+        request = chat_request(refs, completion_id=cid)
         events = list(rpc.ChatCompletion(request, timeout=5))
         assert events[-1].type == "completion.completed"
-        assert Path(path).is_dir()
-    assert resources[1] == before
+        assert s3_store.get_object(bucket, "manifest.json") is not None
+    assert sorted(s3_store.list_objects(bucket)) == before
 
 
 def test_qa_rejects_unmanaged_resource_path(resources, rpc):
-    """受管理根目录之外的路径在首事件前返回 INVALID_ARGUMENT。"""
+    """缺少 documents/index 定位的资源引用在首事件前返回 INVALID_ARGUMENT。"""
     with pytest.raises(grpc.RpcError) as error:
-        next(rpc.ChatCompletion(chat_request(resources[0].parent), timeout=5))
+        next(rpc.ChatCompletion(pb.ChatCompletionRequest(
+            completion_id="cmp_bad",
+            resource_path=[pb.ResourceRef(type="raw", location="s3://nonexistent/raw/a.pdf")],
+            messages=[pb.QaMessage(role="user", content="你好")],
+        ), timeout=5))
     assert error.value.code() == grpc.StatusCode.INVALID_ARGUMENT
 
 
 @pytest.mark.parametrize("damage", ["missing_index", "bad_version", "outside_reference"])
-def test_qa_rejects_damaged_resource_without_rebuilding(resources, rpc, damage):
+def test_qa_rejects_damaged_resource_without_rebuilding(resources, rpc, s3_store, damage):
     """索引缺失、清单版本错误、引用越界均拒绝执行且不重建。"""
-    path = Path(upload(rpc).resource_path)
+    refs = list(upload(rpc).resource_path)
+    bucket = _bucket(refs)
     if damage == "missing_index":
-        (path / "index" / "vectors.npy").unlink()
+        s3_store.delete_object(bucket, "index/vectors.npy")
     elif damage == "bad_version":
-        manifest_path = path / "manifest.json"
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest = json.loads(s3_store.get_object(bucket, "manifest.json").decode("utf-8"))
         manifest["version"] = -1
-        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        s3_store.put_object(bucket, "manifest.json", json.dumps(manifest).encode("utf-8"))
     else:
-        index_path = path / "index" / "index.json"
-        index = json.loads(index_path.read_text(encoding="utf-8"))
+        index = json.loads(s3_store.get_object(bucket, "index/index.json").decode("utf-8"))
         index["chunks"][0]["covered_files"] = ["../../outside.md"]
-        index_path.write_text(json.dumps(index), encoding="utf-8")
-    before = list(resources[1])
+        s3_store.put_object(bucket, "index/index.json", json.dumps(index).encode("utf-8"))
     with pytest.raises(grpc.RpcError) as error:
-        next(rpc.ChatCompletion(chat_request(path), timeout=5))
+        next(rpc.ChatCompletion(chat_request(refs), timeout=5))
     assert error.value.code() == grpc.StatusCode.INVALID_ARGUMENT
-    assert resources[1] == before
 
 
 def test_prepare_pdf_calls_parser_then_builds_resource(resources, rpc, monkeypatch):
@@ -158,4 +168,4 @@ def test_parser_failure_identifies_file_and_does_not_build_index(resources, rpc,
         ]), timeout=5)
     assert error.value.code() == grpc.StatusCode.INTERNAL
     assert "bad.pdf" in error.value.details() and "invalid PDF" in error.value.details()
-    assert resources[1] == [] and list(resources[0].iterdir()) == []
+    assert resources[1] == []

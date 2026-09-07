@@ -28,13 +28,21 @@ class Document(_message.Message):
     html: str
     def __init__(self, filename: _Optional[str] = ..., html: _Optional[str] = ...) -> None: ...
 
+class ResourceRef(_message.Message):
+    __slots__ = ("type", "location")
+    TYPE_FIELD_NUMBER: _ClassVar[int]
+    LOCATION_FIELD_NUMBER: _ClassVar[int]
+    type: str
+    location: str
+    def __init__(self, type: _Optional[str] = ..., location: _Optional[str] = ...) -> None: ...
+
 class PrepareResourcesResponse(_message.Message):
     __slots__ = ("resource_path", "documents")
     RESOURCE_PATH_FIELD_NUMBER: _ClassVar[int]
     DOCUMENTS_FIELD_NUMBER: _ClassVar[int]
-    resource_path: str
+    resource_path: _containers.RepeatedCompositeFieldContainer[ResourceRef]
     documents: _containers.RepeatedCompositeFieldContainer[Document]
-    def __init__(self, resource_path: _Optional[str] = ..., documents: _Optional[_Iterable[_Union[Document, _Mapping]]] = ...) -> None: ...
+    def __init__(self, resource_path: _Optional[_Iterable[_Union[ResourceRef, _Mapping]]] = ..., documents: _Optional[_Iterable[_Union[Document, _Mapping]]] = ...) -> None: ...
 
 class QaMessage(_message.Message):
     __slots__ = ("role", "content", "tool_calls_json", "tool_call_id", "name")
@@ -99,7 +107,7 @@ class ChatCompletionRequest(_message.Message):
     TOP_K_FIELD_NUMBER: _ClassVar[int]
     STREAM_FIELD_NUMBER: _ClassVar[int]
     completion_id: str
-    resource_path: str
+    resource_path: _containers.RepeatedCompositeFieldContainer[ResourceRef]
     messages: _containers.RepeatedCompositeFieldContainer[QaMessage]
     run_options: RunOptions
     model_config: ModelConfig
@@ -112,7 +120,7 @@ class ChatCompletionRequest(_message.Message):
     top_p: float
     top_k: int
     stream: bool
-    def __init__(self, completion_id: _Optional[str] = ..., resource_path: _Optional[str] = ..., messages: _Optional[_Iterable[_Union[QaMessage, _Mapping]]] = ..., run_options: _Optional[_Union[RunOptions, _Mapping]] = ..., model_config: _Optional[_Union[ModelConfig, _Mapping]] = ..., base_url: _Optional[str] = ..., api_key: _Optional[str] = ..., openai_api_key: _Optional[str] = ..., model: _Optional[str] = ..., api_transport: _Optional[str] = ..., temperature: _Optional[float] = ..., top_p: _Optional[float] = ..., top_k: _Optional[int] = ..., stream: _Optional[bool] = ...) -> None: ...
+    def __init__(self, completion_id: _Optional[str] = ..., resource_path: _Optional[_Iterable[_Union[ResourceRef, _Mapping]]] = ..., messages: _Optional[_Iterable[_Union[QaMessage, _Mapping]]] = ..., run_options: _Optional[_Union[RunOptions, _Mapping]] = ..., model_config: _Optional[_Union[ModelConfig, _Mapping]] = ..., base_url: _Optional[str] = ..., api_key: _Optional[str] = ..., openai_api_key: _Optional[str] = ..., model: _Optional[str] = ..., api_transport: _Optional[str] = ..., temperature: _Optional[float] = ..., top_p: _Optional[float] = ..., top_k: _Optional[int] = ..., stream: _Optional[bool] = ...) -> None: ...
 
 class ToolCall(_message.Message):
     __slots__ = ("id", "name", "args_json")
