@@ -13,7 +13,7 @@ flowchart TD
     G --> H["loop 初始化工具并提供执行函数；graph 绑定节点/路由；图内仅 messages"]
     H --> I["LangGraph: 模型消息 / 完整工具结果批次"]
     I --> J["completion_runtime 包装事件字典"]
-    J --> K["CompletionRuntime: queue → seq → 事件字典 → protobuf 流"]
+    J --> K["CompletionRuntime: queue → 唤醒异步消费者 → seq → 事件字典 → protobuf 流"]
     K --> L["移除本轮运行时，保留资源"]
 ```
 

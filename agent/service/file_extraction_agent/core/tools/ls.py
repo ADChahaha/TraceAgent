@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from typing import Any, Callable
 
 try:
@@ -37,7 +39,7 @@ def _ls_result(state: Any, path: str) -> dict[str, Any]:
 
 def build_ls(state: Any) -> Callable:
     @tool
-    def ls(path: str = "") -> dict[str, Any]:
+    async def ls(path: str = "") -> dict[str, Any]:
         """List one level of the document workspace at a directory path.
 
         Use this to see document structure. Leave path empty for the root,
@@ -49,7 +51,7 @@ def build_ls(state: Any) -> Callable:
         Start every investigation here to understand document layout before reading.
         """
 
-        return _ls(state, path)
+        return await asyncio.to_thread(_ls, state, path)
 
     return ls
 

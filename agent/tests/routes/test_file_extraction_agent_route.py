@@ -1,5 +1,7 @@
 """真实 RPC 请求 → 原 manager/runtime → protobuf 事件，验证校验、取消及断连。"""
 
+import asyncio
+from tests.async_helpers import async_items
 import json
 import threading
 import time
@@ -31,10 +33,64 @@ def request(**fields):
     return pb.ChatCompletionRequest(**values)
 
 
+def test_many_waiting_streams_keep_control_rpcs_available(rpc, manager, monkeypatch):
+    """二十条活动流等待时，取消和能力查询仍能立即处理。"""
+    release = threading.Event()
+
+    async def events(**kwargs):
+        yield {"type": "completion.created"}
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(runtime_module, "stream_completion_events", events)
+    streams = []
+    try:
+        for i in range(20):
+            stream = rpc.ChatCompletion(request(completion_id=f"many{i}"), timeout=10)
+            streams.append(stream)
+            assert next(stream).type == "completion.created"
+        assert rpc.GetCapabilities(pb.Empty(), timeout=1).supported_file_types
+        assert rpc.CancelCompletion(pb.CompletionRequest(completion_id="many0"), timeout=1).status == "cancelling"
+        assert next(streams[0]).type == "completion.cancelled"
+    finally:
+        for stream in streams:
+            stream.cancel()
+        release.set()
+
+
+def test_initialization_cleanup_survives_event_loop_shutdown(manager, monkeypatch):
+    """初始化期间断连并关闭事件循环，迟到的初始化结果也必须释放。"""
+    started = threading.Event()
+    release = threading.Event()
+
+    def build(config):
+        started.set()
+        assert release.wait(5)
+        return object()
+
+    monkeypatch.setattr(manager_module, "build_qa_model", build)
+
+    async def run():
+        stream = qa_routes.create_chat_completion(request(), None)
+        task = asyncio.create_task(anext(stream))
+        try:
+            assert await asyncio.to_thread(started.wait, 2)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            asyncio.get_running_loop().call_later(0.1, release.set)
+
+    try:
+        asyncio.run(run())
+        assert manager.get_status("cmp_rpc") is None
+    finally:
+        release.set()
+
+
 def test_chat_streams_typed_events_and_preserves_json(rpc, manager, monkeypatch):
     """事件按序逐条传输，动态 JSON 保留大整数、空值和特殊字符。"""
     payload = {"number": 2 ** 60 + 1, "text": '中文\n"引号"', "null": None}
-    def events(**kwargs):
+    async def events(**kwargs):
         yield {"type": "model_message", "content": "回答", "is_final": False,
                "tool_call_count": 1, "tool_calls": [{"id": "call1", "name": "read", "args": payload}]}
         yield {"type": "tool_completed", "tool": "read", "tool_call_id": "call1",
@@ -57,7 +113,7 @@ def test_chat_preserves_history_options_and_model_defaults(rpc, manager, monkeyp
     def build(config):
         seen["config"] = config
         return object()
-    def events(**kwargs):
+    async def events(**kwargs):
         seen.update(kwargs)
         yield {"type": "completion.completed", "status": "completed"}
     monkeypatch.setattr(manager_module, "build_qa_model", build)
@@ -84,7 +140,7 @@ def test_chat_model_override_precedence(rpc, manager, monkeypatch):
     configs = []
     monkeypatch.setattr(manager_module, "build_qa_model", lambda config: configs.append(config))
     monkeypatch.setattr(runtime_module, "stream_completion_events",
-                        lambda **kwargs: iter([{"type": "completion.completed"}]))
+                        lambda **kwargs: async_items([{"type": "completion.completed"}]))
     flat = dict(base_url="https://example.com/v1", openai_api_key="key", model="qa",
                 api_transport="chat_completions", temperature=0.2, top_p=0.9, top_k=40)
     list(rpc.ChatCompletion(request(**flat), timeout=5))
@@ -124,10 +180,10 @@ def test_cancel_returns_before_tool_batch_and_stream_drains(rpc, manager, monkey
     """取消 RPC 先返回 cancelling，工具结果补齐后原流仅发一个取消终态。"""
     release = threading.Event()
     started = threading.Event()
-    def events(**kwargs):
+    async def events(**kwargs):
         yield {"type": "model_message", "tool_calls": [{"id": "call1", "name": "read", "args": {}}]}
         started.set()
-        assert release.wait(5)
+        assert await asyncio.to_thread(release.wait, 5)
         yield {"type": "tool_completed", "tool": "read", "tool_call_id": "call1", "result": {"ok": True}}
         yield {"type": "completion.cancelled", "status": "cancelled"}
     monkeypatch.setattr(runtime_module, "stream_completion_events", events)
@@ -154,10 +210,10 @@ def test_transport_cancel_or_deadline_cleans_runtime(rpc, manager, monkeypatch, 
     """RPC 取消和超时唤醒阻塞消费者并释放注册项，后台观察停止信号。"""
     release = threading.Event()
     stopped = threading.Event()
-    def events(**kwargs):
+    async def events(**kwargs):
         yield {"type": "completion.created", "status": "in_progress"}
         try:
-            assert release.wait(5)
+            assert await asyncio.to_thread(release.wait, 5)
             assert kwargs["should_stop"]()
         finally:
             stopped.set()
@@ -183,9 +239,9 @@ def test_transport_cancel_or_deadline_cleans_runtime(rpc, manager, monkeypatch, 
 def test_duplicate_id_does_not_cancel_existing_stream(rpc, manager, monkeypatch):
     """重复 ID 请求失败，原运行时仍可独立取消。"""
     release = threading.Event()
-    def events(**kwargs):
+    async def events(**kwargs):
         yield {"type": "completion.created"}
-        release.wait(5)
+        await asyncio.to_thread(release.wait, 5)
     monkeypatch.setattr(runtime_module, "stream_completion_events", events)
     stream = rpc.ChatCompletion(request(), timeout=5)
     try:

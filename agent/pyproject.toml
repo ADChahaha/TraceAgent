@@ -32,6 +32,7 @@ dependencies = [
 dev = [
     "grpcio-tools==1.83.1",
     "pytest>=8.0",
+    "pytest-asyncio>=1.0,<2",
     "Pillow>=10.0",
     "reportlab>=4.0",
 ]
@@ -50,5 +51,7 @@ include = ["service*", "routes*"]
 namespaces = false
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 addopts = ["--import-mode=importlib"]

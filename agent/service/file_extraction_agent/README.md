@@ -15,7 +15,7 @@ completion_id + resource_path + messages + 模型/运行配置
 ## 文件与职责
 
 - `manager.py`：创建、注册、查找运行时，转发取消/状态查询，流结束后移除注册项。
-- `completion_runtime.py`：单轮运行时、事件包装、生产线程、队列、事件输出与取消收尾。
+- `completion_runtime.py`：单轮运行时、事件包装、生产协程、队列、异步事件等待与取消收尾。
 - `core/loop.py`：初始化依赖、消费图更新、转发批次、检查取消并关闭流。
 - `core/messages.py`：提示词、历史消息转换、响应校验与终止信号解析。
 - `core/model_invocation.py`：模型调用、重试、退避和流式消息聚合。
@@ -41,6 +41,6 @@ for frame in stream:
     print(frame)
 ```
 
-gRPC 入口是 `ChatCompletion`。无效资源在事件流开始前返回 INVALID_ARGUMENT；运行失败由 completion.failed 收口。取消时已发布工具批次先返回完整结果，再结束本轮；底层同步线程不能强杀。注册表仅在进程内有效，使用单进程部署。
+gRPC 入口是 `ChatCompletion`。无效资源在事件流开始前返回 INVALID_ARGUMENT；运行失败由 completion.failed 收口。取消时已发布工具批次先返回完整结果，再结束本轮；模型流和工具协程支持取消，工具内同步 I/O/计算线程不能强杀。注册表仅在进程内有效，使用单进程部署。
 
 详见 [设计](docs/DESIGN.md)、[循环](docs/agent_loop.md)、[工具](docs/tools.md) 和 [API](../../docs/API.md)。

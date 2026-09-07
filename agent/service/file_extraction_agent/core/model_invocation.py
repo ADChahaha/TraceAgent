@@ -1,13 +1,13 @@
-"""模型与消息 → 按顺序尝试 stream/invoke → 聚合并校验响应 → 返回完整 AIMessage。
+"""模型与消息 → 按顺序尝试 astream/ainvoke → 聚合并校验响应 → 返回完整 AIMessage。
 
-调用失败或响应不完整时按随机指数退避重试，最多五次；全部失败抛 RuntimeError，
+调用失败或响应不完整时用 asyncio.sleep 随机指数退避，最多五次；全部失败抛 RuntimeError，
 附带各次错误。消息转换与终止信号校验由 messages.py 负责。
 """
 
 from __future__ import annotations
 
+import asyncio
 import random
-import time
 from typing import Any
 
 from langchain_core.messages import message_chunk_to_message
@@ -18,7 +18,7 @@ PROVIDER_ATTEMPT_LIMIT = 5
 PROVIDER_BACKOFF_SLOT_SECONDS = 0.25
 
 
-def _invoke_model_message(model: Any, messages: list[Any]) -> Any:
+async def _invoke_model_message(model: Any, messages: list[Any]) -> Any:
     errors: list[tuple[str, Exception]] = []
     attempts = _model_call_attempts(model)[:PROVIDER_ATTEMPT_LIMIT]
     for attempt_index, attempt in enumerate(attempts):
@@ -27,15 +27,15 @@ def _invoke_model_message(model: Any, messages: list[Any]) -> Any:
         use_stream = bool(_read(attempt, "use_stream", True))
         try:
             if use_stream:
-                message = _stream_model_message(attempt_model, messages)
+                message = await _stream_model_message(attempt_model, messages)
             else:
-                message = attempt_model.invoke(messages)
+                message = await attempt_model.ainvoke(messages)
             _validate_model_message(message)
             return message
         except Exception as exc:
             errors.append((str(attempt_name), exc))
             if attempt_index < len(attempts) - 1:
-                _sleep_before_next_provider_attempt(attempt_index)
+                await _sleep_before_next_provider_attempt(attempt_index)
     details = "; ".join(f"{name}: {type(error).__name__}: {error}" for name, error in errors)
     raise RuntimeError(f"all model call attempts failed: {details}")
 
@@ -52,24 +52,30 @@ def _model_call_attempts(model: Any) -> list[Any]:
 
 
 
-def _sleep_before_next_provider_attempt(attempt_index: int) -> None:
+async def _sleep_before_next_provider_attempt(attempt_index: int) -> None:
     if attempt_index >= PROVIDER_ATTEMPT_LIMIT - 1:
         return
     upper_slot = (2 ** max(0, attempt_index + 1)) - 1
     slot_count = random.randint(0, upper_slot)
     delay = slot_count * PROVIDER_BACKOFF_SLOT_SECONDS
     if delay > 0:
-        time.sleep(delay)
+        await asyncio.sleep(delay)
 
 
 
-def _stream_model_message(model: Any, messages: list[Any]) -> Any:
-    stream = getattr(model, "stream", None)
+async def _stream_model_message(model: Any, messages: list[Any]) -> Any:
+    stream = getattr(model, "astream", None)
     if not callable(stream):
-        raise RuntimeError("model does not support stream")
+        raise RuntimeError("model does not support astream")
     streamed_message: Any = None
-    for chunk in stream(messages):
-        streamed_message = chunk if streamed_message is None else streamed_message + chunk
+    chunks = stream(messages)
+    try:
+        async for chunk in chunks:
+            streamed_message = chunk if streamed_message is None else streamed_message + chunk
+    finally:
+        close = getattr(chunks, "aclose", None)
+        if close is not None:
+            await close()
     if streamed_message is None:
         raise RuntimeError("model stream returned no chunks")
     return message_chunk_to_message(streamed_message)

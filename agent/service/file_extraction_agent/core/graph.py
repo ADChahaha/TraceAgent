@@ -8,7 +8,7 @@ agent 有 tool_calls 时进入 tools，否则结束；工具结果回到 agent�
 from __future__ import annotations
 
 import json
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.graph import END, StateGraph
@@ -23,24 +23,24 @@ def build_qa_graph(
     tools: list[Any],
     run_options: RunOptions | None = None,
     *,
-    invoke_model: Callable[[Any, list[Any]], AIMessage],
-    execute_tools: Callable[..., list[ToolMessage]],
+    invoke_model: Callable[[Any, list[Any]], Awaitable[AIMessage]],
+    execute_tools: Callable[..., Awaitable[list[ToolMessage]]],
 ):
     """绑定模型、工具与超时配置 → 构建仅追加 messages 的 LangGraph。"""
     model = qa_model.bind_tools(tools)
     timeout = (run_options or RunOptions()).tool_execution_timeout
 
-    def call_model(graph_state: MessagesState):
-        message = invoke_model(model, graph_state["messages"])
+    async def call_model(graph_state: MessagesState):
+        message = await invoke_model(model, graph_state["messages"])
         return {"messages": [message]}
 
-    def run_tools(graph_state: MessagesState):
+    async def run_tools(graph_state: MessagesState):
         last_message = graph_state["messages"][-1]
         tool_calls = getattr(last_message, "tool_calls", None)
         if not tool_calls:
             return {"messages": []}
         try:
-            tool_messages = execute_tools(tool_calls, tools, timeout=timeout)
+            tool_messages = await execute_tools(tool_calls, tools, timeout=timeout)
         except Exception as exc:
             result = {"ok": False, "errors": [{"message": str(exc)}]}
             tool_messages = [ToolMessage(

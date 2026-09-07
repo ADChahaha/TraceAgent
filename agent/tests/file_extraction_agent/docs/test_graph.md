@@ -10,3 +10,5 @@
 - `test_closing_event_stream_closes_message_generator`：外层关闭传播到消息生成器，停止后续调用。
 
 所有图测试使用 conftest 生成的 resource_path；图执行通过工具层读取文件，completion_runtime 只发出启动确认和消息事件，事件包装入口不再接收 completion ID。
+
+测试使用协程与异步迭代器驱动实际 Agent 链路；模型替身提供 astream/ainvoke，取消等待使用事件循环。

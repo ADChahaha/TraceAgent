@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from pathlib import Path
 import shutil
 import subprocess
@@ -63,7 +65,7 @@ def _run_ripgrep(query: str, scope_dir: Path, max_results: int) -> str | None:
 
 def build_grep(state: Any) -> Callable:
     @tool
-    def grep(query: str, scope: str = "", max_results: int = 20) -> dict[str, Any]:
+    async def grep(query: str, scope: str = "", max_results: int = 20) -> dict[str, Any]:
         """Full-text search across readable blocks using ripgrep.
 
         Use for targeted lookups: dates, names, amounts, specific terms.
@@ -73,7 +75,7 @@ def build_grep(state: Any) -> Callable:
         max_results: default 20, max 50.
         """
 
-        return _grep(state, query=query, scope=scope, max_results=max_results)
+        return await asyncio.to_thread(_grep, state, query=query, scope=scope, max_results=max_results)
 
     return grep
 

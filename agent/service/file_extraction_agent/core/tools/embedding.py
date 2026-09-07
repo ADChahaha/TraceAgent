@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import json
 import os
 import threading
@@ -209,7 +211,7 @@ def _search_top_k(query_vec: Any, index: Any, top_k: int) -> list[dict[str, Any]
 
 def build_search_embedding(state: Any) -> Callable:
     @tool
-    def search_embedding(query: str, top_k: int = 5, scope: str = "") -> dict[str, Any]:
+    async def search_embedding(query: str, top_k: int = 5, scope: str = "") -> dict[str, Any]:
         """Semantic search across chunks using embeddings.
 
         Returns up to top_k text chunks that are semantically (not just
@@ -223,7 +225,7 @@ def build_search_embedding(state: Any) -> Callable:
         file before citing it in your answer.
         """
 
-        return _search_embedding(state, query=query, top_k=top_k, scope=scope)
+        return await asyncio.to_thread(_search_embedding, state, query=query, top_k=top_k, scope=scope)
 
     return search_embedding
 

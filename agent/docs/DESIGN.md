@@ -21,14 +21,14 @@ ChatCompletion（resource_path + messages）
 | 模块 | 职责 |
 | --- | --- |
 | ../agent_proto/agent.proto | 仓库根目录的共享契约；独立发布 traceagent-protocol，agent/backend 均可依赖 |
-| main.py | gRPC server 启动、消息大小配置、标准 Health 与 CLI 探活 |
-| routes/__init__.py | 注册业务方法，限制长任务并发并预留控制请求 worker |
-| routes/document_resources.py | 校验上传类型，在 gRPC worker 中串联解析与资源准备，映射 RPC 错误 |
+| main.py | grpc.aio 启停、阻塞工作执行器、消息大小配置、异步 Health 与 CLI 探活 |
+| routes/__init__.py | 注册异步业务方法，通过 async for 转发问答流 |
+| routes/document_resources.py | 在线程中校验上传类型、解析与准备资源，回到事件循环映射 RPC 错误 |
 | service/document_processor | PDF 调 MinerU、DOCX 调 python-docx，输出带 CSS 的 HTML |
 | service/document_resources | HTML 转文件、文档分块和 embedding 索引构建、资源落盘与发布前自检 |
 | routes/file_extraction_agent.py | 路径问答、取消 gRPC 适配；固定字段转 protobuf，动态字段保留 JSON |
 | service/file_extraction_agent/manager.py | completion 创建、注册、查找、取消转发与流结束后的移除 |
-| service/file_extraction_agent/completion_runtime.py | 单轮执行、事件字典输出、线程队列与取消收尾 |
+| service/file_extraction_agent/completion_runtime.py | 单轮执行、事件字典输出、生产协程与取消收尾 |
 | service/file_extraction_agent/core/loop.py | 初始化依赖、消费图更新、批次转发与取消关闭 |
 | service/file_extraction_agent/core/messages.py | 提示词、历史转换、响应校验、终止信号与消息 JSON 归一化 |
 | service/file_extraction_agent/core/model_invocation.py | 模型调用、流式聚合、重试与退避 |
@@ -42,17 +42,21 @@ ChatCompletion（resource_path + messages）
 ## 传输与部署
 
 ```text
-main.py 读取监听地址、worker 数和消息上限
-  → 创建单进程 gRPC Server，注册 AgentService 与标准 Health
-  → PrepareResources / ChatCompletion 尝试获取长任务槽（workers−2）
-  → 满额返回 RESOURCE_EXHAUSTED；取消、查询与探活不占长任务槽
+main.py 读取监听地址、阻塞工作线程数和消息上限
+  → asyncio.run 创建事件循环，启动 grpc.aio.Server 与异步标准 Health
+  → PrepareResources 的解析/资源构建、ChatCompletion 的初始化通过 asyncio.to_thread 执行
+  → 取消、查询和探活直接在事件循环处理
   → routes 转换 protobuf 与业务对象，保留参数缺省值及显式零值
-  → runtime 仍逐条 yield 字典，routes 编码 CompletionEvent
+  → producer 入队后用 call_soon_threadsafe 唤醒 asyncio.Event
+  → runtime.astream 按 FIFO 分配 seq，routes 用 async for 编码 CompletionEvent
+  → SIGINT/SIGTERM 唤醒 asyncio.Event，await server.stop(5) 停服
 ```
 
-默认 16 个 RPC worker、单条请求/响应上限 64 MiB；文件整包 bytes 上传，客户端须相应配置收发上限。固定事件字段使用 protobuf，动态参数/结果用 JSON 字符串保留大整数和 null。共享协议位于与 agent 同级的 agent_proto，agent wheel 依赖 traceagent-protocol，不内置协议副本。协议生成器版本固定，从仓库根目录生成；测试比对绑定，并验证共享 wheel 可脱离 agent 业务包导入。
+默认 16 个阻塞工作线程、单条请求/响应上限 64 MiB。活动 RPC 流不受线程数限制，等待事件不占执行器；模型请求、重试退避、图执行和工具调度均为原生异步；文件 I/O 与本地计算才使用阻塞工作线程。文件整包 bytes 上传，客户端须相应配置收发上限。固定事件字段使用 protobuf，动态参数/结果用 JSON 字符串保留大整数和 null。共享协议位于与 agent 同级的 agent_proto，agent wheel 依赖 traceagent-protocol，不内置协议副本。协议生成器版本固定，从仓库根目录生成；测试比对绑定，并验证共享 wheel 可脱离 agent 业务包导入。
 
-传输层断连与业务取消分开：CancelCompletion 立即确认后让原流按批次收尾；RPC 取消/断连/deadline 回调绑定本轮 CompletionStream，唤醒 consumer 并设置停止信号，finally 关闭内层流并移除对应注册项。旧回调不会按 ID 误取消后来的新流；从未迭代的流关闭也会清理。断连后不保证交付终态，不强杀同步模型或工具线程。
+传输层断连与业务取消分开：CancelCompletion 立即确认后让原流按批次收尾；RPC 取消/断连/deadline 回调绑定本轮 CompletionStream，唤醒 consumer 并设置停止信号，finally 关闭内层流并移除对应注册项。旧回调不会按 ID 误取消后来的新流；从未迭代的流关闭也会清理。断连后不保证交付终态，取消生产协程并关闭模型流，工具内已运行的同步线程不能强杀。
+
+同步初始化与协程取消通过锁交接流：取消先发生时，初始化线程关闭迟到的流；初始化先完成时，由取消分支关闭已交接流。清理不依赖已关闭事件循环的回调。停服后 asyncio.run 会等待默认执行器中已运行的同步工作结束，5 秒 RPC 宽限期不是进程退出时间的硬上限。
 
 ## 资源生命周期
 
@@ -84,6 +88,6 @@ main.py 读取监听地址、worker 数和消息上限
 - 采用标准 gRPC Health 探活；GetCapabilities、CancelCompletion 迁移为 RPC；GetCompletion 保留 not_implemented。
 - 不再提供 FastAPI、HTTP 路由和 SSE；旧问答 documents 输入不保留。
 - 本次迁移 agent 及其启动脚本/CI 配套；backend 代码未改，旧 HTTP 客户端需后续适配。
-- cancel 注册表依赖单进程；gRPC worker 是同进程线程，不是多进程 worker。
+- cancel 注册表依赖单进程；多个 RPC 协程共享 manager，多进程之间不共享取消状态。
 
 接口示例见 [API.md](API.md)，资源细节见 [资源设计](../service/document_resources/docs/DESIGN.md)，问答细节见 [问答设计](../service/file_extraction_agent/docs/DESIGN.md)。

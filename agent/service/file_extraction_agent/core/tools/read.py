@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from typing import Any, Callable
 
 try:
@@ -49,7 +51,7 @@ def _locator_error(state: Any, path: str) -> dict[str, Any] | None:
 
 def build_read(state: Any) -> Callable:
     @tool
-    def read(path: str) -> dict[str, Any]:
+    async def read(path: str) -> dict[str, Any]:
         """Read one .md block file.
 
         path MUST be an absolute path to a .md file under the workspace root,
@@ -59,7 +61,7 @@ def build_read(state: Any) -> Callable:
         with actual values — then move on or cite it in your answer with a link.
         """
 
-        return _read(state, path)
+        return await asyncio.to_thread(_read, state, path)
 
     return read
 

@@ -37,10 +37,10 @@ python main.py --check-health 127.0.0.1:8001 --timeout 5
 | --- | --- | --- |
 | `--host` / `AGENT_HOST` | 127.0.0.1 | 监听地址 |
 | `--port` / `AGENT_PORT` | 8001 | gRPC 端口 |
-| `--workers` / `AGENT_GRPC_WORKERS` | 16 | 同一进程内的 RPC worker 数，至少 3 |
+| `--workers` / `AGENT_GRPC_WORKERS` | 16 | 文档处理、初始化及工具内同步 I/O/计算的线程数，至少 1；不限制活动 RPC 流数 |
 | `--max-message-bytes` / `AGENT_GRPC_MAX_MESSAGE_BYTES` | 67108864 | 单条请求和响应的 64 MiB 上限 |
 
-资源准备与问答最多占用 workers−2 个槽，达到容量即返回 RESOURCE_EXHAUSTED，预留线程处理取消、查询和探活。客户端也须配置足够的消息接收上限，尤其是多文档 HTML 响应。当前使用明文 gRPC，与原本机服务部署边界一致。
+服务使用 `grpc.aio`：RPC 方法与事件等待运行在事件循环中，文档处理和问答初始化通过 `asyncio.to_thread` 执行。问答流等待事件不占工作线程，也没有 workers−2 的活动流限制；模型 astream/ainvoke、图执行、工具调度和事件生产都运行在协程中，只有同步文件操作与本地计算交给线程。客户端也须配置足够的消息接收上限，尤其是多文档 HTML 响应。当前使用明文 gRPC，与原本机服务部署边界一致。
 
 准备阶段需要 embedding 依赖；PDF 使用 MinerU，DOCX 使用 python-docx。默认 embedding 后端为 OpenVINO。问答模型配置 `BASE_URL`、`OPENAI_API_KEY`、`MODEL`；可选 `MODEL_API_TRANSPORT=responses` 或 `chat_completions`。PDF 语言由 `DOCUMENT_PROCESSOR_MINERU_LANG` 指定，默认 japan。
 

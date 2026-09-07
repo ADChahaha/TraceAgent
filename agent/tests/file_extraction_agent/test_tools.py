@@ -71,6 +71,7 @@ def test_build_tools_exposes_qa_navigation_tools_only(tmp_path):
     tool_names = [getattr(tool, "name", getattr(tool, "__name__", "")) for tool in tools]
 
     assert tool_names == ["ls", "grep", "read", "search_embedding"]
+    assert all(inspect.iscoroutinefunction(tool.coroutine) for tool in tools)
 
 
 def test_module_exports_qa_helpers_only():

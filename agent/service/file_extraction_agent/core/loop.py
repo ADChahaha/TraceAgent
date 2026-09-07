@@ -6,7 +6,8 @@ model_invocation.py 与 executor.py；无效输入抛 ValueError，执行异常�
 
 from __future__ import annotations
 
-from typing import Iterable
+import asyncio
+from typing import AsyncIterator
 
 from langchain_core.messages import AIMessage, ToolMessage
 
@@ -21,14 +22,14 @@ from service.file_extraction_agent.schemas import DocumentQaMessage, RunOptions
 QA_RECURSION_LIMIT = 10000
 
 
-def run_qa_stream(
+async def run_qa_stream(
     *,
     resource_path: str,
     messages: list[DocumentQaMessage],
     qa_model: ChatModelFallbackChain | None,
     run_options: RunOptions | None = None,
     should_stop=None,
-) -> Iterable[AIMessage | list[ToolMessage]]:
+) -> AsyncIterator[AIMessage | list[ToolMessage]]:
     """路径初始化工具、配置绑定执行器 → 仅消息进入图 → 完整工具批次后响应取消。"""
     if not messages:
         raise ValueError("messages must be a non-empty list")
@@ -37,19 +38,19 @@ def run_qa_stream(
     stopped = lambda: should_stop is not None and should_stop()
     if stopped():
         return
-    tools = build_tools(open_workspace(resource_path))
+    tools = build_tools(await asyncio.to_thread(open_workspace, resource_path))
     messages = qa_messages.build_qa_messages(messages)
     graph = build_qa_graph(
         qa_model, tools, run_options=run_options,
         invoke_model=model_invocation._invoke_model_message, execute_tools=executor._execute_tools_parallel,
     )
-    updates = graph.stream(
+    updates = graph.astream(
         {"messages": messages},
         stream_mode="updates",
         config={"recursion_limit": QA_RECURSION_LIMIT},
     )
     try:
-        for output in updates:
+        async for output in updates:
             for node, update in output.items():
                 batch = update.get("messages", [])
                 if node == "agent":
@@ -67,7 +68,7 @@ def run_qa_stream(
                     if stopped():
                         return
     finally:
-        updates.close()
+        await updates.aclose()
 
 
 __all__ = ["run_qa_stream"]

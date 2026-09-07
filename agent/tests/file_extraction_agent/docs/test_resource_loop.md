@@ -5,3 +5,5 @@
 - `test_path_graph_returns_complete_tool_batch_and_stops_after_cancel`：路径只传入工具上下文初始化，配置超时传入 executor.py 执行器；两次同名工具调用分别成功和失败，整批返回 ID、名称、参数与结果；取消仍配齐该批次结果，且不再调用下一轮模型。
 
 测试使用真实模型/工具循环，仅替换资源访问器和 provider，验证配置分离后批次与取消行为不变。
+
+测试使用协程与异步迭代器驱动实际 Agent 链路；模型替身提供 astream/ainvoke，取消等待使用事件循环。

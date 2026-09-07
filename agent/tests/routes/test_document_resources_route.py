@@ -85,7 +85,7 @@ def test_qa_uses_prepared_path_without_rebuilding_or_deleting(resources, rpc, mo
     class Model:
         def bind_tools(self, tools):
             return self
-        def invoke(self, messages):
+        async def ainvoke(self, messages):
             return AIMessage(content="回答", response_metadata={"finish_reason": "stop"})
     monkeypatch.setattr(manager, "build_qa_model", lambda config: Model())
     path = upload(rpc).resource_path

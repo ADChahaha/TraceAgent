@@ -2,7 +2,7 @@
 
 执行链路：资源路径初始化工具上下文，运行参数绑定执行器；输入消息 → prompt/历史转换 → 绑定工具 → 正式 LangGraph agent/tools 循环 → 原样 yield AIMessage/ToolMessage；运行异常向外抛出，图内无事件或取消缓冲。
 
-messages.py 的 build_qa_messages 直接接收消息列表；独立 graph.py 的 build_qa_graph 接收 RunOptions 以及 model_invocation.py 与 executor.py 的执行函数；工具执行器不接收状态容器。工具并行提交并共享超时期限；按原始调用 ID 返回消息。超时失败先返回，迟到线程不能修改已返回消息。model_invocation 测试覆盖 stream/invoke 降级、响应终止信号校验和退避；completion_runtime 负责事件格式与最终回答标记。
+messages.py 的 build_qa_messages 直接接收消息列表；独立 graph.py 的 build_qa_graph 接收 RunOptions 以及 model_invocation.py 与 executor.py 的执行函数；工具执行器不接收状态容器。工具并行提交并共享超时期限；按原始调用 ID 返回消息。超时失败先返回，迟到线程不能修改已返回消息。model_invocation 测试覆盖 astream/ainvoke 降级、响应终止信号校验和退避；completion_runtime 负责事件格式与最终回答标记。
 
 ## 测试函数
 
@@ -26,3 +26,5 @@ messages.py 的 build_qa_messages 直接接收消息列表；独立 graph.py 的
 - `test_qa_rejects_plan_only_message_without_terminal_stop_signal`：验证只有计划性文本、没有工具调用、也没有 terminal stop signal 的模型响应不能被当成完成结果。
 
 执行输入改为资源路径；`test_qa_stream_yields_only_original_messages` 验证模型消息和整批工具结果。工具与 prompt 测试仅构造文件树，不依赖 manager 初始化状态。
+
+测试使用协程与异步迭代器驱动实际 Agent 链路；模型替身提供 astream/ainvoke，取消等待使用事件循环。

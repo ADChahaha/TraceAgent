@@ -18,7 +18,7 @@
 
 ## 测试函数
 
-- `test_build_tools_exposes_qa_navigation_tools_only`：验证模型看到 `ls` / `grep` / `read` / `search_embedding`，不再有 `inspect` 或字段抽取工具。
+- `test_build_tools_exposes_qa_navigation_tools_only`：验证四个导航工具均暴露协程实现，模型不再看到 `inspect` 或字段抽取工具。
 - `test_module_exports_qa_helpers_only`：验证模块公开 helper 切换到 `_ls/_grep/_read`，且 `_inspect` 已删除。
 - `test_internal_tool_helpers_do_not_accept_reason_parameter`：验证工具 helper 不接收旧 `reason` 参数。
 - `test_ls_and_read_use_real_file_paths`：验证 ls 返回真实目录项，read 接受绝对 `.md` 文件路径并返回正文。

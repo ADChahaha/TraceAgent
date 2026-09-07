@@ -20,9 +20,11 @@ resource_path + messages + 模型/运行配置
 
 `manager.py` 只管理 CompletionManager：校验请求与资源 → 创建模型和 CompletionRuntime → 注册到 ID 映射 → 转发 stream/terminate/get_status → 由 CompletionStream.close 移除注册项（包括从未迭代的流）。completion_id 只保存在 manager 的注册表键和流清理闭包中；清理时同时核对 ID 与运行时对象身份，避免误删其他注册项。
 
-`completion_runtime.py` 管理单轮 CompletionRuntime，以及 stream_completion_events 和事件转换：后台 producer 执行 loop → 提交业务事件到锁保护的队列 → consumer 按 FIFO 编号输出事件字典 → 完成/失败/取消时唯一收尾。它不负责传输编码，不接收或保存 completion_id，不导入 manager，也不维护全局注册表。后台线程使用固定名称 qa-completion，名称只用于调试。
+`completion_runtime.py` 管理单轮 CompletionRuntime，以及 stream_completion_events 和事件转换：producer 协程执行异步 loop → 提交业务事件到锁保护的队列 → consumer 按 FIFO 编号输出事件字典 → 完成/失败/取消时唯一收尾。它不负责传输编码，不接收或保存 completion_id，不导入 manager，也不维护全局注册表。生产 Task 使用名称 qa-completion，不为每轮创建线程。
 
-CompletionStream 是 manager 返回的托管迭代器，包装 runtime.stream()。消费者结束或主动 close 时关闭内层生成器并按对象身份移除注册项；即使从未调用 next，也执行清理。gRPC 回调只调用该流绑定的 disconnect，不跨线程关闭生成器，也不按可复用的 completion_id 查找运行时。
+CompletionStream 是 manager 返回的托管迭代器。gRPC 使用 async for 消费 runtime.astream()，在 finally 中 await aclose()；stream() 同样返回异步迭代器；close() 仅供初始化线程关闭尚未开始的流，同一流只由一个消费者读取。消费者结束或主动关闭时按对象身份移除注册项，即使从未迭代也执行清理。gRPC 回调只调用该流绑定的 disconnect，不跨线程关闭生成器，也不按可复用的 completion_id 查找运行时。
+
+异步消费链路：astream 绑定当前循环的 asyncio.Event → producer 在锁内提交队列并 call_soon_threadsafe 唤醒 Event → 协程 get_nowait 按 FIFO 取事件，空队列 await Event → 分配 seq 并输出字典 → 关闭时取消并等待 producer 清理，再结束本轮。等待不占执行器线程，取消和唯一终态仍由原队列与锁裁定。
 
 ## 执行输入与状态
 
@@ -30,7 +32,7 @@ CompletionStream 是 manager 返回的托管迭代器，包装 runtime.stream()�
 
 `run_qa_stream` 校验非空消息和资源路径，然后调用 open_workspace(resource_path) 创建 ToolWorkspace；build_tools(workspace) 让四个工具闭包共享文档访问器和 EmbeddingResources。build_qa_messages(messages) 转换完整历史；build_qa_graph(model, tools, run_options) 将工具超时绑定到执行闭包。建图逻辑独立放在 core/graph.py，包括 agent/tools 节点、条件路由与 compile；loop.py 从 model_invocation.py 与 executor.py 注入 invoke_model/execute_tools 两个执行函数并消费图更新，graph.py 不反向导入 loop.py。执行器只接收工具调用、工具集合和 timeout。无效输入抛 ValueError；工具失败与取消仍遵守原批次契约。
 
-manager 负责输入合法性、问答模型装配和 completion 注册；资源预检委托工具层；source_indexed 只返回 result={"ok":true}，启动通知不遍历或读取文档。manager 不读取磁盘，也不持有 embedding 对象。初始化失败不注册运行时；同一活动 completion_id 不可重复。gRPC 服务方法在 worker 中完成预检；首事件前的参数错误映射 INVALID_ARGUMENT。
+manager 负责输入合法性、问答模型装配和 completion 注册；资源预检委托工具层；source_indexed 只返回 result={"ok":true}，启动通知不遍历或读取文档。manager 不读取磁盘，也不持有 embedding 对象。初始化失败不注册运行时；同一活动 completion_id 不可重复。异步 gRPC 适配层通过 asyncio.to_thread 完成预检和初始化；首事件前的参数错误通过 await context.abort 映射 INVALID_ARGUMENT，其他初始化错误映射 INTERNAL。初始化与取消在锁内交接流，取消后的迟到结果在线程内关闭，停服时也不留下注册项。
 
 route 在模块顶部直接导入 completion_manager；标准库与内部工具依赖也在顶部声明。生成端 model.py 与工具 embedding.py 分别保留 SentenceTransformer 的延迟导入，避免未使用 embedding 时加载其重依赖。
 
@@ -38,8 +40,8 @@ route 在模块顶部直接导入 completion_manager；标准库与内部工具�
 
 - loop.py：校验输入 → 初始化工具和消息 → 建图 → 消费 updates → 转发 AIMessage/完整工具批次 → 检查取消 → finally 关闭图流。
 - messages.py：完整历史 → 系统提示与角色/工具参数转换 → 模型输入；响应 → 终止信号校验，不完整响应抛 RuntimeError。JSON 归一化供工具结果封装复用。
-- model_invocation.py：模型与消息 → stream/invoke 尝试 → 聚合消息 → messages 校验 → 成功返回；失败随机退避，最多五次，耗尽后抛 RuntimeError。
-- executor.py：调用列表和工具集合 → 并行执行 → 共享 deadline 收集 → 按原顺序封装 ToolMessage；异常/超时转失败结果，不等待迟到线程。
+- model_invocation.py：模型与消息 → astream/ainvoke 尝试 → 聚合消息 → messages 校验 → 成功返回；失败通过 asyncio.sleep 随机退避，最多五次，耗尽后抛 RuntimeError。
+- executor.py：调用列表和工具集合 → create_task 并发 ainvoke → asyncio.wait 共享 deadline 收集 → 按原顺序封装 ToolMessage；异常/超时转失败结果，不等待迟到线程。
 
 ## 消息批次与事件
 
@@ -52,7 +54,7 @@ route 在模块顶部直接导入 completion_manager；标准库与内部工具�
   → completion_runtime 输出 model_message；有调用则输出 tool_started
 
 工具节点调用 executor._execute_tools_parallel
-  → ThreadPoolExecutor 并行执行整批调用
+  → asyncio.create_task 并发执行整批工具协程
   → 按共享 deadline 和原始顺序收集成功 / 异常 / 超时结果
   → 每项 ToolMessage 携带 tool_call_id、name、additional_kwargs.tool_args、artifact、status
   → 整批 yield list[ToolMessage]
@@ -77,13 +79,15 @@ route 在模块顶部直接导入 completion_manager；标准库与内部工具�
 
 CompletionRuntime 的调用 ID 集合只用于取消时判断批次是否结清，不保存调用参数、不承担消息配对。consumer 按 FIFO 输出已提交事件，终态与 close 均唯一；取消后的迟到模型事件会被拒收。
 
-关闭事件流时关闭内层生成器。同步 provider 和工具线程不能强杀；请求 timeout 和工具 deadline 约束阻塞，超时线程的迟到结果不会再写事件。问答结束只释放运行时，不删除资源。
+关闭事件流时 await aclose 内层生成器，取消并等待 producer，取消传播到图、模型流和工具协程。模型请求使用原生 astream/ainvoke，重试退避使用 asyncio.sleep；请求 timeout 和工具共享 deadline 保持不变。同步文件操作与本地 embedding 通过 to_thread 执行，取消后不等待线程，迟到结果不会再写事件。问答结束只释放运行时，不删除资源。
 
 业务 terminate 立即返回 cancelling，维持上述批次契约。RPC 断连/deadline 的 disconnect 则设置取消标志、关闭逻辑运行时并入队 sentinel 唤醒 consumer；连接已不可用，不等待批次补齐或尝试保证终态送达。已经完成的运行时不会被断连回调改写终态。
 
-首次迭代在同一运行时锁内判断 closed/cancel_requested 并启动 producer；若断连先发生，不再创建线程，托管流直接清理。
+首次迭代在同一运行时锁内判断 closed/cancel_requested 并启动 producer；若断连先发生，不再创建生产 Task，托管流直接清理。
 
 ## 工具与引用
+
+工具对模型暴露 async coroutine；executor 优先 await ainvoke。文件浏览、ripgrep 与本地 embedding 使用 asyncio.to_thread 执行同步叶子操作，事件循环不承担磁盘等待或推理计算。
 
 工具各自使用单文件：`tools/ls.py`、`grep.py`、`read.py`、`embedding.py`。共享文件访问在 `workspace.py`，异常结果归一化在 `base.py`。
 
@@ -116,6 +120,6 @@ Markdown 文件树由资源模块创建：文档标题作为顶层目录后缀�
 
 每轮历史完全来自调用方的 append-only messages，保留 assistant tool_calls 和 tool 结果，不摘要或裁剪。资源路径跨轮稳定；任务与路径的关联由 backend 管理。
 
-本次将 agent 对外传输改为 gRPC；问答仍接收 resource_path，不接收任务 metadata。backend 尚未迁移。active completion 注册表仍是单进程内存，多个 RPC worker 线程共享一个 manager。
+本次将 agent 对外传输改为 gRPC；问答仍接收 resource_path，不接收任务 metadata。backend 尚未迁移。active completion 注册表仍是单进程内存，多个 RPC 协程共享一个 manager。
 
 接口见 [agent API](../../../docs/API.md)，资源准备见 [资源设计](../../document_resources/docs/DESIGN.md)。

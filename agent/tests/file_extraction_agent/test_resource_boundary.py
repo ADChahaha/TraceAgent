@@ -24,23 +24,24 @@ def test_qa_package_does_not_import_resource_builder():
     assert dependencies == []
 
 
-def test_graph_only_keeps_messages_with_options_bound_outside():
+async def test_graph_only_keeps_messages_with_options_bound_outside():
     from service.file_extraction_agent.core.graph import build_qa_graph
     from service.file_extraction_agent.core.messages import build_qa_messages
     from service.file_extraction_agent.core.model_invocation import _invoke_model_message
     from service.file_extraction_agent.core.executor import _execute_tools_parallel
-    from unittest.mock import Mock
+    from unittest.mock import Mock, AsyncMock
     from langchain_core.messages import AIMessage
     from service.file_extraction_agent.core.model import ChatModelFallbackChain, ModelCallAttempt
 
-    provider = Mock(spec=["bind_tools", "invoke"])
+    provider = Mock(spec=["bind_tools", "ainvoke"])
     provider.bind_tools.return_value = provider
-    provider.invoke.return_value = AIMessage(content="回答", response_metadata={"finish_reason": "stop"})
+    provider.ainvoke = AsyncMock()
+    provider.ainvoke.return_value = AIMessage(content="回答", response_metadata={"finish_reason": "stop"})
     model = ChatModelFallbackChain([ModelCallAttempt("test", provider, False)])
     graph = build_qa_graph(model, [], run_options=RunOptions(tool_execution_timeout=0.1),
                            invoke_model=_invoke_model_message, execute_tools=_execute_tools_parallel)
     messages = build_qa_messages([DocumentQaMessage(role="user", content="问题")])
-    result = graph.invoke({"messages": messages})
+    result = await graph.ainvoke({"messages": messages})
     assert set(result) == {"messages"}
     assert [message.content for message in result["messages"]][-2:] == ["问题", "回答"]
 

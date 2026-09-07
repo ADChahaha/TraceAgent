@@ -47,3 +47,7 @@ CompletionStream 托管迭代与 close，传输断连仅通知绑定的 runtime�
 事件替身和事件断言均不携带 completion ID；取消/状态接口仍按 ID 定位运行时。运行时测试通过真实 resource_path 进入，保留取消竞态、FIFO、终态唯一和消息包装覆盖。原每轮建树/清理测试由资源准备和损坏资源测试替代。
 
 模型装配替身注入 manager；事件生成和图执行替身注入 completion_runtime。现有取消竞态、FIFO、注册表移除和终态测试覆盖拆分后的协作。
+
+测试使用协程与异步迭代器驱动实际 Agent 链路；模型替身提供 astream/ainvoke，取消等待使用事件循环。
+
+断连测试验证生产协程的 finally 观察停止信号，提前断连不会创建生产协程。

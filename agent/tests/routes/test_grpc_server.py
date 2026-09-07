@@ -1,6 +1,7 @@
 """启动真实本机 gRPC Server，验证服务入口与协议生命周期。"""
 
 import socket
+import inspect
 import subprocess
 import sys
 import threading
@@ -11,13 +12,13 @@ import pytest
 from grpc_health.v1 import health_pb2, health_pb2_grpc
 
 from agent_proto import agent_pb2 as pb, agent_pb2_grpc
-from main import create_server
 
 
 def test_entrypoint_provides_grpc_server():
     import main
 
     assert callable(getattr(main, "create_server", None)), "agent 入口必须提供 gRPC server 工厂"
+    assert inspect.iscoroutinefunction(main.create_server), "服务工厂必须异步初始化 grpc.aio 和 Health"
     assert not hasattr(main, "app"), "迁移后不再启动 FastAPI 应用"
 
 
@@ -31,50 +32,42 @@ def test_health_and_capabilities(rpc, rpc_channel):
     assert list(result.implemented_file_types) == ["pdf", "docx"]
 
 
-def test_busy_work_is_rejected_and_cancel_stays_available(monkeypatch):
-    """长任务达到容量后快速拒绝新工作，保留线程处理取消和探活。"""
+def test_blocking_preparation_keeps_control_rpcs_responsive(monkeypatch, rpc_server_factory):
+    """单线程执行器忙于文档解析时，事件循环仍可取消、查询和探活。"""
     from routes import document_resources
     started = threading.Event()
     release = threading.Event()
-    def blocked(request, context):
+
+    def blocked(documents):
         started.set()
         release.wait(5)
-        return pb.PrepareResourcesResponse()
-    monkeypatch.setattr(document_resources, "create_document_resource", blocked)
-    server = create_server(workers=3)
-    port = server.add_insecure_port("127.0.0.1:0")
-    server.start()
-    try:
-        with grpc.insecure_channel(f"127.0.0.1:{port}") as channel:
-            stub = agent_pb2_grpc.AgentServiceStub(channel)
-            pending = stub.PrepareResources.future(pb.PrepareResourcesRequest(), timeout=5)
+        return "resource"
+
+    monkeypatch.setattr(document_resources, "prepare_resources", blocked)
+    monkeypatch.setattr(document_resources.processor, "process",
+                        lambda file: type("Document", (), {"filename": "a.docx", "html": "<p>a</p>"})())
+    with rpc_server_factory(workers=1) as channel:
+        stub = agent_pb2_grpc.AgentServiceStub(channel)
+        pending = stub.PrepareResources.future(pb.PrepareResourcesRequest(
+            files=[pb.UploadedFile(filename="a.docx", content=b"test")]), timeout=5)
+        try:
             assert started.wait(2)
-            try:
-                with pytest.raises(grpc.RpcError) as error:
-                    stub.PrepareResources(pb.PrepareResourcesRequest(), timeout=1)
-                assert error.value.code() == grpc.StatusCode.RESOURCE_EXHAUSTED
-                assert stub.CancelCompletion(pb.CompletionRequest(completion_id="missing"), timeout=1).status == "not_found"
-            finally:
-                release.set()
-                pending.result(timeout=2)
-    finally:
-        release.set()
-        server.stop(0).wait(5)
+            assert stub.CancelCompletion(pb.CompletionRequest(completion_id="missing"), timeout=1).status == "not_found"
+            assert stub.GetCapabilities(pb.Empty(), timeout=1).supported_file_types
+            assert health_pb2_grpc.HealthStub(channel).Check(
+                health_pb2.HealthCheckRequest(), timeout=1).status == health_pb2.HealthCheckResponse.SERVING
+        finally:
+            release.set()
+            pending.result(timeout=2)
 
 
-def test_oversized_request_returns_resource_exhausted():
+def test_oversized_request_returns_resource_exhausted(rpc_server_factory):
     """超过配置的消息上限时由 gRPC 拒绝，不进入文档解析。"""
-    server = create_server(max_message_bytes=1024)
-    port = server.add_insecure_port("127.0.0.1:0")
-    server.start()
-    try:
-        with grpc.insecure_channel(f"127.0.0.1:{port}") as channel:
-            with pytest.raises(grpc.RpcError) as error:
-                agent_pb2_grpc.AgentServiceStub(channel).PrepareResources(pb.PrepareResourcesRequest(
-                    files=[pb.UploadedFile(filename="large.pdf", content=b"x" * 2048)]), timeout=2)
-            assert error.value.code() == grpc.StatusCode.RESOURCE_EXHAUSTED
-    finally:
-        server.stop(0).wait(5)
+    with rpc_server_factory(max_message_bytes=1024) as channel:
+        with pytest.raises(grpc.RpcError) as error:
+            agent_pb2_grpc.AgentServiceStub(channel).PrepareResources(pb.PrepareResourcesRequest(
+                files=[pb.UploadedFile(filename="large.pdf", content=b"x" * 2048)]), timeout=2)
+        assert error.value.code() == grpc.StatusCode.RESOURCE_EXHAUSTED
 
 
 def test_cli_starts_server_and_health_command():

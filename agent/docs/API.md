@@ -92,7 +92,7 @@ CancelCompletion
 
 要接收收尾事件，保持原问答流打开。客户端直接 stream.cancel()、断连或 deadline 到期，表示放弃这条 RPC：回调绑定本轮 CompletionStream，通知 runtime 停止后续生产并唤醒 consumer，由 finally 关闭内层迭代器并清理注册项。连接已断时不保证发送业务终态，也不等待工具结果补齐。
 
-逻辑取消不保证底层同步模型请求或工具线程立即物理停止；它们继续受自身 timeout/deadline 约束。资源准备也是同步操作，客户端放弃 RPC 不保证正在执行的 OCR/embedding 立即停止，完成后可能留下已发布资源。
+模型请求与工具调度使用协程。无活动工具批次时，取消终态发出后会取消生产协程并关闭模型流；已有工具批次仍先完成收尾。取消本地协程不保证远端模型服务立即停止计算。工具内同步文件操作、OCR 和 embedding 不能通过协程取消强行终止；客户端放弃资源准备 RPC 后，完成时可能留下已发布资源。
 
 ## 状态、能力和错误
 
@@ -105,7 +105,7 @@ CancelCompletion
 | 上传类型/参数、消息或资源校验失败，活动 ID 重复 | INVALID_ARGUMENT，首事件前返回 |
 | 文档解析、资源准备或问答初始化异常 | INTERNAL |
 | 开始执行后的模型/工具循环异常 | 原流的 completion.failed；普通工具失败可继续执行 |
-| 消息超过配置上限、长任务槽已满 | RESOURCE_EXHAUSTED |
+| 消息超过配置上限 | RESOURCE_EXHAUSTED |
 | 客户端直接取消或 deadline 到期 | 客户端观察 CANCELLED / DEADLINE_EXCEEDED |
 
 每次 RPC 应设置符合 OCR、embedding 或问答耗时的 deadline；取消请求使用独立短超时。不要盲目重试资源准备或问答创建：响应丢失时服务端可能已执行，本版不提供持久幂等或事件重放。

@@ -5,9 +5,11 @@
 CompletionStream 并由 consumer finally 清理，避免旧 ID 回调误取消新问答。
 """
 
+import asyncio
 import json
+import threading
 from dataclasses import fields
-from typing import Any, Iterable
+from typing import Any, AsyncIterator
 
 import grpc
 
@@ -71,9 +73,9 @@ def event_message(event: dict[str, Any]) -> pb.CompletionEvent:
     return pb.CompletionEvent(**values)
 
 
-def create_chat_completion(request, context) -> Iterable[pb.CompletionEvent]:
+async def create_chat_completion(request, context) -> AsyncIterator[pb.CompletionEvent]:
     try:
-        stream = completion_manager.create(
+        stream = await _create_stream(
             completion_id=request.completion_id,
             resource_path=request.resource_path,
             messages=_messages(request),
@@ -81,25 +83,51 @@ def create_chat_completion(request, context) -> Iterable[pb.CompletionEvent]:
             model_config=_model_config(request),
         )
     except ValueError as exc:
-        context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+        await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
     except Exception as exc:
-        context.abort(grpc.StatusCode.INTERNAL, f"completion initialization failed: {exc}")
+        await context.abort(grpc.StatusCode.INTERNAL, f"completion initialization failed: {exc}")
 
     try:
-        if not context.add_callback(stream.disconnect):
-            stream.disconnect()
+        context.add_done_callback(lambda _: stream.disconnect())
+        if context.done():
             return
-        for event in stream:
-            if not context.is_active():
+        async for event in stream:
+            if context.done():
                 return
             yield event_message(event)
     finally:
-        stream.close()
+        await stream.aclose()
 
 
-def cancel_chat_completion(request, context):
+async def _create_stream(**kwargs):
+    """线程初始化 → 交接流；取消与交接互斥，迟到结果在线程内关闭。"""
+    lock = threading.Lock()
+    abandoned = False
+    stream = None
+
+    def initialize():
+        nonlocal stream
+        created = completion_manager.create(**kwargs)
+        with lock:
+            if abandoned:
+                created.close()
+            else:
+                stream = created
+        return created
+
+    try:
+        return await asyncio.to_thread(initialize)
+    except asyncio.CancelledError:
+        with lock:
+            abandoned = True
+            if stream is not None:
+                stream.close()
+        raise
+
+
+async def cancel_chat_completion(request, context):
     return pb.CompletionResponse(**completion_manager.terminate(request.completion_id))
 
 
-def get_chat_completion(request, context):
+async def get_chat_completion(request, context):
     return pb.CompletionResponse(id=request.completion_id, status="not_implemented")
