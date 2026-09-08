@@ -1,6 +1,6 @@
-"""固定模型与消息 → 单次请求 / 指数退避 / 工具节点 → 原生增量与完整结果。
+"""固定模型与工具 → 构建模型 / 指数退避 / 工具节点 → 返回编译后的图。
 
-本模块负责建图、执行、更新转换、取消边界及图流关闭。已发布的工具调用必须完成
+本模块负责建图、节点执行、重试路由及节点停止检查。已发布的工具调用必须完成
 整批结果后停止；模型失败经 updates 输出并路由至退避节点，取消异常保持传播。
 """
 
@@ -9,11 +9,10 @@ from __future__ import annotations
 import asyncio
 import json
 import random
-from uuid import uuid4
-from collections.abc import AsyncGenerator, Sequence
-from typing import Literal, cast
+from collections.abc import Sequence
+from typing import Literal
 
-from langchain_core.messages import AIMessage, AnyMessage, ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.graph import StateGraph
 from langgraph.graph.message import MessagesState
 from langgraph.graph.state import CompiledStateGraph
@@ -21,13 +20,8 @@ from langgraph.types import Command
 
 from service.file_extraction_agent.core import executor, model_invocation
 from service.file_extraction_agent.core.contracts import (
-    AgentOutput,
-    MessageDelta,
-    MessageStarted,
     ModelCallFailure,
-    ModelFailed,
     ModelInvoker,
-    ModelRetry,
     QaModel,
     StopCheck,
     Tool,
@@ -35,7 +29,6 @@ from service.file_extraction_agent.core.contracts import (
 )
 from service.file_extraction_agent.schemas import RunOptions
 
-QA_RECURSION_LIMIT = 10000
 MODEL_MAX_ATTEMPTS = 5
 RETRY_BASE_SECONDS = 0.5
 RETRY_MAX_SECONDS = 8.0
@@ -59,18 +52,6 @@ def _retry_delay(attempt: int, failure: ModelCallFailure) -> float:
         return failure.retry_after_seconds
     base = min(RETRY_BASE_SECONDS * 2 ** min(attempt - 1, 1000), RETRY_MAX_SECONDS)
     return base * (1 - 0.25 * random.random())
-
-
-def _visible_text(content: object) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "".join(
-            part if isinstance(part, str) else part.get("text", "")
-            for part in content
-            if isinstance(part, str) or isinstance(part, dict) and part.get("type") == "text"
-        )
-    return ""
 
 
 def build_qa_graph(
@@ -154,71 +135,3 @@ def build_qa_graph(
     graph.add_node("retry_wait", retry_wait)
     graph.set_entry_point("agent")
     return graph.compile()
-
-
-async def stream_qa_graph(
-    *,
-    qa_model: QaModel,
-    tools: Sequence[Tool],
-    messages: list[AnyMessage],
-    run_options: RunOptions | None = None,
-    should_stop: StopCheck | None = None,
-) -> AsyncGenerator[AgentOutput, None]:
-    """messages 通道输出可见增量 → updates 输出完整结果/重试 → 取消抑制迟到消息 → 关闭图流。"""
-    graph = build_qa_graph(qa_model, tools, run_options, should_stop=should_stop)
-    updates = graph.astream(
-        {"messages": messages},
-        stream_mode=["messages", "updates"],
-        config={"recursion_limit": QA_RECURSION_LIMIT},
-    )
-    message_id = None
-    emitted_text = False
-    try:
-        async for mode, output in updates:
-            if mode == "messages":
-                chunk, metadata = output
-                if metadata.get("langgraph_node") != "agent":
-                    continue
-                if should_stop is not None and should_stop():
-                    continue
-                if message_id is None:
-                    message_id = str(uuid4())
-                    yield MessageStarted(message_id)
-                text = _visible_text(chunk.content)
-                if text:
-                    emitted_text = True
-                    yield MessageDelta(message_id, text)
-                continue
-            for node, update in output.items():
-                if node == "agent":
-                    if should_stop is not None and should_stop():
-                        return
-                    failure = update.get("model_failure")
-                    batch = update.get("messages", [])
-                    if not failure and not batch:
-                        continue
-                    if message_id is None:
-                        message_id = str(uuid4())
-                        yield MessageStarted(message_id)
-                    if failure:
-                        attempt = update["model_attempt"]
-                        if attempt < MODEL_MAX_ATTEMPTS:
-                            yield ModelRetry(
-                                message_id, attempt + 1, MODEL_MAX_ATTEMPTS,
-                                round(update["retry_delay_seconds"] * 1000), failure,
-                            )
-                        else:
-                            yield ModelFailed(message_id, failure)
-                    else:
-                        message = cast(AIMessage, batch[0]).model_copy(update={"id": message_id})
-                        # 自定义非 LangChain 模型不产生原生回调；只能在完成时交付正文。
-                        text = _visible_text(message.content)
-                        if text and not emitted_text:
-                            yield MessageDelta(message_id, text)
-                        yield message
-                    message_id = None
-                    emitted_text = False
-                elif node == "tools" and update.get("messages"):
-                    yield cast(list[ToolMessage], update["messages"])
-    finally:
-        await updates.aclose()

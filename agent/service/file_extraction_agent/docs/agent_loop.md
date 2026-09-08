@@ -9,10 +9,10 @@ manager 保存 completion_id → CompletionRuntime 映射
   → run_qa_stream 调 open_workspace(resource_path)，build_tools 绑定工具上下文
   → RunOptions 在构图时绑定工具执行器，文件访问与 embedding 缓存由工具层持有
   → messages.build_qa_messages(messages) 保留完整历史
-  → loop 调 graph.stream_qa_graph；graph 绑定 model_invocation / executor，以 QaState 编译 agent/retry_wait/tools 图
+  → loop.stream_qa_graph 调 graph.build_qa_graph；graph 绑定 model_invocation / executor，以 QaState 编译 agent/retry_wait/tools 图
   → 模型节点单次调用，messages 通道提供可见增量
   → 节点返回 AIMessage 或 ModelCallFailure；失败进入 retry_wait 指数退避再请求
-  → updates 通道提供完整结果或失败通知
+  → loop 消费 messages/updates，管理 message_id，将增量、完整结果和失败更新转换成类型化通知
   → completion_runtime 包装 started / delta / done / model_request.retrying / tool_started
   → 工具节点并行执行整批调用，返回 list[ToolMessage]
   → completion_runtime 包装 tool_completed / tool_failed

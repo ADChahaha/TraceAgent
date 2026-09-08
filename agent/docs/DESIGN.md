@@ -31,12 +31,12 @@ ChatCompletion（resource_refs + messages）
 | routes/file_extraction_agent.py | 路径问答、取消 gRPC 适配；固定字段转 protobuf，动态字段保留 JSON |
 | service/file_extraction_agent/manager.py | completion 创建、注册、查找、取消转发与流结束后的移除 |
 | service/file_extraction_agent/completion_runtime.py | 单轮执行、事件字典输出、生产协程与取消收尾 |
-| service/file_extraction_agent/core/loop.py | Agent 接口：校验输入、组装工作区/工具/历史消息、转发 graph 输出 |
+| service/file_extraction_agent/core/loop.py | Agent 接口：校验输入、组装工作区/工具/历史消息、执行图并转换原生流输出、关闭图流 |
 | service/file_extraction_agent/core/contracts.py | 模型与工具调用协议、消息输出和 JSON 类型，不承担执行 |
 | service/file_extraction_agent/core/messages.py | 提示词、历史转换、响应校验、终止信号与消息 JSON 归一化 |
 | service/file_extraction_agent/core/model_invocation.py | 单次模型调用、流式聚合和失败结果 |
 | service/file_extraction_agent/core/executor.py | 工具并行执行、共享超时与 ToolMessage 封装 |
-| service/file_extraction_agent/core/graph.py | LangGraph 单次请求、指数退避与工具节点，原生 messages/updates 输出及取消清理 |
+| service/file_extraction_agent/core/graph.py | LangGraph 状态、单次请求/指数退避/工具节点、路由及节点停止检查 |
 | service/file_extraction_agent/core/tools/workspace.py | 资源定位解析、S3ObjectStore 读取、文件浏览与读取 |
 | service/file_extraction_agent/core/tools/embedding.py | 清单配置和索引读取（经 storage 服务）、查询模型缓存、query 编码与检索 |
 | service/object_store.py | ObjectStore 接口 + S3ObjectStore（boto3）+ s3:// URL 解析 |

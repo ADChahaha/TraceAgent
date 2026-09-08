@@ -10,7 +10,7 @@ from langchain_core.messages import AIMessageChunk, HumanMessage
 from langchain_core.outputs import ChatGenerationChunk
 from pydantic import PrivateAttr
 
-from service.file_extraction_agent.core import graph, model_invocation
+from service.file_extraction_agent.core import graph, loop, model_invocation
 from service.file_extraction_agent.completion_runtime import stream_completion_events
 from service.file_extraction_agent.schemas import DocumentQaMessage
 
@@ -247,7 +247,7 @@ async def test_chatopenai_native_callback_and_http_stream_close():
     )) as client:
         model = ChatOpenAI(model="test", api_key="test", base_url="https://model.invalid/v1",
                            http_async_client=client, max_retries=0, streaming=True)
-        events = graph.stream_qa_graph(qa_model=model, tools=[], messages=[HumanMessage(content="问题")])
+        events = loop.stream_qa_graph(qa_model=model, tools=[], messages=[HumanMessage(content="问题")])
         async with aclosing(events):
             while True:
                 event = await asyncio.wait_for(anext(events), 2)

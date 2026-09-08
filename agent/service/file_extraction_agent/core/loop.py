@@ -1,21 +1,30 @@
-"""Agent 入口：资源路径与历史 → 校验并初始化工具 → 构建模型消息 → 转发 graph 输出。
+"""Agent 入口：资源路径与历史 → 初始化工具和消息 → 执行图 → 转换并输出类型化通知。
 
-这里只组装流程，不解析 LangGraph 更新或决定节点路由；无效输入抛 ValueError，
-执行异常向运行时传播，调用方关闭时同步关闭内层异步生成器。
+本模块消费 LangGraph messages/updates，管理消息 ID 并转换增量、完整结果和失败通知。
+节点路由由 graph 决定；无效输入抛 ValueError，执行异常向运行时传播，关闭时等待内层流清理。
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from contextlib import aclosing
+from typing import cast
+from uuid import uuid4
 
-from service.file_extraction_agent.core.contracts import AgentOutput, QaModel, StopCheck
-from service.file_extraction_agent.core.graph import stream_qa_graph
+from langchain_core.messages import AIMessage, AnyMessage, ToolMessage
+
+from service.file_extraction_agent.core.contracts import (
+    AgentOutput, MessageDelta, MessageStarted, ModelFailed, ModelRetry,
+    QaModel, StopCheck, Tool,
+)
+from service.file_extraction_agent.core.graph import MODEL_MAX_ATTEMPTS, build_qa_graph
 from service.file_extraction_agent.core.messages import build_qa_messages
 from service.file_extraction_agent.core.tools import build_tools
 from service.file_extraction_agent.core.tools.workspace import open_workspace
 from service.file_extraction_agent.schemas import DocumentQaMessage, ResourceRefs, RunOptions
+
+QA_RECURSION_LIMIT = 10000
 
 
 async def run_qa_stream(
@@ -26,7 +35,7 @@ async def run_qa_stream(
     run_options: RunOptions | None = None,
     should_stop: StopCheck | None = None,
 ) -> AsyncGenerator[AgentOutput, None]:
-    """校验路径和消息 → 初始化共享工具上下文 → 委托 graph 执行 → 输出消息或工具批次。"""
+    """校验路径和消息 → 初始化共享工具上下文 → 执行并消费图流 → 输出消息或工具批次。"""
     if not messages:
         raise ValueError("messages must be a non-empty list")
     if not resource_path:
@@ -45,6 +54,86 @@ async def run_qa_stream(
     ) as outputs:
         async for output in outputs:
             yield output
+
+
+def _visible_text(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            part if isinstance(part, str) else part.get("text", "")
+            for part in content
+            if isinstance(part, str) or isinstance(part, dict) and part.get("type") == "text"
+        )
+    return ""
+
+
+async def stream_qa_graph(
+    *,
+    qa_model: QaModel,
+    tools: Sequence[Tool],
+    messages: list[AnyMessage],
+    run_options: RunOptions | None = None,
+    should_stop: StopCheck | None = None,
+) -> AsyncGenerator[AgentOutput, None]:
+    """messages 通道输出可见增量 → updates 输出完整结果/重试 → 取消抑制迟到消息 → 关闭图流。"""
+    graph = build_qa_graph(qa_model, tools, run_options, should_stop=should_stop)
+    updates = graph.astream(
+        {"messages": messages},
+        stream_mode=["messages", "updates"],
+        config={"recursion_limit": QA_RECURSION_LIMIT},
+    )
+    message_id = None
+    emitted_text = False
+    try:
+        async for mode, output in updates:
+            if mode == "messages":
+                chunk, metadata = output
+                if metadata.get("langgraph_node") != "agent":
+                    continue
+                if should_stop is not None and should_stop():
+                    continue
+                if message_id is None:
+                    message_id = str(uuid4())
+                    yield MessageStarted(message_id)
+                text = _visible_text(chunk.content)
+                if text:
+                    emitted_text = True
+                    yield MessageDelta(message_id, text)
+                continue
+            for node, update in output.items():
+                if node == "agent":
+                    if should_stop is not None and should_stop():
+                        return
+                    failure = update.get("model_failure")
+                    batch = update.get("messages", [])
+                    if not failure and not batch:
+                        continue
+                    if message_id is None:
+                        message_id = str(uuid4())
+                        yield MessageStarted(message_id)
+                    if failure:
+                        attempt = update["model_attempt"]
+                        if attempt < MODEL_MAX_ATTEMPTS:
+                            yield ModelRetry(
+                                message_id, attempt + 1, MODEL_MAX_ATTEMPTS,
+                                round(update["retry_delay_seconds"] * 1000), failure,
+                            )
+                        else:
+                            yield ModelFailed(message_id, failure)
+                    else:
+                        message = cast(AIMessage, batch[0]).model_copy(update={"id": message_id})
+                        # 自定义非 LangChain 模型不产生原生回调；只能在完成时交付正文。
+                        text = _visible_text(message.content)
+                        if text and not emitted_text:
+                            yield MessageDelta(message_id, text)
+                        yield message
+                    message_id = None
+                    emitted_text = False
+                elif node == "tools" and update.get("messages"):
+                    yield cast(list[ToolMessage], update["messages"])
+    finally:
+        await updates.aclose()
 
 
 __all__ = ["run_qa_stream"]

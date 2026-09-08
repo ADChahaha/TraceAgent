@@ -1,6 +1,6 @@
 # 流式模型与重试测试
 
-通过真实 BaseChatModel 回调驱动 LangGraph，使用 Event 控制模型输出和退避，不请求外部模型。
+通过真实 BaseChatModel 回调驱动 LangGraph，由 loop 消费图流，使用 Event 控制模型输出和退避，不请求外部模型。
 
 - `test_native_messages_arrive_before_model_finishes`：第二块被阻塞时先收到第一块，验证消息 ID、完整结果和无重复文本。
 - `test_graph_retries_same_model_five_times_and_reports_before_wait`：固定随机源验证 0.5 秒起步的指数抖动，事件等待时间与实际等待一致；同配置五次、消息 ID 独立。

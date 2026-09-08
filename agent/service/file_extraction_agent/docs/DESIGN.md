@@ -8,10 +8,10 @@ resource_refs([{type, location}]) + messages + 模型/运行配置
   -> completion_runtime.stream_completion_events 包装业务事件
   -> run_qa_stream 用 resource_refs 调 open_workspace，build_tools 绑定 ToolWorkspace
   -> messages.build_qa_messages 转换历史消息
-  -> graph.stream_qa_graph 调 build_qa_graph，绑定 RunOptions、执行函数和停止信号
+  -> loop.stream_qa_graph 调 graph.build_qa_graph，绑定 RunOptions、执行函数和停止信号
   -> QaState 保存完整 messages 与请求次数、失败信息、退避时长
   -> LangGraph agent 单次请求 / retry_wait 指数退避 / tools 工具节点
-  -> graph 合并 messages 增量和 updates 结果，loop 原样转发类型化通知
+  -> loop 消费 graph.astream，合并 messages 增量和 updates 结果，输出类型化通知
   -> completion_runtime 事件字典 → CompletionRuntime 队列 → 分配 seq 并输出事件字典
   -> 传输适配层负责响应消息编码
 ```
@@ -41,11 +41,11 @@ resource_refs([{type, location}]) + messages + 模型/运行配置
 
 QaState 继承 MessagesState，增加 model_attempt、model_failure、retry_delay_seconds。只有校验通过的完整消息进入 messages；失败尝试的部分文本不进入历史。资源路径、运行参数、工具访问器和 embedding 缓存均在图状态之外。
 
-`run_qa_stream` 是 Agent 接口：校验非空消息和资源定位数组 → open_workspace 创建 ToolWorkspace → build_tools 绑定四个共享工具 → build_qa_messages 转换完整历史 → 调用 graph.stream_qa_graph 并转发结果。loop 不解析图更新、不决定节点路由；关闭接口流时通过 aclosing 关闭内层生成器。
+`run_qa_stream` 是 Agent 接口：校验非空消息和资源定位数组 → open_workspace 创建 ToolWorkspace → build_tools 绑定四个共享工具 → build_qa_messages 转换完整历史 → 调用同模块 stream_qa_graph 执行图并转换输出。loop 解析图更新，但不决定节点路由；关闭接口流时通过 aclosing 关闭内层生成器，并等待原生图流 aclose。
 
 graph.py 绑定固定模型并编译 agent、retry_wait、tools 三个节点。agent 每次只调用一次 model_invocation；ModelCallFailure 通过 Command 更新状态，未达上限路由至 retry_wait，否则结束。retry_wait 按以 0.5 秒起步、8 秒封顶并乘 0.75–1 随机系数的指数间隔等待后回到 agent；同一逻辑模型调用总共最多五次请求。成功后计数归零，工具完成后的下一次模型调用重新计数。无效工具 ID 抛 ValueError，不发完整消息、不执行工具。
 
-stream_qa_graph 使用 graph.astream(stream_mode=["messages", "updates"])：messages 通过 LangChain 原生回调提供 chunk，updates 提供节点结束结果。只读取 agent 节点的可见文本，过滤隐藏推理和工具参数。每次实际请求首次观察到输出时分配独立 message_id 并发送 MessageStarted，随后 MessageDelta；完成后输出带同一 ID 的完整 AIMessage。没有回调的注入模型仅在完成时输出正文，不伪装为实时生成。
+loop.stream_qa_graph 使用 graph.astream(stream_mode=["messages", "updates"])：messages 通过 LangChain 原生回调提供 chunk，updates 提供节点结束结果。只读取 agent 节点的可见文本，过滤隐藏推理和工具参数。每次实际请求首次观察到输出时分配独立 message_id 并发送 MessageStarted，随后 MessageDelta；完成后输出带同一 ID 的完整 AIMessage。没有回调的注入模型仅在完成时输出正文，不伪装为实时生成。
 
 失败结果保留 retry_after_seconds：从响应头优先解析 retry-after-ms，其次 Retry-After 秒数或 HTTP 日期；仅接受有限且大于 0、不超过 120 秒的值，否则回退到随机指数退避。graph 优先采用该值，不叠加抖动。等待时间只计算一次，事件使用同一值换算毫秒。
 
@@ -59,8 +59,8 @@ route 在模块顶部直接导入 completion_manager；标准库与内部工具�
 
 ## 循环职责拆分
 
-- loop.py：校验输入 → 初始化工具和消息 → 调用 graph.stream_qa_graph → 转发输出并传播关闭。
-- graph.py：绑定依赖 → 构建并运行 QaState 图 → 节点路由与停止检查 → 合并原生消息增量与节点更新 → 关闭图流。
+- loop.py：校验输入 → 初始化工具和消息 → 调用 build_qa_graph → 消费 graph.astream → 合并原生消息增量与节点更新 → 输出类型化通知并关闭图流。
+- graph.py：绑定依赖 → 定义 QaState 及模型/退避/工具节点 → 配置路由与节点停止检查 → 返回编译后的图。
 - contracts.py：声明模型/工具 Protocol、ModelCallAttempt、AgentOutput 和 JSON 类型。消息使用 LangChain 的具体类型；外部动态工具结果先以 object 接收，再由 messages 归一化为 JsonValue。
 - messages.py：完整历史 → 系统提示与角色/工具参数转换 → 模型输入；响应 → 终止信号校验，不完整响应抛 RuntimeError。JSON 归一化供工具结果封装复用。
 - model_invocation.py：固定模型与消息 → 单次 astream/ainvoke → 聚合与校验 → AIMessage 或 ModelCallFailure；finally 关闭响应流。重试由 graph 控制。
