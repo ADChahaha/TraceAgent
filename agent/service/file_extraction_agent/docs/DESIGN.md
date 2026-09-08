@@ -25,7 +25,7 @@ resource_refs([{type, location}]) + messages + 模型/运行配置
   `EmbeddingResources`。
 - `DocumentFileTree` 按 key 前缀浏览/读取 .md 对象，越界校验改为「key 前缀 + 拒绝
   `..`/绝对路径」。
-- `grep` 用纯 Python 遍历 .md 对象并按正则匹配，不再依赖 ripgrep 子进程。
+- `grep` 用纯 Python 遍历 .md 对象并做忽略大小写的字面匹配，不再依赖 ripgrep 子进程。
 
 ## 运行时与注册表
 
@@ -127,13 +127,19 @@ search_embedding(query)
 RPC 预检加载索引但不创建查询模型；实际工具执行时另建本轮上下文。`EmbeddingResources` 的锁保证并行查询只初始化一次索引和模型引用。查询模型按模型 ID 与后端缓存在 `embedding.py`；生成端模型缓存独立，不新增公共模型模块。问答不重建文档向量。
 
 - `ls(path="")`：逐层浏览资源的 documents 目录。
-- `grep(query, scope="", max_results=20)`：纯 Python 遍历 .md 对象并按正则匹配候选行。
+- `grep(query, scope="", max_results=20)`：纯 Python 遍历 .md 对象并做忽略大小写的字面匹配候选行。
 - `read(path)`：读取真实 Markdown 文件，拒绝文档目录之外的路径。
 - `search_embedding(query, top_k=5)`：沿用资源记录的模型编码 query，从已加载索引召回文本及 covered_files；删除从未参与过滤的 scope 参数。
 
 Markdown 文件树由资源模块创建：文档标题作为顶层目录后缀，h1–h6 按层级建目录；paragraph、list、table 分别作为文件。排序使用数字前缀；合并表格单元格展开为 Markdown。内部 index/manifest 不暴露给浏览工具。
 
-检索只提供候选，具体事实应 read 后引用。过程消息使用可读标签链接；最终回答使用句尾数字引用，例如 `[1](/abs/resource/documents/...md)`，不汇总成末尾 Sources 区。非文档问题允许直接回答。
+检索只提供候选，具体事实应 read 后引用。过程消息使用可读标签链接；最终回答使用句尾数字引用，例如 `[1](documents/0001-contract/0001-section/0001-block.md)`，链接目标原样使用工具返回的 key，不汇总成末尾 Sources 区。非文档问题允许直接回答。
+
+资源定位与工具路径是两层：RPC 的 `resource_path`（文中也称 resource_refs）保存
+`s3://res_example/documents` 与 `s3://res_example/index`；工具工作区固定 bucket 后，
+ls/read/grep 与检索结果使用 `documents/...` key，不传本机绝对路径或完整 S3 URL。
+引用链接保存同一个 key；它不是可直接访问的 HTTP 下载地址，展示端需结合资源定位解析。
+完整输入输出示例见 [工具说明](tools.md)。
 
 ## 跨轮与部署
 

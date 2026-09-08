@@ -1,11 +1,12 @@
-"""HTML → 临时文档树与 embedding 索引 → 校验产物 → 原子发布到对象存储。
+"""HTML → 临时文档树与 embedding 索引 → 校验产物 → 逐对象上传到对象存储。
 
 prepare_resources 调用 materialize_tree、build_index，先在本机临时目录构建并校验，
 然后把整棵产物（documents 文件树、index、manifest）以及原始文件 bytes 写入
 ObjectStore（bucket = res_*），最后返回资源定位数组 [{type, location}]。
 
 已发布资源由 Agent 工具从 ObjectStore 读取，本模块不提供消费端加载接口。
-准备异常清理自己的临时目录，不发布半成品。
+构建或校验失败不开始上传；上传失败可能留下远端部分对象，不返回资源定位。
+成功或失败都会清理本地临时目录；当前没有远端回滚或原子发布机制。
 """
 
 from __future__ import annotations

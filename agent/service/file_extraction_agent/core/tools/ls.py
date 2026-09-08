@@ -38,7 +38,7 @@ def build_ls(state: ToolWorkspace) -> BaseTool:
         """List one level of the document workspace at a directory path.
 
         Use this to see document structure. Leave path empty for the root,
-        or pass an absolute directory path returned by a previous ls.
+        或原样传入上次 ls 返回的目录 key（例如 documents/0001-contract）。
         Directory names show a trailing slash in ls output.
         ls returns only direct child directories and .md block files; it does
         NOT recursively expand descendants and does NOT return file text.

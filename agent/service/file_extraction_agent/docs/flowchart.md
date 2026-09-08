@@ -10,7 +10,7 @@ flowchart TD
     D --> E["调用方保存路径与 HTML"]
     E --> F["ChatCompletion: resource_path + messages"]
     F --> G["manager 委托工具预检、创建问答模型、注册 CompletionRuntime"]
-    G --> H["loop 初始化工具并提供执行函数；graph 绑定节点/路由；图内仅 messages"]
+    G --> H["loop 初始化工具与消息；graph 绑定执行函数并运行节点/路由；图内仅 messages"]
     H --> I["LangGraph: 模型消息 / 完整工具结果批次"]
     I --> J["completion_runtime 包装事件字典"]
     J --> K["CompletionRuntime: queue → 唤醒异步消费者 → seq → 事件字典 → protobuf 流"]
@@ -28,7 +28,7 @@ flowchart TD
     E --> F{"有已发布工具批次？"}
     E --> R["取消 RPC 立即返回 cancelling；已终态时返回实际状态"]
     F -- 否 --> G["取消 sentinel 唤醒 consumer"]
-    F -- 是 --> H["整批结果先提交，loop 不再请求模型"]
+    F -- 是 --> H["整批结果先提交，graph 不再请求模型"]
     G --> I["FIFO 发出已提交事件，以 cancelled 收口"]
     H --> I
 ```

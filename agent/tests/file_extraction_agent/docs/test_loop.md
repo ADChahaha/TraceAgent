@@ -1,5 +1,7 @@
 # test_loop.py
 
+提示词中的数字引用使用工具返回的 `documents/...md` 对象 key；引用断言随路径契约同步。
+
 执行链路：资源路径初始化工具上下文，运行参数绑定执行器；输入消息 → prompt/历史转换 → 绑定工具 → 正式 LangGraph agent/tools 循环 → 原样 yield AIMessage/ToolMessage；运行异常向外抛出，图内无事件或取消缓冲。
 
 messages.py 的 build_qa_messages 直接接收消息列表；独立 graph.py 的 build_qa_graph 接收 RunOptions 以及 model_invocation.py 与 executor.py 的执行函数；工具执行器不接收状态容器。工具并行提交并共享超时期限；按原始调用 ID 返回消息。超时失败先返回，迟到线程不能修改已返回消息。model_invocation 测试覆盖 astream/ainvoke 降级、响应终止信号校验和退避；completion_runtime 负责事件格式与最终回答标记。
@@ -11,7 +13,7 @@ messages.py 的 build_qa_messages 直接接收消息列表；独立 graph.py 的
 - `test_qa_requires_tool_binding_before_invoking_model`：缺少 `bind_tools` 的模型在调用前报错，不能通过旧字典协议执行备用循环。
 - `test_tool_timeout_emits_one_matching_result_and_discards_late_success`：验证超时只返回一个带调用 ID 的失败 ToolMessage，迟到成功不改写消息。
 - `test_tool_exception_is_reported_consistently_without_timeout`：普通异常保留真实错误，并与模型收到的结果一致。
-- `test_qa_messages_describe_qa_investigation_not_field_extraction`：验证 prompt 说明 QA 调查流程和 evidence 规则（真实路径块链接），要求过程消息用可读 label、最终回答用数字 label、citation 紧跟被支撑句子，不汇总成一个总 `Sources` 区；同时验证不再出现 `task_spec/write_field/submit_result` 字段抽取语义，system prompt 不再接收 memory context。
+- `test_qa_messages_describe_qa_investigation_not_field_extraction`：验证 prompt 说明 QA 调查流程和 evidence 规则（工具返回的 documents/...md 对象 key 链接），要求过程消息用可读 label、最终回答用数字 label、citation 紧跟被支撑句子，不汇总成一个总 `Sources` 区；同时验证不再出现 `task_spec/write_field/submit_result` 字段抽取语义，system prompt 不再接收 memory context。
 - `test_qa_prompt_allows_direct_answers_without_forced_document_search`：验证 prompt 明确允许身份、能力和已有上下文可回答的问题直接回答，只有用户询问文档内容、要求证据或上下文不清楚时才使用文档工具；同时确认 prompt 使用 `ls / grep / read` 命名，避免把结构浏览工具描述成递归 `tree`，并避免用 `Show your thought process` 诱导隐藏推理。
 - `test_qa_messages_preserve_openai_tool_history`：验证历史 assistant tool_calls 和 tool 结果会保留为真实 chat/tool message；最新用户消息仍是模型看到的最后一条 human 消息。
 - `test_qa_graph_preserves_parallel_tool_calls`：验证 provider 同轮返回多个 tool call 时，qa graph 会保留完整 tool_calls 摘要，并行执行这些工具，按原调用顺序返回结果。

@@ -36,7 +36,7 @@ def _locator_error(path: str) -> JsonObject | None:
             "errors": [
                 {
                     "code": "BAD_PATH",
-                    "message": "use an absolute .md file path copied from ls output",
+                    "message": "请原样使用 ls 返回的 .md 对象 key，例如 documents/0001-contract/0001-section/0001-block.md",
                 }
             ],
         }
@@ -48,8 +48,8 @@ def build_read(state: ToolWorkspace) -> BaseTool:
     async def read(path: str) -> JsonObject:
         """Read one .md block file.
 
-        path MUST be an absolute path to a .md file under the workspace root,
-        copied verbatim from ls output. Returns the file's markdown content.
+        path 必须原样使用 ls 返回的 .md 对象 key（例如 documents/0001-contract/0001-section/0001-block.md），
+        不传本机路径或 s3:// URL。返回文件的 Markdown 内容。
         Paragraphs return plain text; lists return markdown bullets; tables
         return a markdown table. After reading, narrate what the block contains
         with actual values — then move on or cite it in your answer with a link.

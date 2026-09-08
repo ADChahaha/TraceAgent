@@ -1,39 +1,93 @@
-# 工具表面
+# 问答工具
 
-QA completion 暴露四个异步工具，经 S3ObjectStore 读取真实文件树和已有 embedding 索引。没有 `path_id` /
-`evidence://` / `inspect`；引用证据直接用真实的 `.md` key 路径。
+四个工具复用 ToolWorkspace，通过 S3ObjectStore 读取文档与已有索引：
 
-模型 tool_calls → executor 并发 await tool.ainvoke → 工具协程用 asyncio.to_thread 执行同步文件操作、纯 Python 搜索或本地 embedding → 返回结果并封装 ToolMessage。普通异常与共享超时返回失败结果；取消协程不强杀已经运行的同步线程。
-
-返回类型 JsonObject 是 dict[str, JsonValue]，只包含可序列化的 JSON 值。run_tool(execute) 负责异常归一化，不再接收未使用的状态、工具名或参数。
-
-## ls
-
-列出当前 key 前缀层的一个层级。
-```python
-async def ls(path: str = "") -> JsonObject:
+```text
+模型 tool_calls
+  → executor 并发 await tool.ainvoke
+  → 工具通过 asyncio.to_thread 执行对象读取、字面搜索或 query embedding
+  → 返回 JSON 对象，由 executor 封装为 ToolMessage
+  → 模型 read 核实候选内容后，使用返回的 key 引用
 ```
 
-## grep
+普通异常由 run_tool 转为 `{"ok":false,"errors":[{"message":"异常说明"}]}`；
+工具共享超时由 executor 处理。取消协程不能强杀已运行的同步线程。
 
-在 scope key 前缀（默认整个 documents 根）内用纯 Python 遍历 .md 对象并按正则匹配候选行。
-```python
-async def grep(query: str, scope: str = "", max_results: int = 20) -> JsonObject:
+## 路径如何传递
+
+PrepareResources 返回 `s3://res_example/documents` 与 `s3://res_example/index`。
+工作区据此固定 bucket；工具传入的路径是桶内 `documents/...` key。
+
+```text
+ls("") → entries[].path = documents/0001-contract
+  → ls("documents/0001-contract") → 继续逐层浏览
+  → read("documents/0001-contract/0001-section/0001-block.md")
+  → 返回 path + text
+  → 回答引用 [1](documents/0001-contract/0001-section/0001-block.md)
 ```
 
-## read
+以下 key 和文本仅为示例，实际调用需原样复制工具输出。不要传本机绝对路径或
+s3:// URL；引用 key 也不是 HTTP 下载地址，展示端需结合资源定位解析。
 
-按 key 读取一个 `.md` block 文件的 markdown 内容。
-```python
-async def read(path: str) -> JsonObject:
+## ls(path="")
+
+空路径使用 documents 根；非空路径作为目录 key 校验后列出直接子目录和 .md 文件。
+不递归展开，也不返回正文。
+
+调用 `ls("documents/0001-contract/0001-section")` 的成功结果示例：
+
+```json
+{"ok":true,"path":"documents/0001-contract/0001-section","entries":[{"name":"0001-block.md","path":"documents/0001-contract/0001-section/0001-block.md","kind":"md","order":1}],"text":"0001-block.md"}
 ```
 
-## search_embedding
+调用 `ls("index")` 返回 `ok:false`，errors 中说明路径越界；无可列出对象时 entries 为空。
 
-使用资源清单指定的模型编码 query，从已有索引返回 top-k 候选及真实文件引用；不重建文档向量。
+## grep(query, scope="", max_results=20)
 
-```python
-async def search_embedding(query: str, top_k: int = 5) -> JsonObject:
+校验非空 query → 确定 scope key 前缀 → 遍历 .md 对象 → 忽略大小写地匹配字面文本
+→ 返回 `key:行号:正文` 字符串。query 经 re.escape，不支持用户正则表达式。
+max_results 默认 20，范围限制为 1–50；传 0 使用默认值。
+
+调用 `grep("付款", scope="documents/0001-contract")` 的成功结果示例：
+
+```json
+{"ok":true,"query":"付款","scope":"documents/0001-contract","output":"documents/0001-contract/0001-section/0001-block.md:1:付款期限为30天。"}
 ```
 
-已删除未参与过滤的 scope 参数。检索结果应通过 read 核实后引用。
+空 query 返回 `{"ok":false,"errors":[{"code":"BAD_QUERY","message":"query is required"}]}`。
+没有匹配时 output 为空字符串。当前 scope 越界会把错误文字放进 output，外层仍为
+`ok:true`；调用方不能仅凭 ok 判断是否获得候选。候选必须通过 read 核实后再引用。
+
+## read(path)
+
+校验非空路径 → 检查 key 属于文档前缀 → 读取对象并按 UTF-8 解码 → 返回 Markdown。
+段落为正文，列表为 Markdown 列表，表格为 Markdown 表格。
+
+调用 `read("documents/0001-contract/0001-section/0001-block.md")` 的成功结果示例：
+
+```json
+{"ok":true,"path":"documents/0001-contract/0001-section/0001-block.md","text":"付款期限为30天。"}
+```
+
+调用 `read("index/index.json")` 返回：
+
+```json
+{"ok":false,"errors":[{"code":"BAD_PATH","message":"path escapes the document workspace: index/index.json"}]}
+```
+
+空路径、越界或对象缺失使用 BAD_PATH；其他普通异常使用通用 errors 结果。
+
+## search_embedding(query, top_k=5)
+
+校验 query → 加载或复用清单、索引和清单指定的查询模型 → encode([query])
+→ 归一化查询向量，按相似度排序 → 返回候选及 covered_files。
+不重建文档向量，不支持 scope。top_k 默认 5，范围限制为 1–20；传 0 使用默认值。
+
+调用 `search_embedding("付款期限", top_k=1)` 的结果结构示例（分数及 token 范围为示意值）：
+
+```json
+{"ok":true,"query":"付款期限","results":[{"score":0.9,"document":"0001-contract","chunk_id":"0001-contract#c1","text":"付款期限为30天。","token_range":[0,8],"covered_files":["documents/0001-contract/0001-section/0001-block.md"]}]}
+```
+
+空 query 返回与 grep 相同的 BAD_QUERY。索引损坏、模型加载失败或向量维度不符，
+返回 `ok:false` 与 errors。一个 chunk 可能跨多个文件，应 read 对应 covered_files 后引用。

@@ -21,6 +21,7 @@ graph 加载资源。
 
 ## 测试函数
 
+- `test_model_path_examples_can_be_read_from_object_store`：提取模型提示中的 Markdown 引用示例，通过带 documents 前缀的对象存储替身实际读取，确认示例 key 可用，且 ls/read 不再要求本机绝对路径。
 - `test_build_tools_exposes_qa_navigation_tools_only`：验证四个导航工具均暴露协程实现，模型不再看到 `inspect` 或字段抽取工具。
 - `test_embedding_tool_does_not_advertise_unused_scope`：语义检索仅向模型暴露实际使用的 query、top_k 参数。
 - `test_module_exports_qa_helpers_only`：验证模块公开 helper 切换到 `_ls/_grep/_read`，且 `_inspect` 已删除。

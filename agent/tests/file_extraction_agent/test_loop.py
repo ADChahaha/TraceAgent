@@ -170,7 +170,7 @@ def test_qa_messages_describe_qa_investigation_not_field_extraction(tmp_path):
     assert "answer" in system_content.lower()
     assert "evidence" in system_content.lower()
     assert "Use numeric citation labels in the final answer" in system_content
-    assert "[1](/abs/path/0001-contract/0001-section/0001-block.md)" in system_content
+    assert "[1](documents/0001-contract/0001-section/0001-block.md)" in system_content
     assert "Do not use descriptive final citation labels" in system_content
     assert (
         "During investigation, use human-readable labels; in final answers, use numeric labels"

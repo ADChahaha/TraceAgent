@@ -79,6 +79,24 @@ def test_embedding_tool_does_not_advertise_unused_scope(tmp_path):
     assert set(search.args) == {"query", "top_k"}
 
 
+def test_model_path_examples_can_be_read_from_object_store():
+    """模型看到的路径示例必须能作为对象 key 交给 read。"""
+    import re
+    from service.file_extraction_agent.core.messages import build_qa_messages
+
+    key = "documents/0001-contract/0001-section/0001-block.md"
+    store = SimpleNamespace(get_object=lambda bucket, path: b"Payment due in 30 days." if path == key else None)
+    state = SimpleNamespace(document=DocumentFileTree(store, "res_example", "documents"))
+    prompt = build_qa_messages([])[0].content
+    links = re.findall(r"\]\(([^)]+\.md)\)", prompt)
+    assert links
+    for path in links:
+        assert _read(state, path)["ok"], path
+    for tool in build_tools(state):
+        if tool.name in {"ls", "read"}:
+            assert "absolute" not in tool.description.lower()
+
+
 def test_module_exports_qa_helpers_only():
     assert "_ls" in tools_all
     assert "_tree" not in tools_all
