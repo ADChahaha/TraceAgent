@@ -1,7 +1,7 @@
 """固定模型与工具 → 构建模型 / 指数退避 / 工具节点 → 返回编译后的图。
 
-本模块负责建图、节点执行、重试路由及节点停止检查。已发布的工具调用必须完成
-整批结果后停止；模型失败经 updates 输出并路由至退避节点，取消异常保持传播。
+本模块负责建图、节点执行、重试路由及节点停止检查。工具结果通过 custom 逐项发布，取消传播至工具 Task；
+模型失败经 updates 输出并路由至退避节点，取消异常保持传播。
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from collections.abc import Sequence
 from typing import Literal
 
 from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.config import get_stream_writer
 from langgraph.graph import StateGraph
 from langgraph.graph.message import MessagesState
 from langgraph.graph.state import CompiledStateGraph
@@ -112,8 +113,17 @@ def build_qa_graph(
         message = state["messages"][-1]
         if not isinstance(message, AIMessage):
             raise TypeError("tools node requires an AIMessage")
+        if stopped():
+            return Command(update={"messages": []}, goto="__end__")
+        writer = get_stream_writer()
+        published: set[str] = set()
+
+        def emit(reply: ToolMessage) -> None:
+            published.add(reply.tool_call_id)
+            writer(reply)
+
         try:
-            replies = await execute(message.tool_calls, tools, timeout=timeout)
+            replies = await execute(message.tool_calls, tools, timeout=timeout, on_result=emit)
         except Exception as exc:
             result = {"ok": False, "errors": [{"message": str(exc)}]}
             replies = [
@@ -127,6 +137,9 @@ def build_qa_graph(
                 )
                 for call in message.tool_calls
             ]
+        for reply in replies:
+            if reply.tool_call_id not in published:
+                emit(reply)
         return Command(update={"messages": replies}, goto="__end__" if stopped() else "agent")
 
     graph = StateGraph(QaState)

@@ -13,7 +13,7 @@ ChatCompletion（resource_refs + messages）
   → CompletionManager 委托工具层预检资源并注册 completion
   → 经 S3ObjectStore（boto3）从 storage 服务读取资源
   → 路径创建工具上下文，运行配置绑定执行器，图内保存完整 messages 和重试状态
-  → 模型文本增量 / 完整消息 / 重试通知 / 完整工具结果批次
+  → 模型文本增量 / 完整消息 / 重试通知 / 单个工具结果
   → completion_runtime 输出不含 completion ID、带 seq 的事件字典，由传输层编码
   → 释放本轮运行时，保留文档资源
 ```
@@ -35,7 +35,7 @@ ChatCompletion（resource_refs + messages）
 | service/file_extraction_agent/core/contracts.py | 模型与工具调用协议、消息输出和 JSON 类型，不承担执行 |
 | service/file_extraction_agent/core/messages.py | 提示词、历史转换、响应校验、终止信号与消息 JSON 归一化 |
 | service/file_extraction_agent/core/model_invocation.py | 单次模型调用、流式聚合和失败结果 |
-| service/file_extraction_agent/core/executor.py | 工具并行执行、共享超时与 ToolMessage 封装 |
+| service/file_extraction_agent/core/executor.py | 工具并行执行、共享超时、逐项结果回调与取消清理 |
 | service/file_extraction_agent/core/graph.py | LangGraph 状态、单次请求/指数退避/工具节点、路由及节点停止检查 |
 | service/file_extraction_agent/core/tools/workspace.py | 资源定位解析、S3ObjectStore 读取、文件浏览与读取 |
 | service/file_extraction_agent/core/tools/embedding.py | 清单配置和索引读取（经 storage 服务）、查询模型缓存、query 编码与检索 |
@@ -58,7 +58,7 @@ main.py 读取监听地址、阻塞工作线程数和消息上限
 
 默认 16 个阻塞工作线程、单条请求/响应上限 64 MiB。活动 RPC 流不受线程数限制，等待事件不占执行器；模型请求、重试退避、图执行和工具调度均为原生异步；文件 I/O 与本地计算才使用阻塞工作线程。文件整包 bytes 上传，客户端须相应配置收发上限。固定事件字段使用 protobuf，动态参数/结果用 JSON 字符串保留大整数和 null。共享协议位于与 agent 同级的 agent_proto，agent wheel 依赖 traceagent-protocol，不内置协议副本。协议生成器版本固定，从仓库根目录生成；测试比对绑定，并验证共享 wheel 可脱离 agent 业务包导入。
 
-传输层断连与业务取消分开：CancelCompletion 立即确认后让原流按批次收尾；RPC 取消/断连/deadline 回调绑定本轮 CompletionRuntime 的 disconnect，唤醒 consumer 并设置停止信号，finally 关闭事件迭代器并通知 manager 移除注册项。旧回调不会按 ID 误取消后来的新流；从未迭代的流关闭也会清理。断连后不保证交付终态，取消生产协程并关闭模型流，工具内已运行的同步线程不能强杀。
+传输层断连与业务取消分开：CancelCompletion 立即确认并取消 producer 和未完成工具 Task；RPC 取消/断连/deadline 回调绑定本轮 CompletionRuntime 的 disconnect，唤醒 consumer 并设置停止信号，finally 关闭事件迭代器并通知 manager 移除注册项。旧回调不会按 ID 误取消后来的新流；从未迭代的流关闭也会清理。断连后不保证交付终态，取消生产协程并关闭模型流，工具内已运行的同步线程不能强杀。
 
 同步初始化与协程取消通过锁交接流：取消先发生时，初始化线程关闭迟到的流；初始化先完成时，由取消分支关闭已交接流。清理不依赖已关闭事件循环的回调。停服后 asyncio.run 会等待默认执行器中已运行的同步工作结束，5 秒 RPC 宽限期不是进程退出时间的硬上限。
 
@@ -80,12 +80,12 @@ main.py 读取监听地址、阻塞工作线程数和消息上限
 ```text
 模型节点返回 AIMessage
   → completion_runtime 输出 model_message.started/delta/done、重试通知和 tool_started
-  → 工具节点并行执行，按共享 deadline 收集整批 ToolMessage
+  → 工具节点并行执行，按共享 deadline 逐项经 custom 输出 ToolMessage，完整历史供下一轮模型使用
   → 每项携带调用 ID、名称、参数和成功/失败结果
   → completion_runtime 直接输出 tool_completed / tool_failed，不维护 pending 配对字典
 ```
 
-取消保持已发布调用的结果完整性：没有活动批次时立即唤醒事件 consumer；已有批次时消费完结果再结束，不调用下一轮模型。队列按 FIFO 发出已提交事件，终态只提交一次。资源校验错误在首事件前返回 INVALID_ARGUMENT；执行异常通过 completion.failed 收口。
+取消立即唤醒 consumer 并取消 producer，工具 finally 取消并等待未完成 Task；不配齐中断结果、不调用下一轮模型。队列按 FIFO 发出已提交事件，终态只提交一次。资源校验错误在首事件前返回 INVALID_ARGUMENT；执行异常通过 completion.failed 收口。
 
 ## 对外契约与迁移
 

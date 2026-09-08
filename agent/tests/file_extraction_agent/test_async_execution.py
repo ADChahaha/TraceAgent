@@ -95,3 +95,59 @@ def test_async_tools_share_deadline_preserve_order_and_cancel_pending():
         assert closed.is_set()
 
     asyncio.run(run())
+
+
+def test_tool_result_streams_before_sibling_finishes_and_cancel_cleans_up(resource_path, monkeypatch):
+    async def run():
+        started, closed = asyncio.Event(), asyncio.Event()
+        model_calls = []
+
+        class Model:
+            def bind_tools(self, tools):
+                return self
+
+            async def astream(self, messages):
+                model_calls.append(messages)
+                yield AIMessageChunk(content="读取", tool_call_chunks=[
+                    {"id": "slow", "name": "read", "args": '{"slow": true}', "index": 0},
+                    {"id": "fast", "name": "read", "args": '{"slow": false}', "index": 1},
+                ])
+
+        class Tool:
+            name = "read"
+
+            async def ainvoke(self, args):
+                if args["slow"]:
+                    try:
+                        started.set()
+                        await asyncio.Event().wait()
+                    finally:
+                        closed.set()
+                await started.wait()
+                return {"ok": True}
+
+        monkeypatch.setattr(loop, "build_tools", lambda workspace: [Tool()])
+        runtime = CompletionRuntime(resource_path, Model(), [DocumentQaMessage(role="user", content="问题")])
+        stream = runtime.astream()
+        events = []
+        try:
+            while True:
+                event = await asyncio.wait_for(anext(stream), 1)
+                events.append(event)
+                if event["type"] == "tool_completed":
+                    assert event["tool_call_id"] == "fast"
+                    assert not closed.is_set()
+                    break
+            assert runtime.terminate() == "cancelling"
+            events.extend(await asyncio.wait_for(collect(stream), 1))
+            assert closed.is_set()
+            assert len(model_calls) == 1
+            assert [e["tool_call_id"] for e in events if e["type"] == "tool_completed"] == ["fast"]
+            assert [e["type"] for e in events if e["type"].startswith("completion.")] == ["completion.created", "completion.cancelled"]
+        finally:
+            await stream.aclose()
+
+    async def collect(stream):
+        return [event async for event in stream]
+
+    asyncio.run(run())

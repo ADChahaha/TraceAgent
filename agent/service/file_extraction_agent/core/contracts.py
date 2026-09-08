@@ -50,7 +50,7 @@ class ModelFailed:
     error: str
 
 
-AgentOutput: TypeAlias = AIMessage | list[ToolMessage] | MessageStarted | MessageDelta | ModelRetry | ModelFailed
+AgentOutput: TypeAlias = AIMessage | ToolMessage | list[ToolMessage] | MessageStarted | MessageDelta | ModelRetry | ModelFailed
 
 
 @runtime_checkable
@@ -101,5 +101,6 @@ ModelInvoker: TypeAlias = Callable[[BoundModel, Sequence[BaseMessage]], Awaitabl
 
 class ToolExecutor(Protocol):
     def __call__(
-        self, tool_calls: list[ToolCall], tools: Sequence[Tool], timeout: float = 60.0
+        self, tool_calls: list[ToolCall], tools: Sequence[Tool], timeout: float = 60.0,
+        *, on_result: Callable[[ToolMessage], None] | None = None,
     ) -> Awaitable[list[ToolMessage]]: ...

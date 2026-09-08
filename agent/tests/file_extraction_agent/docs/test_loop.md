@@ -33,3 +33,5 @@ messages.py 的 build_qa_messages 直接接收消息列表；独立 graph.py 的
 - 五次固定配置和指数退避的图验证见 test_streaming_retry.md。
 
 模型装配对象重命名为 ConfiguredChatModel，明确只保存一个固定调用配置。
+
+`test_qa_stream_yields_only_original_messages` 现在验证逐个 ToolMessage 输出，而非整批列表；完整工具历史仍按调用顺序保存。

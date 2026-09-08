@@ -39,11 +39,11 @@ async def test_qa_stream_yields_only_original_messages(tmp_path, monkeypatch, re
             resource_path=resource_path, messages=_state(tmp_path).messages, qa_model=model
         )
     ]
-    messages = [m for m in messages if isinstance(m, (AIMessage, list))]
+    messages = [m for m in messages if isinstance(m, (AIMessage, ToolMessage))]
     assert len(messages) == 3
     assert messages[0].content == first.content
-    assert isinstance(messages[1], list)
-    assert messages[1][0].tool_call_id == "ls-1"
+    assert isinstance(messages[1], ToolMessage)
+    assert messages[1].tool_call_id == "ls-1"
     assert messages[2].content == final.content
 
 

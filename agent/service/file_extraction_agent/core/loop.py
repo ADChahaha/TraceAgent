@@ -1,6 +1,6 @@
 """Agent 入口：资源路径与历史 → 初始化工具和消息 → 执行图 → 转换并输出类型化通知。
 
-本模块消费 LangGraph messages/updates，管理消息 ID 并转换增量、完整结果和失败通知。
+本模块消费 LangGraph messages/updates/custom，管理消息 ID 并转换增量、完整结果和失败通知。
 节点路由由 graph 决定；无效输入抛 ValueError，执行异常向运行时传播，关闭时等待内层流清理。
 """
 
@@ -35,7 +35,7 @@ async def run_qa_stream(
     run_options: RunOptions | None = None,
     should_stop: StopCheck | None = None,
 ) -> AsyncGenerator[AgentOutput, None]:
-    """校验路径和消息 → 初始化共享工具上下文 → 执行并消费图流 → 输出消息或工具批次。"""
+    """校验路径和消息 → 初始化共享工具上下文 → 执行并消费图流 → 输出模型消息或单个工具结果。"""
     if not messages:
         raise ValueError("messages must be a non-empty list")
     if not resource_path:
@@ -80,13 +80,17 @@ async def stream_qa_graph(
     graph = build_qa_graph(qa_model, tools, run_options, should_stop=should_stop)
     updates = graph.astream(
         {"messages": messages},
-        stream_mode=["messages", "updates"],
+        stream_mode=["messages", "updates", "custom"],
         config={"recursion_limit": QA_RECURSION_LIMIT},
     )
     message_id = None
     emitted_text = False
     try:
         async for mode, output in updates:
+            if mode == "custom":
+                if isinstance(output, ToolMessage) and not (should_stop is not None and should_stop()):
+                    yield output
+                continue
             if mode == "messages":
                 chunk, metadata = output
                 if metadata.get("langgraph_node") != "agent":
@@ -130,8 +134,6 @@ async def stream_qa_graph(
                         yield message
                     message_id = None
                     emitted_text = False
-                elif node == "tools" and update.get("messages"):
-                    yield cast(list[ToolMessage], update["messages"])
     finally:
         await updates.aclose()
 

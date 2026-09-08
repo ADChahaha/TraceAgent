@@ -8,7 +8,7 @@ from service.file_extraction_agent.core.model import ConfiguredChatModel, ModelC
 from service.file_extraction_agent.schemas import DocumentQaMessage, RunOptions
 
 
-async def test_path_graph_returns_complete_tool_batch_and_stops_after_cancel(monkeypatch):
+async def test_path_graph_streams_tool_results_and_stops_after_cancel(monkeypatch):
     messages = [DocumentQaMessage(role="user", content="问题")]
     options = RunOptions(tool_execution_timeout=0.125)
     workspace = object()
@@ -63,9 +63,9 @@ async def test_path_graph_returns_complete_tool_batch_and_stops_after_cancel(mon
     assert isinstance(await anext(stream), MessageStarted)
     assert isinstance(await anext(stream), MessageDelta)
     assert isinstance(await anext(stream), AIMessage)
+    batch = [await anext(stream), await anext(stream)]
+    batch.sort(key=lambda result: result.tool_call_id)
     cancelled = True
-    batch = await anext(stream)
-    assert isinstance(batch, list)
     assert all((isinstance(result, ToolMessage) for result in batch))
     assert [(result.tool_call_id, result.name, result.status) for result in batch] == [
         ("a", "read", "success"),

@@ -4,7 +4,7 @@
 
 测试消费 manager.create(...) 返回的运行时：迭代其 stream()，断连仅调用运行时 disconnect；测试覆盖未迭代就关闭（runtime.close）、断连唤醒和 ID 复用后的隔离。
 
-取消批次按已提交模型事件中的调用 ID 跟踪；工具结果先配齐再关闭。事件内容断言归一化掉 seq 后比较，独立完整流测试验证序号连续及终态唯一。事件转换只提取可见文本，异常与超时结果保留原始调用 ID。
+取消唤醒 consumer 并取消 producer；等待协程清理后关闭，不补齐工具结果。事件内容断言归一化掉 seq 后比较，独立完整流测试验证序号连续及终态唯一。事件转换只提取可见文本，异常与超时结果保留原始调用 ID。
 
 ## 测试函数
 
@@ -16,7 +16,7 @@
 - `test_completion_runtime_streams_without_manager`：独立构造 completion_runtime.py 的运行时，验证无需注册表也能输出有序事件并唯一收尾。
 - `test_stream_numbers_messages_and_terminal_once`：完成、失败、取消三种完整输出流均无 completion ID、连续编号且仅有一个终态；问答执行失败的阶段名为 qa。
 - `test_startup_events_only_acknowledge_without_reading_documents`：启动通知只返回状态和 ok，不遍历目录、读取文档或附带资源内容。
-- `test_runtime_cancel_drains_real_graph_batch_and_skips_next_model`：真实 LangGraph 并行同名工具执行中取消，等待匹配结果后关闭；不再请求模型，并保留资源目录。
+- `test_runtime_cancel_interrupts_real_tools_and_skips_next_model`：真实 LangGraph 并行同名工具执行中取消，中断未完成调用后关闭；不再请求模型，并保留资源目录。
 - `test_manager_wraps_messages_and_pairs_same_name_calls`：completion_runtime 将 AIMessage/ToolMessage 包装为模型、调度和结果事件，同名工具按 call ID 保留各自参数及失败状态。
 - `test_graph_keeps_events_as_objects_until_stream_boundary`：图执行器返回事件字典，开始、索引、终态顺序不变。
 - `test_stream_preserves_runtime_failure_with_special_characters`：运行时异常含换行、制表符、引号和反斜杠时，仍输出一个保留原始异常文本的失败事件。
@@ -26,10 +26,10 @@
 - `test_create_completion_stream_builds_completion_input_and_runs_graph`：用 fake model builder 和 fake stream graph 确认 `completion_manager.create(...)` 只传递资源路径、messages 和 qa model，completion ID 留在运行时管理层。
 - `test_create_completion_stream_validates_input_before_iteration`：确认 completion 输入校验发生在返回事件 iterator 前，route 层可以把业务入参错误稳定映射为传输层参数错误。
 - `test_create_completion_stream_registers_completion_runtime_before_iteration`：确认 active completion 会在返回 iterator 前注册，backend 立即调用 cancel 时不会因为流还没开始迭代而得到 `not_found`；早取消后 consumer 直接用 cancel sentinel 收口，不再启动 graph/provider producer。
-- `test_create_completion_stream_cancel_does_not_wait_for_blocked_graph`：确认 graph/provider 卡住时，`completion_manager.terminate(...)` 会通过 runtime queue 的 cancel sentinel 主动唤醒事件 consumer，consumer 立即输出 `completion.cancelled`，不等待 producer 继续产出或 queue timeout 轮询。
+- `test_create_completion_stream_cancel_does_not_wait_for_blocked_graph`：确认 graph/provider 卡住时，`completion_manager.terminate(...)` 会通过 runtime queue 的 cancel sentinel 主动唤醒事件 consumer，consumer 等待协程清理后输出 `completion.cancelled`，不等待 producer 继续产出或 queue timeout 轮询。
 - `test_create_completion_stream_flushes_committed_events_before_cancel`：确认 cancel 前已经成功 commit 到 runtime queue 的普通 event 会先按 FIFO 发出，然后才输出 `completion.cancelled`；consumer 不能用 cancel flag 跳过旧 event。
 - `test_create_completion_stream_emits_only_one_terminal_event_when_cancel_races_completed`：确认 cancel 与 producer 完成竞争时，同一个 completion 只会输出一个 terminal event。
-- `test_terminate_defers_cancel_until_active_tool_batch_settles`：验证 cancel 到达正在执行的 tool 批次时会走 deferred cancel 路径——consumer 不会立即收口，而是等批次运行产生的工具事件（如 `tool_completed`）完整提交后再以 `completion.cancelled` 结束。
+- `test_terminate_interrupts_active_tool_batch`：验证 cancel 直接中断活动工具等待，无需释放工具 gate 即可输出 completion.cancelled，无迟到 tool_completed。
 - `test_should_stop_is_wired_to_cancel_requested`：验证 `_produce` 把 `should_stop=lambda: self.cancel_requested` 注入到 `stream_completion_events`，使取消信号能在图执行外部被观测——cancel 前 should_stop 为 False，terminate 后变为 True。
 - `test_completion_manager_create_runs_graph_and_returns_events`：确认 `CompletionManager.create(...)` 会校验路径、传递消息、创建 qa model，并返回可消费的事件流。
 - `test_completion_manager_create_registers_before_iteration_and_terminate_cancels`：确认 `create` 在返回事件流前先注册 runtime，`terminate` 能把 active completion 取消，早取消后 consumer 用 cancel sentinel 收口且不再启动 producer。
@@ -56,3 +56,5 @@
 模型配置测试改为单一配置、单一流式调用，不再生成 invoke fallback；完整消息事件改为 model_message.done，并携带 message_id。
 
 模型装配对象重命名为 ConfiguredChatModel，明确只保存一个固定调用配置。
+
+取消测试现在验证活动工具无需配齐结果即可终止，不输出迟到工具结果，也不启动下一次模型请求。

@@ -1,13 +1,7 @@
 # 路径问答图测试
 
-资源路径 → 创建工具上下文；运行配置 → 绑定工具超时；消息 → 模型发布调用 → 完整结果批次 → 取消后结束。
+资源路径 → 创建工具上下文 → 配置工具超时 → 模型发布调用 → custom 逐项工具结果 → 取消后结束。
 
-- `test_path_graph_returns_complete_tool_batch_and_stops_after_cancel`：路径只传入工具上下文初始化，配置超时传入 executor.py 执行器；两次同名工具调用分别成功和失败，整批返回 ID、名称、参数与结果；取消仍配齐该批次结果，且不再调用下一轮模型。
+- `test_path_graph_streams_tool_results_and_stops_after_cancel`：验证路径只用于初始化工具上下文、超时传入 executor；逐项收到同名工具的成功和失败 ToolMessage，保留 ID、名称及参数，取消后不调用下一轮模型。
 
-测试使用真实模型/工具循环，仅替换资源访问器和 provider，验证配置分离后批次与取消行为不变。
-
-测试使用协程与异步迭代器驱动实际 Agent 链路；模型替身提供 astream/ainvoke，取消等待使用事件循环。
-
-取消边界测试先消费 started、delta、完整模型消息，再验证工具批次。
-
-模型装配对象重命名为 ConfiguredChatModel，明确只保存一个固定调用配置。
+使用真实 LangGraph 和 ConfiguredChatModel，只替换资源访问器和 provider。

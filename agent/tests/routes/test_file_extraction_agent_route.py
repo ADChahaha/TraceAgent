@@ -214,8 +214,8 @@ def test_chat_runtime_failure_is_terminal_event(rpc, manager, monkeypatch):
     assert events[0].error_message == '失败\n"原因"'
 
 
-def test_cancel_returns_before_tool_batch_and_stream_drains(rpc, manager, monkeypatch):
-    """取消 RPC 先返回 cancelling，工具结果补齐后原流仅发一个取消终态。"""
+def test_cancel_interrupts_tool_wait_without_waiting_for_thread(rpc, manager, monkeypatch):
+    """取消 RPC 返回 cancelling，线程仍阻塞时原流即可发出唯一取消终态。"""
     release = threading.Event()
     started = threading.Event()
     async def events(**kwargs):
@@ -232,12 +232,10 @@ def test_cancel_returns_before_tool_batch_and_stream_drains(rpc, manager, monkey
         cancel = rpc.CancelCompletion(pb.CompletionRequest(completion_id="cmp_rpc"), timeout=1)
         assert cancel.status == "cancelling"
         assert not release.is_set()
-        assert manager.get_status("cmp_rpc")["status"] == "cancelling"
-        assert rpc.CancelCompletion(pb.CompletionRequest(completion_id="cmp_rpc"), timeout=1).status == "cancelling"
-        release.set()
         remaining = list(stream)
-        assert [e.type for e in remaining] == ["tool_completed", "completion.cancelled"]
-        assert [e.seq for e in remaining] == [2, 3]
+        assert [e.type for e in remaining] == ["completion.cancelled"]
+        assert not release.is_set()
+        assert [e.seq for e in remaining] == [2]
     finally:
         release.set()
         stream.cancel()

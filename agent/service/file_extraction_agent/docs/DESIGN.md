@@ -11,7 +11,7 @@ resource_refs([{type, location}]) + messages + 模型/运行配置
   -> loop.stream_qa_graph 调 graph.build_qa_graph，绑定 RunOptions、执行函数和停止信号
   -> QaState 保存完整 messages 与请求次数、失败信息、退避时长
   -> LangGraph agent 单次请求 / retry_wait 指数退避 / tools 工具节点
-  -> loop 消费 graph.astream，合并 messages 增量和 updates 结果，输出类型化通知
+  -> loop 消费 graph.astream，转换 messages 增量、updates 模型结果和 custom 单个工具结果，输出类型化通知
   -> completion_runtime 事件字典 → CompletionRuntime 队列 → 分配 seq 并输出事件字典
   -> 传输适配层负责响应消息编码
 ```
@@ -45,7 +45,7 @@ QaState 继承 MessagesState，增加 model_attempt、model_failure、retry_dela
 
 graph.py 绑定固定模型并编译 agent、retry_wait、tools 三个节点。agent 每次只调用一次 model_invocation；ModelCallFailure 通过 Command 更新状态，未达上限路由至 retry_wait，否则结束。retry_wait 按以 0.5 秒起步、8 秒封顶并乘 0.75–1 随机系数的指数间隔等待后回到 agent；同一逻辑模型调用总共最多五次请求。成功后计数归零，工具完成后的下一次模型调用重新计数。无效工具 ID 抛 ValueError，不发完整消息、不执行工具。
 
-loop.stream_qa_graph 使用 graph.astream(stream_mode=["messages", "updates"])：messages 通过 LangChain 原生回调提供 chunk，updates 提供节点结束结果。只读取 agent 节点的可见文本，过滤隐藏推理和工具参数。每次实际请求首次观察到输出时分配独立 message_id 并发送 MessageStarted，随后 MessageDelta；完成后输出带同一 ID 的完整 AIMessage。没有回调的注入模型仅在完成时输出正文，不伪装为实时生成。
+loop.stream_qa_graph 使用 graph.astream(stream_mode=["messages", "updates", "custom"])：messages 通过 LangChain 原生回调提供 chunk，updates 提供节点结束结果，custom 提供节点尚未结束时的单个 ToolMessage；loop 不重复发布 tools 的 updates。只读取 agent 节点的可见文本，过滤隐藏推理和工具参数。每次实际请求首次观察到输出时分配独立 message_id 并发送 MessageStarted，随后 MessageDelta；完成后输出带同一 ID 的完整 AIMessage。没有回调的注入模型仅在完成时输出正文，不伪装为实时生成。
 
 失败结果保留 retry_after_seconds：从响应头优先解析 retry-after-ms，其次 Retry-After 秒数或 HTTP 日期；仅接受有限且大于 0、不超过 120 秒的值，否则回退到随机指数退避。graph 优先采用该值，不叠加抖动。等待时间只计算一次，事件使用同一值换算毫秒。
 
@@ -64,7 +64,7 @@ route 在模块顶部直接导入 completion_manager；标准库与内部工具�
 - contracts.py：声明模型/工具 Protocol、ModelCallAttempt、AgentOutput 和 JSON 类型。消息使用 LangChain 的具体类型；外部动态工具结果先以 object 接收，再由 messages 归一化为 JsonValue。
 - messages.py：完整历史 → 系统提示与角色/工具参数转换 → 模型输入；响应 → 终止信号校验，不完整响应抛 RuntimeError。JSON 归一化供工具结果封装复用。
 - model_invocation.py：固定模型与消息 → 单次 astream/ainvoke → 聚合与校验 → AIMessage 或 ModelCallFailure；finally 关闭响应流。重试由 graph 控制。
-- executor.py：调用列表和工具集合 → create_task 并发 ainvoke → asyncio.wait 共享 deadline 收集 → 按原顺序封装 ToolMessage；异常/超时转失败结果，不等待迟到线程。
+- executor.py：调用列表和工具集合 → create_task 并发 ainvoke → FIRST_COMPLETED 按共享 deadline 等待 → on_result 立即发布单项 ToolMessage → 按调用顺序返回完整历史；异常/超时转失败结果，取消时清理未完成 Task，不等待迟到线程。
 
 ## 消息批次与事件
 
@@ -85,7 +85,8 @@ route 在模块顶部直接导入 completion_manager；标准库与内部工具�
   → asyncio.create_task 并发执行整批工具协程
   → 按共享 deadline 和原始顺序收集成功 / 异常 / 超时结果
   → 每项 ToolMessage 携带 tool_call_id、name、additional_kwargs.tool_args、artifact、status
-  → 整批 yield list[ToolMessage]
+  → 每项完成经 on_result → graph custom → loop yield ToolMessage
+  → 全部完成后才将完整结果写入图状态，供下一轮模型使用
   → completion_runtime 直接输出 tool_completed / tool_failed
 ```
 
@@ -96,20 +97,21 @@ route 在模块顶部直接导入 completion_manager；标准库与内部工具�
 ## 取消与线程边界
 
 ```text
-发布带 tool_calls 的模型事件
-  → runtime 锁内登记活动调用 ID 并入队
-  → terminate 在同一锁内设置取消标志
-     ├─ 无活动批次：入队取消 sentinel，立即唤醒 consumer
-     └─ 有活动批次：延迟取消，让该批次结果先提交
-  → graph 工具节点返回整批结果；下一模型调用前再次检查 should_stop，取消后不再调用模型
-  → CompletionRuntime 输出 completion.cancelled
+工具完成 → executor.on_result → graph custom → loop ToolMessage → runtime 入队
+terminate → 锁内设置 cancel_requested，拒收后续事件
+  → 取消 sentinel 唤醒 consumer，call_soon_threadsafe 取消 producer
+  → 图取消传播到 executor，finally 取消并等待未完成工具 Task
+  → 工具 await 收到 CancelledError，finally 清理后退出
+  → consumer 按 FIFO 发出已提交事件，等待 producer 清理后输出唯一 completion.cancelled
 ```
 
-CompletionRuntime 的调用 ID 集合只用于取消时判断批次是否结清，不保存调用参数、不承担消息配对。consumer 按 FIFO 输出已提交事件，终态与 close 均唯一；取消后的迟到模型事件会被拒收。
+不再维护 _pending_tool_ids 或延迟取消，不补造中断工具结果。完成先提交则保留完成终态。
+同步 to_thread 计算可继续，返回值不会再交给已取消协程；计算中的副作用不能撤销。
+协程必须传播 CancelledError，清理仍需协作；不承诺固定时间内强杀任意工具。
 
 关闭事件流时先 disconnect 再 await aclose 事件生成器，取消并等待 producer，取消传播到图、模型流和工具协程。模型请求使用原生 astream/ainvoke，重试退避使用 asyncio.sleep；请求 timeout 和工具共享 deadline 保持不变。同步文件操作与本地 embedding 通过 to_thread 执行，取消后不等待线程，迟到结果不会再写事件。问答结束只释放运行时，不删除资源。
 
-业务 terminate 立即返回 cancelling，维持上述批次契约。RPC 断连/deadline 的 disconnect 则设置取消标志、关闭逻辑运行时并入队 sentinel 唤醒 consumer；连接已不可用，不等待批次补齐或尝试保证终态送达。已经完成的运行时不会被断连回调改写终态。
+业务 terminate 立即返回 cancelling，并安排取消 producer。RPC 断连/deadline 的 disconnect 则设置取消标志、关闭逻辑运行时并入队 sentinel 唤醒 consumer；连接已不可用，不等待批次补齐或尝试保证终态送达。已经完成的运行时不会被断连回调改写终态。
 
 首次迭代在同一运行时锁内判断 closed/cancel_requested 并启动 producer；若断连先发生，不再创建生产 Task，流生成器直接收尾并由 runtime 通知 manager 清理。
 

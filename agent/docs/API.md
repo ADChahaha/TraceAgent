@@ -96,14 +96,14 @@ print(response.status)
 CancelCompletion
   → manager 找到本轮 runtime → 锁内设置取消标志 → 返回
   → 原问答流按 FIFO 发出已提交事件
-  → 无活动工具批次：立即唤醒 consumer
-  → 有活动工具批次：先配齐结果，不再请求下一轮模型
+  → 唤醒 consumer，取消 producer 和未完成工具 Task
+  → 等待协程清理，不补造中断结果，不再请求下一轮模型
   → completion.cancelled → 关闭流、移除注册项
 ```
 
 要接收收尾事件，保持原问答流打开。客户端直接 stream.cancel()、断连或 deadline 到期，表示放弃这条 RPC：回调绑定本轮 CompletionRuntime 的 disconnect，通知运行时停止后续生产并唤醒 consumer，由 finally 关闭事件迭代器并通知 manager 清理注册项。连接已断时不保证发送业务终态，也不等待工具结果补齐。
 
-模型请求与工具调度使用协程。无活动工具批次时，取消终态发出后会取消生产协程并关闭模型流；已有工具批次仍先完成收尾。取消本地协程不保证远端模型服务立即停止计算。工具内同步文件操作、OCR 和 embedding 不能通过协程取消强行终止；客户端放弃资源准备 RPC 后，完成时可能留下已发布资源。
+模型请求与工具调度使用协程。每个工具完成后立即输出 tool_completed/tool_failed；业务取消中断生产协程，关闭模型流或取消未完成工具 Task，等待协程清理后输出取消终态。取消本地协程不保证远端模型服务立即停止计算。工具内同步文件操作、OCR 和 embedding 不能通过协程取消强行终止；客户端放弃资源准备 RPC 后，完成时可能留下已发布资源。
 
 ## 探活和错误
 

@@ -150,7 +150,7 @@ async def test_startup_events_only_acknowledge_without_reading_documents(resourc
         await stream.aclose()
 
 
-async def test_runtime_cancel_drains_real_graph_batch_and_skips_next_model(
+async def test_runtime_cancel_interrupts_real_tools_and_skips_next_model(
     tmp_path, monkeypatch, resource_path, s3_store
 ):
     import json
@@ -206,17 +206,14 @@ async def test_runtime_cancel_drains_real_graph_batch_and_skips_next_model(
     try:
         assert await wait_event(started, 1)
         assert manager.terminate("cmp_real_cancel")["status"] == "cancelling"
-        assert not await wait_event(done, 0.05)
+        assert await wait_event(done, 0.5)
     finally:
         release.set()
         await asyncio.wait_for(thread, 2)
     assert done.is_set()
     events = frames
     results = [event for event in events if event["type"] == "tool_completed"]
-    assert [(e["tool_call_id"], e["result"]["text"]) for e in results] == [
-        ("read-1", "first"),
-        ("read-2", "second"),
-    ]
+    assert results == []
     assert events[-1]["type"] == "completion.cancelled"
     assert [event["seq"] for event in events] == list(range(1, len(events) + 1))
     assert provider.ainvoke.call_count == 1
@@ -598,7 +595,7 @@ async def test_should_stop_is_wired_to_cancel_requested(monkeypatch, resource_pa
     assert manager.terminate("cmp_ws") == {"id": "cmp_ws", "status": "not_found"}
 
 
-async def test_terminate_defers_cancel_until_active_tool_batch_settles(monkeypatch, resource_path):
+async def test_terminate_interrupts_active_tool_batch(monkeypatch, resource_path):
     batch_running = asyncio.Event()
     release_batch = asyncio.Event()
 
@@ -641,12 +638,12 @@ async def test_terminate_defers_cancel_until_active_tool_batch_settles(monkeypat
     assert await wait_event(batch_running, timeout=0.5)
     assert manager.terminate("cmp_deferred") == {"id": "cmp_deferred", "status": "cancelling"}
     try:
-        assert await wait_event(stream_done, timeout=0.25) is False
+        assert await wait_event(stream_done, timeout=0.5) is True
     finally:
         release_batch.set()
         await asyncio.wait_for(consumer_thread, 1.0)
     tool_events = [event for event in events if event["type"] == "tool_completed"]
-    assert tool_events == [{"type": "tool_completed", "tool": "read", "tool_call_id": "deferred-read"}]
+    assert tool_events == []
     assert events[-1] == {"type": "completion.cancelled", "status": "cancelled"}
     assert manager.terminate("cmp_deferred") == {"id": "cmp_deferred", "status": "not_found"}
 

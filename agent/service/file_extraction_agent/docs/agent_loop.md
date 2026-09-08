@@ -12,17 +12,17 @@ manager 保存 completion_id → CompletionRuntime 映射
   → loop.stream_qa_graph 调 graph.build_qa_graph；graph 绑定 model_invocation / executor，以 QaState 编译 agent/retry_wait/tools 图
   → 模型节点单次调用，messages 通道提供可见增量
   → 节点返回 AIMessage 或 ModelCallFailure；失败进入 retry_wait 指数退避再请求
-  → loop 消费 messages/updates，管理 message_id，将增量、完整结果和失败更新转换成类型化通知
+  → loop 消费 messages/updates/custom，管理 message_id，将增量、完整结果和失败更新转换成类型化通知
   → completion_runtime 包装 started / delta / done / model_request.retrying / tool_started
-  → 工具节点并行执行整批调用，返回 list[ToolMessage]
+  → 工具节点并行执行调用，on_result 经 custom 逐项输出 ToolMessage；完整返回值仅用于历史
   → completion_runtime 包装 tool_completed / tool_failed
   → runtime 锁内入队并唤醒 asyncio.Event，astream 协程按 FIFO 分配 seq 并输出字典
 ```
 
 ## 取消和失败
 
-- 无活动工具批次时，取消 sentinel 立即唤醒 consumer；已有批次则先配齐结果。
-- graph 在模型调用前后检查 should_stop，丢弃未发布的迟到响应；已发布工具批次配齐结果后停止，不再请求下一轮模型。
+- 取消 sentinel 唤醒 consumer，同时取消 producer；工具 executor 清理未完成 Task 后输出取消终态，不补齐结果。
+- graph 在模型调用前后检查 should_stop，丢弃未发布的迟到响应；工具节点启动前检查停止信号，取消后不再请求下一轮模型。
 - 工具普通异常和超时转为对应 ToolMessage；执行器整体异常转为整批失败结果。
 - 同一配置最多请求五次，按以 0.5 秒起步、8 秒封顶并乘 0.75–1 随机系数的指数间隔；耗尽后 ModelFailed 转 completion.failed，取消不重试。每次尝试独立 message_id，局部失败文本不进入历史。
 - 关闭事件流时先 disconnect 再 await aclose 事件生成器并取消生产协程，工具内迟到线程结果不再写事件；runtime 通知 manager 移除注册项。问答结束保留文档资源。

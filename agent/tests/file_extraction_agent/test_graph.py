@@ -91,7 +91,7 @@ async def test_cancel_before_execution_does_not_call_model(resource_path):
     provider.ainvoke.assert_not_called()
 
 
-async def test_cancel_after_model_drains_tools_without_next_model(resource_path):
+async def test_cancel_after_model_skips_tools_and_next_model(resource_path):
     model, provider = _scripted_model()
     cancel = False
     stream = stream_completion_events(**_input(resource_path), qa_model=model, should_stop=lambda: cancel)
@@ -102,8 +102,7 @@ async def test_cancel_after_model_drains_tools_without_next_model(resource_path)
     assert (await anext(stream))["type"] == "model_message.done"
     cancel = True
     events = [item async for item in stream]
-    assert [e["type"] for e in events] == ["tool_started", "tool_completed", "completion.cancelled"]
-    assert events[1]["tool_call_id"] == "call-ls"
+    assert [e["type"] for e in events] == ["tool_started", "completion.cancelled"]
     assert provider.ainvoke.call_count == 1
 
 
@@ -137,10 +136,10 @@ async def test_executor_failure_returns_entire_failed_batch(resource_path, monke
         )
     ]
     replies = [e for e in events if e["type"] == "tool_failed"]
-    assert [(e["tool_call_id"], e["args"]) for e in replies] == [
+    assert [(e["tool_call_id"], e["args"]) for e in replies] == ([] if cancelled else [
         ("a", {"path": "first"}),
         ("b", {"path": "second"}),
-    ]
+    ])
     assert events[-1]["type"] == ("completion.cancelled" if cancelled else "completion.completed")
     assert provider.ainvoke.call_count == (1 if cancelled else 2)
 
@@ -165,7 +164,7 @@ async def test_closing_event_stream_closes_message_generator(resource_path, monk
 
 
 @pytest.mark.parametrize("cancel_at", ["before_model", "during_model", "after_model", "after_tools"])
-async def test_graph_owns_cancellation_and_drains_published_batch(cancel_at):
+async def test_graph_checks_cancellation_before_each_node(cancel_at):
     from langchain_core.messages import HumanMessage
     from service.file_extraction_agent.core.graph import build_qa_graph
 
@@ -202,6 +201,10 @@ async def test_graph_owns_cancellation_and_drains_published_batch(cancel_at):
         assert published == []
         execute.assert_not_called()
         assert invoke.call_count == (cancel_at == "during_model")
+    elif cancel_at == "after_model":
+        assert [node for node, _ in published] == ["agent"]
+        execute.assert_not_called()
+        assert invoke.call_count == 1
     else:
         assert [node for node, _ in published] == ["agent", "tools"]
         assert [message.tool_call_id for message in published[1][1]] == ["a", "b"]

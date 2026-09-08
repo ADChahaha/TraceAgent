@@ -1,7 +1,7 @@
 """单轮问答：执行模型/工具循环 → 包装事件 → 队列提交 → 事件输出与取消收尾。
 
-CompletionRuntime 独立持有输入、模型、生产协程、锁与事件队列。已发布工具批次先配齐
-结果再取消，终态只提交一次；本模块不维护运行时注册表，也不导入 CompletionManager。
+CompletionRuntime 独立持有输入、模型、生产协程、锁与事件队列。工具结果逐项发布，取消立即中断生产协程及未完成工具，
+终态只提交一次；本模块不维护运行时注册表，也不导入 CompletionManager。
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ async def stream_completion_events(
     qa_model: QaModel | None = None,
     run_options: RunOptions | None = None, should_stop=None,
 ) -> AsyncIterator[dict[str, Any]]:
-    """路径与消息 → graph 批次输出 → 业务事件；管理 ID 不进入 graph。"""
+    """路径与消息 → loop 模型/单项工具输出 → 业务事件；管理 ID 不进入 graph。"""
     stopped = lambda: should_stop is not None and should_stop()
     yield {"type": "completion.created", "status": "in_progress"}
     yield {"type": "source_indexed", "tool": "source_index", "result": {"ok": True}}
@@ -56,6 +56,10 @@ async def stream_completion_events(
                 yield _model_message_event(output)
                 for call in output.tool_calls:
                     yield {"type": "tool_started", "tool": call["name"], "args": call["args"], "tool_call_id": call["id"]}
+            elif isinstance(output, ToolMessage):
+                yield _tool_message_event(output, {
+                    "name": output.name, "args": output.additional_kwargs["tool_args"],
+                })
             elif isinstance(output, list):
                 for message in output:
                     if not isinstance(message, ToolMessage):
@@ -168,9 +172,8 @@ class CompletionRuntime:
         self.cancel_requested = False
         self.closed = False
         self.terminal_committed = False
-        self._cancel_deferred = False
         self._lock = threading.Lock()
-        self._pending_tool_ids: set[str] = set()
+        self._producer: asyncio.Task | None = None
         self.queue: queue.Queue[dict[str, Any] | object] = queue.Queue()
         self._async_loop: asyncio.AbstractEventLoop | None = None
         self._async_ready: asyncio.Event | None = None
@@ -206,6 +209,7 @@ class CompletionRuntime:
                 self._async_ready = ready
                 if not self.cancel_requested:
                     producer = asyncio.create_task(self._produce(), name="qa-completion")
+                    self._producer = producer
         if closed:
             self._notify_closed()
             return
@@ -219,6 +223,9 @@ class CompletionRuntime:
                     await ready.wait()
                     continue
                 if event is _QUEUE_CANCEL:
+                    if producer is not None:
+                        self._cancel_producer()
+                        await asyncio.gather(producer, return_exceptions=True)
                     event = _completion_event("cancelled")
                 elif event is _QUEUE_DONE:
                     event = _completion_event("completed")
@@ -237,10 +244,16 @@ class CompletionRuntime:
                 self._async_loop = None
                 self._async_ready = None
             if producer is not None:
-                if not producer.done():
+                if not producer.done() and not producer.cancelling():
                     producer.cancel()
                 await asyncio.gather(producer, return_exceptions=True)
+            self._producer = None
             self._notify_closed()
+
+    def _cancel_producer(self) -> None:
+        task = self._producer
+        if task is not None and not task.done() and not task.cancelling():
+            task.cancel()
 
     def stream(self) -> AsyncIterator[dict[str, Any]]:
         return self.astream()
@@ -281,6 +294,8 @@ class CompletionRuntime:
             self.closed = True
             self.status = "cancelled"
             self._enqueue(_QUEUE_CANCEL)
+            if self._async_loop is not None:
+                self._async_loop.call_soon_threadsafe(self._cancel_producer)
 
     def terminate(self) -> str:
         with self._lock:
@@ -290,10 +305,9 @@ class CompletionRuntime:
                 return self.status
             self.cancel_requested = True
             self.status = "cancelling"
-            if not self._pending_tool_ids:
-                self._enqueue(_QUEUE_CANCEL)
-            else:
-                self._cancel_deferred = True
+            self._enqueue(_QUEUE_CANCEL)
+            if self._async_loop is not None:
+                self._async_loop.call_soon_threadsafe(self._cancel_producer)
             return self.status
 
     def get_status(self) -> str:
@@ -303,16 +317,12 @@ class CompletionRuntime:
         with self._lock:
             if self.closed or self.terminal_committed:
                 return False
-            if self.cancel_requested and not self._cancel_deferred:
+            if self.cancel_requested:
                 return False
             active_events = list(events)
             for event in active_events:
                 if _terminal_status(event) is not None:
                     continue
-                if event.get("type") in {"model_message", "model_message.done"}:
-                    self._pending_tool_ids.update(call["id"] for call in event.get("tool_calls", []))
-                elif event.get("type") in {"tool_completed", "tool_failed"}:
-                    self._pending_tool_ids.discard(event.get("tool_call_id"))
                 self._enqueue(event)
             return True
 
@@ -326,7 +336,7 @@ class CompletionRuntime:
         with self._lock:
             if self.closed or self.terminal_committed:
                 return False
-            if self.cancel_requested and not (self._cancel_deferred and status == "cancelled"):
+            if self.cancel_requested:
                 return False
             self.terminal_committed = True
             self.status = status
