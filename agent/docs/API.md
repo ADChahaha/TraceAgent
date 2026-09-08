@@ -73,7 +73,7 @@ ChatCompletion 为服务端流 RPC。输入转换为现有 DocumentQaMessage、R
 | model_request.retrying | message_id（失败尝试）、attempt（下一次，2–5）、max_attempts=5、retry_delay_ms、error |
 | tool_started | tool、tool_call_id、args_json |
 | tool_completed / tool_failed | 对应调用的 args_json、result_json |
-| completion.completed / completion.cancelled / completion.failed | 唯一业务终态、status、可选 error/error_message |
+| completion.completed / completion.failed | 正常或失败终态、status；失败携带 error_message。主动取消直接结束流，不发终态 |
 
 args_json、result_json 及 ToolCall.args_json 用 JSON 字符串保留动态结构、大整数和 null；客户端用 json.loads 解码。其余固定字段使用 protobuf 类型，可选字段可用 HasField 判断。最终回答由 is_final=true 标记；工具调用 ID 仍用于配对，模型引用 documents 下的真实 Markdown key 路径。
 
@@ -90,20 +90,20 @@ response = client.CancelCompletion(
 print(response.status)
 ```
 
-业务取消立即返回 cancelling，不等待模型或工具退出。重复取消返回当前状态；完成先发生时返回实际终态，注册项移除后返回 not_found。
+业务取消命中活动注册项时返回 cancelling，移除后返回 not_found。取消接口不等待模型或工具清理；原问答流不再发 completion.cancelled。
 
 ```text
-CancelCompletion
-  → manager 找到本轮 runtime → 锁内设置取消标志 → 返回
-  → 原问答流按 FIFO 发出已提交事件
-  → 唤醒 consumer，取消 producer 和未完成工具 Task
-  → 等待协程清理，不补造中断结果，不再请求下一轮模型
-  → completion.cancelled → 关闭流、移除注册项
+CancelCompletion → manager 找到 runtime → 设置 cancel_requested → 返回 cancelling
+  → 取消 producer 及未完成工具 Task
+  → 等待协程 finally 清理
+  → 关闭原流并移除注册项，不发送取消终态
 ```
 
-要接收收尾事件，保持原问答流打开。客户端直接 stream.cancel()、断连或 deadline 到期，表示放弃这条 RPC：回调绑定本轮 CompletionRuntime 的 disconnect，通知运行时停止后续生产并唤醒 consumer，由 finally 关闭事件迭代器并通知 manager 清理注册项。连接已断时不保证发送业务终态，也不等待工具结果补齐。
+内层只生成 Agent 普通事件，completion.created/completed/failed 由 astream 统一输出。
+正常消费按 FIFO 连续编号；取消后丢弃未消费队列内容，但已发给传输层的内容不能撤回。
+backend 必须自己记录取消状态，并拒收迟到内容；不依赖取消终态判断取消成功。未主动取消时意外断流仍须由消费端识别，不能一律视为成功。
 
-模型请求与工具调度使用协程。每个工具完成后立即输出 tool_completed/tool_failed；业务取消中断生产协程，关闭模型流或取消未完成工具 Task，等待协程清理后输出取消终态。取消本地协程不保证远端模型服务立即停止计算。工具内同步文件操作、OCR 和 embedding 不能通过协程取消强行终止；客户端放弃资源准备 RPC 后，完成时可能留下已发布资源。
+每个工具完成立即输出 tool_completed/tool_failed。Task 取消会清理模型流和工具协程；to_thread 的文件操作或 embedding 计算不能强杀，迟到结果不输出。RPC 断连/deadline 同样触发清理。
 
 ## 探活和错误
 

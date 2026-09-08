@@ -31,11 +31,26 @@ resource_refs([{type, location}]) + messages + 模型/运行配置
 
 `manager.py` 只管理 CompletionManager：校验请求与资源 → 创建模型和 CompletionRuntime → 注册到 ID 映射 → 转发 stream/terminate/get_status → 运行时收尾时通过注入的 on_close 移除注册项（包括从未迭代的流）。completion_id 只保存在 manager 的注册表键和注入闭包中；清理时同时核对 ID 与运行时对象身份，避免误删其他注册项。CompletionRuntime 不接收或保存 completion_id，也不导入 manager。
 
-`completion_runtime.py` 管理单轮 CompletionRuntime，以及 stream_completion_events 和事件转换：producer 协程执行异步 loop → 提交业务事件到锁保护的队列 → consumer 按 FIFO 编号输出事件字典 → 完成/失败/取消时唯一收尾。manager 通过 on_close 注入移除注册项的闭包，runtime 在 stream 生成器结束或 close() 时幂等通知一次。它不负责传输编码，不接收或保存 completion_id，不导入 manager，也不维护全局注册表。生产 Task 使用名称 qa-completion，不为每轮创建线程。
+`completion_runtime.py` 的内层 stream_completion_events 仅转换模型、工具和重试通知；ModelFailed 转 RuntimeError，取消异常继续传播。completion 生命周期只由外层 astream 生成。
 
-调用方（gRPC 路由）通过 runtime.stream() 消费事件字典：async for 消费 runtime.astream()，在 finally 中先 disconnect 再 await aclose()；stream() 每次调用返回独立的异步迭代器，同一运行时只应被一个消费者读取，且只消费一次 stream() 结果。close() 仅供初始化线程关闭尚未开始的流。消费者结束或主动关闭时按对象身份移除注册项，即使从未迭代也执行清理。gRPC 回调只调用运行时绑定的 disconnect，不跨线程关闭生成器，也不按可复用的 completion_id 查找运行时。
+```text
+astream 绑定事件循环并创建唯一 producer Task
+  → 输出 completion.created
+  → producer 将普通事件放入 asyncio.Queue
+  → consumer await queue.get，正常情况下按 FIFO 编号输出
+  → Task 完成回调写内部 _DONE，唤醒 consumer（即使 Task 未进入函数体就取消）
+  → 正常返回：astream 输出 completion.completed
+  → 执行异常：astream 输出 completion.failed，携带 error_message
+  → 主动取消：不输出终态，直接结束流
+  → finally 取消并等待 producer 清理，取走 on_close 回调移除注册项
+```
 
-异步消费链路：astream 绑定当前循环的 asyncio.Event → producer 在锁内提交队列并 call_soon_threadsafe 唤醒 Event → 协程 get_nowait 按 FIFO 取事件，空队列 await Event → 分配 seq 并输出字典 → 关闭时取消并等待 producer 清理，再通知 manager 收尾。等待不占执行器线程，取消和唯一终态仍由原队列与锁裁定。
+只保留 cancel_requested 业务标志，不保存 status、closed、terminal_committed 或独立关闭标志。
+producer Task 表示执行生命周期；on_close 被取走后不会重复执行。stream 是 astream 的别名，单个运行时只允许启动一次消费。close 用于关闭初始化完成但未迭代的运行时；已启动流在 finally 等待清理。
+
+同步 terminate/disconnect 共用入口：锁内设置取消标志，通过 call_soon_threadsafe 在事件循环取消 Task。
+短锁仍用于协调跨线程取消、首次启动和事件提交，不在锁内 await。取消后不再交付队列中未消费的事件，backend 自己记录取消。
+manager 的 get_status 仅从取消标志推导活动请求的 in_progress/cancelling；注册项在正常终态交付前移除，之后返回 not_found。
 
 ## 执行输入与状态
 
@@ -49,7 +64,7 @@ loop.stream_qa_graph 使用 graph.astream(stream_mode=["messages", "updates", "c
 
 失败结果保留 retry_after_seconds：从响应头优先解析 retry-after-ms，其次 Retry-After 秒数或 HTTP 日期；仅接受有限且大于 0、不超过 120 秒的值，否则回退到随机指数退避。graph 优先采用该值，不叠加抖动。等待时间只计算一次，事件使用同一值换算毫秒。
 
-失败更新转换成 ModelRetry 或 ModelFailed。重试通知在退避结束前输出，携带失败尝试的 message_id、下一次 attempt、max_attempts=5、retry_delay_ms、error；下一次请求使用新 ID。Runtime 将 ModelFailed 转为 completion.failed。关闭图流传播取消，模型与退避中的 CancelledError 不转换为失败或重试。
+失败更新转换成 ModelRetry 或 ModelFailed。重试通知在退避结束前输出，携带失败尝试的 message_id、下一次 attempt、max_attempts=5、retry_delay_ms、error；下一次请求使用新 ID。内层将 ModelFailed 转异常，astream 根据 producer 异常生成 completion.failed。关闭图流传播取消，模型与退避中的 CancelledError 不转换为失败或重试。
 
 RunOptions 只保留 tool_execution_timeout，默认 60 秒；删除从未参与执行的 max_tool_calls。LangGraph 的递归保护仍为 10000，由 graph 内部配置。
 
@@ -97,23 +112,21 @@ route 在模块顶部直接导入 completion_manager；标准库与内部工具�
 ## 取消与线程边界
 
 ```text
-工具完成 → executor.on_result → graph custom → loop ToolMessage → runtime 入队
-terminate → 锁内设置 cancel_requested，拒收后续事件
-  → 取消 sentinel 唤醒 consumer，call_soon_threadsafe 取消 producer
-  → 图取消传播到 executor，finally 取消并等待未完成工具 Task
-  → 工具 await 收到 CancelledError，finally 清理后退出
-  → consumer 按 FIFO 发出已提交事件，等待 producer 清理后输出唯一 completion.cancelled
+terminate / disconnect
+  → 设置 cancel_requested，拒收新事件
+  → 在所属事件循环取消 producer
+  → 模型或工具 await 收到 CancelledError
+  → executor finally 取消并等待未完成工具 Task
+  → Task 完成回调唤醒 consumer
+  → consumer 直接退出，不发 completion.cancelled
 ```
 
-不再维护 _pending_tool_ids 或延迟取消，不补造中断工具结果。完成先提交则保留完成终态。
-同步 to_thread 计算可继续，返回值不会再交给已取消协程；计算中的副作用不能撤销。
-协程必须传播 CancelledError，清理仍需协作；不承诺固定时间内强杀任意工具。
+已经交给传输层的事件无法撤回；取消后 runtime 不再输出尚未消费的队列内容。
+取消前先完成并交付的终态不会再发第二次。backend 应以自己的取消状态禁止后续写库，不依赖 agent 取消事件。
+重复取消不再次中断清理。同步 to_thread 计算可能继续，迟到结果不再输出，副作用不能撤销。
+模型、工具和清理协程必须协作传播取消；不保证固定清理时间。
 
-关闭事件流时先 disconnect 再 await aclose 事件生成器，取消并等待 producer，取消传播到图、模型流和工具协程。模型请求使用原生 astream/ainvoke，重试退避使用 asyncio.sleep；请求 timeout 和工具共享 deadline 保持不变。同步文件操作与本地 embedding 通过 to_thread 执行，取消后不等待线程，迟到结果不会再写事件。问答结束只释放运行时，不删除资源。
-
-业务 terminate 立即返回 cancelling，并安排取消 producer。RPC 断连/deadline 的 disconnect 则设置取消标志、关闭逻辑运行时并入队 sentinel 唤醒 consumer；连接已不可用，不等待批次补齐或尝试保证终态送达。已经完成的运行时不会被断连回调改写终态。
-
-首次迭代在同一运行时锁内判断 closed/cancel_requested 并启动 producer；若断连先发生，不再创建生产 Task，流生成器直接收尾并由 runtime 通知 manager 清理。
+RPC 断连回调绑定具体 runtime，避免旧 ID 误取消新请求。初始化期间取消沿用路由线程交接：迟到 runtime 调 close，未启动 producer 也可移除注册项。
 
 ## 工具与引用
 

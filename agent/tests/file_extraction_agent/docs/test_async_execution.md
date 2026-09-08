@@ -6,4 +6,6 @@
 - `test_model_cancellation_closes_provider_stream`：取消模型调用协程会关闭供应商流，不继续降级重试。
 - `test_async_tools_share_deadline_preserve_order_and_cancel_pending`：工具协程并发执行，共享超时，按调用顺序返回，慢调用取消后运行清理。
 
-- `test_tool_result_streams_before_sibling_finishes_and_cancel_cleans_up`：慢工具阻塞时先收到快工具结果，取消后慢工具执行 finally，不再调用模型、不补造结果且只有一个取消终态。
+- `test_tool_result_streams_before_sibling_finishes_and_cancel_cleans_up`：慢工具阻塞时先收到快工具结果，取消后慢工具执行 finally，不再调用模型、不补造结果且不输出取消终态。
+
+本轮契约调整：内层只输出普通 Agent 事件；完成/失败由 astream 唯一出口生成，取消直接结束且不输出 cancelled。对应测试改用 producer 结果或外层流验证，保留配对、重试和资源清理覆盖。

@@ -59,7 +59,9 @@ def test_real_graph_streams_native_chunks_and_retry_over_rpc(rpc, manager, monke
     finally:
         stream.cancel()
     assert [e.seq for e in events] == list(range(1, len(events) + 1))
-    assert events[-1].type == ("completion.cancelled" if cancel else "completion.completed")
+    assert not any(e.type == "completion.cancelled" for e in events)
+    if not cancel:
+        assert events[-1].type == "completion.completed"
     if cancel:
         assert not any(e.type == "model_message.done" for e in events)
         assert model._calls == 1
@@ -77,7 +79,8 @@ def test_many_waiting_streams_keep_control_rpcs_available(rpc, manager, monkeypa
     release = threading.Event()
 
     async def events(**kwargs):
-        yield {"type": "completion.created"}
+        if False:
+            yield {}
         await asyncio.Event().wait()
 
     monkeypatch.setattr(runtime_module, "stream_completion_events", events)
@@ -88,7 +91,7 @@ def test_many_waiting_streams_keep_control_rpcs_available(rpc, manager, monkeypa
             streams.append(stream)
             assert next(stream).type == "completion.created"
         assert rpc.CancelCompletion(pb.CompletionRequest(completion_id="many0"), timeout=1).status == "cancelling"
-        assert next(streams[0]).type == "completion.cancelled"
+        assert list(streams[0]) == []
     finally:
         for stream in streams:
             stream.cancel()
@@ -133,10 +136,13 @@ def test_chat_streams_typed_events_and_preserves_json(rpc, manager, monkeypatch)
                "tool_call_count": 1, "tool_calls": [{"id": "call1", "name": "read", "args": payload}]}
         yield {"type": "tool_completed", "tool": "read", "tool_call_id": "call1",
                "args": payload, "result": payload}
-        yield {"type": "completion.completed", "status": "completed"}
+        if False:
+            yield {}
     monkeypatch.setattr(runtime_module, "stream_completion_events", events)
     result = list(rpc.ChatCompletion(request(), timeout=5))
-    assert [e.seq for e in result] == [1, 2, 3]
+    assert [e.seq for e in result] == [1, 2, 3, 4]
+    assert result[0].type == "completion.created"
+    result = result[1:]
     assert result[0].HasField("is_final") and result[0].is_final is False
     assert json.loads(result[0].tool_calls[0].args_json) == payload
     assert json.loads(result[1].result_json) == payload
@@ -153,7 +159,8 @@ def test_chat_preserves_history_options_and_model_defaults(rpc, manager, monkeyp
         return object()
     async def events(**kwargs):
         seen.update(kwargs)
-        yield {"type": "completion.completed", "status": "completed"}
+        if False:
+            yield {}
     monkeypatch.setattr(manager_module, "build_qa_model", build)
     monkeypatch.setattr(runtime_module, "stream_completion_events", events)
     history = [{"id": "a", "name": "read", "args": {"path": "a.md"}}]
@@ -178,7 +185,7 @@ def test_chat_model_override_precedence(rpc, manager, monkeypatch):
     configs = []
     monkeypatch.setattr(manager_module, "build_qa_model", lambda config: configs.append(config))
     monkeypatch.setattr(runtime_module, "stream_completion_events",
-                        lambda **kwargs: async_items([{"type": "completion.completed"}]))
+                        lambda **kwargs: async_items([]))
     flat = dict(base_url="https://example.com/v1", openai_api_key="key", model="qa",
                 api_transport="chat_completions", temperature=0.2, top_p=0.9, top_k=40)
     list(rpc.ChatCompletion(request(**flat), timeout=5))
@@ -209,9 +216,10 @@ def test_chat_runtime_failure_is_terminal_event(rpc, manager, monkeypatch):
         raise RuntimeError('失败\n"原因"')
     monkeypatch.setattr(runtime_module, "stream_completion_events", fail)
     events = list(rpc.ChatCompletion(request(), timeout=5))
-    assert len(events) == 1
-    assert events[0].type == "completion.failed"
-    assert events[0].error_message == '失败\n"原因"'
+    assert len(events) == 2
+    assert events[0].type == "completion.created"
+    assert events[-1].type == "completion.failed"
+    assert events[-1].error_message == '失败\n"原因"'
 
 
 def test_cancel_interrupts_tool_wait_without_waiting_for_thread(rpc, manager, monkeypatch):
@@ -223,19 +231,20 @@ def test_cancel_interrupts_tool_wait_without_waiting_for_thread(rpc, manager, mo
         started.set()
         assert await asyncio.to_thread(release.wait, 5)
         yield {"type": "tool_completed", "tool": "read", "tool_call_id": "call1", "result": {"ok": True}}
-        yield {"type": "completion.cancelled", "status": "cancelled"}
+        if False:
+            yield {}
     monkeypatch.setattr(runtime_module, "stream_completion_events", events)
     stream = rpc.ChatCompletion(request(), timeout=8)
     try:
+        assert next(stream).type == "completion.created"
         assert next(stream).type == "model_message"
         assert started.wait(2)
         cancel = rpc.CancelCompletion(pb.CompletionRequest(completion_id="cmp_rpc"), timeout=1)
         assert cancel.status == "cancelling"
         assert not release.is_set()
         remaining = list(stream)
-        assert [e.type for e in remaining] == ["completion.cancelled"]
+        assert remaining == []
         assert not release.is_set()
-        assert [e.seq for e in remaining] == [2]
     finally:
         release.set()
         stream.cancel()
@@ -247,7 +256,8 @@ def test_transport_cancel_or_deadline_cleans_runtime(rpc, manager, monkeypatch, 
     release = threading.Event()
     stopped = threading.Event()
     async def events(**kwargs):
-        yield {"type": "completion.created", "status": "in_progress"}
+        if False:
+            yield {}
         try:
             assert await asyncio.to_thread(release.wait, 5)
             assert kwargs["should_stop"]()
@@ -276,7 +286,8 @@ def test_duplicate_id_does_not_cancel_existing_stream(rpc, manager, monkeypatch)
     """重复 ID 请求失败，原运行时仍可独立取消。"""
     release = threading.Event()
     async def events(**kwargs):
-        yield {"type": "completion.created"}
+        if False:
+            yield {}
         await asyncio.to_thread(release.wait, 5)
     monkeypatch.setattr(runtime_module, "stream_completion_events", events)
     stream = rpc.ChatCompletion(request(), timeout=5)
@@ -287,7 +298,7 @@ def test_duplicate_id_does_not_cancel_existing_stream(rpc, manager, monkeypatch)
         assert error.value.code() == grpc.StatusCode.INVALID_ARGUMENT
         assert manager.get_status("cmp_rpc")["status"] == "in_progress"
         assert rpc.CancelCompletion(pb.CompletionRequest(completion_id="cmp_rpc"), timeout=1).status == "cancelling"
-        assert list(stream)[-1].type == "completion.cancelled"
+        assert list(stream) == []
     finally:
         release.set()
         stream.cancel()

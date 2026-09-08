@@ -138,12 +138,12 @@ def test_tool_result_streams_before_sibling_finishes_and_cancel_cleans_up(resour
                     assert event["tool_call_id"] == "fast"
                     assert not closed.is_set()
                     break
-            assert runtime.terminate() == "cancelling"
+            runtime.terminate()
             events.extend(await asyncio.wait_for(collect(stream), 1))
             assert closed.is_set()
             assert len(model_calls) == 1
             assert [e["tool_call_id"] for e in events if e["type"] == "tool_completed"] == ["fast"]
-            assert [e["type"] for e in events if e["type"].startswith("completion.")] == ["completion.created", "completion.cancelled"]
+            assert [e["type"] for e in events if e["type"].startswith("completion.")] == ["completion.created"]
         finally:
             await stream.aclose()
 

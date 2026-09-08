@@ -25,10 +25,10 @@ flowchart TD
     B --> C{"找到？"}
     C -- 否 --> D["not_found"]
     C -- 是 --> E["锁内设置 cancel_requested"]
-    E --> F["取消 sentinel 唤醒 consumer；取消 producer"]
-    E --> R["取消 RPC 立即返回 cancelling；已终态时返回实际状态"]
+    E --> F["取消 producer；Task 完成回调唤醒 consumer"]
+    E --> R["取消 RPC 立即返回 cancelling；注册项移除后返回 not_found"]
     F --> G["executor 取消未完成工具 Task，等待 finally 清理"]
-    G --> I["FIFO 发出已提交事件，清理后以 cancelled 收口，不补造结果"]
+    G --> I["取消后停止输出队列内容，清理后直接关闭，不发取消终态"]
 ```
 
 具体契约以 [DESIGN.md](DESIGN.md) 为准。

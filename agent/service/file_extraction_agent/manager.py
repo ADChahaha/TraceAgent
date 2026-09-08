@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 import threading
-from typing import Any, Callable
+from typing import Any
 
 from service.file_extraction_agent.completion_runtime import CompletionRuntime
 from service.file_extraction_agent.core.model import build_qa_model
@@ -22,7 +22,7 @@ class CompletionManager:
 
     create(...) 装配 路径 + model，构造一个 CompletionRuntime（单 completion 的
     运行时），注入结束时移除注册项的闭包并注册，返回该运行时；其 stream() 产出事件
-    字典流。terminate / get_status 转发到对应 runtime；运行时收尾时通过 on_close
+    字典流。terminate 取消对应 runtime，get_status 根据取消标志派生结果；收尾时通过 on_close
     从注册表移除。单实例持有注册表 + 锁，应按单进程单实例部署；同进程协程与工作线程
     共享注册表，多进程不共享 cancel 状态。
     """
@@ -66,15 +66,15 @@ class CompletionManager:
             runtime = self._completions.get(completion_id)
         if runtime is None:
             return {"id": completion_id, "status": "not_found"}
-        status = runtime.terminate()
-        return {"id": completion_id, "status": status}
+        runtime.terminate()
+        return {"id": completion_id, "status": "cancelling"}
 
     def get_status(self, completion_id: str) -> dict[str, Any] | None:
         with self._lock:
             runtime = self._completions.get(completion_id)
         if runtime is None:
             return None
-        return {"id": completion_id, "status": runtime.get_status()}
+        return {"id": completion_id, "status": "cancelling" if runtime.cancel_requested else "in_progress"}
 
 
 completion_manager = CompletionManager()

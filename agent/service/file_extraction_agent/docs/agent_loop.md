@@ -1,11 +1,11 @@
 # Agent Loop
 
-`CompletionRuntime._produce` 通过 async for 消费同文件 completion_runtime.py 的 `stream_completion_events`；后者包装 `run_qa_stream` 返回的模型消息和工具批次，最终由异步 consumer 输出带 seq 的字典，gRPC 接口转换为 protobuf 消息。
+`CompletionRuntime._produce` 通过 async for 消费同文件 completion_runtime.py 的 `stream_completion_events`；后者包装 `run_qa_stream` 返回的模型消息和单个工具结果，最终由异步 consumer 输出带 seq 的字典，gRPC 接口转换为 protobuf 消息。
 
 ```text
 manager 保存 completion_id → CompletionRuntime 映射
   → CompletionRuntime 只保存 resource_path、messages、qa_model 和运行参数
-  → stream_completion_events 输出无 completion ID 的开始事件与 source_indexed(ok=true) 确认
+  → astream 输出开始事件；stream_completion_events 输出 source_indexed(ok=true) 确认
   → run_qa_stream 调 open_workspace(resource_path)，build_tools 绑定工具上下文
   → RunOptions 在构图时绑定工具执行器，文件访问与 embedding 缓存由工具层持有
   → messages.build_qa_messages(messages) 保留完整历史
@@ -16,12 +16,12 @@ manager 保存 completion_id → CompletionRuntime 映射
   → completion_runtime 包装 started / delta / done / model_request.retrying / tool_started
   → 工具节点并行执行调用，on_result 经 custom 逐项输出 ToolMessage；完整返回值仅用于历史
   → completion_runtime 包装 tool_completed / tool_failed
-  → runtime 锁内入队并唤醒 asyncio.Event，astream 协程按 FIFO 分配 seq 并输出字典
+  → producer 写 asyncio.Queue，astream 按 FIFO 编号，独自输出完成或失败
 ```
 
 ## 取消和失败
 
-- 取消 sentinel 唤醒 consumer，同时取消 producer；工具 executor 清理未完成 Task 后输出取消终态，不补齐结果。
+- 取消标志拒收新结果，取消 producer；Task 完成回调唤醒 consumer，清理后直接结束，不发取消终态。
 - graph 在模型调用前后检查 should_stop，丢弃未发布的迟到响应；工具节点启动前检查停止信号，取消后不再请求下一轮模型。
 - 工具普通异常和超时转为对应 ToolMessage；执行器整体异常转为整批失败结果。
 - 同一配置最多请求五次，按以 0.5 秒起步、8 秒封顶并乘 0.75–1 随机系数的指数间隔；耗尽后 ModelFailed 转 completion.failed，取消不重试。每次尝试独立 message_id，局部失败文本不进入历史。
@@ -29,6 +29,6 @@ manager 保存 completion_id → CompletionRuntime 映射
 
 管理 ID 不进入 graph；执行细节和取消锁语义见 [DESIGN.md](DESIGN.md)。
 
-loop 只组装 Agent 输入、转发输出和关闭内层生成器；图节点、Command 路由、更新转换、递归保护及图流关闭全部归 graph。RunOptions 仅配置工具共享超时，不再包含工具调用次数上限。
+loop 组装输入、消费图流并转换输出；graph 负责节点和 Command 路由。RunOptions 仅配置工具共享超时，不再包含工具调用次数上限。
 
 重试优先采用有效 retry-after-ms / Retry-After（秒数或 HTTP 日期，大于 0 且不超过 120 秒）；无效值回退到随机指数退避。retry_delay_ms 是本次实际等待时间的毫秒表示。

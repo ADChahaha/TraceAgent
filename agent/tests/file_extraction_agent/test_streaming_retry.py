@@ -11,7 +11,11 @@ from langchain_core.outputs import ChatGenerationChunk
 from pydantic import PrivateAttr
 
 from service.file_extraction_agent.core import graph, loop, model_invocation
-from service.file_extraction_agent.completion_runtime import stream_completion_events
+from service.file_extraction_agent.completion_runtime import CompletionRuntime
+
+
+def runtime_events(*, resource_path, messages, qa_model):
+    return CompletionRuntime(resource_path, qa_model, messages).astream()
 from service.file_extraction_agent.schemas import DocumentQaMessage
 
 
@@ -47,7 +51,7 @@ class StreamingModel(BaseChatModel):
 
 async def test_native_messages_arrive_before_model_finishes(resource_path):
     model = StreamingModel()
-    async with aclosing(stream_completion_events(
+    async with aclosing(runtime_events(
         resource_path=resource_path, messages=[DocumentQaMessage(role="user", content="问题")],
         qa_model=model,
     )) as events:
@@ -77,7 +81,7 @@ async def test_graph_retries_same_model_five_times_and_reports_before_wait(resou
         await release.wait()
 
     monkeypatch.setattr(graph, "_wait_retry", wait_retry, raising=False)
-    async with aclosing(stream_completion_events(
+    async with aclosing(runtime_events(
         resource_path=resource_path, messages=[DocumentQaMessage(role="user", content="问题")],
         qa_model=model,
     )) as events:
@@ -157,7 +161,7 @@ async def test_server_retry_delay_reaches_event_and_wait(resource_path, monkeypa
 
     monkeypatch.setattr(graph, "_wait_retry", wait_retry)
     model = LimitedModel()
-    events = [e async for e in stream_completion_events(
+    events = [e async for e in runtime_events(
         resource_path=resource_path, messages=[DocumentQaMessage(role="user", content="问题")], qa_model=model,
     )]
     assert model._calls == 5 and waits == [30.0] * 4
@@ -209,8 +213,8 @@ async def test_runtime_cancel_during_retry_wait_stops_next_attempt(resource_path
     runtime.terminate()
     await asyncio.wait_for(task, 2)
     assert closed.is_set() and model._calls == 1
-    assert received[-1]["type"] == "completion.cancelled"
-    assert sum(e["type"].startswith("completion.") and e["type"] != "completion.created" for e in received) == 1
+    assert not any(e["type"] == "completion.cancelled" for e in received)
+    assert sum(e["type"].startswith("completion.") and e["type"] != "completion.created" for e in received) == 0
 
 
 async def test_retry_success_keeps_failed_partial_text_out_of_history(monkeypatch):

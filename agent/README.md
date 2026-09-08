@@ -72,6 +72,6 @@ dev 依赖固定代码生成器版本，测试会重新生成并比对绑定；�
 
 模型由文件/环境配置选定，单次请求失败通过图的 retry_wait 节点采用以 0.5 秒起步、8 秒封顶并乘 0.75–1 随机系数的指数间隔退避，总共最多五次，配置保持不变。LangGraph messages 通道实时提供可见文本，updates 通道提供完整结果和重试通知。SDK 内层重试关闭。
 
-事件为 model_message.started / delta / done 和 model_request.retrying；按 message_id 区分尝试，done 正文不能重复追加。Runtime 保留单个 producer Task、FIFO 队列与消费者；取消模型或退避会清理对应异步流。工具结果经 custom 通道逐项输出；取消会取消未完成工具 Task 并等待协程清理，不补造中断结果。线程中的计算自行结束，迟到结果不输出。消费端需按新协议适配，详见 docs/API.md。
+事件为 model_message.started / delta / done 和 model_request.retrying；按 message_id 区分尝试，done 正文不能重复追加。Runtime 保留单个 producer Task、FIFO 队列与消费者；取消模型或退避会清理对应异步流。工具结果经 custom 通道逐项输出；取消会取消未完成工具 Task 并等待协程清理，不补造中断结果，也不输出取消终态；backend 自己记录取消。线程中的计算自行结束，迟到结果不输出。消费端需按新协议适配，详见 docs/API.md。
 
 重试优先采用有效 retry-after-ms / Retry-After（秒数或 HTTP 日期，大于 0 且不超过 120 秒）；无效值回退到随机指数退避。retry_delay_ms 是本次实际等待时间的毫秒表示。

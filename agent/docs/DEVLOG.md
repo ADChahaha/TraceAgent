@@ -1,4 +1,12 @@
-last updated: 2026-09-08 18:55:35
+last updated: 2026-09-08 19:57:41
+
+## 2026-09-08 19:57:41
+
+### 已完成工作
+
+- runtime 精简至 205 行，仅保留 cancel_requested 业务标志；删除 status、closed、terminal_committed 和 commit_*，使用 asyncio.Queue 连接 producer Task 与消费者。
+- 内层只包装 Agent 事件，最终失败抛异常；astream 统一输出开始、完成和失败。取消丢弃未交付事件，取消 producer 并等待清理后直接关闭，不输出取消终态。
+- 同步设计、API 和对应测试文档；agent-gate 问答及路由回归 181 passed，覆盖早取消、跨线程重复取消、异步清理、重试和真实工具/RPC 取消。
 
 ## 2026-09-08 18:55:35
 

@@ -7,7 +7,7 @@
 - `test_chat_model_override_precedence`：兼容扁平模型参数，嵌套模型配置优先。
 - `test_chat_rejects_invalid_input_before_first_event`：无效 ID、角色、历史工具 JSON 或空消息在首事件前返回 INVALID_ARGUMENT。
 - `test_chat_runtime_failure_is_terminal_event`：开始执行后的异常通过 completion.failed 保留原始错误文本。
-- `test_cancel_interrupts_tool_wait_without_waiting_for_thread`：取消 RPC 先返回 cancelling，工具等待被中断后原流仅发一个取消终态。
+- `test_cancel_interrupts_tool_wait_without_waiting_for_thread`：取消 RPC 先返回 cancelling，工具等待被中断并清理后原流直接关闭。
 - `test_transport_cancel_or_deadline_cleans_runtime`：RPC 取消和超时唤醒阻塞消费者并释放注册项，后台观察停止信号。
 - `test_duplicate_id_does_not_cancel_existing_stream`：重复 ID 请求失败，原运行时仍可独立取消。
 - `test_cancel_unknown_returns_not_found`：未知取消返回 not_found。
@@ -23,6 +23,8 @@
 运行参数的显式零值使用 `tool_execution_timeout=0` 验证；工具调用上限已从共享协议删除。
 # 原生流式回归
 
-`test_real_graph_streams_native_chunks_and_retry_over_rpc`：真实 LangGraph 与 LangChain 回调进入 RPC，验证增量先于生成结束、首次随机退避为 375–500 ms、尝试 ID 隔离和业务取消的唯一终态。
+`test_real_graph_streams_native_chunks_and_retry_over_rpc`：真实 LangGraph 与 LangChain 回调进入 RPC，验证增量先于生成结束、首次随机退避为 375–500 ms、尝试 ID 隔离和业务取消后直接关闭。
 
-`test_cancel_interrupts_tool_wait_without_waiting_for_thread`：真实 RPC 取消中断工具等待，线程尚未释放时已收到唯一取消终态，无迟到工具结果。
+`test_cancel_interrupts_tool_wait_without_waiting_for_thread`：真实 RPC 取消中断工具等待，线程尚未释放时原流已关闭，无迟到工具结果。
+
+生命周期更新：内层替身不生成 completion 事件，外层统一开始/完成/失败；业务取消的 RPC 确认不变，原流直接结束，不输出 completion.cancelled。

@@ -58,7 +58,7 @@ main.py 读取监听地址、阻塞工作线程数和消息上限
 
 默认 16 个阻塞工作线程、单条请求/响应上限 64 MiB。活动 RPC 流不受线程数限制，等待事件不占执行器；模型请求、重试退避、图执行和工具调度均为原生异步；文件 I/O 与本地计算才使用阻塞工作线程。文件整包 bytes 上传，客户端须相应配置收发上限。固定事件字段使用 protobuf，动态参数/结果用 JSON 字符串保留大整数和 null。共享协议位于与 agent 同级的 agent_proto，agent wheel 依赖 traceagent-protocol，不内置协议副本。协议生成器版本固定，从仓库根目录生成；测试比对绑定，并验证共享 wheel 可脱离 agent 业务包导入。
 
-传输层断连与业务取消分开：CancelCompletion 立即确认并取消 producer 和未完成工具 Task；RPC 取消/断连/deadline 回调绑定本轮 CompletionRuntime 的 disconnect，唤醒 consumer 并设置停止信号，finally 关闭事件迭代器并通知 manager 移除注册项。旧回调不会按 ID 误取消后来的新流；从未迭代的流关闭也会清理。断连后不保证交付终态，取消生产协程并关闭模型流，工具内已运行的同步线程不能强杀。
+传输层断连与业务取消分开：CancelCompletion 立即确认并取消 producer 和未完成工具 Task；RPC 取消/断连/deadline 回调绑定本轮 CompletionRuntime 的 disconnect，设置取消信号并取消 producer，finally 关闭事件迭代器并通知 manager 移除注册项。旧回调不会按 ID 误取消后来的新流；从未迭代的流关闭也会清理。断连后不保证交付终态，取消生产协程并关闭模型流，工具内已运行的同步线程不能强杀。
 
 同步初始化与协程取消通过锁交接流：取消先发生时，初始化线程关闭迟到的流；初始化先完成时，由取消分支关闭已交接流。清理不依赖已关闭事件循环的回调。停服后 asyncio.run 会等待默认执行器中已运行的同步工作结束，5 秒 RPC 宽限期不是进程退出时间的硬上限。
 
@@ -85,7 +85,7 @@ main.py 读取监听地址、阻塞工作线程数和消息上限
   → completion_runtime 直接输出 tool_completed / tool_failed，不维护 pending 配对字典
 ```
 
-取消立即唤醒 consumer 并取消 producer，工具 finally 取消并等待未完成 Task；不配齐中断结果、不调用下一轮模型。队列按 FIFO 发出已提交事件，终态只提交一次。资源校验错误在首事件前返回 INVALID_ARGUMENT；执行异常通过 completion.failed 收口。
+取消立即唤醒 consumer 并取消 producer，工具 finally 取消并等待未完成 Task；不配齐中断结果、不调用下一轮模型。正常消费按 FIFO 输出，astream 独自生成完成/失败；取消丢弃未消费事件并直接关闭，不发取消终态。资源校验错误在首事件前返回 INVALID_ARGUMENT；执行异常通过 completion.failed 收口。
 
 ## 对外契约与迁移
 

@@ -45,17 +45,17 @@ loop 不再次输出 tools updates，避免重复事件。结果通过 tool_call
 
 ```text
 CancelCompletion(id)
-  → runtime 锁内标记 cancelling，拒收后续结果；立即返回状态
-  → 入队取消 sentinel，call_soon_threadsafe 安排 producer.cancel
+  → runtime 锁内设置 cancel_requested，拒收后续结果；manager 返回 cancelling
+  → call_soon_threadsafe 安排 producer.cancel；Task 完成回调写内部结束通知
   → 图中断模型等待或工具节点等待
   → executor finally 取消未完成工具 Task，gather 等待协程清理
   → 工具 await 抛 CancelledError，执行 finally 后退出
-  → consumer 发出已提交的 FIFO 事件，等待 producer 清理后输出唯一 completion.cancelled
+  → consumer 不再交付队列内容，等待 producer 清理后直接退出，不发取消终态
   → 关闭流并按对象身份移除注册项
 ```
 
-不等待工具正常计算结束，不补造 TOOL_ABORTED 或其他工具结果。已提交结果保留，取消后的迟到结果拒收。
-重复取消不再次中断正在进行的清理。完成先提交时保留原终态，注册项移除后返回 not_found。
+不等待工具正常计算结束，不补造 TOOL_ABORTED 或其他工具结果。已发送结果不能撤回，取消后未消费的队列结果及迟到结果不再输出。
+重复取消不再次中断正在进行的清理。正常终态交付前移除注册项，之后取消返回 not_found。
 断连/deadline 同样取消生产协程，但连接不可用时不保证交付终态。
 
 Task.cancel 是协作式取消；工具必须传播 CancelledError，finally 的异步清理仍可能等待。
@@ -70,3 +70,5 @@ backend/前端的历史与展示适配不在本次实现范围内。
 
 覆盖测试包括：模型实时增量、同配置重试、工具快慢并发、取消执行 finally、线程未释放时 RPC 已终止、FIFO 和唯一终态。
 实际模块边界见 [DESIGN.md](DESIGN.md)，对外字段见 [API.md](../../../docs/API.md)。
+
+completion 生命周期由 astream 统一管理，内层 ModelFailed 转为异常；正常返回发 completed，异常发 failed，主动取消无终态。

@@ -9,6 +9,8 @@
 - `test_server_retry_delay_reaches_event_and_wait`：真实限流异常通过单次调用、图状态和事件包装后，30 秒指示同时进入重试事件及等待，仍只请求五次。
 - `test_single_model_call_returns_failure_without_retry`：单次调用只返回失败对象，重试由图负责。
 - `test_cancel_model_closes_stream_without_retry`：取消关闭模型流并传播 CancelledError，不发生重试。
-- `test_runtime_cancel_during_retry_wait_stops_next_attempt`：业务取消打断退避，关闭等待并只输出取消终态。
+- `test_runtime_cancel_during_retry_wait_stops_next_attempt`：业务取消打断退避，关闭等待并直接结束，不输出取消终态。
 - `test_retry_success_keeps_failed_partial_text_out_of_history`：第五次成功，前四次局部文本不进入历史，重试状态归零。
 - `test_chatopenai_native_callback_and_http_stream_close`：真实 ChatOpenAI 和 SDK 消费受控 SSE 响应，验证原生增量及取消关闭 HTTP 响应。
+
+本轮契约调整：内层只输出普通 Agent 事件；完成/失败由 astream 唯一出口生成，取消直接结束且不输出 cancelled。对应测试改用 producer 结果或外层流验证，保留配对、重试和资源清理覆盖。

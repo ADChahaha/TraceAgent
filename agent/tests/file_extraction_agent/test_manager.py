@@ -25,16 +25,16 @@ async def test_runtime_yields_event_objects_with_sequence(resource_path, monkeyp
         lambda **kwargs: async_items(
             [
                 {"type": "model_message.done", "content": "你好\n世界"},
-                {"type": "completion.completed", "status": "completed"},
             ]
         ),
     )
     runtime = CompletionRuntime(resource_path, object(), [DocumentQaMessage(role="user", content="问题")])
     assert [item async for item in runtime.stream()] == [
-        {"type": "model_message.done", "content": "你好\n世界", "seq": 1},
-        {"type": "completion.completed", "status": "completed", "seq": 2},
+        {"type": "completion.created", "status": "in_progress", "seq": 1},
+        {"type": "model_message.done", "content": "你好\n世界", "seq": 2},
+        {"type": "completion.completed", "status": "completed", "seq": 3},
     ]
-    assert runtime.is_closed()
+    assert runtime._producer.done()
 
 
 @pytest.mark.parametrize("ending", ["completed", "failed", "cancelled"])
@@ -64,10 +64,12 @@ async def test_stream_numbers_messages_and_terminal_once(tmp_path, monkeypatch, 
     events = frames
     assert all(("id" not in event and "completion_id" not in event for event in events))
     assert [event["seq"] for event in events] == list(range(1, len(events) + 1))
-    assert events[-1]["type"] == f"completion.{ending}"
-    if ending == "failed":
-        assert [event["tool"] for event in events if event["type"] == "tool_failed"] == ["qa"]
-    assert sum((runtime_module._terminal_status(event) is not None for event in events)) == 1
+    terminal = [e for e in events if e["type"] in {"completion.completed", "completion.failed"}]
+    assert len(terminal) == (0 if ending == "cancelled" else 1)
+    if terminal:
+        assert terminal[0]["type"] == f"completion.{ending}"
+    assert not any(e["type"] in {"completion.cancelled", "tool_failed"} for e in events)
+
 
 
 async def test_completion_runtime_streams_without_manager(resource_path, monkeypatch):
@@ -91,7 +93,7 @@ async def test_completion_runtime_streams_without_manager(resource_path, monkeyp
         "model_message.done",
         "completion.completed",
     ]
-    assert runtime.is_closed() and runtime.get_status() == "completed"
+    assert runtime._producer.done()
     assert [event["seq"] for event in events] == [1, 2, 3, 4]
     assert all(("id" not in event for event in events))
 
@@ -125,7 +127,7 @@ async def test_manager_keeps_id_outside_runtime_and_cleans_only_matching_entry(r
     finally:
         for cid, stream in streams.items():
             manager.terminate(cid)
-            [item async for item in stream.stream()]
+            stream.close()
 
 
 async def test_startup_events_only_acknowledge_without_reading_documents(resource_path, monkeypatch):
@@ -142,9 +144,7 @@ async def test_startup_events_only_acknowledge_without_reading_documents(resourc
         qa_model=object(),
     )
     try:
-        created = await anext(stream)
         source = await anext(stream)
-        assert created == {"type": "completion.created", "status": "in_progress"}
         assert source == {"type": "source_indexed", "tool": "source_index", "result": {"ok": True}}
     finally:
         await stream.aclose()
@@ -214,7 +214,7 @@ async def test_runtime_cancel_interrupts_real_tools_and_skips_next_model(
     events = frames
     results = [event for event in events if event["type"] == "tool_completed"]
     assert results == []
-    assert events[-1]["type"] == "completion.cancelled"
+    assert not any(e["type"] == "completion.cancelled" for e in events)
     assert [event["seq"] for event in events] == list(range(1, len(events) + 1))
     assert provider.ainvoke.call_count == 1
     assert _resource_exists(resource_path, s3_store)
@@ -258,7 +258,7 @@ async def test_manager_wraps_messages_and_pairs_same_name_calls(tmp_path, monkey
         ],
         AIMessage(content="答案", response_metadata={"finish_reason": "stop"}),
     ]
-    monkeypatch.setattr(runtime_module, "run_qa_stream", lambda *args, **kwargs: async_items(model_messages))
+    monkeypatch.setattr(runtime_module, "run_qa_stream", lambda *args, **kwargs: async_items([m for item in model_messages for m in (item if isinstance(item, list) else [item])]))
     events = [
         item
         async for item in runtime_module.stream_completion_events(
@@ -268,7 +268,6 @@ async def test_manager_wraps_messages_and_pairs_same_name_calls(tmp_path, monkey
         )
     ]
     assert [e["type"] for e in events] == [
-        "completion.created",
         "source_indexed",
         "model_message.done",
         "tool_started",
@@ -276,11 +275,10 @@ async def test_manager_wraps_messages_and_pairs_same_name_calls(tmp_path, monkey
         "tool_completed",
         "tool_failed",
         "model_message.done",
-        "completion.completed",
     ]
     results = [e for e in events if e["type"] in {"tool_completed", "tool_failed"}]
     assert [(e["tool_call_id"], e["args"]["path"]) for e in results] == [("a", "first"), ("b", "second")]
-    assert events[-2]["is_final"] is True
+    assert events[-1]["is_final"] is True
 
 
 async def test_graph_keeps_events_as_objects_until_stream_boundary(tmp_path, monkeypatch, resource_path):
@@ -301,10 +299,8 @@ async def test_graph_keeps_events_as_objects_until_stream_boundary(tmp_path, mon
     ]
     assert all((isinstance(event, dict) for event in events))
     assert [event["type"] for event in events] == [
-        "completion.created",
         "source_indexed",
         "model_message.done",
-        "completion.completed",
     ]
 
 
@@ -326,9 +322,9 @@ async def test_stream_preserves_runtime_failure_with_special_characters(tmp_path
             messages=[DocumentQaMessage(role="user", content="问题")],
         ).stream()
     )
-    assert len(frames) == 1
-    assert frames[0]["type"] == "completion.failed"
-    assert frames[0]["error_message"] == error
+    assert len(frames) == 2
+    assert frames[-1]["type"] == "completion.failed"
+    assert frames[-1]["error_message"] == error
 
 
 @pytest.mark.parametrize("marker", ["completed", "cancelled", "failed"])
@@ -339,7 +335,7 @@ async def test_stream_preserves_terminal_words_in_data(tmp_path, monkeypatch, ma
     terminal = {"type": "completion.completed", "status": "completed"}
     monkeypatch.setattr(manager_module, "build_qa_model", lambda config: object())
     monkeypatch.setattr(
-        runtime_module, "stream_completion_events", lambda *a, **k: async_items([ordinary, terminal])
+        runtime_module, "stream_completion_events", lambda *a, **k: async_items([ordinary])
     )
     frames = await _frames(
         CompletionManager().create(
@@ -349,25 +345,7 @@ async def test_stream_preserves_terminal_words_in_data(tmp_path, monkeypatch, ma
             messages=[DocumentQaMessage(role="user", content="问题")],
         ).stream()
     )
-    assert frames == [ordinary, terminal]
-
-
-@pytest.mark.parametrize("status", ["completed", "cancelled", "failed"])
-def test_terminal_status_reads_only_event_type(status):
-    event = {"type": f"completion.{status}", "content": "event: completion.cancelled"}
-    assert runtime_module._terminal_status(event) == status
-
-
-@pytest.mark.parametrize(
-    "event",
-    [
-        {"type": "completion.completed.extra"},
-        {"type": "model_message.done", "status": "failed", "content": "event: completion.failed"},
-        {"content": "event: completion.cancelled"},
-    ],
-)
-def test_terminal_detection_requires_exact_event_type(event):
-    assert runtime_module._terminal_status(event) is None
+    assert frames == [{"type": "completion.created", "status": "in_progress"}, ordinary, terminal]
 
 
 async def test_create_completion_stream_builds_completion_input_and_runs_graph(monkeypatch, resource_path):
@@ -382,7 +360,8 @@ async def test_create_completion_stream_builds_completion_input_and_runs_graph(m
         captured["document_root"] = kwargs["resource_path"]
         captured["messages"] = kwargs["messages"]
         captured["model"] = qa_model
-        yield {"type": "completion.completed"}
+        if False:
+            yield {}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
     monkeypatch.setattr(
@@ -398,7 +377,7 @@ async def test_create_completion_stream_builds_completion_input_and_runs_graph(m
             model_config=ModelConfig(model_name="qa"),
         ).stream()
     )
-    assert events == [{"type": "completion.completed"}]
+    assert events == [{"type": "completion.created", "status": "in_progress"}, {"type": "completion.completed", "status": "completed"}]
     assert captured["has_completion_id"] is False
     assert captured["document_root"] == resource_path
     assert captured["messages"][0].content == "问题"
@@ -436,7 +415,8 @@ async def test_create_completion_stream_registers_completion_runtime_before_iter
     async def fake_stream_completion_events(*, qa_model, **kwargs):
         del qa_model
         graph_called.set()
-        yield {"type": "completion.completed"}
+        if False:
+            yield {}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
     monkeypatch.setattr(
@@ -451,7 +431,7 @@ async def test_create_completion_stream_registers_completion_runtime_before_iter
         model_config=ModelConfig(model_name="qa"),
     ).stream()
     assert manager.terminate("cmp_early_cancel") == {"id": "cmp_early_cancel", "status": "cancelling"}
-    assert await _frames(stream) == [{"type": "completion.cancelled", "status": "cancelled"}]
+    assert await _frames(stream) == []
     assert not graph_called.is_set()
     assert manager.terminate("cmp_early_cancel") == {"id": "cmp_early_cancel", "status": "not_found"}
 
@@ -468,7 +448,8 @@ async def test_create_completion_stream_cancel_does_not_wait_for_blocked_graph(m
         del qa_model
         graph_started.set()
         await wait_event(release_graph, timeout=1.0)
-        yield {"type": "completion.completed"}
+        if False:
+            yield {}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
     monkeypatch.setattr(
@@ -499,11 +480,11 @@ async def test_create_completion_stream_cancel_does_not_wait_for_blocked_graph(m
         release_graph.set()
         await asyncio.wait_for(consumer_thread, 1.0)
     assert time.monotonic() - started_at < 0.25
-    assert events == [{"type": "completion.cancelled", "status": "cancelled"}]
+    assert events == [{"type": "completion.created", "status": "in_progress"}]
     assert manager.terminate("cmp_blocked") == {"id": "cmp_blocked", "status": "not_found"}
 
 
-async def test_create_completion_stream_flushes_committed_events_before_cancel(monkeypatch, resource_path):
+async def test_create_completion_stream_discards_queued_events_after_cancel(monkeypatch, resource_path):
     second_event_reached_graph = asyncio.Event()
     release_graph = asyncio.Event()
 
@@ -517,7 +498,8 @@ async def test_create_completion_stream_flushes_committed_events_before_cancel(m
         second_event_reached_graph.set()
         yield {"type": "tool_completed", "tool": "read"}
         await wait_event(release_graph, timeout=1.0)
-        yield {"type": "completion.completed", "status": "completed"}
+        if False:
+            yield {}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
     monkeypatch.setattr(
@@ -533,6 +515,7 @@ async def test_create_completion_stream_flushes_committed_events_before_cancel(m
             model_config=ModelConfig(model_name="qa"),
         ).stream()
     )
+    assert (await anext(stream))["type"] == "completion.created"
     first_event = _without_seq(await anext(stream))
     assert await wait_event(second_event_reached_graph, timeout=0.5)
     await asyncio.sleep(0.02)
@@ -542,10 +525,7 @@ async def test_create_completion_stream_flushes_committed_events_before_cancel(m
     finally:
         release_graph.set()
     assert first_event == {"type": "model_message.done", "content": "first"}
-    assert remaining_events == [
-        {"type": "tool_completed", "tool": "read"},
-        {"type": "completion.cancelled", "status": "cancelled"},
-    ]
+    assert remaining_events == []
     assert manager.terminate("cmp_flush") == {"id": "cmp_flush", "status": "not_found"}
 
 
@@ -563,7 +543,8 @@ async def test_should_stop_is_wired_to_cancel_requested(monkeypatch, resource_pa
         seen_should_stop["value"] = kwargs.get("should_stop")
         batch_running.set()
         await wait_event(release_batch, timeout=1.0)
-        yield {"type": "completion.completed", "status": "completed"}
+        if False:
+            yield {}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
     monkeypatch.setattr(
@@ -613,7 +594,8 @@ async def test_terminate_interrupts_active_tool_batch(monkeypatch, resource_path
         batch_running.set()
         await wait_event(release_batch, timeout=1.0)
         yield {"type": "tool_completed", "tool": "read", "tool_call_id": "deferred-read"}
-        yield {"type": "completion.cancelled", "status": "cancelled"}
+        if False:
+            yield {}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
     monkeypatch.setattr(
@@ -644,7 +626,7 @@ async def test_terminate_interrupts_active_tool_batch(monkeypatch, resource_path
         await asyncio.wait_for(consumer_thread, 1.0)
     tool_events = [event for event in events if event["type"] == "tool_completed"]
     assert tool_events == []
-    assert events[-1] == {"type": "completion.cancelled", "status": "cancelled"}
+    assert not any(e["type"] == "completion.cancelled" for e in events)
     assert manager.terminate("cmp_deferred") == {"id": "cmp_deferred", "status": "not_found"}
 
 
@@ -660,7 +642,8 @@ async def test_create_completion_stream_emits_only_one_terminal_event_when_cance
     async def fake_stream_completion_events(*, qa_model, **kwargs):
         del qa_model
         await wait_event(graph_can_complete, timeout=1.0)
-        yield {"type": "completion.completed", "status": "completed"}
+        if False:
+            yield {}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
     monkeypatch.setattr(
@@ -678,7 +661,7 @@ async def test_create_completion_stream_emits_only_one_terminal_event_when_cance
     graph_can_complete.set()
     events = await _frames(stream)
     terminal_events = [event for event in events if event["type"].startswith("completion.")]
-    assert terminal_events == [{"type": "completion.cancelled", "status": "cancelled"}]
+    assert terminal_events == []
 
 
 def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
@@ -797,7 +780,8 @@ async def test_completion_manager_create_runs_graph_and_returns_events(monkeypat
         captured["has_completion_id"] = "completion_id" in kwargs
         captured["messages"] = kwargs["messages"]
         captured["model"] = qa_model
-        yield {"type": "completion.completed"}
+        if False:
+            yield {}
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
     monkeypatch.setattr(
@@ -812,7 +796,7 @@ async def test_completion_manager_create_runs_graph_and_returns_events(monkeypat
             model_config=ModelConfig(model_name="qa"),
         ).stream()
     )
-    assert events == [{"type": "completion.completed"}]
+    assert events == [{"type": "completion.created", "status": "in_progress"}, {"type": "completion.completed", "status": "completed"}]
     assert captured["has_completion_id"] is False
     assert captured["messages"][0].content == "问题"
     assert captured["model"] == "qa-model"
@@ -831,7 +815,8 @@ async def test_completion_manager_create_registers_before_iteration_and_terminat
     async def fake_stream_completion_events(*, qa_model, **kwargs):
         del qa_model
         graph_called.set()
-        yield {"type": "completion.completed"}
+        if False:
+            yield {}
 
     manager = CompletionManager()
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
@@ -846,7 +831,7 @@ async def test_completion_manager_create_registers_before_iteration_and_terminat
         model_config=ModelConfig(model_name="qa"),
     ).stream()
     assert manager.terminate("cmp_mgr_cancel") == {"id": "cmp_mgr_cancel", "status": "cancelling"}
-    assert await _frames(stream) == [{"type": "completion.cancelled", "status": "cancelled"}]
+    assert await _frames(stream) == []
     assert not graph_called.is_set()
     assert manager.terminate("cmp_mgr_cancel") == {"id": "cmp_mgr_cancel", "status": "not_found"}
 
@@ -861,21 +846,13 @@ def test_completion_manager_get_status_returns_none_for_unknown():
     assert manager.get_status("cmp_missing") is None
 
 
-def test_completion_runtime_owns_terminate_get_status_and_terminal_uniqueness():
-    state = SimpleNamespace(
-        completion_id="cmp_ac",
-        document=SimpleNamespace(root=Path(".") / "nonexistent"),
-        messages=[],
-        run_options=RunOptions(),
-    )
+def test_runtime_cancel_flag_is_idempotent():
     runtime = CompletionRuntime("unused", object(), [])
-    assert runtime.get_status() == "in_progress"
-    assert runtime.terminate() == "cancelling"
-    assert runtime.get_status() == "cancelling"
-    assert runtime.terminate() == "cancelling"
-    assert runtime.close_once("cancelled") is True
-    assert runtime.get_status() == "cancelled"
-    assert runtime.close_once("completed") is False
+    assert runtime.cancel_requested is False
+    runtime.terminate()
+    runtime.terminate()
+    assert runtime.cancel_requested is True
+    assert not any(hasattr(runtime, field) for field in ("status", "closed", "terminal_committed"))
 
 
 def test_qa_records_text_from_responses_api_content_blocks(tmp_path):
@@ -941,7 +918,8 @@ async def test_disconnect_wakes_consumer_and_stops_producer(resource_path, monke
         started.set()
         try:
             await release.wait()
-            yield {"type": "completion.completed"}
+            if False:
+                yield {}
         finally:
             observed_stop.append(kwargs["should_stop"]())
 

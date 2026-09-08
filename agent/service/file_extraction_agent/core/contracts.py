@@ -50,7 +50,7 @@ class ModelFailed:
     error: str
 
 
-AgentOutput: TypeAlias = AIMessage | ToolMessage | list[ToolMessage] | MessageStarted | MessageDelta | ModelRetry | ModelFailed
+AgentOutput: TypeAlias = AIMessage | ToolMessage | MessageStarted | MessageDelta | ModelRetry | ModelFailed
 
 
 @runtime_checkable
