@@ -23,4 +23,4 @@
 运行参数的显式零值使用 `tool_execution_timeout=0` 验证；工具调用上限已从共享协议删除。
 # 原生流式回归
 
-`test_real_graph_streams_native_chunks_and_retry_over_rpc`：真实 LangGraph 与 LangChain 回调进入 RPC，验证增量先于生成结束、重试字段编码、尝试 ID 隔离和业务取消的唯一终态。
+`test_real_graph_streams_native_chunks_and_retry_over_rpc`：真实 LangGraph 与 LangChain 回调进入 RPC，验证增量先于生成结束、首次随机退避为 375–500 ms、尝试 ID 隔离和业务取消的唯一终态。

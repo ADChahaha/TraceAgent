@@ -1,6 +1,7 @@
 """真实 LangChain 回调进入图流 → 验证增量时序、固定配置重试和取消。"""
 
 import asyncio
+import random
 from contextlib import aclosing
 
 import pytest
@@ -66,6 +67,7 @@ async def test_native_messages_arrive_before_model_finishes(resource_path):
 
 
 async def test_graph_retries_same_model_five_times_and_reports_before_wait(resource_path, monkeypatch):
+    monkeypatch.setattr(random, "random", lambda: 0.5)
     model = StreamingModel(failures=5)
     waits = []
     release = asyncio.Event()
@@ -87,12 +89,80 @@ async def test_graph_retries_same_model_five_times_and_reports_before_wait(resou
         release.set()
         received.extend([e async for e in events])
     assert model._calls == 5
-    assert waits == [0.25, 0.5, 1.0, 2.0]
+    assert waits == [0.4375, 0.875, 1.75, 3.5]
+    retries = [e for e in received if e["type"] == "model_request.retrying"]
+    assert [e["retry_delay_ms"] for e in retries] == [round(delay * 1000) for delay in waits]
     assert len([e for e in received if e["type"] == "model_request.retrying"]) == 4
     starts = [e["message_id"] for e in received if e["type"] == "model_message.started"]
     assert len(starts) == len(set(starts)) == 5
     assert not any(e["type"] == "model_message.done" for e in received)
     assert received[-1]["type"] == "completion.failed"
+
+
+@pytest.mark.parametrize("headers, expected", [
+    ({"retry-after-ms": "1250", "retry-after": "10"}, 1.25),
+    ({"retry-after": "30"}, 30.0),
+    ({"retry-after": "120"}, 120.0),
+    ({"retry-after-ms": "bad", "retry-after": "2.5"}, 2.5),
+    ({"retry-after": "Wed, 09 Sep 2026 00:00:30 GMT"}, 30.0),
+    ({"retry-after": "121"}, None),
+    ({"retry-after": "0"}, None),
+    ({"retry-after": "-1"}, None),
+    ({"retry-after": "nan"}, None),
+    ({"retry-after": "inf"}, None),
+    ({"retry-after": "invalid"}, None),
+    ({}, None),
+])
+async def test_model_failure_preserves_valid_retry_after(headers, expected, monkeypatch):
+    import time
+    import httpx
+    from openai import RateLimitError
+
+    monkeypatch.setattr(time, "time", lambda: 1788912000.0)
+    response = httpx.Response(429, headers=headers, request=httpx.Request("POST", "https://model.invalid"))
+
+    class LimitedModel:
+        async def astream(self, messages):
+            raise RateLimitError("限流", response=response, body=None)
+            yield
+
+    result = await model_invocation._invoke_model_message(LimitedModel(), [])
+    assert result.retry_after_seconds == expected
+
+
+def test_retry_backoff_caps_base_and_honors_server_delay(monkeypatch):
+    from service.file_extraction_agent.core.contracts import ModelCallFailure
+
+    monkeypatch.setattr(random, "random", lambda: 0.5)
+    assert graph._retry_delay(20, ModelCallFailure("失败")) == 7.0
+    assert graph._retry_delay(1, ModelCallFailure("限流", retry_after_seconds=30)) == 30
+
+
+async def test_server_retry_delay_reaches_event_and_wait(resource_path, monkeypatch):
+    import httpx
+    from openai import RateLimitError
+
+    class LimitedModel(StreamingModel):
+        async def _astream(self, messages, **kwargs):
+            self._calls += 1
+            response = httpx.Response(429, headers={"Retry-After": "30"},
+                                      request=httpx.Request("POST", "https://model.invalid"))
+            raise RateLimitError("限流", response=response, body=None)
+            yield
+
+    waits = []
+
+    async def wait_retry(delay):
+        waits.append(delay)
+
+    monkeypatch.setattr(graph, "_wait_retry", wait_retry)
+    model = LimitedModel()
+    events = [e async for e in stream_completion_events(
+        resource_path=resource_path, messages=[DocumentQaMessage(role="user", content="问题")], qa_model=model,
+    )]
+    assert model._calls == 5 and waits == [30.0] * 4
+    assert [e["retry_delay_ms"] for e in events if e["type"] == "model_request.retrying"] == [30000] * 4
+    assert events[-1]["type"] == "completion.failed"
 
 
 async def test_single_model_call_returns_failure_without_retry():

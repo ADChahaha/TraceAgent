@@ -5,6 +5,9 @@
 
 from __future__ import annotations
 
+import email.utils
+import math
+import time
 from collections.abc import Sequence
 from langchain_core.messages import (
     AIMessage,
@@ -23,6 +26,30 @@ from service.file_extraction_agent.core.contracts import (
 
 from service.file_extraction_agent.core.messages import _validate_model_message
 
+
+def _retry_after_seconds(exc: Exception) -> float | None:
+    """失败响应头 → 毫秒优先，其次秒数/HTTP 日期 → 仅接受 (0, 120] 秒。"""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    try:
+        delay = float(headers.get("retry-after-ms")) / 1000
+    except (TypeError, ValueError):
+        value = headers.get("retry-after")
+        try:
+            delay = float(value)
+        except (TypeError, ValueError):
+            try:
+                parsed = email.utils.parsedate_tz(value)
+                if parsed is None:
+                    return None
+                delay = email.utils.mktime_tz(parsed) - time.time()
+            except (TypeError, ValueError, OverflowError):
+                return None
+    return delay if math.isfinite(delay) and 0 < delay <= 120 else None
+
+
 async def _invoke_model_message(model: BoundModel, messages: Sequence[BaseMessage]) -> AIMessage | ModelCallFailure:
     attempt = _model_call_attempts(model)[0]
     try:
@@ -35,7 +62,10 @@ async def _invoke_model_message(model: BoundModel, messages: Sequence[BaseMessag
         _validate_model_message(response)
         return response
     except Exception as exc:
-        return ModelCallFailure(error=f"{type(exc).__name__}: {exc}")
+        return ModelCallFailure(
+            error=f"{type(exc).__name__}: {exc}",
+            retry_after_seconds=_retry_after_seconds(exc),
+        )
 
 
 def _model_call_attempts(model: BoundModel) -> list[ModelCallAttempt]:

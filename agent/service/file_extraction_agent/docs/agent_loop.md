@@ -24,9 +24,11 @@ manager 保存 completion_id → CompletionRuntime 映射
 - 无活动工具批次时，取消 sentinel 立即唤醒 consumer；已有批次则先配齐结果。
 - graph 在模型调用前后检查 should_stop，丢弃未发布的迟到响应；已发布工具批次配齐结果后停止，不再请求下一轮模型。
 - 工具普通异常和超时转为对应 ToolMessage；执行器整体异常转为整批失败结果。
-- 同一配置最多请求五次，等待 0.25、0.5、1、2 秒；耗尽后 ModelFailed 转 completion.failed，取消不重试。每次尝试独立 message_id，局部失败文本不进入历史。
+- 同一配置最多请求五次，按以 0.5 秒起步、8 秒封顶并乘 0.75–1 随机系数的指数间隔；耗尽后 ModelFailed 转 completion.failed，取消不重试。每次尝试独立 message_id，局部失败文本不进入历史。
 - 关闭事件流时先 disconnect 再 await aclose 事件生成器并取消生产协程，工具内迟到线程结果不再写事件；runtime 通知 manager 移除注册项。问答结束保留文档资源。
 
 管理 ID 不进入 graph；执行细节和取消锁语义见 [DESIGN.md](DESIGN.md)。
 
 loop 只组装 Agent 输入、转发输出和关闭内层生成器；图节点、Command 路由、更新转换、递归保护及图流关闭全部归 graph。RunOptions 仅配置工具共享超时，不再包含工具调用次数上限。
+
+重试优先采用有效 retry-after-ms / Retry-After（秒数或 HTTP 日期，大于 0 且不超过 120 秒）；无效值回退到随机指数退避。retry_delay_ms 是本次实际等待时间的毫秒表示。

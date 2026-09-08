@@ -43,9 +43,11 @@ QaState 继承 MessagesState，增加 model_attempt、model_failure、retry_dela
 
 `run_qa_stream` 是 Agent 接口：校验非空消息和资源定位数组 → open_workspace 创建 ToolWorkspace → build_tools 绑定四个共享工具 → build_qa_messages 转换完整历史 → 调用 graph.stream_qa_graph 并转发结果。loop 不解析图更新、不决定节点路由；关闭接口流时通过 aclosing 关闭内层生成器。
 
-graph.py 绑定固定模型并编译 agent、retry_wait、tools 三个节点。agent 每次只调用一次 model_invocation；ModelCallFailure 通过 Command 更新状态，未达上限路由至 retry_wait，否则结束。retry_wait 等待 0.25、0.5、1、2 秒后回到 agent；同一逻辑模型调用总共最多五次请求。成功后计数归零，工具完成后的下一次模型调用重新计数。无效工具 ID 抛 ValueError，不发完整消息、不执行工具。
+graph.py 绑定固定模型并编译 agent、retry_wait、tools 三个节点。agent 每次只调用一次 model_invocation；ModelCallFailure 通过 Command 更新状态，未达上限路由至 retry_wait，否则结束。retry_wait 按以 0.5 秒起步、8 秒封顶并乘 0.75–1 随机系数的指数间隔等待后回到 agent；同一逻辑模型调用总共最多五次请求。成功后计数归零，工具完成后的下一次模型调用重新计数。无效工具 ID 抛 ValueError，不发完整消息、不执行工具。
 
 stream_qa_graph 使用 graph.astream(stream_mode=["messages", "updates"])：messages 通过 LangChain 原生回调提供 chunk，updates 提供节点结束结果。只读取 agent 节点的可见文本，过滤隐藏推理和工具参数。每次实际请求首次观察到输出时分配独立 message_id 并发送 MessageStarted，随后 MessageDelta；完成后输出带同一 ID 的完整 AIMessage。没有回调的注入模型仅在完成时输出正文，不伪装为实时生成。
+
+失败结果保留 retry_after_seconds：从响应头优先解析 retry-after-ms，其次 Retry-After 秒数或 HTTP 日期；仅接受有限且大于 0、不超过 120 秒的值，否则回退到随机指数退避。graph 优先采用该值，不叠加抖动。等待时间只计算一次，事件使用同一值换算毫秒。
 
 失败更新转换成 ModelRetry 或 ModelFailed。重试通知在退避结束前输出，携带失败尝试的 message_id、下一次 attempt、max_attempts=5、retry_delay_ms、error；下一次请求使用新 ID。Runtime 将 ModelFailed 转为 completion.failed。关闭图流传播取消，模型与退避中的 CancelledError 不转换为失败或重试。
 

@@ -21,6 +21,7 @@ class ModelCallFailure:
     """单次请求失败；不进入消息历史，取消异常不转换为此类型。"""
 
     error: str
+    retry_after_seconds: float | None = None
 
 
 @dataclass(frozen=True)

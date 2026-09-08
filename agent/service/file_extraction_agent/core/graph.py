@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 from uuid import uuid4
 from collections.abc import AsyncGenerator, Sequence
 from typing import Literal, cast
@@ -36,7 +37,8 @@ from service.file_extraction_agent.schemas import RunOptions
 
 QA_RECURSION_LIMIT = 10000
 MODEL_MAX_ATTEMPTS = 5
-RETRY_BASE_SECONDS = 0.25
+RETRY_BASE_SECONDS = 0.5
+RETRY_MAX_SECONDS = 8.0
 
 
 class QaState(MessagesState):
@@ -49,6 +51,14 @@ class QaState(MessagesState):
 
 async def _wait_retry(delay: float) -> None:
     await asyncio.sleep(delay)
+
+
+def _retry_delay(attempt: int, failure: ModelCallFailure) -> float:
+    """有效服务端等待优先；否则指数基数封顶后乘 0.75–1 的随机系数。"""
+    if failure.retry_after_seconds is not None:
+        return failure.retry_after_seconds
+    base = min(RETRY_BASE_SECONDS * 2 ** min(attempt - 1, 1000), RETRY_MAX_SECONDS)
+    return base * (1 - 0.25 * random.random())
 
 
 def _visible_text(content: object) -> str:
@@ -90,7 +100,7 @@ def build_qa_graph(
         attempt = state.get("model_attempt", 0) + 1
         if isinstance(message, ModelCallFailure):
             retry = attempt < MODEL_MAX_ATTEMPTS
-            delay = RETRY_BASE_SECONDS * 2 ** (attempt - 1) if retry else 0.0
+            delay = _retry_delay(attempt, message) if retry else 0.0
             return Command(
                 update={
                     "messages": [],

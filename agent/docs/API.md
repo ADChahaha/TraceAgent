@@ -77,7 +77,7 @@ ChatCompletion 为服务端流 RPC。输入转换为现有 DocumentQaMessage、R
 
 args_json、result_json 及 ToolCall.args_json 用 JSON 字符串保留动态结构、大整数和 null；客户端用 json.loads 解码。其余固定字段使用 protobuf 类型，可选字段可用 HasField 判断。最终回答由 is_final=true 标记；工具调用 ID 仍用于配对，模型引用 documents 下的真实 Markdown key 路径。
 
-每次逻辑模型调用最多尝试五次，始终使用同一配置；指数退避为 250、500、1000、2000 ms。重试通知在等待结束前发出；第五次失败以 completion.failed 结束。SDK 内层重试关闭，旧 model_config.max_retries / MODEL_MAX_RETRIES 暂保留解析但不再控制请求次数。
+每次逻辑模型调用最多尝试五次，始终使用同一配置；指数退避公式为 min(0.5 × 2^(失败次数−1), 8) × (1 − 0.25 × random()) 秒；四次等待分别约 375–500、750–1000、1500–2000、3000–4000 ms。重试通知在等待结束前发出；第五次失败以 completion.failed 结束。SDK 内层重试关闭，旧 model_config.max_retries / MODEL_MAX_RETRIES 暂保留解析但不再控制请求次数。
 
 按 message_id 追加 delta，done.content 替换/确认完整正文，不再追加。收到 retrying 将关联旧消息标记失败；下一次 started 使用新 ID，正文不能拼接。失败的部分文本只供展示，不作为完整 assistant 历史回传。取消或失败可能没有 done。旧 model_message 消费端必须升级；本次只更新 agent 与共享协议，不宣称 backend/前端已完成适配。
 
@@ -121,3 +121,5 @@ CancelCompletion
 每次 RPC 应设置符合 OCR、embedding 或问答耗时的 deadline；取消请求使用独立短超时。不要盲目重试资源准备或问答创建：响应丢失时服务端可能已执行，本版不提供持久幂等或事件重放。
 
 部署参数、消息上限和协议生成命令见 [README](../README.md)。问答内存队列仍未设置容量上限；本次未引入多实例路由、持久任务或新的资源生命周期。
+
+重试优先采用有效 retry-after-ms / Retry-After（秒数或 HTTP 日期，大于 0 且不超过 120 秒）；无效值回退到随机指数退避。retry_delay_ms 是本次实际等待时间的毫秒表示。

@@ -65,7 +65,8 @@ def test_real_graph_streams_native_chunks_and_retry_over_rpc(rpc, manager, monke
         assert model._calls == 1
     else:
         retry = next(e for e in events if e.type == "model_request.retrying")
-        assert retry.attempt == 2 and retry.max_attempts == 5 and retry.retry_delay_ms == 250
+        assert retry.attempt == 2 and retry.max_attempts == 5
+        assert 375 <= retry.retry_delay_ms <= 500
         done = next(e for e in events if e.type == "model_message.done")
         assert done.content == "前半后半" and done.message_id != retry.message_id
         assert model._calls == 2

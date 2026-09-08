@@ -2,7 +2,7 @@
 
 状态：模型原生流式与固定配置重试已实施；工具取消有界收尾、backend/前端适配仍待实施。当前行为以 [DESIGN.md](DESIGN.md) 为准。
 
-已采用后续讨论修订：graph 使用 messages/updates 原生通道；agent 每次单次请求，失败通过状态更新转入 retry_wait；同一配置最多五次，指数退避 0.25、0.5、1、2 秒。每次实际尝试使用新 message_id，失败后可以重试，前端不得拼接失败尝试文本。工具取消章节保留为后续草案。
+已采用后续讨论修订：graph 使用 messages/updates 原生通道；agent 每次单次请求，失败通过状态更新转入 retry_wait；同一配置最多五次，退避采用以 0.5 秒起步、8 秒封顶并乘 0.75–1 随机系数的指数间隔。每次实际尝试使用新 message_id，失败后可以重试，前端不得拼接失败尝试文本。工具取消章节保留为后续草案。
 
 ## 基础思路
 
@@ -72,7 +72,7 @@ agent 调用一次固定模型
   → 完整响应聚合并校验，成功写入 messages
   → 失败返回 ModelCallFailure，更新 QaState 的次数、失败信息和退避时间
   → updates 转成 ModelRetry，Runtime 包装 model_request.retrying
-  → retry_wait 等待 0.25、0.5、1、2 秒，再进入 agent
+  → retry_wait 按以 0.5 秒起步、8 秒封顶并乘 0.75–1 随机系数的指数间隔等待，再进入 agent
   → 第五次失败返回 ModelFailed，Runtime 输出 completion.failed
 ```
 
@@ -196,3 +196,5 @@ DEVLOG 条目在验证后单独征求批准。已实施行为见 DESIGN.md；工
 - [工具取消与已完成结果保护](https://github.com/openai/codex/blob/d6489472f3c15e87d2d7763a5fde033545c530f8/codex-rs/core/src/tools/parallel.rs#L179-L208)
 - [中断结果进入下一轮历史的测试](https://github.com/openai/codex/blob/d6489472f3c15e87d2d7763a5fde033545c530f8/codex-rs/core/tests/suite/abort_tasks.rs#L207-L300)
 - [轮次取消及有界收尾](https://github.com/openai/codex/blob/d6489472f3c15e87d2d7763a5fde033545c530f8/codex-rs/core/src/tasks/mod.rs#L902-L973)
+
+重试优先采用有效 retry-after-ms / Retry-After（秒数或 HTTP 日期，大于 0 且不超过 120 秒）；无效值回退到随机指数退避。retry_delay_ms 是本次实际等待时间的毫秒表示。
