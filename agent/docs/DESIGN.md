@@ -12,8 +12,8 @@ PrepareResources（files: filename + bytes）
 ChatCompletion（resource_refs + messages）
   → CompletionManager 委托工具层预检资源并注册 completion
   → 经 S3ObjectStore（boto3）从 storage 服务读取资源
-  → 路径创建工具上下文，运行配置绑定执行器，图内只保存 messages
-  → 模型消息 / 完整工具结果批次
+  → 路径创建工具上下文，运行配置绑定执行器，图内保存完整 messages 和重试状态
+  → 模型文本增量 / 完整消息 / 重试通知 / 完整工具结果批次
   → completion_runtime 输出不含 completion ID、带 seq 的事件字典，由传输层编码
   → 释放本轮运行时，保留文档资源
 ```
@@ -34,9 +34,9 @@ ChatCompletion（resource_refs + messages）
 | service/file_extraction_agent/core/loop.py | Agent 接口：校验输入、组装工作区/工具/历史消息、转发 graph 输出 |
 | service/file_extraction_agent/core/contracts.py | 模型与工具调用协议、消息输出和 JSON 类型，不承担执行 |
 | service/file_extraction_agent/core/messages.py | 提示词、历史转换、响应校验、终止信号与消息 JSON 归一化 |
-| service/file_extraction_agent/core/model_invocation.py | 模型调用、流式聚合、重试与退避 |
+| service/file_extraction_agent/core/model_invocation.py | 单次模型调用、流式聚合和失败结果 |
 | service/file_extraction_agent/core/executor.py | 工具并行执行、共享超时与 ToolMessage 封装 |
-| service/file_extraction_agent/core/graph.py | LangGraph 建图与执行、节点路由、取消边界、更新转换和图流关闭 |
+| service/file_extraction_agent/core/graph.py | LangGraph 单次请求、指数退避与工具节点，原生 messages/updates 输出及取消清理 |
 | service/file_extraction_agent/core/tools/workspace.py | 资源定位解析、S3ObjectStore 读取、文件浏览与读取 |
 | service/file_extraction_agent/core/tools/embedding.py | 清单配置和索引读取（经 storage 服务）、查询模型缓存、query 编码与检索 |
 | service/object_store.py | ObjectStore 接口 + S3ObjectStore（boto3）+ s3:// URL 解析 |
@@ -75,11 +75,11 @@ main.py 读取监听地址、阻塞工作线程数和消息上限
 
 ## 问答运行时
 
-`CompletionManager` 只在进程内保存 active completion；管理 ID 不进入 graph。图使用 LangGraph MessagesState，仅保存消息；resource_refs 用于创建工具上下文（经 S3ObjectStore 读取资源），RunOptions 在构图时绑定工具执行器。工具闭包持有 ToolWorkspace；其中的 EmbeddingResources 管理本轮索引与查询模型引用。
+`CompletionManager` 只在进程内保存 active completion；管理 ID 不进入 graph。图使用继承 MessagesState 的 QaState，保存完整消息和重试控制状态；resource_refs 用于创建工具上下文（经 S3ObjectStore 读取资源），RunOptions 在构图时绑定工具执行器。工具闭包持有 ToolWorkspace；其中的 EmbeddingResources 管理本轮索引与查询模型引用。
 
 ```text
 模型节点返回 AIMessage
-  → completion_runtime 输出 model_message 和 tool_started
+  → completion_runtime 输出 model_message.started/delta/done、重试通知和 tool_started
   → 工具节点并行执行，按共享 deadline 收集整批 ToolMessage
   → 每项携带调用 ID、名称、参数和成功/失败结果
   → completion_runtime 直接输出 tool_completed / tool_failed，不维护 pending 配对字典

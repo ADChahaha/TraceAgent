@@ -13,8 +13,43 @@ from langchain_core.messages import AIMessage, BaseMessage, BaseMessageChunk, To
 from pydantic import JsonValue
 
 JsonObject: TypeAlias = dict[str, JsonValue]
-AgentOutput: TypeAlias = AIMessage | list[ToolMessage]
 StopCheck: TypeAlias = Callable[[], bool]
+
+
+@dataclass(frozen=True)
+class ModelCallFailure:
+    """单次请求失败；不进入消息历史，取消异常不转换为此类型。"""
+
+    error: str
+
+
+@dataclass(frozen=True)
+class MessageStarted:
+    message_id: str
+
+
+@dataclass(frozen=True)
+class MessageDelta:
+    message_id: str
+    delta: str
+
+
+@dataclass(frozen=True)
+class ModelRetry:
+    message_id: str
+    attempt: int
+    max_attempts: int
+    retry_delay_ms: int
+    error: str
+
+
+@dataclass(frozen=True)
+class ModelFailed:
+    message_id: str
+    error: str
+
+
+AgentOutput: TypeAlias = AIMessage | list[ToolMessage] | MessageStarted | MessageDelta | ModelRetry | ModelFailed
 
 
 @runtime_checkable
@@ -60,7 +95,7 @@ class QaModel(Protocol):
     def bind_tools(self, tools: Sequence[Tool]) -> BoundModel: ...
 
 
-ModelInvoker: TypeAlias = Callable[[BoundModel, Sequence[BaseMessage]], Awaitable[AIMessage]]
+ModelInvoker: TypeAlias = Callable[[BoundModel, Sequence[BaseMessage]], Awaitable[AIMessage | ModelCallFailure]]
 
 
 class ToolExecutor(Protocol):

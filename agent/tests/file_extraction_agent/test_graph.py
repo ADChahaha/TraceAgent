@@ -8,7 +8,7 @@ import pytest
 from langchain_core.messages import ToolMessage
 from service.file_extraction_agent import completion_runtime as runtime_module
 from langchain_core.messages import AIMessage, AIMessageChunk
-from service.file_extraction_agent.core.model import ChatModelFallbackChain, ModelCallAttempt
+from service.file_extraction_agent.core.model import ConfiguredChatModel, ModelCallAttempt
 from service.file_extraction_agent.completion_runtime import stream_completion_events
 from service.file_extraction_agent.schemas import DocumentQaMessage
 
@@ -29,7 +29,7 @@ def _scripted_model():
         ),
         AIMessage(content="答案。", response_metadata={"finish_reason": "stop"}),
     ]
-    return (ChatModelFallbackChain([ModelCallAttempt("test_invoke", provider, False)]), provider)
+    return (ConfiguredChatModel([ModelCallAttempt("test_invoke", provider, False)]), provider)
 
 
 def _input(resource_path):
@@ -45,13 +45,19 @@ async def test_stream_completion_events_yields_objects_and_terminal_completion(r
     assert [e["type"] for e in events] == [
         "completion.created",
         "source_indexed",
-        "model_message",
+        "model_message.started",
+        "model_message.delta",
+        "model_message.done",
         "tool_started",
         "tool_completed",
-        "model_message",
+        "model_message.started",
+        "model_message.delta",
+        "model_message.done",
         "tool_started",
         "tool_completed",
-        "model_message",
+        "model_message.started",
+        "model_message.delta",
+        "model_message.done",
         "completion.completed",
     ]
     history = provider.ainvoke.call_args.args[0]
@@ -64,7 +70,9 @@ async def test_tool_started_is_yielded_before_tool_execution(resource_path):
     stream = stream_completion_events(**_input(resource_path), qa_model=model)
     assert (await anext(stream))["type"] == "completion.created"
     assert (await anext(stream))["type"] == "source_indexed"
-    assert (await anext(stream))["type"] == "model_message"
+    assert (await anext(stream))["type"] == "model_message.started"
+    assert (await anext(stream))["type"] == "model_message.delta"
+    assert (await anext(stream))["type"] == "model_message.done"
     assert (await anext(stream))["type"] == "tool_started"
     assert provider.ainvoke.call_count == 1
     assert (await anext(stream))["type"] == "tool_completed"
@@ -89,7 +97,9 @@ async def test_cancel_after_model_drains_tools_without_next_model(resource_path)
     stream = stream_completion_events(**_input(resource_path), qa_model=model, should_stop=lambda: cancel)
     assert (await anext(stream))["type"] == "completion.created"
     assert (await anext(stream))["type"] == "source_indexed"
-    assert (await anext(stream))["type"] == "model_message"
+    assert (await anext(stream))["type"] == "model_message.started"
+    assert (await anext(stream))["type"] == "model_message.delta"
+    assert (await anext(stream))["type"] == "model_message.done"
     cancel = True
     events = [item async for item in stream]
     assert [e["type"] for e in events] == ["tool_started", "tool_completed", "completion.cancelled"]
@@ -149,7 +159,7 @@ async def test_closing_event_stream_closes_message_generator(resource_path, monk
     stream = stream_completion_events(**_input(resource_path), qa_model=object())
     await anext(stream)
     await anext(stream)
-    assert (await anext(stream))["type"] == "model_message"
+    assert (await anext(stream))["type"] == "model_message.done"
     await stream.aclose()
     assert closed == [True]
 

@@ -52,3 +52,7 @@
 
 断连测试验证生产协程的 finally 观察停止信号，提前断连不会创建生产协程。
 模型构造替身检查 SDK 的 `timeout` 参数（`request_timeout` 的别名），默认请求超时仍为 8 秒。
+
+模型配置测试改为单一配置、单一流式调用，不再生成 invoke fallback；完整消息事件改为 model_message.done，并携带 message_id。
+
+模型装配对象重命名为 ConfiguredChatModel，明确只保存一个固定调用配置。

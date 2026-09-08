@@ -35,6 +35,42 @@ def request(**fields):
     return pb.ChatCompletionRequest(**values)
 
 
+@pytest.mark.parametrize("cancel", [False, True])
+def test_real_graph_streams_native_chunks_and_retry_over_rpc(rpc, manager, monkeypatch, cancel):
+    """真实图和模型回调 → RPC 增量；验证重试字段及生成期间业务取消。"""
+    from tests.file_extraction_agent.test_streaming_retry import StreamingModel
+    from service.file_extraction_agent.core import loop
+
+    model = StreamingModel(failures=0 if cancel else 1)
+    if not cancel:
+        model._release.set()
+    monkeypatch.setattr(manager_module, "build_qa_model", lambda config: model)
+    monkeypatch.setattr(loop, "open_workspace", lambda refs: object())
+    monkeypatch.setattr(loop, "build_tools", lambda workspace: [])
+    stream = rpc.ChatCompletion(request(), timeout=5)
+    events = []
+    try:
+        for event in stream:
+            events.append(event)
+            if cancel and event.type == "model_message.delta":
+                assert not model._closed.is_set()
+                response = rpc.CancelCompletion(pb.CompletionRequest(completion_id="cmp_rpc"), timeout=1)
+                assert response.status == "cancelling"
+    finally:
+        stream.cancel()
+    assert [e.seq for e in events] == list(range(1, len(events) + 1))
+    assert events[-1].type == ("completion.cancelled" if cancel else "completion.completed")
+    if cancel:
+        assert not any(e.type == "model_message.done" for e in events)
+        assert model._calls == 1
+    else:
+        retry = next(e for e in events if e.type == "model_request.retrying")
+        assert retry.attempt == 2 and retry.max_attempts == 5 and retry.retry_delay_ms == 250
+        done = next(e for e in events if e.type == "model_message.done")
+        assert done.content == "前半后半" and done.message_id != retry.message_id
+        assert model._calls == 2
+
+
 def test_many_waiting_streams_keep_control_rpcs_available(rpc, manager, monkeypatch):
     """二十条活动流等待时，取消仍能立即处理。"""
     release = threading.Event()

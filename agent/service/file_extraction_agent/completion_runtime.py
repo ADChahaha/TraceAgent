@@ -17,8 +17,10 @@ from typing import Any, AsyncIterator, Callable, Iterable
 from langchain_core.messages import AIMessage, ToolMessage
 
 from service.file_extraction_agent.core.loop import run_qa_stream
+from service.file_extraction_agent.core.contracts import (
+    MessageStarted, MessageDelta, ModelRetry, ModelFailed, QaModel,
+)
 from service.file_extraction_agent.core.messages import _message_stop_signal, _terminal_stop_signals
-from service.file_extraction_agent.core.model import ChatModelFallbackChain
 from service.file_extraction_agent.schemas import DocumentQaMessage, ResourceRefs, RunOptions
 
 
@@ -28,7 +30,7 @@ _QUEUE_DONE = object()
 
 async def stream_completion_events(
     *, resource_path: ResourceRefs, messages: list[DocumentQaMessage],
-    qa_model: ChatModelFallbackChain | None = None,
+    qa_model: QaModel | None = None,
     run_options: RunOptions | None = None, should_stop=None,
 ) -> AsyncIterator[dict[str, Any]]:
     """路径与消息 → graph 批次输出 → 业务事件；管理 ID 不进入 graph。"""
@@ -41,7 +43,16 @@ async def stream_completion_events(
     )
     try:
         async for output in outputs:
-            if isinstance(output, AIMessage):
+            if isinstance(output, MessageStarted):
+                yield {"type": "model_message.started", "message_id": output.message_id}
+            elif isinstance(output, MessageDelta):
+                yield {"type": "model_message.delta", "message_id": output.message_id, "delta": output.delta}
+            elif isinstance(output, ModelRetry):
+                yield {"type": "model_request.retrying", **asdict(output)}
+            elif isinstance(output, ModelFailed):
+                yield _completion_event("failed", **asdict(output))
+                return
+            elif isinstance(output, AIMessage):
                 yield _model_message_event(output)
                 for call in output.tool_calls:
                     yield {"type": "tool_started", "tool": call["name"], "args": call["args"], "tool_call_id": call["id"]}
@@ -69,7 +80,8 @@ def _model_message_event(message: AIMessage) -> dict[str, Any]:
     """提取可见文本、工具调用和终止信号，不携带隐藏推理。"""
     stop_signal = _message_stop_signal(message)
     event = {
-        "type": "model_message",
+        "type": "model_message.done",
+        "message_id": message.id or "",
         "content": _message_content_text(message.content),
         "tool_call_count": len(message.tool_calls),
         "tool_calls": [{"id": call["id"], "name": call["name"], "args": call["args"]} for call in message.tool_calls],
@@ -145,7 +157,7 @@ class CompletionRuntime:
     之后的新事件被拒收；terminal 只提交一次；close_once 保证终态唯一。
     """
 
-    def __init__(self, resource_path: ResourceRefs, qa_model: ChatModelFallbackChain,
+    def __init__(self, resource_path: ResourceRefs, qa_model: QaModel,
                  messages: list[DocumentQaMessage], run_options: RunOptions | None = None,
                  on_close: Callable[[], None] | None = None) -> None:
         self.resource_path = resource_path
@@ -297,7 +309,7 @@ class CompletionRuntime:
             for event in active_events:
                 if _terminal_status(event) is not None:
                     continue
-                if event.get("type") == "model_message":
+                if event.get("type") in {"model_message", "model_message.done"}:
                     self._pending_tool_ids.update(call["id"] for call in event.get("tool_calls", []))
                 elif event.get("type") in {"tool_completed", "tool_failed"}:
                     self._pending_tool_ids.discard(event.get("tool_call_id"))

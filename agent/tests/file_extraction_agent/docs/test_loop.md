@@ -4,11 +4,11 @@
 
 执行链路：资源路径初始化工具上下文，运行参数绑定执行器；输入消息 → prompt/历史转换 → 绑定工具 → 正式 LangGraph agent/tools 循环 → 原样 yield AIMessage/ToolMessage；运行异常向外抛出，图内无事件或取消缓冲。
 
-messages.py 的 build_qa_messages 直接接收消息列表；独立 graph.py 的 build_qa_graph 接收 RunOptions 以及 model_invocation.py 与 executor.py 的执行函数；工具执行器不接收状态容器。工具并行提交并共享超时期限；按原始调用 ID 返回消息。超时失败先返回，迟到线程不能修改已返回消息。model_invocation 测试覆盖 astream/ainvoke 降级、响应终止信号校验和退避；completion_runtime 负责事件格式与最终回答标记。
+messages.py 的 build_qa_messages 直接接收消息列表；独立 graph.py 的 build_qa_graph 接收 RunOptions 以及 model_invocation.py 与 executor.py 的执行函数；工具执行器不接收状态容器。工具并行提交并共享超时期限；按原始调用 ID 返回消息。超时失败先返回，迟到线程不能修改已返回消息。model_invocation 测试覆盖 单次固定调用、失败对象和响应终止信号校验；completion_runtime 负责事件格式与最终回答标记。
 
 ## 测试函数
 
-- `test_qa_stream_yields_only_original_messages`：同一正式循环返回原始模型消息和匹配的工具回复，没有 outcome 包装或重复最终消息。
+- `test_qa_stream_yields_only_original_messages`：同一正式循环返回完整模型消息、增量和匹配的工具回复，没有 outcome 包装或重复最终消息。
 - `test_tool_context_has_no_event_or_runtime_buffers`：工具测试上下文不保存事件、action、序号、事件锁及取消批次状态。
 - `test_qa_requires_tool_binding_before_invoking_model`：缺少 `bind_tools` 的模型在调用前报错，不能通过旧字典协议执行备用循环。
 - `test_tool_timeout_emits_one_matching_result_and_discards_late_success`：验证超时只返回一个带调用 ID 的失败 ToolMessage，迟到成功不改写消息。
@@ -20,10 +20,6 @@ messages.py 的 build_qa_messages 直接接收消息列表；独立 graph.py 的
 - `test_parallel_tool_executor_runs_all_calls_concurrently`：直接验证 `_execute_tools_parallel` 会把同一批多个 tool_calls 并发执行（用一个 gate 证明两个工具同时进入执行而非串行等待），且各自返回带匹配 `tool_call_id` 的 `ToolMessage`。
 - `test_parallel_tool_executor_times_out_slow_call`：验证慢工具在超过 `tool_execution_timeout` 后返回带 `tool execution timeout` 结果的 `ToolMessage`，不会无限阻塞整个批次。
 - `test_qa_uses_responses_api_stream_and_merges_content_with_tool_calls`：确认 stream 调用能把 text chunk 和 tool call chunk 合并成带 content 和 tool_calls 的 `AIMessage`。
-- `test_qa_falls_back_from_stream_to_invoke_within_configured_transport`：确认一个已配置 transport 内 stream 失败后会降级到同 transport 的非流 invoke，不承担跨 Responses/chat-completions 自动切换。
-- `test_qa_uses_ethernet_backoff_between_failed_provider_attempts`：在 model_invocation 中替换退避时间槽，确认 provider attempt 失败后按 `[0, 2^k - 1]` slot 随机指数退避，再进入下一 attempt。
-- `test_qa_stops_after_provider_attempt_limit`：确认同一轮 provider 调用最多尝试五次，避免无限重试或长期占用 producer。
-- `test_qa_retries_transport_when_provider_stop_signal_requires_missing_tool_calls`：验证 provider 给出 `finish_reason=tool_calls` 但 LangChain 消息里没有实际 `tool_calls` 时，会把该响应视为不完整并切换到下一个 transport。
 - `test_qa_accepts_terminal_stop_message_without_tool_calls`：验证 `finish_reason=stop` 这类 terminal stop signal 仍会作为自然文本终态处理。
 - `test_qa_rejects_plan_only_message_without_terminal_stop_signal`：验证只有计划性文本、没有工具调用、也没有 terminal stop signal 的模型响应不能被当成完成结果。
 
@@ -31,3 +27,9 @@ messages.py 的 build_qa_messages 直接接收消息列表；独立 graph.py 的
 
 测试使用协程与异步迭代器驱动实际 Agent 链路；模型替身提供 astream/ainvoke，取消等待使用事件循环。
 工具执行替身通过 `run_tool(execute)` 归一化失败；不再传入未使用的状态、工具名或参数。
+
+- `test_qa_rejects_multiple_dynamic_configurations`：拒绝配置候选列表，禁止失败后探测其他配置。
+- `test_qa_returns_incomplete_response_failure`：缺失工具调用的响应返回明确的 without tool calls 失败说明，不在单次调用内重试。
+- 五次固定配置和指数退避的图验证见 test_streaming_retry.md。
+
+模型装配对象重命名为 ConfiguredChatModel，明确只保存一个固定调用配置。

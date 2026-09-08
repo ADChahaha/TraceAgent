@@ -133,7 +133,7 @@ class ToolCall(_message.Message):
     def __init__(self, id: _Optional[str] = ..., name: _Optional[str] = ..., args_json: _Optional[str] = ...) -> None: ...
 
 class CompletionEvent(_message.Message):
-    __slots__ = ("type", "seq", "status", "content", "tool", "tool_call_id", "args_json", "result_json", "tool_calls", "tool_call_count", "is_final", "stop_signal", "error", "error_message")
+    __slots__ = ("type", "seq", "status", "content", "tool", "tool_call_id", "args_json", "result_json", "tool_calls", "tool_call_count", "is_final", "stop_signal", "error", "error_message", "message_id", "delta", "attempt", "max_attempts", "retry_delay_ms")
     TYPE_FIELD_NUMBER: _ClassVar[int]
     SEQ_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
@@ -148,6 +148,11 @@ class CompletionEvent(_message.Message):
     STOP_SIGNAL_FIELD_NUMBER: _ClassVar[int]
     ERROR_FIELD_NUMBER: _ClassVar[int]
     ERROR_MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_ID_FIELD_NUMBER: _ClassVar[int]
+    DELTA_FIELD_NUMBER: _ClassVar[int]
+    ATTEMPT_FIELD_NUMBER: _ClassVar[int]
+    MAX_ATTEMPTS_FIELD_NUMBER: _ClassVar[int]
+    RETRY_DELAY_MS_FIELD_NUMBER: _ClassVar[int]
     type: str
     seq: int
     status: str
@@ -162,7 +167,12 @@ class CompletionEvent(_message.Message):
     stop_signal: str
     error: str
     error_message: str
-    def __init__(self, type: _Optional[str] = ..., seq: _Optional[int] = ..., status: _Optional[str] = ..., content: _Optional[str] = ..., tool: _Optional[str] = ..., tool_call_id: _Optional[str] = ..., args_json: _Optional[str] = ..., result_json: _Optional[str] = ..., tool_calls: _Optional[_Iterable[_Union[ToolCall, _Mapping]]] = ..., tool_call_count: _Optional[int] = ..., is_final: _Optional[bool] = ..., stop_signal: _Optional[str] = ..., error: _Optional[str] = ..., error_message: _Optional[str] = ...) -> None: ...
+    message_id: str
+    delta: str
+    attempt: int
+    max_attempts: int
+    retry_delay_ms: int
+    def __init__(self, type: _Optional[str] = ..., seq: _Optional[int] = ..., status: _Optional[str] = ..., content: _Optional[str] = ..., tool: _Optional[str] = ..., tool_call_id: _Optional[str] = ..., args_json: _Optional[str] = ..., result_json: _Optional[str] = ..., tool_calls: _Optional[_Iterable[_Union[ToolCall, _Mapping]]] = ..., tool_call_count: _Optional[int] = ..., is_final: _Optional[bool] = ..., stop_signal: _Optional[str] = ..., error: _Optional[str] = ..., error_message: _Optional[str] = ..., message_id: _Optional[str] = ..., delta: _Optional[str] = ..., attempt: _Optional[int] = ..., max_attempts: _Optional[int] = ..., retry_delay_ms: _Optional[int] = ...) -> None: ...
 
 class CompletionRequest(_message.Message):
     __slots__ = ("completion_id",)

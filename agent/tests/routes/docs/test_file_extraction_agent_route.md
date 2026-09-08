@@ -21,3 +21,6 @@
 
 事件替身使用异步生成器，与生产协程一致；同步 RPC 客户端的跨线程测试信号通过 await 等待。
 运行参数的显式零值使用 `tool_execution_timeout=0` 验证；工具调用上限已从共享协议删除。
+# 原生流式回归
+
+`test_real_graph_streams_native_chunks_and_retry_over_rpc`：真实 LangGraph 与 LangChain 回调进入 RPC，验证增量先于生成结束、重试字段编码、尝试 ID 隔离和业务取消的唯一终态。

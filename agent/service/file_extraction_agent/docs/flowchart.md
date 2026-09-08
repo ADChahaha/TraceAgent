@@ -10,8 +10,8 @@ flowchart TD
     D --> E["调用方保存路径与 HTML"]
     E --> F["ChatCompletion: resource_path + messages"]
     F --> G["manager 委托工具预检、创建问答模型、注册 CompletionRuntime"]
-    G --> H["loop 初始化工具与消息；graph 绑定执行函数并运行节点/路由；图内仅 messages"]
-    H --> I["LangGraph: 模型消息 / 完整工具结果批次"]
+    G --> H["loop 初始化工具与消息；graph 绑定执行函数并运行节点/路由；图内完整 messages 与重试状态"]
+    H --> I["LangGraph: messages 增量 / updates 节点结果"]
     I --> J["completion_runtime 包装事件字典"]
     J --> K["CompletionRuntime: queue → 唤醒异步消费者 → seq → 事件字典 → protobuf 流"]
     K --> L["移除本轮运行时，保留资源"]
@@ -34,3 +34,17 @@ flowchart TD
 ```
 
 具体契约以 [DESIGN.md](DESIGN.md) 为准。
+
+## 模型请求与重试
+
+```mermaid
+flowchart TD
+    A[agent: 固定配置单次请求] --> B{结果}
+    A -. messages 原生回调 .-> S[文本增量]
+    B -->|成功有工具| T[tools]
+    T --> A
+    B -->|成功无工具| E[结束]
+    B -->|失败且未达五次| R[updates 失败通知 → retry_wait 指数退避]
+    R --> A
+    B -->|第五次失败| F[completion.failed]
+```

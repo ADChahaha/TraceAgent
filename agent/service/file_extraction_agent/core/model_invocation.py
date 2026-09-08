@@ -1,13 +1,10 @@
-"""模型与消息 → 按顺序尝试 astream/ainvoke → 聚合并校验响应 → 返回完整 AIMessage。
+"""固定模型与历史 → 单次调用并聚合 → 校验 → 完整消息或失败结果。
 
-调用失败或响应不完整时用 asyncio.sleep 随机指数退避，最多五次；全部失败抛 RuntimeError，
-附带各次错误。消息转换与终止信号校验由 messages.py 负责。
+重试和指数退避由图节点负责；取消传播并关闭 provider 流，不转成普通失败。
 """
 
 from __future__ import annotations
 
-import asyncio
-import random
 from collections.abc import Sequence
 from langchain_core.messages import (
     AIMessage,
@@ -21,53 +18,33 @@ from service.file_extraction_agent.core.contracts import (
     ChatModel,
     ModelAttempts,
     ModelCallAttempt,
+    ModelCallFailure,
 )
 
 from service.file_extraction_agent.core.messages import _validate_model_message
 
-PROVIDER_ATTEMPT_LIMIT = 5
-PROVIDER_BACKOFF_SLOT_SECONDS = 0.25
-
-
-async def _invoke_model_message(model: BoundModel, messages: Sequence[BaseMessage]) -> AIMessage:
-    errors: list[tuple[str, Exception]] = []
-    attempts = _model_call_attempts(model)[:PROVIDER_ATTEMPT_LIMIT]
-    for attempt_index, attempt in enumerate(attempts):
-        try:
-            response: BaseMessage
-            if attempt.use_stream:
-                response = await _stream_model_message(attempt.model, messages)
-            else:
-                response = await attempt.model.ainvoke(messages)
-            if not isinstance(response, AIMessage):
-                raise TypeError("model must return an AIMessage")
-            _validate_model_message(response)
-            return response
-        except Exception as exc:
-            errors.append((attempt.name, exc))
-            if attempt_index < len(attempts) - 1:
-                await _sleep_before_next_provider_attempt(attempt_index)
-    details = "; ".join(f"{name}: {type(error).__name__}: {error}" for name, error in errors)
-    raise RuntimeError(f"all model call attempts failed: {details}")
+async def _invoke_model_message(model: BoundModel, messages: Sequence[BaseMessage]) -> AIMessage | ModelCallFailure:
+    attempt = _model_call_attempts(model)[0]
+    try:
+        response = (
+            await _stream_model_message(attempt.model, messages)
+            if attempt.use_stream else await attempt.model.ainvoke(messages)
+        )
+        if not isinstance(response, AIMessage):
+            raise TypeError("model must return an AIMessage")
+        _validate_model_message(response)
+        return response
+    except Exception as exc:
+        return ModelCallFailure(error=f"{type(exc).__name__}: {exc}")
 
 
 def _model_call_attempts(model: BoundModel) -> list[ModelCallAttempt]:
     if isinstance(model, ModelAttempts):
-        return model.model_call_attempts()
-    return [
-        ModelCallAttempt("stream", model, True),
-        ModelCallAttempt("invoke", model, False),
-    ]
-
-
-async def _sleep_before_next_provider_attempt(attempt_index: int) -> None:
-    if attempt_index >= PROVIDER_ATTEMPT_LIMIT - 1:
-        return
-    upper_slot = (2 ** max(0, attempt_index + 1)) - 1
-    slot_count = random.randint(0, upper_slot)
-    delay = slot_count * PROVIDER_BACKOFF_SLOT_SECONDS
-    if delay > 0:
-        await asyncio.sleep(delay)
+        attempts = model.model_call_attempts()
+        if len(attempts) != 1:
+            raise ValueError("exactly one fixed model configuration is required")
+        return attempts
+    return [ModelCallAttempt("stream", model, True)]
 
 
 async def _stream_model_message(model: ChatModel, messages: Sequence[BaseMessage]) -> AIMessage:

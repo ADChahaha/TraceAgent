@@ -17,3 +17,7 @@
 
 - `test_graph_owns_cancellation_and_drains_published_batch`：直接运行编译图，覆盖模型前、模型中、模型输出后及工具批次后取消；已发布批次结果齐全，取消后不再调用模型。
 - `test_graph_rejects_invalid_tool_ids_before_execution`：空 ID 或重复 ID 在图内报错，工具不会执行。
+
+流式契约同步：模型输出按 started → delta → done 验证，工具结果仍按调用 ID 配对。
+
+模型装配对象重命名为 ConfiguredChatModel，明确只保存一个固定调用配置。

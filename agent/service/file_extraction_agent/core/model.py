@@ -33,7 +33,7 @@ class ChatModelOptions(TypedDict, total=False):
     extra_body: JsonObject
 
 
-def build_qa_model(config: ModelConfig | None) -> "ChatModelFallbackChain":
+def build_qa_model(config: ModelConfig | None) -> "ConfiguredChatModel":
     normalized = normalize_model_config(config)
     return build_chat_model(normalized, normalized.model_name)
 
@@ -46,7 +46,7 @@ def normalize_model_config(config: ModelConfig | None) -> ModelConfig:
     raise TypeError(f"unexpected model config type: {type(config).__name__}")
 
 
-def build_chat_model(config: ModelConfig, model_name: str) -> "ChatModelFallbackChain":
+def build_chat_model(config: ModelConfig, model_name: str) -> "ConfiguredChatModel":
     if config.provider != "openai":
         raise ValueError(f"unsupported provider: {config.provider}")
     if not model_name:
@@ -56,7 +56,8 @@ def build_chat_model(config: ModelConfig, model_name: str) -> "ChatModelFallback
     kwargs: ChatModelOptions = {
         "model": model_name,
         "temperature": config.temperature,
-        "max_retries": config.max_retries,
+        # 图统一控制五次请求，禁用 SDK 内层重试，避免次数相乘。
+        "max_retries": 0,
     }
     kwargs["timeout"] = config.request_timeout or DEFAULT_MODEL_REQUEST_TIMEOUT_SECONDS
     if config.base_url:
@@ -82,7 +83,7 @@ def build_chat_model(config: ModelConfig, model_name: str) -> "ChatModelFallback
         if _should_enable_deepseek_thinking(config, model_name)
         else ChatOpenAI
     )
-    return ChatModelFallbackChain(
+    return ConfiguredChatModel(
         [
             ModelCallAttempt(
                 name=name,
@@ -94,19 +95,19 @@ def build_chat_model(config: ModelConfig, model_name: str) -> "ChatModelFallback
     )
 
 
-class ChatModelFallbackChain:
-    """按配置保存模型尝试顺序，绑定工具后生成独立的调用链。"""
+class ConfiguredChatModel:
+    """保存文件选定的单一调用配置，绑定工具时保留同一配置。"""
 
     def __init__(self, attempts: list[ModelCallAttempt]):
-        if not attempts:
-            raise ValueError("at least one model call attempt is required")
+        if len(attempts) != 1:
+            raise ValueError("exactly one fixed model configuration is required")
         self._attempts = attempts
 
     @property
     def attempts(self) -> list[ModelCallAttempt]:
         return list(self._attempts)
 
-    def bind_tools(self, tools: Sequence[Tool]) -> "ChatModelFallbackChain":
+    def bind_tools(self, tools: Sequence[Tool]) -> "ConfiguredChatModel":
         bound_attempts = []
         for attempt in self._attempts:
             bind_tools = getattr(attempt.model, "bind_tools", None)
@@ -118,7 +119,7 @@ class ChatModelFallbackChain:
                     use_stream=attempt.use_stream,
                 )
             )
-        return ChatModelFallbackChain(bound_attempts)
+        return ConfiguredChatModel(bound_attempts)
 
     def model_call_attempts(self) -> list[ModelCallAttempt]:
         return self.attempts
@@ -128,12 +129,10 @@ def _transport_attempt_specs(transport: str) -> list[tuple[str, bool, bool]]:
     if transport == "responses":
         return [
             ("responses_stream", True, True),
-            ("responses_invoke", True, False),
         ]
     if transport == "chat_completions":
         return [
             ("chat_completions_stream", False, True),
-            ("chat_completions_invoke", False, False),
         ]
     raise ValueError("MODEL_API_TRANSPORT must be responses or chat_completions")
 

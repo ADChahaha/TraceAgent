@@ -4,7 +4,7 @@ from unittest.mock import Mock, AsyncMock
 from langchain_core.messages import AIMessage, ToolMessage
 from service.file_extraction_agent.core import loop
 from service.file_extraction_agent.core import executor
-from service.file_extraction_agent.core.model import ChatModelFallbackChain, ModelCallAttempt
+from service.file_extraction_agent.core.model import ConfiguredChatModel, ModelCallAttempt
 from service.file_extraction_agent.schemas import DocumentQaMessage, RunOptions
 
 
@@ -56,9 +56,12 @@ async def test_path_graph_returns_complete_tool_batch_and_stops_after_cancel(mon
         resource_path="R",
         messages=messages,
         run_options=options,
-        qa_model=ChatModelFallbackChain([ModelCallAttempt("test", provider, False)]),
+        qa_model=ConfiguredChatModel([ModelCallAttempt("test", provider, False)]),
         should_stop=lambda: cancelled,
     )
+    from service.file_extraction_agent.core.contracts import MessageStarted, MessageDelta
+    assert isinstance(await anext(stream), MessageStarted)
+    assert isinstance(await anext(stream), MessageDelta)
     assert isinstance(await anext(stream), AIMessage)
     cancelled = True
     batch = await anext(stream)

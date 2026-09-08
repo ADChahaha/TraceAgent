@@ -12,3 +12,6 @@
 - `test_parser_failure_identifies_file_and_does_not_build_index`：解析异常映射 INTERNAL 并标明文件，不进入索引构建。
 
 图执行验证使用 ainvoke 和异步模型替身，保留原有资源边界断言。
+# 流式问答补充
+
+`test_qa_uses_prepared_path_without_rebuilding_or_deleting` 使用真实 LangChain 流式回调，验证 DOCX 资源准备后两轮 RPC 均输出增量和唯一 done，资源保持不变。

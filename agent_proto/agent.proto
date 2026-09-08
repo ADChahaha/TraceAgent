@@ -91,6 +91,12 @@ message CompletionEvent {
   optional string stop_signal = 12;
   optional string error = 13;
   optional string error_message = 14;
+  // 每次实际模型请求使用独立 ID；重试事件关联失败的请求。
+  optional string message_id = 15;
+  optional string delta = 16;
+  optional uint32 attempt = 17;
+  optional uint32 max_attempts = 18;
+  optional uint32 retry_delay_ms = 19;
 }
 message CompletionRequest { string completion_id = 1; }
 message CompletionResponse {

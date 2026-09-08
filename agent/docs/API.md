@@ -38,8 +38,8 @@ with grpc.insecure_channel("127.0.0.1:8001", options=[
         messages=[pb.QaMessage(role="user", content="付款期限是多少？")],
     ), timeout=300)
     for event in stream:
-        if event.type == "model_message":
-            print(event.content)
+        if event.type == "model_message.delta":
+            print(event.delta, end="", flush=True)
         if event.type.startswith("completion."):
             print(event.type)
 ```
@@ -67,12 +67,19 @@ ChatCompletion 为服务端流 RPC。输入转换为现有 DocumentQaMessage、R
 | --- | --- |
 | completion.created | 开始执行，status=in_progress |
 | source_indexed | 启动确认，result_json 为 `{"ok":true}`，不返回文档树 |
-| model_message | content、tool_calls、tool_call_count、is_final、可选 stop_signal |
+| model_message.started | message_id；每次实际请求独立，在首次输出被观察到时发送 |
+| model_message.delta | message_id、delta；新增可见文本 |
+| model_message.done | message_id、content、tool_calls、tool_call_count、is_final、可选 stop_signal |
+| model_request.retrying | message_id（失败尝试）、attempt（下一次，2–5）、max_attempts=5、retry_delay_ms、error |
 | tool_started | tool、tool_call_id、args_json |
 | tool_completed / tool_failed | 对应调用的 args_json、result_json |
 | completion.completed / completion.cancelled / completion.failed | 唯一业务终态、status、可选 error/error_message |
 
 args_json、result_json 及 ToolCall.args_json 用 JSON 字符串保留动态结构、大整数和 null；客户端用 json.loads 解码。其余固定字段使用 protobuf 类型，可选字段可用 HasField 判断。最终回答由 is_final=true 标记；工具调用 ID 仍用于配对，模型引用 documents 下的真实 Markdown key 路径。
+
+每次逻辑模型调用最多尝试五次，始终使用同一配置；指数退避为 250、500、1000、2000 ms。重试通知在等待结束前发出；第五次失败以 completion.failed 结束。SDK 内层重试关闭，旧 model_config.max_retries / MODEL_MAX_RETRIES 暂保留解析但不再控制请求次数。
+
+按 message_id 追加 delta，done.content 替换/确认完整正文，不再追加。收到 retrying 将关联旧消息标记失败；下一次 started 使用新 ID，正文不能拼接。失败的部分文本只供展示，不作为完整 assistant 历史回传。取消或失败可能没有 done。旧 model_message 消费端必须升级；本次只更新 agent 与共享协议，不宣称 backend/前端已完成适配。
 
 ## 取消与连接生命周期
 

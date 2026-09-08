@@ -89,14 +89,11 @@ def test_prepare_rejects_unsupported_or_missing_files(resources, rpc, files):
 
 def test_qa_uses_prepared_path_without_rebuilding_or_deleting(resources, rpc, monkeypatch, s3_store):
     """两轮真实图执行复用同一资源，不重建向量、不删除资源。"""
-    from langchain_core.messages import AIMessage
+    from tests.file_extraction_agent.test_streaming_retry import StreamingModel
     from service.file_extraction_agent import manager
-    class Model:
-        def bind_tools(self, tools):
-            return self
-        async def ainvoke(self, messages):
-            return AIMessage(content="回答", response_metadata={"finish_reason": "stop"})
-    monkeypatch.setattr(manager, "build_qa_model", lambda config: Model())
+    model = StreamingModel()
+    model._release.set()
+    monkeypatch.setattr(manager, "build_qa_model", lambda config: model)
     refs = list(upload(rpc).resource_path)
     bucket = _bucket(refs)
     before = sorted(s3_store.list_objects(bucket))
@@ -104,6 +101,8 @@ def test_qa_uses_prepared_path_without_rebuilding_or_deleting(resources, rpc, mo
         request = chat_request(refs, completion_id=cid)
         events = list(rpc.ChatCompletion(request, timeout=5))
         assert events[-1].type == "completion.completed"
+        assert "".join(e.delta for e in events if e.type == "model_message.delta") == "前半后半"
+        assert sum(e.type == "model_message.done" for e in events) == 1
         assert s3_store.get_object(bucket, "manifest.json") is not None
     assert sorted(s3_store.list_objects(bucket)) == before
 

@@ -1,4 +1,18 @@
-last updated: 2026-09-08 13:53:01
+last updated: 2026-09-08 18:21:17
+
+## 2026-09-08 18:21:17
+
+### 已完成工作
+
+- 固定配置单次模型请求 → LangGraph messages 实时增量 / updates 节点结果 → Runtime 队列 → gRPC；新增 started、delta、done 及独立消息 ID。
+- 单次失败返回 ModelCallFailure，图经 retry_wait 按 0.25、0.5、1、2 秒指数退避，总共最多请求五次；不切换配置，关闭 SDK 内层重试，并输出 model_request.retrying。
+- 失败尝试的局部文本不进入模型历史；验证生成及退避期间取消不会触发重试，并关闭模型 HTTP 响应流。
+- 同步协议生成绑定、设计、接口及一一对应测试文档。agent-gate 中问答、路由和打包检查共 187 passed；包含真实 ChatOpenAI 回调、受控 SSE 和真实 DOCX/RPC 链路。
+
+### 当前进展与下一步
+
+- 工具有界取消及 TOOL_ABORTED 收尾仍待实施，当前保留已发布工具批次先配齐结果的规则。
+- backend/前端需适配新事件、重试消息 ID 和中断历史；本次不宣称消费端已完成迁移。
 
 ## 2026-09-08 13:53:01
 

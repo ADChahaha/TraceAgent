@@ -9,9 +9,9 @@ resource_refs([{type, location}]) + messages + 模型/运行配置
   -> run_qa_stream 用 resource_refs 调 open_workspace，build_tools 绑定 ToolWorkspace
   -> messages.build_qa_messages 转换历史消息
   -> graph.stream_qa_graph 调 build_qa_graph，绑定 RunOptions、执行函数和停止信号
-  -> 仅 messages 进入 LangGraph
-  -> LangGraph 模型节点 / 工具节点
-  -> graph 将节点更新转换成 AIMessage / list[ToolMessage]，loop 原样转发
+  -> QaState 保存完整 messages 与请求次数、失败信息、退避时长
+  -> LangGraph agent 单次请求 / retry_wait 指数退避 / tools 工具节点
+  -> graph 合并 messages 增量和 updates 结果，loop 原样转发类型化通知
   -> completion_runtime 事件字典 → CompletionRuntime 队列 → 分配 seq 并输出事件字典
   -> 传输适配层负责响应消息编码
 ```
@@ -39,11 +39,15 @@ resource_refs([{type, location}]) + messages + 模型/运行配置
 
 ## 执行输入与状态
 
-图内只使用 LangGraph MessagesState 保存消息，不再定义自有 GraphState。资源路径、运行参数、工具访问器和 embedding 缓存均在图状态之外。
+QaState 继承 MessagesState，增加 model_attempt、model_failure、retry_delay_seconds。只有校验通过的完整消息进入 messages；失败尝试的部分文本不进入历史。资源路径、运行参数、工具访问器和 embedding 缓存均在图状态之外。
 
 `run_qa_stream` 是 Agent 接口：校验非空消息和资源定位数组 → open_workspace 创建 ToolWorkspace → build_tools 绑定四个共享工具 → build_qa_messages 转换完整历史 → 调用 graph.stream_qa_graph 并转发结果。loop 不解析图更新、不决定节点路由；关闭接口流时通过 aclosing 关闭内层生成器。
 
-graph.py 完整封装 LangGraph：build_qa_graph 绑定模型、工具执行器、超时和 should_stop → 以 MessagesState 编译 agent/tools 节点 → 节点通过 Command 提交消息及下一跳 → stream_qa_graph 消费 updates，转换为 AIMessage/完整 ToolMessage 批次 → finally 关闭图流。取消前后的检查、工具 ID 校验和执行器整体异常处理都在 graph 内，直接运行编译图也遵守批次契约。无效输入或工具 ID 抛 ValueError；模型尝试耗尽抛 RuntimeError。
+graph.py 绑定固定模型并编译 agent、retry_wait、tools 三个节点。agent 每次只调用一次 model_invocation；ModelCallFailure 通过 Command 更新状态，未达上限路由至 retry_wait，否则结束。retry_wait 等待 0.25、0.5、1、2 秒后回到 agent；同一逻辑模型调用总共最多五次请求。成功后计数归零，工具完成后的下一次模型调用重新计数。无效工具 ID 抛 ValueError，不发完整消息、不执行工具。
+
+stream_qa_graph 使用 graph.astream(stream_mode=["messages", "updates"])：messages 通过 LangChain 原生回调提供 chunk，updates 提供节点结束结果。只读取 agent 节点的可见文本，过滤隐藏推理和工具参数。每次实际请求首次观察到输出时分配独立 message_id 并发送 MessageStarted，随后 MessageDelta；完成后输出带同一 ID 的完整 AIMessage。没有回调的注入模型仅在完成时输出正文，不伪装为实时生成。
+
+失败更新转换成 ModelRetry 或 ModelFailed。重试通知在退避结束前输出，携带失败尝试的 message_id、下一次 attempt、max_attempts=5、retry_delay_ms、error；下一次请求使用新 ID。Runtime 将 ModelFailed 转为 completion.failed。关闭图流传播取消，模型与退避中的 CancelledError 不转换为失败或重试。
 
 RunOptions 只保留 tool_execution_timeout，默认 60 秒；删除从未参与执行的 max_tool_calls。LangGraph 的递归保护仍为 10000，由 graph 内部配置。
 
@@ -54,13 +58,18 @@ route 在模块顶部直接导入 completion_manager；标准库与内部工具�
 ## 循环职责拆分
 
 - loop.py：校验输入 → 初始化工具和消息 → 调用 graph.stream_qa_graph → 转发输出并传播关闭。
-- graph.py：绑定依赖 → 构建并运行 MessagesState 图 → 节点路由与停止检查 → 转换节点更新 → 关闭图流。
+- graph.py：绑定依赖 → 构建并运行 QaState 图 → 节点路由与停止检查 → 合并原生消息增量与节点更新 → 关闭图流。
 - contracts.py：声明模型/工具 Protocol、ModelCallAttempt、AgentOutput 和 JSON 类型。消息使用 LangChain 的具体类型；外部动态工具结果先以 object 接收，再由 messages 归一化为 JsonValue。
 - messages.py：完整历史 → 系统提示与角色/工具参数转换 → 模型输入；响应 → 终止信号校验，不完整响应抛 RuntimeError。JSON 归一化供工具结果封装复用。
-- model_invocation.py：模型与消息 → astream/ainvoke 尝试 → 聚合消息 → messages 校验 → 成功返回；失败通过 asyncio.sleep 随机退避，最多五次，耗尽后抛 RuntimeError。
+- model_invocation.py：固定模型与消息 → 单次 astream/ainvoke → 聚合与校验 → AIMessage 或 ModelCallFailure；finally 关闭响应流。重试由 graph 控制。
 - executor.py：调用列表和工具集合 → create_task 并发 ainvoke → asyncio.wait 共享 deadline 收集 → 按原顺序封装 ToolMessage；异常/超时转失败结果，不等待迟到线程。
 
 ## 消息批次与事件
+
+模型配置来自既有文件/环境配置及显式请求覆盖；ConfiguredChatModel 只保存一个选定配置，API 不变、streaming=True，不再尝试其他 API 或降级 ainvoke。SDK max_retries 固定为 0，避免与图的五次尝试相乘；旧配置字段暂保留解析，但不再控制 SDK 重试。
+
+对外模型事件为 model_message.started、model_message.delta、model_message.done，重试事件为 model_request.retrying。前端按 message_id 追加 delta；done.content 只能确认或替换，不能再次追加。重试标记旧尝试失败，新 ID 开始新正文。done 只代表本条消息完成，整轮仍以 completion 终态为准。协议是消费端行为变更，backend/前端的持久化及显示适配尚未在本次实施。
+
 
 每条 gRPC 流已绑定本轮请求，所有事件均不重复携带 completion ID；事件包装入口也不接收该参数。completion_id 仅供运行时注册、取消和状态查询使用。tool_call_id 及模型 tool_calls 内的 ID 仍保留，用于调用与结果配对。
 
@@ -68,7 +77,7 @@ route 在模块顶部直接导入 completion_manager；标准库与内部工具�
 模型节点调用 model_invocation._invoke_model_message
   → 校验响应完整性及工具 ID 唯一性
   → yield AIMessage
-  → completion_runtime 输出 model_message；有调用则输出 tool_started
+  → completion_runtime 输出 model_message.done；有调用则输出 tool_started
 
 工具节点调用 executor._execute_tools_parallel
   → asyncio.create_task 并发执行整批工具协程
@@ -78,7 +87,7 @@ route 在模块顶部直接导入 completion_manager；标准库与内部工具�
   → completion_runtime 直接输出 tool_completed / tool_failed
 ```
 
-事件包装不维护 pending 配对字典。执行器整体异常也由工具节点转换成整批失败结果，允许模型继续说明失败；普通模型调用失败在尝试耗尽后向 completion_runtime 抛 RuntimeError，以 completion.failed 收口。
+事件包装不维护 pending 配对字典。执行器整体异常也由工具节点转换成整批失败结果，允许模型继续说明失败；普通模型调用失败在图中指数退避，五次耗尽后通过 ModelFailed 以 completion.failed 收口。
 
 消息仅提取可见文本，不输出隐藏推理。合法 terminal stop signal 且无 tool_calls 时标记 is_final=true。图更新不重复输出历史消息或最后一条回答。
 

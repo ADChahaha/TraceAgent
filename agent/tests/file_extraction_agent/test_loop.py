@@ -24,7 +24,7 @@ from service.file_extraction_agent.schemas import DocumentQaMessage
 
 async def test_qa_stream_yields_only_original_messages(tmp_path, monkeypatch, resource_path):
     from unittest.mock import Mock, AsyncMock
-    from service.file_extraction_agent.core.model import ChatModelFallbackChain, ModelCallAttempt
+    from service.file_extraction_agent.core.model import ConfiguredChatModel, ModelCallAttempt
 
     provider = Mock(spec=["bind_tools", "ainvoke"])
     provider.bind_tools.return_value = provider
@@ -32,18 +32,19 @@ async def test_qa_stream_yields_only_original_messages(tmp_path, monkeypatch, re
     first = AIMessage(content="读取结构", tool_calls=[{"id": "ls-1", "name": "ls", "args": {}}])
     final = AIMessage(content="完成", response_metadata={"finish_reason": "stop"})
     provider.ainvoke.side_effect = [first, final]
-    model = ChatModelFallbackChain([ModelCallAttempt("test", provider, False)])
+    model = ConfiguredChatModel([ModelCallAttempt("test", provider, False)])
     messages = [
         item
         async for item in qa_module.run_qa_stream(
             resource_path=resource_path, messages=_state(tmp_path).messages, qa_model=model
         )
     ]
+    messages = [m for m in messages if isinstance(m, (AIMessage, list))]
     assert len(messages) == 3
-    assert messages[0] is first
+    assert messages[0].content == first.content
     assert isinstance(messages[1], list)
     assert messages[1][0].tool_call_id == "ls-1"
-    assert messages[2] is final
+    assert messages[2].content == final.content
 
 
 def test_tool_context_has_no_event_or_runtime_buffers(tmp_path):
@@ -349,169 +350,24 @@ async def test_qa_uses_responses_api_stream_and_merges_content_with_tool_calls()
     assert message.tool_calls == [{"name": "ls", "args": {"path": ""}, "id": "call-1", "type": "tool_call"}]
 
 
-async def test_qa_falls_back_from_stream_to_invoke_within_configured_transport():
-    calls = []
-
-    class FailingStreamModel:
-
-        def __init__(self, name):
-            self.name = name
-
-        async def astream(self, messages):
-            if False:
-                yield None
-            calls.append(f"{self.name}.stream")
-            raise RuntimeError(f"{self.name} failed")
-
-    class InvokeModel:
-
-        def __init__(self, name):
-            self.name = name
-
-        async def ainvoke(self, messages):
-            calls.append(f"{self.name}.invoke")
-            return AIMessage(
-                content="fallback invoke worked",
-                tool_calls=[{"id": "call-1", "name": "ls", "args": {"path": ""}}],
-            )
-
-    class NeverCalledModel:
-
-        async def ainvoke(self, messages):
-            raise AssertionError("later fallback should not be called")
-
-    class FallbackModel:
-
+async def test_qa_rejects_multiple_dynamic_configurations():
+    class MultipleModels:
         def model_call_attempts(self):
-            return [
-                SimpleNamespace(
-                    name="responses_stream", model=FailingStreamModel("responses"), use_stream=True
-                ),
-                SimpleNamespace(name="responses_invoke", model=InvokeModel("responses"), use_stream=False),
-                SimpleNamespace(name="chat_completions_invoke", model=NeverCalledModel(), use_stream=False),
-            ]
+            return [object(), object()]
 
-    message = await _invoke_model_message(FallbackModel(), ["messages"])
-    assert calls == ["responses.stream", "responses.invoke"]
-    assert message.content == "fallback invoke worked"
-    assert message.tool_calls[0]["name"] == "ls"
+    with pytest.raises(ValueError, match="exactly one fixed"):
+        await _invoke_model_message(MultipleModels(), [])
 
 
-async def test_qa_uses_ethernet_backoff_between_failed_provider_attempts(monkeypatch):
-    calls = []
-    sleeps = []
-
-    class FailingStreamModel:
-
-        def __init__(self, name):
-            self.name = name
-
+async def test_qa_returns_incomplete_response_failure():
+    class IncompleteModel:
         async def astream(self, messages):
-            if False:
-                yield None
-            calls.append(f"{self.name}.stream")
-            raise TimeoutError(f"{self.name} timeout")
+            yield AIMessageChunk(content="缺少工具", response_metadata={"finish_reason": "tool_calls"})
 
-    class SuccessfulInvokeModel:
-
-        async def ainvoke(self, messages):
-            calls.append("invoke")
-            return AIMessage(
-                content="fallback invoke worked",
-                tool_calls=[{"id": "call-1", "name": "ls", "args": {"path": ""}}],
-            )
-
-    class FallbackModel:
-
-        def model_call_attempts(self):
-            return [
-                SimpleNamespace(
-                    name="responses_stream", model=FailingStreamModel("responses"), use_stream=True
-                ),
-                SimpleNamespace(
-                    name="chat_completions_stream", model=FailingStreamModel("chat"), use_stream=True
-                ),
-                SimpleNamespace(name="responses_invoke", model=SuccessfulInvokeModel(), use_stream=False),
-            ]
-
-    monkeypatch.setattr(
-        model_invocation.asyncio, "sleep", AsyncMock(side_effect=lambda seconds: sleeps.append(seconds))
-    )
-    monkeypatch.setattr(random, "randint", lambda lower, upper: upper)
-    monkeypatch.setattr(model_invocation, "PROVIDER_BACKOFF_SLOT_SECONDS", 0.01)
-    message = await _invoke_model_message(FallbackModel(), ["messages"])
-    assert calls == ["responses.stream", "chat.stream", "invoke"]
-    assert sleeps == [0.01, 0.03]
-    assert message.content == "fallback invoke worked"
-
-
-async def test_qa_stops_after_provider_attempt_limit(monkeypatch):
-
-    class FailingStreamModel:
-
-        async def astream(self, messages):
-            if False:
-                yield None
-            del messages
-            raise TimeoutError("provider timeout")
-
-    class FallbackModel:
-
-        def model_call_attempts(self):
-            return [
-                SimpleNamespace(name=f"attempt_{index}", model=FailingStreamModel(), use_stream=True)
-                for index in range(7)
-            ]
-
-    monkeypatch.setattr(model_invocation.asyncio, "sleep", AsyncMock())
-    monkeypatch.setattr(random, "randint", lambda lower, upper: lower)
-    with pytest.raises(RuntimeError) as exc:
-        await _invoke_model_message(FallbackModel(), ["messages"])
-    message = str(exc.value)
-    assert "attempt_0" in message
-    assert "attempt_4" in message
-    assert "attempt_5" not in message
-
-
-async def test_qa_retries_transport_when_provider_stop_signal_requires_missing_tool_calls():
-    calls = []
-
-    class IncompleteToolCallStreamModel:
-
-        async def astream(self, messages):
-            calls.append("responses.stream")
-            assert messages == ["messages"]
-            yield AIMessageChunk(
-                content="我会先看文档结构，再决定下一步。", response_metadata={"finish_reason": "tool_calls"}
-            )
-
-    class CompleteToolCallInvokeModel:
-
-        async def ainvoke(self, messages):
-            calls.append("responses.invoke")
-            assert messages == ["messages"]
-            return AIMessage(
-                content="我先看结构。",
-                tool_calls=[{"id": "call-1", "name": "ls", "args": {"path": ""}}],
-                response_metadata={"finish_reason": "tool_calls"},
-            )
-
-    class FallbackModel:
-
-        def model_call_attempts(self):
-            return [
-                SimpleNamespace(
-                    name="responses_stream", model=IncompleteToolCallStreamModel(), use_stream=True
-                ),
-                SimpleNamespace(
-                    name="responses_invoke", model=CompleteToolCallInvokeModel(), use_stream=False
-                ),
-            ]
-
-    message = await _invoke_model_message(FallbackModel(), ["messages"])
-    assert calls == ["responses.stream", "responses.invoke"]
-    assert message.content == "我先看结构。"
-    assert message.tool_calls[0]["name"] == "ls"
+    from service.file_extraction_agent.core.contracts import ModelCallFailure
+    result = await _invoke_model_message(IncompleteModel(), [])
+    assert isinstance(result, ModelCallFailure)
+    assert "without tool calls" in result.error
 
 
 async def test_qa_accepts_terminal_stop_message_without_tool_calls():
@@ -540,12 +396,11 @@ async def test_qa_rejects_plan_only_message_without_terminal_stop_signal():
         def model_call_attempts(self):
             return [SimpleNamespace(name="responses_stream", model=PlanOnlyModel(), use_stream=True)]
 
-    try:
-        await _invoke_model_message(FallbackModel(), ["messages"])
-    except RuntimeError as exc:
-        assert "terminal stop signal" in str(exc)
-    else:
-        raise AssertionError("plan-only message without terminal stop signal should fail")
+    from service.file_extraction_agent.core.contracts import ModelCallFailure
+    result = await _invoke_model_message(FallbackModel(), ["messages"])
+    assert isinstance(result, ModelCallFailure)
+    assert "terminal stop signal" in result.error
+
 
 
 async def test_parallel_tool_executor_runs_all_calls_concurrently(tmp_path):

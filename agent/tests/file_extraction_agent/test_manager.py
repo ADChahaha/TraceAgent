@@ -24,14 +24,14 @@ async def test_runtime_yields_event_objects_with_sequence(resource_path, monkeyp
         "stream_completion_events",
         lambda **kwargs: async_items(
             [
-                {"type": "model_message", "content": "你好\n世界"},
+                {"type": "model_message.done", "content": "你好\n世界"},
                 {"type": "completion.completed", "status": "completed"},
             ]
         ),
     )
     runtime = CompletionRuntime(resource_path, object(), [DocumentQaMessage(role="user", content="问题")])
     assert [item async for item in runtime.stream()] == [
-        {"type": "model_message", "content": "你好\n世界", "seq": 1},
+        {"type": "model_message.done", "content": "你好\n世界", "seq": 1},
         {"type": "completion.completed", "status": "completed", "seq": 2},
     ]
     assert runtime.is_closed()
@@ -88,7 +88,7 @@ async def test_completion_runtime_streams_without_manager(resource_path, monkeyp
     assert [event["type"] for event in events] == [
         "completion.created",
         "source_indexed",
-        "model_message",
+        "model_message.done",
         "completion.completed",
     ]
     assert runtime.is_closed() and runtime.get_status() == "completed"
@@ -155,7 +155,7 @@ async def test_runtime_cancel_drains_real_graph_batch_and_skips_next_model(
 ):
     import json
     from unittest.mock import Mock, AsyncMock
-    from service.file_extraction_agent.core.model import ChatModelFallbackChain, ModelCallAttempt
+    from service.file_extraction_agent.core.model import ConfiguredChatModel, ModelCallAttempt
     from service.file_extraction_agent.core import loop
 
     started, release = (asyncio.Event(), asyncio.Event())
@@ -184,7 +184,7 @@ async def test_runtime_cancel_drains_real_graph_batch_and_skips_next_model(
     monkeypatch.setattr(
         manager_module,
         "build_qa_model",
-        lambda config: ChatModelFallbackChain([ModelCallAttempt("test", provider, False)]),
+        lambda config: ConfiguredChatModel([ModelCallAttempt("test", provider, False)]),
     )
     manager = CompletionManager()
     stream = manager.create(
@@ -273,12 +273,12 @@ async def test_manager_wraps_messages_and_pairs_same_name_calls(tmp_path, monkey
     assert [e["type"] for e in events] == [
         "completion.created",
         "source_indexed",
-        "model_message",
+        "model_message.done",
         "tool_started",
         "tool_started",
         "tool_completed",
         "tool_failed",
-        "model_message",
+        "model_message.done",
         "completion.completed",
     ]
     results = [e for e in events if e["type"] in {"tool_completed", "tool_failed"}]
@@ -306,7 +306,7 @@ async def test_graph_keeps_events_as_objects_until_stream_boundary(tmp_path, mon
     assert [event["type"] for event in events] == [
         "completion.created",
         "source_indexed",
-        "model_message",
+        "model_message.done",
         "completion.completed",
     ]
 
@@ -338,7 +338,7 @@ async def test_stream_preserves_runtime_failure_with_special_characters(tmp_path
 async def test_stream_preserves_terminal_words_in_data(tmp_path, monkeypatch, marker, resource_path):
     import json
 
-    ordinary = {"type": "model_message", "content": f"event: completion.{marker}"}
+    ordinary = {"type": "model_message.done", "content": f"event: completion.{marker}"}
     terminal = {"type": "completion.completed", "status": "completed"}
     monkeypatch.setattr(manager_module, "build_qa_model", lambda config: object())
     monkeypatch.setattr(
@@ -365,7 +365,7 @@ def test_terminal_status_reads_only_event_type(status):
     "event",
     [
         {"type": "completion.completed.extra"},
-        {"type": "model_message", "status": "failed", "content": "event: completion.failed"},
+        {"type": "model_message.done", "status": "failed", "content": "event: completion.failed"},
         {"content": "event: completion.cancelled"},
     ],
 )
@@ -516,7 +516,7 @@ async def test_create_completion_stream_flushes_committed_events_before_cancel(m
 
     async def fake_stream_completion_events(*, qa_model, **kwargs):
         del qa_model
-        yield {"type": "model_message", "content": "first"}
+        yield {"type": "model_message.done", "content": "first"}
         second_event_reached_graph.set()
         yield {"type": "tool_completed", "tool": "read"}
         await wait_event(release_graph, timeout=1.0)
@@ -544,7 +544,7 @@ async def test_create_completion_stream_flushes_committed_events_before_cancel(m
         remaining_events = await _frames(stream)
     finally:
         release_graph.set()
-    assert first_event == {"type": "model_message", "content": "first"}
+    assert first_event == {"type": "model_message.done", "content": "first"}
     assert remaining_events == [
         {"type": "tool_completed", "tool": "read"},
         {"type": "completion.cancelled", "status": "cancelled"},
@@ -609,7 +609,7 @@ async def test_terminate_defers_cancel_until_active_tool_batch_settles(monkeypat
     async def fake_stream_completion_events(*, qa_model, **kwargs):
         del qa_model
         yield {
-            "type": "model_message",
+            "type": "model_message.done",
             "content": "读取",
             "tool_calls": [{"id": "deferred-read", "name": "read", "args": {}}],
         }
@@ -747,11 +747,11 @@ def test_build_chat_model_builds_responses_transport_by_default(monkeypatch):
         ModelConfig(base_url="https://example.com/v1", api_key="key", model_name="qa"), "qa"
     )
     attempts = model.model_call_attempts()
-    assert [attempt.name for attempt in attempts] == ["responses_stream", "responses_invoke"]
-    assert [attempt.use_stream for attempt in attempts] == [True, False]
-    assert [kwargs["use_responses_api"] for kwargs in captured] == [True, True]
-    assert [kwargs["streaming"] for kwargs in captured] == [True, False]
-    assert [kwargs["timeout"] for kwargs in captured] == [8.0, 8.0]
+    assert [attempt.name for attempt in attempts] == ["responses_stream"]
+    assert [attempt.use_stream for attempt in attempts] == [True]
+    assert [kwargs["use_responses_api"] for kwargs in captured] == [True]
+    assert [kwargs["streaming"] for kwargs in captured] == [True]
+    assert [kwargs["timeout"] for kwargs in captured] == [8.0]
 
 
 def test_build_chat_model_builds_chat_completions_transport_when_configured(monkeypatch):
@@ -773,10 +773,10 @@ def test_build_chat_model_builds_chat_completions_transport_when_configured(monk
         "qa",
     )
     attempts = model.model_call_attempts()
-    assert [attempt.name for attempt in attempts] == ["chat_completions_stream", "chat_completions_invoke"]
-    assert [attempt.use_stream for attempt in attempts] == [True, False]
-    assert [kwargs["use_responses_api"] for kwargs in captured] == [False, False]
-    assert [kwargs["streaming"] for kwargs in captured] == [True, False]
+    assert [attempt.name for attempt in attempts] == ["chat_completions_stream"]
+    assert [attempt.use_stream for attempt in attempts] == [True]
+    assert [kwargs["use_responses_api"] for kwargs in captured] == [False]
+    assert [kwargs["streaming"] for kwargs in captured] == [True]
 
 
 def test_build_chat_model_rejects_unknown_transport():
@@ -910,7 +910,8 @@ def test_qa_records_model_message_content_and_tool_calls_without_reasoning(tmp_p
     )
     event = runtime_module._model_message_event(message)
     assert event == {
-        "type": "model_message",
+        "message_id": "",
+        "type": "model_message.done",
         "content": "I will inspect the root listing while calling a tool.",
         "tool_call_count": 1,
         "tool_calls": [{"id": "call-1", "name": "ls", "args": {"path": ""}}],

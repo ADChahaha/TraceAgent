@@ -18,3 +18,5 @@ agent_proto/agent.proto
 - 协议修改后重新生成并检查兼容性；生成失败由 protoc 非零退出报告，运行版本过旧由生成绑定在导入时拒绝。
 - RunOptions 只保留 tool_execution_timeout（编号 2）；已删除的 max_tool_calls 名称及编号 1 均保留为 reserved，避免后续复用。旧客户端的该字段会作为未知字段忽略。
 - 打包和生成同步测试暂由 agent/tests/test_packaging.py 验证，对应说明在 agent/tests/docs/test_packaging.md。
+
+- CompletionEvent 新增 message_id、delta、attempt、max_attempts、retry_delay_ms（15–19），支持模型增量和指数退避通知。字段追加可解码，但旧 model_message 被 started/delta/done 替代属于业务契约变更，消费端需同步升级。
