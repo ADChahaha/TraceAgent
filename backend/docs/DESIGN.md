@@ -4,6 +4,51 @@
 
 接口细节见 [API.md](API.md)。
 
+## 已确认的稳定消息历史设计（待实现）
+
+`qa_messages` 表、唯一索引及行级校验已在 schema 落地；业务尚未接入。目标是将其作为下一轮模型上下文的唯一持久化来源，`qa_events` 继续负责过程展示与续传。下文旧流程中“qa_messages + qa_events 重建上下文”和“仅在 completion.completed 写最终 assistant”的描述将由本节替代，当前 CRUD/service 尚未迁移。本次不补齐旧业务依赖的 qa_documents 等结构、不迁移资源接口或 gRPC。
+
+```text
+用户输入 → 独立完整消息入 qa_messages
+agent model_message.done
+  → 无工具调用：完整 assistant 单条提交
+  → 有工具调用：暂存 assistant，按 tool_call_id 等待全部实际工具结果
+  → 全部配齐且 backend 本地状态仍允许：同一事务提交 assistant + 全部 tool
+取消 → 当前事件临界区可完成；之后丢弃未配齐组和迟到事件
+下一轮 → 仅按 qa_messages.sequence 读取完整历史，不再拼接 qa_events
+```
+
+配对必须使用原始工具调用 ID；同名工具也独立配对，成功与失败结果都算完整结果。不完整组不补造结果、不部分入库。组提交与取消状态更新共用短临界区，已经提交的完整组保持不变；最终 completion 只收口 turn，不重复写 assistant。字段、幂等约束和中断示例见 [table.md](table.md)。数据库约束不能替代上述待实现的业务校验。
+
+### 同一 task 的轮次交接（待实现）
+
+同一 task 的旧轮消息提交、取消和新轮启动必须共用一把 task 级锁；不同 turn 各用一把锁不能保证历史交接。锁只保护本地短事务及历史快照读取，不限制后台线程数量。
+
+```text
+旧轮 worker 处理当前 agent event
+  → 获取 task_runtime.lock
+  → 按自身 old_turn_id 检查状态仍为 in_progress，且仍是本 task 的 active_turn
+  → 完成当前事件及已配齐消息组的事务，提交后释放锁
+
+cancel_task
+  → 获取同一把 task_runtime.lock，等待当前短事务完成
+  → 条件更新旧 turn 为 cancelled，写取消事件
+  → 仅在 active_turn_id 仍指向旧 turn 时清空它
+  → 提交事务后释放锁；从此旧 worker 不得再写历史
+  → 锁外 best-effort 通知旧 completion 取消，不等待线程计算结束
+
+新轮启动
+  → 获取同一把 task_runtime.lock，确认旧轮已结束
+  → 同一事务创建新 turn、保存新用户消息并登记新 active_turn_id
+  → 按 sequence 读取 qa_messages，取得包含新用户消息的独立历史快照
+  → 提交事务后释放锁
+  → 使用该快照在锁外调用 agent
+```
+
+新请求若在旧轮取消提交前到达，不得提前读取历史或启动生成；按当前接口的活跃轮校验拒绝，调用方在取消成功后重试。task 锁本身不保证并发请求按到达顺序执行。
+
+旧 worker 的后续事件、异常及 finally 收尾均按自己的 turn_id 做条件操作，不能借用新 active_turn 的状态通过检查，也不能无条件清空新轮的 active_turn_id。新轮快照读取必须发生在旧轮最后一次合法写入和取消事务提交之后；事务失败则不启动新轮。跨进程部署时，进程内锁须由数据库事务、条件更新或等效数据库锁补充，保证相同交接顺序。
+
 ## 1. 目标与边界
 
 backend 是多轮 QA 的持久化事实来源：
@@ -151,9 +196,31 @@ backend 不能依赖 agent timeout 才完成取消；timeout 只用于降低后�
 
 backend 的线程安全边界：
 
+### 取消时的单条事件处理边界（实现约定，待按此验收）
+
+这里的“一轮”指后台 worker 消费 agent 流的一次事件处理，不是整个 QA turn。取消最多允许已经进入处理临界区的当前事件完成短事务；下一条事件处理前必须重新检查 backend 本地 turn 状态，不能继续写入 DB。
+
+```text
+_run_turn 从 agent 流取得一条 event
+  -> 获取与 cancel_task 共用的 task runtime lock
+  -> 检查 qa_turns.status 是否仍为 in_progress
+     ├─ 否：丢弃该 event，退出消费并关闭上游流，不写 qa_events/qa_messages
+     └─ 是：完成当前 event 的短事务及对应事件提交，然后释放锁
+  -> 下一次处理 event 前再次加锁并检查状态
+
+cancel_task 到达
+  -> 当前事件若已进入临界区，允许它先处理完
+  -> 获取同一把锁，提交本地取消状态及取消事件
+  -> 后续 agent event 即使已在网络或接收缓冲区中，也不能再写入 DB
+```
+
+检查和当前事件写入必须处于同一个短临界区，不能先检查、释放锁，再无条件写库。若当前事件已先提交完成终态，后来的取消沿用既有终态规则。取消判断依赖 backend 本地状态，不等待 agent 的 `completion.cancelled`；该规则同时适用于现有 SSE 和后续 gRPC 消费。面向前端的 SSE 仍可按序发送取消前已经提交的 DB 事件，这不属于新增写入。
+
+以下为完整的线程安全边界：
+
 ```text
 cancel_task
-  -> 获取本 turn runtime lock
+  -> 获取本 task 共用的 task runtime lock
   -> 在 backend 本地立即写 turn.cancel_requested + turn.cancelled
   -> 清 task.active_turn_id
   -> 写入前端可见的 turn.cancel_requested / turn.cancelled 事件
@@ -161,7 +228,7 @@ cancel_task
   -> 锁外用短超时后台 worker best-effort 通知 agent cancel
 
 _run_turn 后台 QA worker
-  -> 从 agent SSE 读到任何 event 后，获取同一个 turn runtime lock
+  -> 从 agent SSE 读到任何 event 后，获取同一个 task runtime lock
   -> 如果 turn.status 已不是 in_progress，立即停止处理并丢弃迟到 event
   -> 只有 turn.status 仍是 in_progress 时，才允许写 agent.event / assistant message / turn 终态
   -> DB 写入和前端事件提交在同一个短临界区内完成
@@ -178,7 +245,7 @@ backend 的 turn runtime 与 agent completion runtime 使用同一类线性化�
 
 ```text
 backend producer: _run_turn 从 agent SSE 收到 event
-  -> with turn_runtime.lock
+  -> with task_runtime.lock
   -> 如果 turn 已 cancelling/cancelled/failed/completed，迟到 event 不写 DB、不转发
   -> 否则短事务写 qa_events(agent.event)
   -> 必要时写 qa_messages assistant 或 qa_turns 终态
@@ -186,7 +253,7 @@ backend producer: _run_turn 从 agent SSE 收到 event
   -> release lock
 
 backend cancel: cancel_task / 前端断开触发本地取消
-  -> with turn_runtime.lock
+  -> with task_runtime.lock
   -> 如果 turn 未 terminal，写 qa_turns cancelling/cancelled
   -> 清 qa_tasks.active_turn_id
   -> 写 qa_events(turn.cancel_requested / turn.cancelled)
@@ -200,7 +267,7 @@ frontend SSE consumer: GET /qa/tasks/{task_id}/events
   -> 看到 turn.cancelled / turn.completed / turn.failed 这类终态后收口
 ```
 
-DB 写入可以放在 `turn_runtime.lock` 内，因为它是本地短事务，用来保证 DB 状态和前端事件顺序一致；但锁内不得执行 agent HTTP cancel、agent completion stream、provider 请求、文件处理、长事务或重试等待。agent cancel 通知只能在锁外后台执行，否则上游卡住会反向卡住 backend 的本地取消。
+DB 写入可以放在 `task_runtime.lock` 内，因为它是本地短事务，用来保证 DB 状态和前端事件顺序一致；但锁内不得执行 agent HTTP cancel、agent completion stream、provider 请求、文件处理、长事务或重试等待。agent cancel 通知只能在锁外后台执行，否则上游卡住会反向卡住 backend 的本地取消。
 
 和 agent 一样，backend consumer 的结束也应由已提交事件决定，而不是直接读取 cancel flag。cancel flag/status 只用于 producer/cancel 决定后续事件还能不能写入；已经写进 `qa_events` 或 runtime queue 的旧事件必须按顺序发给前端，直到遇到 `turn.cancelled`、`turn.completed` 或 `turn.failed` 终态。
 
