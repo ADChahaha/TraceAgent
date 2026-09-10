@@ -1,18 +1,36 @@
-"""语义检索：资源路径 → 校验并加载已有索引 → 按清单加载查询模型 → 编码 query → top-k 候选。
+"""语义检索：资源路径 → 加载已有索引 → 子进程编码 query → top-k 候选。
 
-本文件集中管理 Agent 的 embedding 配置读取、索引加载、模型缓存与检索。
-不生成文档向量；损坏索引抛 ValueError，工具调用通过 run_tool 转成失败结果。
+实现步骤：
+
+```text
+state.embedding.load_index()
+  -> 读取 manifest.json / index.json / vectors.npy，校验维度与 covered_files
+  -> 返回内存 EmbeddingIndex（chunks + vectors）
+
+_search_embedding(state, query, top_k)
+  -> 空 query 直接返回 BAD_QUERY
+  -> load_index（阻塞读经 asyncio.to_thread）
+  -> 组装 worker 请求：query/top_k/model_id/dimension/chunks/vectors_b64
+  -> 每轮 completion 一个信号量，串行启动 worker 子进程
+  -> worker.py 在子进程里用纯 OpenVINO 编码 query 并返回 top-k
+  -> 取消时在 finally kill 子进程，保证可固定时间中断
+```
+
+索引加载后缓存；查询模型不在本进程加载，避免 torch/transformers 启动成本。
 """
 
 from __future__ import annotations
 
 import asyncio
-
+import base64
 import json
+import os
+import sys
 import threading
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from io import BytesIO
-from typing import TYPE_CHECKING, Protocol
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -25,11 +43,9 @@ from service.object_store import ObjectStore
 if TYPE_CHECKING:
     from service.file_extraction_agent.core.tools.workspace import ToolWorkspace
 
-from service.file_extraction_agent.core.tools.base import run_tool
-
-
-class Embedder(Protocol):
-    def encode(self, sentences: list[str]) -> NDArray[np.float32]: ...
+AGENT_ROOT = Path(__file__).resolve().parents[4]
+WORKER_MODULE = "service.file_extraction_agent.core.tools.worker"
+WORKER_TIMEOUT_SECONDS = 120.0
 
 
 @dataclass
@@ -54,10 +70,6 @@ class EmbeddingIndex:
     dimension: int = 0
 
 
-_model_cache: dict[tuple[str, str], Embedder] = {}
-_model_lock = threading.Lock()
-
-
 def _resolve_document_key(document_root: str, relative: str) -> str | None:
     """把索引引用的相对 .md 路径解析为桶内对象 key；越界返回 None。"""
     if not relative or relative.startswith("/") or ".." in relative.split("/"):
@@ -65,23 +77,8 @@ def _resolve_document_key(document_root: str, relative: str) -> str | None:
     return f"{document_root}/{relative}"
 
 
-def get_embedder(*, model_id: str, backend: str) -> Embedder:
-    """按清单配置惰性创建查询编码器，按模型与后端缓存，不加载文档生成模块。"""
-    key = (model_id, backend)
-    with _model_lock:
-        if key not in _model_cache:
-            from sentence_transformers import SentenceTransformer
-
-            _model_cache[key] = SentenceTransformer(
-                model_id,
-                trust_remote_code=True,
-                backend="openvino" if backend == "openvino" else "torch",
-            )
-        return _model_cache[key]
-
-
 class EmbeddingResources:
-    """资源桶 → 校验并缓存清单/索引 → 惰性加载查询模型；并行工具共用同轮缓存。"""
+    """资源桶 → 校验并缓存清单/索引；为每轮 completion 提供查询串行信号量。"""
 
     def __init__(self, store: ObjectStore, bucket: str, root_key: str = "index") -> None:
         self.store = store
@@ -90,8 +87,8 @@ class EmbeddingResources:
         self.model_id: str | None = None
         self.backend: str | None = None
         self._index: EmbeddingIndex | None = None
-        self._model: Embedder | None = None
         self._lock = threading.RLock()
+        self._search_semaphore: asyncio.Semaphore | None = None
 
     def _get(self, key: str) -> bytes:
         data = self.store.get_object(self.bucket, key)
@@ -130,7 +127,7 @@ class EmbeddingResources:
             or not np.isfinite(vectors).all()
         ):
             raise ValueError("invalid index vectors")
-        document_root = self.root_key and "documents" or "documents"
+        document_root = "documents"
         resolved_chunks = []
         for chunk in chunks:
             if not chunk.covered_files:
@@ -145,14 +142,11 @@ class EmbeddingResources:
         self.model_id, self.backend = model_id, backend
         return EmbeddingIndex(model_id, resolved_chunks, vectors, meta["dimension"])
 
-    def get_model(self) -> Embedder:
-        """先取得清单配置，再创建查询模型；不编码文档、不重建索引。"""
-        with self._lock:
-            self.load_index()
-            if self._model is None:
-                assert self.model_id is not None and self.backend is not None
-                self._model = get_embedder(model_id=self.model_id, backend=self.backend)
-            return self._model
+    def search_slot(self) -> asyncio.Semaphore:
+        """每轮 completion 内串行启动 worker，避免并发进程导致的内存尖峰。"""
+        if self._search_semaphore is None:
+            self._search_semaphore = asyncio.Semaphore(1)
+        return self._search_semaphore
 
 
 def search_top_k(
@@ -196,36 +190,90 @@ def _normalize(matrix: NDArray[np.float32]) -> None:
     matrix /= norms
 
 
-def _get_index(state: ToolWorkspace) -> EmbeddingIndex:
+def _get_index(state: "ToolWorkspace") -> EmbeddingIndex:
     """加载或复用工具上下文中的已有索引，问答期间不构建文档向量。"""
     return state.embedding.load_index()
 
 
-def _search_embedding(
-    state: ToolWorkspace,
+def _worker_command() -> list[str]:
+    return [sys.executable, "-m", WORKER_MODULE]
+
+
+def _kill(process: asyncio.subprocess.Process) -> None:
+    if process.returncode is None:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+
+
+async def _run_worker(request: dict[str, Any]) -> dict[str, Any]:
+    """启动 worker 子进程，发送请求并读取响应；取消/超时都会 kill 进程。"""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(AGENT_ROOT), env.get("PYTHONPATH", "")) if part
+    )
+    process = await asyncio.create_subprocess_exec(
+        *_worker_command(),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=str(AGENT_ROOT),
+        env=env,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(json.dumps(request, ensure_ascii=False).encode("utf-8")),
+            timeout=WORKER_TIMEOUT_SECONDS,
+        )
+        if process.returncode != 0 and not stdout:
+            return _error(f"embedding worker failed: {stderr.decode('utf-8', 'replace')[:500]}")
+        try:
+            response = json.loads(stdout.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            return _error(f"invalid embedding worker response: {exc}")
+        if not isinstance(response, dict):
+            return _error("invalid embedding worker response")
+        return response
+    except asyncio.TimeoutError:
+        return _error("embedding worker timed out")
+    finally:
+        _kill(process)
+
+
+def _build_worker_request(index: EmbeddingIndex, query: str, top_k: int) -> dict[str, Any]:
+    vectors = np.ascontiguousarray(index.vectors, dtype="<f4")
+    dimension = int(index.dimension or (vectors.shape[1] if vectors.ndim == 2 else 0))
+    return {
+        "query": query,
+        "top_k": top_k,
+        "model_id": index.model_id,
+        "dimension": dimension,
+        "chunks": [asdict(chunk) for chunk in index.chunks],
+        "vectors_b64": base64.b64encode(vectors.tobytes()).decode("ascii"),
+    }
+
+
+async def _search_embedding(
+    state: "ToolWorkspace",
     *,
     query: str,
     top_k: int = 5,
 ) -> JsonObject:
-    def execute() -> JsonObject:
-        if not isinstance(query, str) or not query.strip():
-            return {"ok": False, "errors": [{"code": "BAD_QUERY", "message": "query is required"}]}
-        top_k_bounded = max(1, min(int(top_k or 5), 20))
-        embedder = _get_embedder(state)
-        index = _get_index(state)
-        query_vec = embedder.encode([query])
-        results = search_top_k(query_vec, index, top_k_bounded)
-        return {"ok": True, "query": query, "results": results}
-
-    return run_tool(execute)
+    if not isinstance(query, str) or not query.strip():
+        return {"ok": False, "errors": [{"code": "BAD_QUERY", "message": "query is required"}]}
+    top_k_bounded = max(1, min(int(top_k or 5), 20))
+    index = await asyncio.to_thread(_get_index, state)
+    request = _build_worker_request(index, query, top_k_bounded)
+    async with state.embedding.search_slot():
+        return await _run_worker(request)
 
 
-def _get_embedder(state: ToolWorkspace) -> Embedder:
-    """使用工具上下文的清单配置，返回本轮缓存的查询模型。"""
-    return state.embedding.get_model()
+def _error(message: str) -> dict[str, Any]:
+    return {"ok": False, "errors": [{"message": message}]}
 
 
-def build_search_embedding(state: ToolWorkspace) -> BaseTool:
+def build_search_embedding(state: "ToolWorkspace") -> BaseTool:
     @tool
     async def search_embedding(query: str, top_k: int = 5) -> JsonObject:
         """Semantic search across chunks using embeddings.
@@ -241,9 +289,16 @@ def build_search_embedding(state: ToolWorkspace) -> BaseTool:
         file before citing it in your answer.
         """
 
-        return await asyncio.to_thread(_search_embedding, state, query=query, top_k=top_k)
+        return await _search_embedding(state, query=query, top_k=top_k)
 
     return search_embedding
 
 
-__all__ = ["build_search_embedding", "_search_embedding", "_get_embedder", "_get_index"]
+__all__ = [
+    "build_search_embedding",
+    "_search_embedding",
+    "_get_index",
+    "_build_worker_request",
+    "_run_worker",
+    "_worker_command",
+]

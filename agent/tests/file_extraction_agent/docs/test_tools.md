@@ -32,9 +32,9 @@ graph 加载资源。
 - `test_read_rejects_non_file_path`：验证 read 对不存在/非文件 key 返回 `BAD_PATH` 错误。
 - `test_grep_can_scope_to_directory`：验证 grep 可限定在某 key 前缀范围内搜索。
 - `test_grep_matches_case_insensitively_and_limits_results`：验证 grep 大小写不敏感并限制结果数。
+- `test_search_embedding_sends_index_request_and_returns_worker_results`：`search_embedding` 组装含 `model_id/dimension/chunks/vectors_b64` 的 worker 请求，并透传 worker 响应。
 - `test_search_embedding_returns_result_without_event_state`：直接工具调用返回检索结果，不依赖或创建事件缓冲。
-- `test_search_embedding_returns_text_and_covered_files_sorted`：用工具侧 Chunk/EmbeddingIndex 构造替身，验证候选按相似度排序。
-- `test_search_embedding_rejects_empty_query`：空查询返回 BAD_QUERY 失败结果。
+- `test_search_embedding_rejects_empty_query`：空查询返回 BAD_QUERY，且不会启动 worker。
 
 工具测试直接构造文档访问上下文，不再调用 manager 创建工作目录。
 `test_run_tool_only_needs_operation_and_normalizes_failure`：执行入口只接收操作，异常转为统一失败对象。

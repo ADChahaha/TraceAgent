@@ -38,9 +38,11 @@ ChatCompletion（resource_refs + messages）
 | service/file_extraction_agent/core/model_invocation.py | 单次模型调用、流式聚合和失败结果 |
 | service/file_extraction_agent/core/executor.py | 工具并行执行、共享超时、逐项结果回调与取消清理 |
 | service/file_extraction_agent/core/graph.py | LangGraph 状态、单次请求/指数退避/工具节点、路由及节点停止检查 |
-| service/file_extraction_agent/core/tools/workspace.py | 资源定位解析、S3ObjectStore 读取、文件浏览与读取 |
-| service/file_extraction_agent/core/tools/embedding.py | 清单配置和索引读取（经 storage 服务）、查询模型缓存、query 编码与检索 |
-| service/object_store.py | ObjectStore 接口 + S3ObjectStore（boto3）+ s3:// URL 解析 |
+| service/file_extraction_agent/core/tools/workspace.py | 资源定位解析、documents.zip 内存摊开、组合 store 浏览与读取 |
+| service/file_extraction_agent/core/tools/embedding.py | 清单配置和索引读取（经 storage 服务）、组装请求并调度检索子进程 |
+| service/file_extraction_agent/core/tools/worker.py | 检索子进程入口：stdin 请求 → 纯 OpenVINO 编码 → stdout top-k |
+| service/file_extraction_agent/core/tools/ov_embedder.py | 纯 OpenVINO 查询编码器（tokenizer + IR + mean pooling + L2） |
+| service/object_store.py | ObjectStore 接口 + S3ObjectStore（boto3）+ Archive/Composite store + s3:// URL 解析 |
 
 两个业务包通过 storage 服务交接，互不导入。`document_resources` 只生成并发布资源；问答读取由工具层经 S3ObjectStore 负责。
 

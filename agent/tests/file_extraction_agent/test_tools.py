@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import inspect
 
 import pytest
@@ -205,13 +207,6 @@ def _fake_embedder(texts):
     return np.array(rows, dtype=np.float32)
 
 
-class _FakeEmbedder:
-    dim = 3
-
-    def encode(self, texts):
-        return _fake_embedder(texts)
-
-
 def _fake_index():
     import numpy as np
 
@@ -227,59 +222,94 @@ def _fake_index():
 
 
 def _install_fake_index(monkeypatch):
-    fake_embedder = _FakeEmbedder()
-
-    def fake_get_index(state):
-        return _fake_index()
-
-    monkeypatch.setattr("service.file_extraction_agent.core.tools.embedding._get_index", fake_get_index)
     monkeypatch.setattr(
-        "service.file_extraction_agent.core.tools.embedding._get_embedder", lambda state: fake_embedder
+        "service.file_extraction_agent.core.tools.embedding._get_index", lambda _state: _fake_index()
     )
 
 
-def test_search_embedding_returns_text_and_covered_files_sorted(tmp_path, monkeypatch):
+def _install_worker(monkeypatch, response):
+    calls: dict = {}
+
+    async def fake_run_worker(request):
+        calls["request"] = request
+        return response
+
+    monkeypatch.setattr(
+        "service.file_extraction_agent.core.tools.embedding._run_worker", fake_run_worker
+    )
+    return calls
+
+
+async def test_search_embedding_sends_index_request_and_returns_worker_results(tmp_path, monkeypatch):
     state = _state(tmp_path)
     _install_fake_index(monkeypatch)
+    response = {
+        "ok": True,
+        "query": "payment",
+        "results": [
+            {
+                "score": 0.9,
+                "document": "contract.pdf",
+                "chunk_id": "contract.pdf#c1",
+                "text": "Either party may terminate with notice.",
+                "token_range": [0, 6],
+                "covered_files": ["documents/a/1.md"],
+            }
+        ],
+    }
+    calls = _install_worker(monkeypatch, response)
 
-    result = _search_embedding(state, query="payment", top_k=3)
+    result = await _search_embedding(state, query="payment", top_k=3)
 
-    assert result["ok"] is True
-    assert result["query"] == "payment"
-    assert len(result["results"]) == 3
-    assert result["results"][0]["score"] >= result["results"][-1]["score"]
-    for item in result["results"]:
-        assert item["text"]
-        assert item["document"]
-        assert item["covered_files"]
-        assert item["chunk_id"]
+    assert result == response
+    request = calls["request"]
+    assert request["query"] == "payment"
+    assert request["top_k"] == 3
+    assert request["model_id"] == "fake-a8m"
+    assert request["dimension"] == 3
+    assert len(request["chunks"]) == 3
+    assert len(base64.b64decode(request["vectors_b64"])) == 3 * 3 * 4
 
 
-def test_search_embedding_returns_result_without_event_state(tmp_path, monkeypatch):
+async def test_search_embedding_returns_result_without_event_state(tmp_path, monkeypatch):
     state = _state(tmp_path)
     _install_fake_index(monkeypatch)
+    _install_worker(monkeypatch, {"ok": True, "query": "payment", "results": []})
 
-    result = _search_embedding(state, query="payment", top_k=1)
+    result = await _search_embedding(state, query="payment", top_k=1)
     assert result["ok"] is True
     assert not hasattr(state, "events")
 
 
-def test_search_embedding_rejects_empty_query(tmp_path, monkeypatch):
+async def test_search_embedding_rejects_empty_query(tmp_path, monkeypatch):
     state = _state(tmp_path)
+
+    async def forbidden(request):
+        raise AssertionError("worker must not start for an empty query")
+
     monkeypatch.setattr(
-        "service.file_extraction_agent.core.tools.embedding._get_embedder", lambda state: _fake_embedder
+        "service.file_extraction_agent.core.tools.embedding._run_worker", forbidden
     )
 
-    result = _search_embedding(state, query="   ", top_k=3)
+    result = await _search_embedding(state, query="   ", top_k=3)
 
     assert result["ok"] is False
     assert result["errors"][0]["code"] == "BAD_QUERY"
+
+
+class _FakeEmbedding:
+    def __init__(self):
+        self._slot = asyncio.Semaphore(1)
+
+    def search_slot(self):
+        return self._slot
 
 
 def _prepare_test_state(*, documents, messages, workspace_root):
     """工具和 prompt 测试只准备文件树，不引入 completion 管理字段。"""
     return SimpleNamespace(
         document=DocumentFileTree.from_local_dir(materialize_tree(documents, workspace_root)),
+        embedding=_FakeEmbedding(),
         messages=messages,
         run_options=RunOptions(),
     )

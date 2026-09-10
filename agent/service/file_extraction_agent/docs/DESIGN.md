@@ -133,9 +133,9 @@ RPC 断连回调绑定具体 runtime，避免旧 ID 误取消新请求。初始�
 
 工具对模型暴露 async coroutine；executor 优先 await ainvoke。文件浏览、纯 Python 搜索与本地 embedding 使用 asyncio.to_thread 执行同步叶子操作，事件循环不承担磁盘等待或推理计算。
 
-工具各自使用单文件：`tools/ls.py`、`grep.py`、`read.py`、`embedding.py`。共享文件访问在 `workspace.py`，异常结果归一化在 `base.py`。
+工具各自使用单文件：`tools/ls.py`、`grep.py`、`read.py`、`embedding.py`；语义检索的子进程入口是 `tools/worker.py`，纯 OpenVINO 查询编码器在 `tools/ov_embedder.py`。共享文件访问在 `workspace.py`，异常结果归一化在 `base.py`。
 
-run_tool 只接收 execute 操作，正常返回结果，普通异常转为 ok:false。工具工厂直接使用必需的 LangChain @tool，返回 BaseTool；不保留缺依赖时退化为普通函数的分支。查询编码器使用 Embedder 协议，索引和工作区使用具体类型。
+run_tool 只接收 execute 操作，正常返回结果，普通异常转为 ok:false。工具工厂直接使用必需的 LangChain @tool，返回 BaseTool；不保留缺依赖时退化为普通函数的分支。索引加载、工作区与文档树使用具体类型。
 
 ```text
 workspace.validate_resource(resource_refs)
@@ -144,19 +144,22 @@ workspace.validate_resource(resource_refs)
   -> 无效资源抛 ValueError，gRPC 在首事件前返回 INVALID_ARGUMENT
 
 search_embedding(query)
-  -> 校验 query；使用工具上下文的 EmbeddingResources
-  -> 从 storage 服务读取 manifest.json、index.json、vectors.npy（BytesIO 加载）
-  -> 根据清单的 model_id/backend 获取缓存查询模型
-  -> encode([query])，归一化查询向量并计算 top-k
+  -> 校验 query；load_index 读取 manifest.json/index.json/vectors.npy（阻塞读走 to_thread）
+  -> 组装子进程请求：query/top_k/model_id/dimension/chunks/vectors_b64
+  -> 每轮 completion 一个信号量，串行启动 python -m ...tools.worker
+  -> worker 用纯 OpenVINO 编码 query、计算 top-k，经 stdout 返回 JSON
+  -> 取消/超时/失败都在 finally kill 子进程
   -> 返回文本、分数与文档 key 引用；工具异常转换为 ok:false
 ```
 
-RPC 预检加载索引但不创建查询模型；实际工具执行时另建本轮上下文。`EmbeddingResources` 的锁保证并行查询只初始化一次索引和模型引用。查询模型按模型 ID 与后端缓存在 `embedding.py`；生成端模型缓存独立，不新增公共模型模块。问答不重建文档向量。
+RPC 预检加载索引但不在本进程加载查询模型。`EmbeddingResources` 的锁保证并行查询只初始化一次索引，并提供本轮查询信号量，避免并发 worker 进程造成内存尖峰。查询编码只依赖 openvino + tokenizers，不 import torch/transformers；生成端索引构建仍用 sentence-transformers。问答不重建文档向量。
+
+基准（本机、OpenVINO CPU、默认模型，实测）：检索子进程每次启动约 2.3s、峰值内存约 420MB，稳态编码约 3ms/条；对比 sentence-transformers 包装启动约 21s。当前按“每调用一个进程”换取可 kill 的取消语义与实现简单，不引入常驻 worker。
 
 - `ls(path="")`：逐层浏览资源的 documents 目录。
 - `grep(query, scope="", max_results=20)`：纯 Python 遍历 .md 对象并做忽略大小写的字面匹配候选行。
 - `read(path)`：读取真实 Markdown 文件，拒绝文档目录之外的路径。
-- `search_embedding(query, top_k=5)`：沿用资源记录的模型编码 query，从已加载索引召回文本及 covered_files；删除从未参与过滤的 scope 参数。
+- `search_embedding(query, top_k=5)`：沿用资源记录的模型，在一次性子进程里用纯 OpenVINO 编码 query，从已加载索引召回文本及 covered_files；子进程可被取消 kill，删除从未参与过滤的 scope 参数。
 
 Markdown 文件树由资源模块创建：文档标题作为顶层目录后缀，h1–h6 按层级建目录；paragraph、list、table 分别作为文件。排序使用数字前缀；合并表格单元格展开为 Markdown。内部 index/manifest 不暴露给浏览工具。
 

@@ -25,7 +25,6 @@ from __future__ import annotations
 from langchain_core.tools import BaseTool
 
 from service.file_extraction_agent.core.tools.embedding import (
-    _get_embedder,
     _get_index,
     _search_embedding,
     build_search_embedding,
@@ -72,7 +71,6 @@ __all__ = [
     "_grep_output",
     "_read_result",
     "_locator_error",
-    "_get_embedder",
     "_get_index",
     "run_tool",
     "expose_entries",
