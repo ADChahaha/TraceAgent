@@ -1,4 +1,18 @@
-last updated: 2026-09-08 19:57:41
+last updated: 2026-09-10 16:08:00
+
+## 2026-09-10 16:08:00
+
+### 已完成工作
+
+- 文档资源改为单对象发布：documents 树打成 documents.zip；index/index.json、index/vectors.npy、manifest.json、raw/<filename> 各自独立；resource_path 的 documents 指向 documents.zip。
+- 新增 ArchiveObjectStore（zip 内存只读对象存储）与 CompositeObjectStore（按 key 前缀把 documents/* 路由到归档、其余走 S3）；open_workspace 一次 GET 归档后整包解到内存虚拟文件系统，ls/read/grep/covered_files 语义不变。
+- agent_proto 删除 PrepareResourcesResponse.documents 字段与 Document 消息（编号 2 置 reserved）并重新生成 pb2/pyi/grpc；document_resources 路由不再构造/返回 documents。
+- TDD：新增 test_archive_store.py；document_resources 路由测试改为断言 documents.zip 与独立对象、协议无 documents payload。agent-gate 下 routes + file_extraction_agent + packaging 共 209 passed。
+- 同步 document_resources / file_extraction_agent / agent / agent_proto 的 DESIGN、API、README 及测试文档。
+
+### 下一步
+
+- backend 适配文档树归档与 gRPC resource_path（backend service 尚未迁移）。
 
 ## 2026-09-08 19:57:41
 

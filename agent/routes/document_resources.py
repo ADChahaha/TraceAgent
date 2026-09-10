@@ -57,5 +57,4 @@ def _prepare(request):
     refs = prepare_resources(documents, raw_files=raw_files)
     return pb.PrepareResourcesResponse(
         resource_path=[pb.ResourceRef(type=ref.type, location=ref.location) for ref in refs],
-        documents=[pb.Document(filename=doc.filename, html=doc.html) for doc in documents],
     )

@@ -3,14 +3,14 @@
 服务名为 `traceagent.v1.AgentService`，协议见 [agent.proto](../../agent_proto/agent.proto)。调用方先准备文档，再保存资源定位数组并用于每轮问答：
 
 ```text
-PrepareResources(files) → 解析与索引构建 → resource_path([{type, location}]) + documents
+PrepareResources(files) → 解析与索引构建 → resource_path([{type, location}])
 ChatCompletion(resource_path + messages) → 校验资源 → 单轮执行 → CompletionEvent 流
 CancelCompletion(completion_id) → 立即确认取消请求 → 原问答流随后收尾
 ```
 
 `resource_path` 是 `repeated ResourceRef`，每项 `{type, location}`，location 为
-`s3://<bucket>[/<key>]`。type 取值：`documents`（Markdown 文件树）、`index`（embedding 索引）、
-`raw`（原始上传文件，每个文件一项）。资源发布在独立的 storage 服务上。
+`s3://<bucket>[/<key>]`。type 取值：`documents`（`documents.zip` 归档，成员为 Markdown 文件树）、
+`index`（embedding 索引）、`raw`（原始上传文件，每个文件一项）。资源发布在独立的 storage 服务上。
 
 agent 的 HTTP 路由已移除。backend 尚未适配 gRPC，以下示例使用生成的 Python 客户端。
 
@@ -44,7 +44,7 @@ with grpc.insecure_channel("127.0.0.1:8001", options=[
             print(event.type)
 ```
 
-PrepareResources 为一元 RPC：一次传入全部文件的 filename/bytes，按后缀选择 PDF 或 DOCX；等待全部解析和资源发布后返回 resource_path（[{type, location}] 数组）与 documents(filename/html)。没有分块上传。请求、响应各受配置消息上限约束，上传 bytes 与返回 HTML 都要计入大小。任一文件处理失败则整组失败，不返回可用定位；已发布资源不会随问答结束删除。
+PrepareResources 为一元 RPC：一次传入全部文件的 filename/bytes，按后缀选择 PDF 或 DOCX；等待全部解析和资源发布后返回 resource_path（[{type, location}] 数组）。文档树发布为单个 `documents.zip`，HTML 不再内联返回；index/manifest 与 raw 各自独立对象。没有分块上传。请求、响应各受配置消息上限约束。任一文件处理失败则整组失败，不返回可用定位；已发布资源不会随问答结束删除。
 
 ## 问答请求
 

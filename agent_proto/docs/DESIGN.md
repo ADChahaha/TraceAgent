@@ -20,3 +20,4 @@ agent_proto/agent.proto
 - 打包和生成同步测试暂由 agent/tests/test_packaging.py 验证，对应说明在 agent/tests/docs/test_packaging.md。
 
 - CompletionEvent 新增 message_id、delta、attempt、max_attempts、retry_delay_ms（15–19），支持模型增量和指数退避通知。字段追加可解码，但旧 model_message 被 started/delta/done 替代属于业务契约变更，消费端需同步升级。
+- PrepareResourcesResponse 删除 `documents` 字段（编号 2）并保留为 reserved，同时移除 `Document` 消息：文档树改为以 `documents.zip` 归档对象发布，调用方只拿 resource_path，不再内联接收 HTML。

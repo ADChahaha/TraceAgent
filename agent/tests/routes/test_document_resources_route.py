@@ -54,18 +54,26 @@ def _bucket(refs):
 
 
 def test_prepare_real_docx_publishes_complete_resource(resources, rpc, s3_store):
-    """真实多文档上传返回 HTML、文档树和可用索引。"""
+    """真实多文档上传发布单个文档树归档和可用索引，不再内联返回 HTML。"""
     root, calls = resources
     result = upload(rpc)
     refs = list(result.resource_path)
     assert [ref.type for ref in refs] == ["documents", "index", "raw", "raw"]
     bucket = _bucket(refs)
+    assert s3_store.get_object(bucket, "documents.zip") is not None
     assert s3_store.get_object(bucket, "manifest.json") is not None
     assert s3_store.get_object(bucket, "index/vectors.npy") is not None
-    assert s3_store.list_objects(bucket, prefix="documents/")  # 有文档树文件
-    assert [doc.filename for doc in result.documents] == ["合同.docx", "附件.docx"]
-    assert "三十天" in result.documents[0].html
+    assert s3_store.get_object(bucket, "index/index.json") is not None
+    assert s3_store.list_objects(bucket, prefix="documents/") == []  # 树只存在于归档里
     assert calls
+
+
+def test_protocol_prepare_response_drops_documents_payload():
+    """共享协议不再暴露 documents/Document，调用方只拿资源定位。"""
+    fields = pb.PrepareResourcesResponse.DESCRIPTOR.fields_by_name
+    assert "resource_path" in fields
+    assert "documents" not in fields
+    assert "Document" not in pb.DESCRIPTOR.message_types_by_name
 
 
 def test_prepare_failure_does_not_publish_resource(resources, rpc, monkeypatch):
@@ -151,7 +159,6 @@ def test_prepare_pdf_calls_parser_then_builds_resource(resources, rpc, monkeypat
         pb.UploadedFile(filename="a.pdf", content=b"%PDF-1.4"),
     ]), timeout=5)
     assert calls == [("a.pdf", b"%PDF-1.4")]
-    assert result.documents[0].html == "<p>PDF 内容</p>"
     assert resources[1] == ["PDF 内容"]
 
 

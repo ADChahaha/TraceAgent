@@ -8,15 +8,17 @@ files（PDF / DOCX）
   -> route 校验全部文件类型，调用 document_processor.process
   -> prepare_resources(documents, raw_files) 在本机临时目录生成 Markdown 文件树并构建索引
   -> 校验临时产物（manifest/index/文档引用）
-  -> 通过 S3ObjectStore（boto3）把整棵产物 + 原始文件 bytes 发布到 storage 服务
-       bucket = res_*，key 为 documents/、index/、manifest.json、raw/<filename>
+  -> 通过 S3ObjectStore（boto3）发布到 storage 服务（bucket = res_*）：
+       documents 文件树整棵打成单个对象 documents.zip（成员名保留 documents/... 逻辑路径）
+       index/index.json、index/vectors.npy、manifest.json 各自独立
+       raw/<filename> 原始文件 bytes 各自独立，不和文档树混在一起
   -> 返回资源定位数组 [{type, location}]：
-       documents -> s3://<bucket>/documents
+       documents -> s3://<bucket>/documents.zip（单个归档对象）
        index     -> s3://<bucket>/index
        raw       -> s3://<bucket>/raw/<filename>（每个原始文件一项）
 ```
 
-已发布资源由 Agent 工具经 storage 服务读取，本模块不提供消费端加载接口。
+已发布资源由 Agent 工具经 storage 服务读取：文档树从 `documents.zip` 整包解到内存虚拟文件系统，索引仍从独立对象读取；本模块不提供消费端加载接口。
 
 ## 边界
 

@@ -18,13 +18,14 @@ resource_refs([{type, location}]) + messages + 模型/运行配置
 
 ## 存储访问
 
-- 工具层通过 `service/object_store.S3ObjectStore`（boto3，endpoint 指向 storage 服务，
+- 工具层通过 `service/object_store`（boto3，endpoint 指向 storage 服务，
   `S3_ENDPOINT_URL` 配置，默认 `http://localhost:9000`）读取资源。
 - `open_workspace(resource_refs)` 解析资源定位数组：按 type 找到 documents 与 index 的
-  `s3://<bucket>[/<key>]` 位置，打开 S3ObjectStore，构造 `DocumentFileTree` 与
-  `EmbeddingResources`。
-- `DocumentFileTree` 按 key 前缀浏览/读取 .md 对象，越界校验改为「key 前缀 + 拒绝
-  `..`/绝对路径」。
+  `s3://<bucket>[/<key>]` 位置，GET `documents.zip` 后经 `ArchiveObjectStore` 在内存摊开
+  文档树，再用 `CompositeObjectStore` 按 key 前缀把 `documents/*` 路由到归档、其余键路由到
+  S3 store，最后构造 `DocumentFileTree` 与 `EmbeddingResources`。
+- `DocumentFileTree` 按 key 前缀浏览/读取归档内的 `.md` 成员，越界校验仍是「key 前缀 + 拒绝
+  `..`/绝对路径」；索引的 `covered_files` 校验也走同一个组合 store，因此能命中归档。
 - `grep` 用纯 Python 遍历 .md 对象并做忽略大小写的字面匹配，不再依赖 ripgrep 子进程。
 
 ## 运行时与注册表
@@ -34,7 +35,7 @@ resource_refs([{type, location}]) + messages + 模型/运行配置
 `completion_runtime.py` 的内层 stream_completion_events 仅转换模型、工具和重试通知；ModelFailed 转 RuntimeError，取消异常继续传播。completion 生命周期只由外层 astream 生成。
 
 ```text
-astream 绑定事件循环并创建唯一 producer Task
+astream 创建并保存唯一对外生成器 → 首次迭代绑定事件循环并创建 producer Task
   → 输出 completion.created
   → producer 将普通事件放入 asyncio.Queue
   → consumer await queue.get，正常情况下按 FIFO 编号输出
@@ -46,9 +47,9 @@ astream 绑定事件循环并创建唯一 producer Task
 ```
 
 只保留 cancel_requested 业务标志，不保存 status、closed、terminal_committed 或独立关闭标志。
-producer Task 表示执行生命周期；on_close 被取走后不会重复执行。stream 是 astream 的别名，单个运行时只允许启动一次消费。close 用于关闭初始化完成但未迭代的运行时；已启动流在 finally 等待清理。
+producer Task 表示执行生命周期；on_close 被取走后不会重复执行。stream 是 astream 的别名，单个运行时只允许领取一次事件生成器。调用方退出消费后 await runtime.aclose：同步 close 请求取消 → 关闭保存的事件生成器 → 由生成器 finally 等待 producer 清理并移除注册项，不递归调用 aclose。不得与同一生成器的 anext 并发调用 aclose；消费期间的外部取消使用 terminate。
 
-同步 terminate/disconnect 共用入口：锁内设置取消标志，通过 call_soon_threadsafe 在事件循环取消 Task。
+业务取消调用 terminate：锁内设置取消标志，通过 call_soon_threadsafe 在事件循环取消 Task。路由 finally 只 await runtime.aclose，不自行关闭 events；同步断连回调和初始化线程仍调用 close，未启动时直接移除注册项，已启动时请求取消，由异步收尾等待清理；不再提供 disconnect。
 短锁仍用于协调跨线程取消、首次启动和事件提交，不在锁内 await。取消后不再交付队列中未消费的事件，backend 自己记录取消。
 manager 的 get_status 仅从取消标志推导活动请求的 in_progress/cancelling；注册项在正常终态交付前移除，之后返回 not_found。
 
@@ -105,14 +106,14 @@ route 在模块顶部直接导入 completion_manager；标准库与内部工具�
   → completion_runtime 直接输出 tool_completed / tool_failed
 ```
 
-事件包装不维护 pending 配对字典。执行器整体异常也由工具节点转换成整批失败结果，允许模型继续说明失败；普通模型调用失败在图中指数退避，五次耗尽后通过 ModelFailed 以 completion.failed 收口。
+事件包装不维护 pending 配对字典。工具节点按调用 ID 保留已发布的完整 ToolMessage；执行器异常时仅为未发布项补失败结果，再按原调用顺序写入模型历史，已发布结果不覆盖、不重复输出。普通模型调用失败在图中指数退避，五次耗尽后通过 ModelFailed 以 completion.failed 收口。
 
 消息仅提取可见文本，不输出隐藏推理。合法 terminal stop signal 且无 tool_calls 时标记 is_final=true。图更新不重复输出历史消息或最后一条回答。
 
 ## 取消与线程边界
 
 ```text
-terminate / disconnect
+terminate / close
   → 设置 cancel_requested，拒收新事件
   → 在所属事件循环取消 producer
   → 模型或工具 await 收到 CancelledError

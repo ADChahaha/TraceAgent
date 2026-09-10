@@ -7,6 +7,7 @@ PrepareResources（files: filename + bytes）
   → document_processor.process：PDF / DOCX → filename + html
   → document_resources.prepare_resources：HTML → Markdown 文件树 → 文档 embedding 索引
   → 发布到独立的 storage 服务（S3 兼容），返回资源定位数组 [{type, location}]
+     documents 文件树打成单个 documents.zip，index/raw 各自独立对象
      type ∈ {documents, index, raw}，location 为 s3://<bucket>[/<key>]
 
 ChatCompletion（resource_refs + messages）
@@ -51,14 +52,14 @@ main.py 读取监听地址、阻塞工作线程数和消息上限
   → PrepareResources 的解析/资源构建、ChatCompletion 的初始化通过 asyncio.to_thread 执行
   → 取消和探活直接在事件循环处理
   → routes 转换 protobuf 与业务对象，保留参数缺省值及显式零值
-  → producer 入队后用 call_soon_threadsafe 唤醒 asyncio.Event
+  → producer 将事件放入 asyncio.Queue，队列自动唤醒消费者
   → runtime.astream 按 FIFO 分配 seq，routes 用 async for 编码 CompletionEvent
   → SIGINT/SIGTERM 唤醒 asyncio.Event，await server.stop(5) 停服
 ```
 
 默认 16 个阻塞工作线程、单条请求/响应上限 64 MiB。活动 RPC 流不受线程数限制，等待事件不占执行器；模型请求、重试退避、图执行和工具调度均为原生异步；文件 I/O 与本地计算才使用阻塞工作线程。文件整包 bytes 上传，客户端须相应配置收发上限。固定事件字段使用 protobuf，动态参数/结果用 JSON 字符串保留大整数和 null。共享协议位于与 agent 同级的 agent_proto，agent wheel 依赖 traceagent-protocol，不内置协议副本。协议生成器版本固定，从仓库根目录生成；测试比对绑定，并验证共享 wheel 可脱离 agent 业务包导入。
 
-传输层断连与业务取消分开：CancelCompletion 立即确认并取消 producer 和未完成工具 Task；RPC 取消/断连/deadline 回调绑定本轮 CompletionRuntime 的 disconnect，设置取消信号并取消 producer，finally 关闭事件迭代器并通知 manager 移除注册项。旧回调不会按 ID 误取消后来的新流；从未迭代的流关闭也会清理。断连后不保证交付终态，取消生产协程并关闭模型流，工具内已运行的同步线程不能强杀。
+传输层断连与业务取消分开：CancelCompletion 立即确认并取消 producer 和未完成工具 Task；RPC 取消/断连/deadline 回调绑定本轮 CompletionRuntime 的 close，设置取消信号并取消 producer，finally 仅 await runtime.aclose，由 runtime 关闭所持事件生成器、等待 producer 清理并通知 manager 移除注册项。旧回调不会按 ID 误取消后来的新流；从未迭代的流关闭也会清理。断连后不保证交付终态，取消生产协程并关闭模型流，工具内已运行的同步线程不能强杀。
 
 同步初始化与协程取消通过锁交接流：取消先发生时，初始化线程关闭迟到的流；初始化先完成时，由取消分支关闭已交接流。清理不依赖已关闭事件循环的回调。停服后 asyncio.run 会等待默认执行器中已运行的同步工作结束，5 秒 RPC 宽限期不是进程退出时间的硬上限。
 
@@ -66,7 +67,8 @@ main.py 读取监听地址、阻塞工作线程数和消息上限
 
 - 资源和问答都通过独立的 storage 服务（S3 兼容 HTTP，仓库顶层 `storage/` 目录）存取。
 - 每次准备生成独立 bucket `res_*`；本机临时目录完成校验后才开始逐对象上传。构建或校验失败不上传；上传失败可能留下远端部分对象，不返回资源定位。当前没有远端回滚或原子发布机制，本地临时目录在成功或失败后均清理。
-- 资源含 `documents/`、`index/`、`manifest.json`，以及 `raw/<filename>` 原始文件。
+- 资源含文档树归档 `documents.zip`（成员为 `documents/...` 逻辑路径）、`index/`、
+  `manifest.json`，以及 `raw/<filename>` 原始文件。读取端把归档整包解到内存虚拟文件系统，
   模型只能浏览 `documents/`，索引引用保存相对路径。
 - manifest 固定 embedding 模型、后端和分块配置。问答加载已有索引，仅对 query 做 embedding，不重建文档向量。
 - 问答完成、失败、取消都不删除资源。首版不做内容去重、自动过期和删除 API；资源管理不依赖 task_id。
@@ -89,7 +91,7 @@ main.py 读取监听地址、阻塞工作线程数和消息上限
 
 ## 对外契约与迁移
 
-- 准备接口：`PrepareResources`，一次发送多个 filename/bytes，返回资源定位数组和路径各文件 HTML。
+- 准备接口：`PrepareResources`，一次发送多个 filename/bytes，返回资源定位数组（文档树为 `documents.zip` 归档，不再内联返回 HTML）。
 - 问答接口：`ChatCompletion`，resource_refs（[{type, location}]）+ messages 输入，CompletionEvent 服务端流输出。
 - 采用标准 gRPC Health 探活；业务 RPC 仅提供 PrepareResources、ChatCompletion、CancelCompletion。问答进展与终态由事件流交付，不提供问答查询或能力查询 RPC。
 - 不再提供 FastAPI、HTTP 路由和 SSE；旧问答 documents 输入不保留。

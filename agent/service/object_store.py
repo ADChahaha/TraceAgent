@@ -9,7 +9,9 @@ S3ObjectStore：通过 boto3 访问 storage 服务（或任何 S3 兼容 endpoin
 
 from __future__ import annotations
 
+import io
 import os
+import zipfile
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -82,6 +84,87 @@ class S3ObjectStore:
         return [item["Key"] for item in response.get("Contents", [])]
 
 
+class ArchiveObjectStore:
+    """把一个 zip bytes 当作只读对象存储，全部在内存里，不落盘。
+
+    归档内的成员名就是对象 key（例如 documents/0001-contract/.../block.md）。
+    写操作不适用于归档资源，调用会抛 NotImplementedError。
+    """
+
+    def __init__(self, bucket: str, data: bytes) -> None:
+        self.bucket = bucket
+        self._buffer = io.BytesIO(data)
+        self._archive = zipfile.ZipFile(self._buffer)
+        self._names = self._archive.namelist()
+
+    def create_bucket(self, bucket: str) -> None:
+        raise NotImplementedError("archive store is read-only")
+
+    def put_object(self, bucket: str, key: str, data: bytes, content_type: str | None = None) -> None:
+        raise NotImplementedError("archive store is read-only")
+
+    def get_object(self, bucket: str, key: str) -> bytes | None:
+        if bucket != self.bucket:
+            return None
+        try:
+            return self._archive.read(key)
+        except KeyError:
+            return None
+
+    def head_object(self, bucket: str, key: str) -> dict | None:
+        if bucket != self.bucket or key not in self._names:
+            return None
+        return {"size": self._archive.getinfo(key).file_size}
+
+    def delete_object(self, bucket: str, key: str) -> None:
+        raise NotImplementedError("archive store is read-only")
+
+    def list_objects(self, bucket: str, prefix: str = "") -> list[str]:
+        if bucket != self.bucket:
+            return []
+        return [name for name in self._names if name.startswith(prefix)]
+
+
+class CompositeObjectStore:
+    """按 key 前缀路由：documents/* 走归档，其余走默认（S3）存储。
+
+    文档树以单个 zip 归档存储，索引等仍分散在对象存储；读侧两者共存，
+    所以凡是访问 documents/ 的键都交给归档，其它键交给默认 store。
+    """
+
+    def __init__(self, documents_store: ObjectStore, default_store: ObjectStore) -> None:
+        self._documents_store = documents_store
+        self._default_store = default_store
+
+    @staticmethod
+    def _is_documents(key: str) -> bool:
+        return key == "documents" or key.startswith("documents/")
+
+    def create_bucket(self, bucket: str) -> None:
+        self._default_store.create_bucket(bucket)
+
+    def put_object(self, bucket: str, key: str, data: bytes, content_type: str | None = None) -> None:
+        self._default_store.put_object(bucket, key, data, content_type)
+
+    def get_object(self, bucket: str, key: str) -> bytes | None:
+        if self._is_documents(key):
+            return self._documents_store.get_object(bucket, key)
+        return self._default_store.get_object(bucket, key)
+
+    def head_object(self, bucket: str, key: str) -> dict | None:
+        if self._is_documents(key):
+            return self._documents_store.head_object(bucket, key)
+        return self._default_store.head_object(bucket, key)
+
+    def delete_object(self, bucket: str, key: str) -> None:
+        self._default_store.delete_object(bucket, key)
+
+    def list_objects(self, bucket: str, prefix: str = "") -> list[str]:
+        if self._is_documents(prefix):
+            return self._documents_store.list_objects(bucket, prefix)
+        return self._default_store.list_objects(bucket, prefix)
+
+
 def build_s3_object_store() -> S3ObjectStore:
     """按环境变量构造默认 S3ObjectStore。
 
@@ -115,6 +198,8 @@ def parse_resource_path(resource_path: str) -> tuple[str, str]:
 __all__ = [
     "ObjectStore",
     "S3ObjectStore",
+    "ArchiveObjectStore",
+    "CompositeObjectStore",
     "build_s3_object_store",
     "parse_resource_path",
 ]

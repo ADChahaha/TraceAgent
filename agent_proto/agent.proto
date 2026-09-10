@@ -12,11 +12,7 @@ message UploadedFile {
   bytes content = 2;
 }
 message PrepareResourcesRequest { repeated UploadedFile files = 1; }
-message Document {
-  string filename = 1;
-  string html = 2;
-}
-// 资源定位：type 表示组成部分（raw=原始文件 / documents=文件树 / index=embedding 索引），
+// 资源定位：type 表示组成部分（raw=原始文件 / documents=文件树归档 / index=embedding 索引），
 // location 是 s3://<bucket>[/<key>] 形式的定位串。
 message ResourceRef {
   string type = 1;
@@ -24,7 +20,9 @@ message ResourceRef {
 }
 message PrepareResourcesResponse {
   repeated ResourceRef resource_path = 1;
-  repeated Document documents = 2;
+  // 展示用 HTML 不再内联返回：文档树以归档对象发布，调用方只拿资源定位。
+  reserved 2;
+  reserved "documents";
 }
 message QaMessage {
   string role = 1;

@@ -1,8 +1,9 @@
 """HTML → 临时文档树与 embedding 索引 → 校验产物 → 逐对象上传到对象存储。
 
 prepare_resources 调用 materialize_tree、build_index，先在本机临时目录构建并校验，
-然后把整棵产物（documents 文件树、index、manifest）以及原始文件 bytes 写入
-ObjectStore（bucket = res_*），最后返回资源定位数组 [{type, location}]。
+然后把 documents 文件树打成单个 documents.zip，index/manifest 与原始文件 bytes
+各自独立写入 ObjectStore（bucket = res_*），最后返回资源定位数组 [{type, location}]。
+读取端把 documents.zip 解到内存虚拟文件系统，索引仍从独立对象读取。
 
 已发布资源由 Agent 工具从 ObjectStore 读取，本模块不提供消费端加载接口。
 构建或校验失败不开始上传；上传失败可能留下远端部分对象，不返回资源定位。
@@ -11,10 +12,12 @@ ObjectStore（bucket = res_*），最后返回资源定位数组 [{type, locatio
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import shutil
 import uuid
+import zipfile
 from dataclasses import asdict
 from pathlib import Path
 from typing import Iterable
@@ -86,10 +89,12 @@ def _publish_to_store(
     temporary: Path,
     raw_files: Iterable[tuple[str, bytes]],
 ) -> None:
-    """把临时产物整树上传到对象存储 bucket，并写入原始文件。"""
+    """把文档树打成单个 zip，索引/清单与原始文件各自独立上传。"""
     store.create_bucket(resource_id)
+    documents_dir = temporary / "documents"
+    store.put_object(resource_id, "documents.zip", _zip_directory(documents_dir, "documents"))
     for path in temporary.rglob("*"):
-        if not path.is_file():
+        if not path.is_file() or path.is_relative_to(documents_dir):
             continue
         key = path.relative_to(temporary).as_posix()
         store.put_object(resource_id, key, path.read_bytes())
@@ -99,9 +104,19 @@ def _publish_to_store(
         store.put_object(resource_id, f"raw/{filename}", data)
 
 
+def _zip_directory(directory: Path, prefix: str) -> bytes:
+    """把目录整棵树压进内存 zip，成员名为 <prefix>/<相对路径>，不落盘。"""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(directory.rglob("*")):
+            if path.is_file():
+                archive.writestr(f"{prefix}/{path.relative_to(directory).as_posix()}", path.read_bytes())
+    return buffer.getvalue()
+
+
 def _resource_refs(resource_id: str, raw_filenames: list[str]) -> list[ResourceRef]:
     refs = [
-        ResourceRef(type="documents", location=f"s3://{resource_id}/documents"),
+        ResourceRef(type="documents", location=f"s3://{resource_id}/documents.zip"),
         ResourceRef(type="index", location=f"s3://{resource_id}/index"),
     ]
     for filename in raw_filenames:

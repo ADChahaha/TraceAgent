@@ -1,6 +1,6 @@
 # 文档问答 Agent
 
-本包接收已准备的资源定位数组与完整历史消息，执行一轮模型/工具循环。`document_resources` 负责 HTML 转文件与文档 embedding 发布到 storage 服务；本包通过 `S3ObjectStore`（boto3）从 storage 服务读取资源，不导入资源生成包。
+本包接收已准备的资源定位数组与完整历史消息，执行一轮模型/工具循环。`document_resources` 负责 HTML 转文件与文档 embedding 发布到 storage 服务；本包通过 storage 服务读取资源，把 `documents.zip` 解到内存虚拟文件系统、索引从独立对象读取，不导入资源生成包。
 
 ```text
 completion_id + resource_refs + messages + 模型/运行配置
@@ -21,7 +21,7 @@ completion_id + resource_refs + messages + 模型/运行配置
 - `core/model_invocation.py`：模型调用、重试、退避和流式消息聚合。
 - `core/executor.py`：并行执行工具、处理超时并封装结果。
 - `core/graph.py`：绑定模型与工具执行器，构建并执行仅含消息的图，负责节点路由、取消边界、更新转换及图流关闭。
-- `core/tools/workspace.py`：资源定位解析、S3ObjectStore 读取、按 key 前缀浏览与读取。
+- `core/tools/workspace.py`：资源定位解析、拉取 `documents.zip` 到内存、组合 store 按 key 前缀浏览与读取。
 - `core/tools/embedding.py`：清单和索引读取（经 storage 服务）、查询模型缓存、query 编码及相似度检索。
 
 工具只浏览 `documents/` key 前缀，内部 manifest/index 不暴露为文档。`grep` 用纯 Python 匹配候选；模型应 read 后为具体事实添加句尾数字引用。

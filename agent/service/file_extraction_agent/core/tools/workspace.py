@@ -11,7 +11,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from service.object_store import ObjectStore, build_s3_object_store, parse_resource_path
+from service.object_store import (
+    ArchiveObjectStore,
+    CompositeObjectStore,
+    ObjectStore,
+    build_s3_object_store,
+    parse_resource_path,
+)
 from service.file_extraction_agent.core.tools.embedding import EmbeddingResources
 from service.file_extraction_agent.core.tools.base import order_key
 from service.file_extraction_agent.schemas import ResourceRefs
@@ -146,7 +152,7 @@ class ToolWorkspace:
 
 
 def open_workspace(resource_refs: ResourceRefs) -> ToolWorkspace:
-    """解析资源定位数组 → 打开 S3 对象存储 → 创建工具访问上下文。"""
+    """解析资源定位 → 拉取文档树归档到内存 → 组合 store 创建工具访问上下文。"""
     documents_location = _location_by_type(resource_refs, "documents")
     index_location = _location_by_type(resource_refs, "index")
     if not documents_location or not index_location:
@@ -156,9 +162,13 @@ def open_workspace(resource_refs: ResourceRefs) -> ToolWorkspace:
     if doc_bucket != idx_bucket:
         raise ValueError("documents and index must belong to the same resource")
     store = build_s3_object_store()
-    document_root_key = doc_key or "documents"
-    document = DocumentFileTree(store, doc_bucket, document_root_key)
-    embedding = EmbeddingResources(store, idx_bucket, idx_key)
+    archive_bytes = store.get_object(doc_bucket, doc_key)
+    if archive_bytes is None:
+        raise ValueError(f"missing document archive: {doc_key}")
+    archive = ArchiveObjectStore(doc_bucket, archive_bytes)
+    composite = CompositeObjectStore(archive, store)
+    document = DocumentFileTree(composite, doc_bucket, "documents")
+    embedding = EmbeddingResources(composite, idx_bucket, idx_key)
     return ToolWorkspace(document, embedding)
 
 

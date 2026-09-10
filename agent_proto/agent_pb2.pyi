@@ -20,14 +20,6 @@ class PrepareResourcesRequest(_message.Message):
     files: _containers.RepeatedCompositeFieldContainer[UploadedFile]
     def __init__(self, files: _Optional[_Iterable[_Union[UploadedFile, _Mapping]]] = ...) -> None: ...
 
-class Document(_message.Message):
-    __slots__ = ("filename", "html")
-    FILENAME_FIELD_NUMBER: _ClassVar[int]
-    HTML_FIELD_NUMBER: _ClassVar[int]
-    filename: str
-    html: str
-    def __init__(self, filename: _Optional[str] = ..., html: _Optional[str] = ...) -> None: ...
-
 class ResourceRef(_message.Message):
     __slots__ = ("type", "location")
     TYPE_FIELD_NUMBER: _ClassVar[int]
@@ -37,12 +29,10 @@ class ResourceRef(_message.Message):
     def __init__(self, type: _Optional[str] = ..., location: _Optional[str] = ...) -> None: ...
 
 class PrepareResourcesResponse(_message.Message):
-    __slots__ = ("resource_path", "documents")
+    __slots__ = ("resource_path",)
     RESOURCE_PATH_FIELD_NUMBER: _ClassVar[int]
-    DOCUMENTS_FIELD_NUMBER: _ClassVar[int]
     resource_path: _containers.RepeatedCompositeFieldContainer[ResourceRef]
-    documents: _containers.RepeatedCompositeFieldContainer[Document]
-    def __init__(self, resource_path: _Optional[_Iterable[_Union[ResourceRef, _Mapping]]] = ..., documents: _Optional[_Iterable[_Union[Document, _Mapping]]] = ...) -> None: ...
+    def __init__(self, resource_path: _Optional[_Iterable[_Union[ResourceRef, _Mapping]]] = ...) -> None: ...
 
 class QaMessage(_message.Message):
     __slots__ = ("role", "content", "tool_calls_json", "tool_call_id", "name")
