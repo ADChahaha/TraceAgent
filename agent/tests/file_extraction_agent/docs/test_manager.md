@@ -2,7 +2,7 @@
 
 执行链路：manager 委托工具层预检资源路径和索引 → 注册独立 completion_runtime.CompletionRuntime → 接收模型消息和逐项工具结果 → 锁内队列提交 → consumer 分配 seq 并返回事件字典 → 运行时通过 on_close 移除注册表，保留资源。
 
-测试消费 manager.create(...) 返回的运行时：迭代其 stream()，断连仅调用运行时 disconnect；测试覆盖未迭代就关闭（runtime.close）、断连唤醒和 ID 复用后的隔离。
+测试消费 manager.create(...) 返回的运行时：迭代其 stream()，断连仅调用运行时 close；测试覆盖未迭代就关闭（runtime.close）、断连唤醒和 ID 复用后的隔离。
 
 取消唤醒 consumer 并取消 producer；等待协程清理后关闭，不补齐工具结果。事件内容断言归一化掉 seq 后比较，独立完整流测试验证序号连续及终态唯一。事件转换只提取可见文本，异常与超时结果保留原始调用 ID。
 
@@ -58,3 +58,5 @@
 取消测试现在验证活动工具无需配齐结果即可终止，不输出迟到工具结果，也不启动下一次模型请求。
 
 本轮契约调整：内层只输出普通 Agent 事件；完成/失败由 astream 唯一出口生成，取消直接结束且不输出 cancelled。对应测试改用 producer 结果或外层流验证，保留配对、重试和资源清理覆盖。
+
+关闭入口统一为 close：未启动时直接移除注册项，已启动时取消 producer 并由流 finally 清理；断连测试同时覆盖重复关闭与 ID 复用隔离。

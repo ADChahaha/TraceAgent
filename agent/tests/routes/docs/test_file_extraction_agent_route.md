@@ -16,6 +16,8 @@
 
 ## 异步并发与关闭回归
 
+- `test_disconnect_before_first_iteration_removes_registration`：初始化后、首次消费前断连也移除注册项；相同 ID 可复用，旧断连回调不影响新轮次。
+
 - `test_many_waiting_streams_keep_control_rpcs_available`：二十条问答流同时等待时，取消 RPC 仍可响应，流数量不受旧 worker 槽限制。
 - `test_initialization_cleanup_survives_event_loop_shutdown`：初始化期间客户端取消，随后事件循环关闭，迟到的初始化结果仍会释放注册项。
 
@@ -28,3 +30,5 @@
 `test_cancel_interrupts_tool_wait_without_waiting_for_thread`：真实 RPC 取消中断工具等待，线程尚未释放时原流已关闭，无迟到工具结果。
 
 生命周期更新：内层替身不生成 completion 事件，外层统一开始/完成/失败；业务取消的 RPC 确认不变，原流直接结束，不输出 completion.cancelled。
+
+路由收尾统一 await runtime.aclose，测试继续验证早断连、正常结束、取消和超时均释放注册项；路由不再直接关闭事件生成器。

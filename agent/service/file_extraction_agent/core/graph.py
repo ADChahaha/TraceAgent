@@ -116,10 +116,10 @@ def build_qa_graph(
         if stopped():
             return Command(update={"messages": []}, goto="__end__")
         writer = get_stream_writer()
-        published: set[str] = set()
+        published: dict[str, ToolMessage] = {}
 
         def emit(reply: ToolMessage) -> None:
-            published.add(reply.tool_call_id)
+            published[reply.tool_call_id] = reply
             writer(reply)
 
         try:
@@ -127,7 +127,7 @@ def build_qa_graph(
         except Exception as exc:
             result = {"ok": False, "errors": [{"message": str(exc)}]}
             replies = [
-                ToolMessage(
+                published[call["id"]] if call["id"] in published else ToolMessage(
                     content=json.dumps(result),
                     artifact=result,
                     status="error",

@@ -11,7 +11,7 @@ import json
 import threading
 from contextlib import aclosing
 from dataclasses import asdict
-from typing import Any, AsyncIterator, Callable
+from typing import Any, AsyncGenerator, AsyncIterator, Callable
 
 from langchain_core.messages import AIMessage, ToolMessage
 
@@ -116,11 +116,17 @@ class CompletionRuntime:
         self._queue: asyncio.Queue = asyncio.Queue()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._on_close = on_close
+        self._events: AsyncGenerator[dict[str, Any], None] | None = None
 
-    async def astream(self) -> AsyncIterator[dict[str, Any]]:
+    def astream(self) -> AsyncGenerator[dict[str, Any], None]:
         with self._lock:
-            if self._producer is not None:
+            if self._events is not None:
                 raise RuntimeError("completion stream can only be consumed once")
+            self._events = self._stream()
+            return self._events
+
+    async def _stream(self) -> AsyncGenerator[dict[str, Any], None]:
+        with self._lock:
             if not self.cancel_requested:
                 self._loop = asyncio.get_running_loop()
                 self._producer = asyncio.create_task(self._produce(), name="qa-completion")
@@ -182,8 +188,6 @@ class CompletionRuntime:
             if self._loop is not None:
                 self._loop.call_soon_threadsafe(self._cancel_producer)
 
-    disconnect = terminate
-
     def _cancel_producer(self) -> None:
         task = self._producer
         if task is not None and not task.done() and not task.cancelling():
@@ -200,6 +204,12 @@ class CompletionRuntime:
         self.terminate()
         if self._producer is None:
             self._notify_closed()
+
+    async def aclose(self) -> None:
+        """调用方停止消费后统一关闭：取消执行 → 关闭事件流 → 等待其 finally 清理。"""
+        self.close()
+        if self._events is not None:
+            await self._events.aclose()
 
 
 __all__ = ["CompletionRuntime", "stream_completion_events"]

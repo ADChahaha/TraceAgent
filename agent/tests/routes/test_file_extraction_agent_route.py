@@ -98,6 +98,36 @@ def test_many_waiting_streams_keep_control_rpcs_available(rpc, manager, monkeypa
         release.set()
 
 
+@pytest.mark.asyncio
+async def test_disconnect_before_first_iteration_removes_registration(manager, monkeypatch):
+    callbacks = []
+
+    class DisconnectedContext:
+        def add_done_callback(self, callback):
+            callbacks.append(callback)
+
+        def done(self):
+            return True
+
+    async def events(**kwargs):
+        raise AssertionError("首次迭代前断连不得启动 producer")
+        yield
+
+    monkeypatch.setattr(runtime_module, "stream_completion_events", events)
+    output = [event async for event in qa_routes.create_chat_completion(request(), DisconnectedContext())]
+    assert output == []
+    assert manager.get_status("cmp_rpc") is None
+    replacement = await qa_routes._create_runtime(
+        completion_id="cmp_rpc", resource_path=request().resource_path,
+        messages=qa_routes._messages(request()),
+    )
+    try:
+        callbacks[0](None)
+        assert manager.get_status("cmp_rpc")["status"] == "in_progress"
+    finally:
+        replacement.close()
+
+
 def test_initialization_cleanup_survives_event_loop_shutdown(manager, monkeypatch):
     """初始化期间断连并关闭事件循环，迟到的初始化结果也必须释放。"""
     started = threading.Event()

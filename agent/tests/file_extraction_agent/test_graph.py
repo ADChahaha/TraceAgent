@@ -140,6 +140,44 @@ async def test_executor_failure_returns_entire_failed_batch(resource_path, monke
     assert provider.ainvoke.call_count == (1 if cancelled else 2)
 
 
+@pytest.mark.parametrize("published_status", ["success", "error"])
+async def test_executor_failure_preserves_published_results(resource_path, monkeypatch, published_status):
+    from service.file_extraction_agent.core import executor
+
+    model, provider = _scripted_model()
+    calls = [
+        {"id": "a", "name": "read", "args": {"path": "first"}},
+        {"id": "b", "name": "read", "args": {"path": "second"}},
+    ]
+    provider.ainvoke.side_effect = [
+        AIMessage(content="读取", tool_calls=calls),
+        AIMessage(content="结果说明", response_metadata={"finish_reason": "stop"}),
+    ]
+    # 第二项先完成，验证发布顺序不影响模型历史中的调用顺序。
+    result = {"ok": published_status == "success", "text": "原始结果"}
+    published = ToolMessage(
+        content="原始结果", tool_call_id="b", name="read", status=published_status,
+        artifact=result, additional_kwargs={"tool_args": calls[1]["args"]},
+    )
+
+    async def fail_after_result(*args, on_result, **kwargs):
+        on_result(published)
+        raise RuntimeError("后续结果转换失败")
+
+    monkeypatch.setattr(executor, "_execute_tools_parallel", fail_after_result)
+    events = [event async for event in stream_completion_events(**_input(resource_path), qa_model=model)]
+    replies = [event for event in events if event["type"] in {"tool_completed", "tool_failed"}]
+    assert [event["tool_call_id"] for event in replies] == ["b", "a"]
+    assert replies[0]["result"] == result
+    assert replies[0]["type"] == ("tool_completed" if published_status == "success" else "tool_failed")
+    assert replies[1]["type"] == "tool_failed"
+    history = [message for message in provider.ainvoke.call_args.args[0] if isinstance(message, ToolMessage)]
+    assert [message.tool_call_id for message in history] == ["a", "b"]
+    assert history[1] == published
+    assert history[0].status == "error"
+    assert history[0].artifact == replies[1]["result"]
+
+
 async def test_closing_event_stream_closes_message_generator(resource_path, monkeypatch):
     closed = []
 

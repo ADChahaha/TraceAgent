@@ -940,7 +940,7 @@ async def test_disconnect_wakes_consumer_and_stops_producer(resource_path, monke
     consumer = asyncio.create_task(consume())
     try:
         assert await wait_event(started, 2)
-        stream.disconnect()
+        stream.close()
         assert await wait_event(done, 1)
         assert manager.get_status("disconnect") is None
         replacement = manager.create(
@@ -949,7 +949,7 @@ async def test_disconnect_wakes_consumer_and_stops_producer(resource_path, monke
             messages=[DocumentQaMessage(role="user", content="新问题")],
         )
         try:
-            stream.disconnect()
+            stream.close()
             assert manager.get_status("disconnect")["status"] == "in_progress"
         finally:
             replacement.close()
@@ -976,7 +976,7 @@ async def test_disconnect_before_iteration_does_not_start_producer(resource_path
         raise AssertionError("disconnected stream must not start a producer")
 
     monkeypatch.setattr(runtime_module.CompletionRuntime, "_produce", forbidden)
-    stream.disconnect()
+    stream.close()
     assert [item async for item in stream.stream()] == []
     assert manager.get_status("disconnect_early") is None
 

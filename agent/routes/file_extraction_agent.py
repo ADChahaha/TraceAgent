@@ -89,7 +89,7 @@ async def create_chat_completion(request, context) -> AsyncIterator[pb.Completio
 
     events = runtime.stream()
     try:
-        context.add_done_callback(lambda _: runtime.disconnect())
+        context.add_done_callback(lambda _: runtime.close())
         if context.done():
             return
         async for event in events:
@@ -97,8 +97,7 @@ async def create_chat_completion(request, context) -> AsyncIterator[pb.Completio
                 return
             yield event_message(event)
     finally:
-        runtime.disconnect()
-        await events.aclose()
+        await runtime.aclose()
 
 
 async def _create_runtime(**kwargs):

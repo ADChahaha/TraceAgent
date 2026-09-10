@@ -77,3 +77,40 @@ async def test_inner_failure_raises_without_completion_event(monkeypatch):
         async for event in module.stream_completion_events(resource_path=[], messages=[], qa_model=object()):
             output.append(event)
     assert all(not event["type"].startswith("completion.") for event in output)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("started", [False, True])
+async def test_runtime_aclose_owns_stream_cleanup(monkeypatch, started):
+    producing, cleaning, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    callbacks = []
+
+    async def events(**kwargs):
+        try:
+            producing.set()
+            await asyncio.Event().wait()
+            yield {}
+        finally:
+            cleaning.set()
+            await release.wait()
+
+    monkeypatch.setattr(module, "stream_completion_events", events)
+    runtime = module.CompletionRuntime([], object(), [], on_close=lambda: callbacks.append(1))
+    stream = runtime.stream()
+    close_runtime = runtime.aclose
+    if started:
+        assert (await anext(stream))["type"] == "completion.created"
+        await asyncio.wait_for(producing.wait(), 1)
+    closing = asyncio.create_task(close_runtime())
+    try:
+        if started:
+            await asyncio.wait_for(cleaning.wait(), 1)
+            assert not closing.done()
+            assert callbacks == []
+    finally:
+        release.set()
+        await asyncio.wait_for(closing, 1)
+    await runtime.aclose()
+    assert callbacks == [1]
+    assert [event async for event in stream] == []
+    assert producing.is_set() == started
