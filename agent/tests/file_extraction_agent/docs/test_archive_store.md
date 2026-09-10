@@ -19,4 +19,5 @@ CompositeObjectStore(documents_store, default_store)
 ## 测试函数
 
 - `test_archive_store_lists_and_reads_members_without_disk`：归档能按 key 读出成员、缺失 key 或不同 bucket 返回 `None`，`list_objects` 按前缀过滤，全程不落盘。
+- `test_archive_store_reads_are_safe_under_concurrent_access`：多线程并发读取大成员，所有读回内容与原始一致（zipfile 内部有读锁，可安全并发）。
 - `test_composite_store_routes_documents_to_archive_and_rest_to_default`：`documents/...` 走归档且不触碰默认 store；`index/vectors.npy` 走默认 store；`list_objects` 的前缀路由一致。

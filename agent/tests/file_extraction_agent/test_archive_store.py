@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import threading
 import zipfile
 
 from service.object_store import ArchiveObjectStore, CompositeObjectStore
@@ -28,6 +29,30 @@ def test_archive_store_lists_and_reads_members_without_disk():
     assert store.list_objects("res_x", prefix="documents/a") == ["documents/a/1.md"]
     assert sorted(store.list_objects("res_x")) == ["documents/a/1.md", "documents/b/2.md"]
     assert store.list_objects("other") == []
+
+
+def test_archive_store_reads_are_safe_under_concurrent_access():
+    members = {
+        f"documents/a/{index:03d}.md": (f"{index}:" + chr(65 + index) * 2_000_000)
+        for index in range(6)
+    }
+    store = ArchiveObjectStore("res_x", _zip_bytes(members))
+    failures: list[str] = []
+
+    def read_member(index: int) -> None:
+        key = f"documents/a/{index:03d}.md"
+        expected = members[key].encode()
+        for _ in range(20):
+            if store.get_object("res_x", key) != expected:
+                failures.append(key)
+                return
+
+    threads = [threading.Thread(target=read_member, args=(index,)) for index in range(len(members))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert failures == []
 
 
 class _RecordingStore:
