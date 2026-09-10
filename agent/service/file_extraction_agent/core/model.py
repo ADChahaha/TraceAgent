@@ -7,11 +7,6 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TypedDict
 
-from langchain_core.messages import AIMessage
-from langchain_core.language_models import LanguageModelInput
-from langchain_core.outputs import ChatResult
-from langchain_openai import ChatOpenAI
-from openai import BaseModel as OpenAIModel
 from pydantic import SecretStr
 
 from service.file_extraction_agent.core.contracts import JsonObject, ModelCallAttempt, Tool
@@ -19,6 +14,14 @@ from service.file_extraction_agent.core.contracts import JsonObject, ModelCallAt
 from service.file_extraction_agent.schemas import ModelConfig
 
 DEFAULT_MODEL_REQUEST_TIMEOUT_SECONDS = 8.0
+
+
+def __getattr__(name: str):
+    if name == "ChatOpenAI":
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class ChatModelOptions(TypedDict, total=False):
@@ -78,11 +81,12 @@ def build_chat_model(config: ModelConfig, model_name: str) -> "ConfiguredChatMod
     if extra_body:
         kwargs["extra_body"] = extra_body
 
-    model_cls = (
-        DeepSeekReasoningChatOpenAI
-        if _should_enable_deepseek_thinking(config, model_name)
-        else ChatOpenAI
-    )
+    if _should_enable_deepseek_thinking(config, model_name):
+        from service.file_extraction_agent.core.openai_models import DeepSeekReasoningChatOpenAI
+
+        model_cls = DeepSeekReasoningChatOpenAI
+    else:
+        model_cls = ChatOpenAI
     return ConfiguredChatModel(
         [
             ModelCallAttempt(
@@ -142,47 +146,6 @@ def _normalize_api_transport(value: str | None) -> str:
     if normalized in {"responses", "chat_completions"}:
         return normalized
     raise ValueError("MODEL_API_TRANSPORT must be responses or chat_completions")
-
-
-class DeepSeekReasoningChatOpenAI(ChatOpenAI):
-    """响应中保存 DeepSeek reasoning_content，再随工具调用历史传回模型。"""
-
-    def _create_chat_result(
-        self,
-        response: dict[str, object] | OpenAIModel,
-        generation_info: dict[str, object] | None = None,
-    ) -> ChatResult:
-        result = super()._create_chat_result(response, generation_info)
-        response_dict = response if isinstance(response, dict) else response.model_dump()
-        choices = response_dict.get("choices") or []
-        if not isinstance(choices, list):
-            raise TypeError("model response choices must be a list")
-        for generation, choice in zip(result.generations, choices, strict=False):
-            message = choice.get("message") or {}
-            reasoning_content = message.get("reasoning_content")
-            if reasoning_content and isinstance(generation.message, AIMessage):
-                generation.message.additional_kwargs["reasoning_content"] = reasoning_content
-        return result
-
-    def _get_request_payload(
-        self,
-        input_: LanguageModelInput,
-        *,
-        stop: list[str] | None = None,
-        **kwargs: object,
-    ) -> dict[str, object]:
-        payload = super()._get_request_payload(input_, stop=stop, **kwargs)
-        messages = self._convert_input(input_).to_messages()
-        for payload_message, source_message in zip(
-            payload.get("messages", []),
-            messages,
-            strict=False,
-        ):
-            if isinstance(source_message, AIMessage):
-                reasoning_content = source_message.additional_kwargs.get("reasoning_content")
-                if reasoning_content:
-                    payload_message["reasoning_content"] = reasoning_content
-        return payload
 
 
 def _model_config_from_env() -> ModelConfig:

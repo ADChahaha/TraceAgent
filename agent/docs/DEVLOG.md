@@ -1,4 +1,20 @@
-last updated: 2026-09-10 16:08:00
+last updated: 2026-09-11 00:03:23
+
+## 2026-09-11 00:03:23
+
+### 已完成工作
+
+- 查询编码改为一次性子进程：search_embedding 组装 query/top_k/model_id/dimension/chunks/vectors_b64，经 stdin 发给 python -m ...tools.worker，stdout 返回 top-k；取消/超时/失败在 finally kill 进程。
+- 新增纯 OpenVINO 查询编码器 ov_embedder（tokenizer + IR + mean pooling + L2），只依赖 openvino/tokenizers，不 import torch/transformers；worker 入口与协议独立。
+- 每轮 completion 一个信号量串行启动 worker，避免并发进程内存尖峰；索引仍只加载一次。
+- 实测：子进程每次约 2.3s / 峰值 420MB，稳态 3ms/条；sentence-transformers 包装启动约 21s。按“每调用起进程”实现，不引入常驻 worker。
+- 修复 main 启动依赖：core/model.py 延迟导入 langchain_openai，DeepSeek ChatModel 变体拆到 openai_models.py，避免 langchain_core 启动时连带 import transformers/torch（import main 10s → 1.8s）。
+- TDD：新增 test_ov_embedder / test_embedding_worker / test_search_subprocess（取消 kill、真实 worker、与 sentence-transformers 参考向量对齐），重写 embedding 缓存与工具检索用例；agent 相关回归 220 passed。
+- 同步 file_extraction_agent / agent 的 DESIGN、README 与测试文档；archive 并发读补回归测试。
+
+### 下一步
+
+- backend 适配 gRPC resource_path / documents.zip（service 未迁移）。
 
 ## 2026-09-10 16:08:00
 
