@@ -1,26 +1,28 @@
 # test_config.py
 
-这份测试覆盖 backend QA-only 重构后的全局配置、路由挂载和数据库初始化。
+这份测试覆盖 backend 的全局配置、路由挂载和数据库初始化。核心变更后，agent 地址改为 gRPC target；`initialize_database` 只负责建当前 QA schema，不再清理或迁移旧表。
 
-实现链路：
+## 实现链路
 
 ```text
-create_app(...)
-  -> 挂载 /qa/tasks 系列 API
-  -> 挂载 /healthz 健康检查 API
+BackendSettings.from_env() / BackendSettings(...)
+  -> 读取 database_path、agent_service_target、请求/取消超时、supported_file_types
+
+create_app(settings=...)
+  -> 挂载 /qa/tasks 系列 API 与 /healthz
   -> 不再挂载旧 /tasks 字段抽取 API
 
 initialize_database(connection)
-  -> 删除旧 tasks / extracted_fields / field_traces / field_commits 等字段抽取 schema
-  -> 如果已有旧 qa_tasks.memory_json 列，删除旧列并保留原有任务行
-  -> 创建 qa_tasks / qa_documents / qa_messages / qa_turns / qa_events
+  -> PRAGMA journal_mode = WAL
+  -> 逐条执行 SCHEMA_SQL，创建 qa_tasks / qa_resources / qa_messages / qa_turns / qa_events
+  -> 不删旧表、不做 memory_json 迁移；旧库按“直接重建新库”处理
 ```
 
 ## 测试函数
 
-- `test_backend_settings_keeps_agent_service_configuration`：验证 backend 仍保留 agent service 地址、超时和 PDF/DOCX 能力配置。
-- `test_backend_settings_loads_agent_cancel_timeout_from_env`：验证 `AGENT_SERVICE_CANCEL_TIMEOUT_SECONDS` 会覆盖后台 best-effort agent cancel 的短超时配置。
-- `test_backend_registers_qa_routes_and_removes_old_task_routes`：验证应用只挂载 QA task API，旧 `/tasks` route 已下线。
-- `test_backend_healthz_reports_ok`：验证 `/healthz` 返回 200 和 `{"status": "ok"}`，供本地启动和部署探活使用。
-- `test_database_initialization_creates_qa_schema_and_drops_old_field_schema`：验证数据库初始化会创建 QA 会话表，并删除旧字段抽取/审核/提交表；同时确认 `qa_tasks` 不再包含 `memory_json`。
-- `test_database_initialization_migrates_existing_qa_tasks_without_memory_json`：用带 `memory_json TEXT NOT NULL` 的旧 `qa_tasks` 表复现升级场景，验证初始化会删除旧列、保留旧任务行，并允许新的 memory-free `create_task(...)` 正常插入。
+- `test_backend_settings_keeps_agent_service_configuration`：验证默认 `agent_service_target == "127.0.0.1:8001"`、请求超时 1200s、取消超时 2s、支持 pdf/docx。
+- `test_backend_settings_loads_agent_target_from_env`：验证 `AGENT_SERVICE_TARGET` 会覆盖默认 gRPC target。
+- `test_backend_settings_loads_agent_cancel_timeout_from_env`：验证 `AGENT_SERVICE_CANCEL_TIMEOUT_SECONDS` 会覆盖后台 best-effort agent cancel 的短超时。
+- `test_backend_registers_qa_routes_and_removes_old_task_routes`：验证只挂载 QA task API，旧 `/tasks` route 已下线。因为 FastAPI 0.141 的 `include_router` 会生成 `_IncludedRouter`，测试用 `_route_paths` 递归展开 `path`、`routes` 和 `original_router.routes` 收集路径。
+- `test_backend_healthz_reports_ok`：验证 `/healthz` 返回 200 和 `{"status": "ok"}`。
+- `test_database_initialization_creates_qa_schema_without_migrating_legacy_tables`：先在内存库建旧 `tasks`/`extracted_fields` 表，再初始化；断言五张 QA 表建出、`qa_tasks` 恰为新 schema 五列，且旧表仍保留（确认初始化不再清理或迁移旧库）。

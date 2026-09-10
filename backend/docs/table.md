@@ -2,7 +2,7 @@
 
 `qa_events` 保存过程事件，供展示和 SSE 续传；`qa_messages` 设计为只保存可完整回传模型的稳定历史。业务接入后，普通完整消息单条提交；带工具调用的 assistant 与全部对应 tool 结果配齐后，在同一事务中一起提交。中断只丢弃尚未提交的组，不删除此前完整历史。
 
-状态：`models/schema.py` 已实现 qa_messages 建表和下述数据库约束；CRUD、事件配对写入、取消交接及历史读取尚未接入。当前初始化支持新库或尚无 qa_messages 的当前结构；未实现旧版 qa_messages 数据迁移。其余表沿用下方旧设计记录，本文不代表当前 schema 的完整镜像。
+状态：`models/schema.py` 已实现 qa_messages 建表和下述数据库约束；CRUD 已对齐新 schema，事件配对写入、取消交接及历史读取尚未接入。当前初始化支持新库或尚无 qa_messages 的当前结构；未实现旧版 qa_messages 数据迁移。其余表沿用下方旧设计记录，本文不代表当前 schema 的完整镜像。
 
 ## qa_tasks
 

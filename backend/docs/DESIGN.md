@@ -6,7 +6,7 @@
 
 ## 已确认的稳定消息历史设计（待实现）
 
-`qa_messages` 表、唯一索引及行级校验已在 schema 落地；业务尚未接入。目标是将其作为下一轮模型上下文的唯一持久化来源，`qa_events` 继续负责过程展示与续传。下文旧流程中“qa_messages + qa_events 重建上下文”和“仅在 completion.completed 写最终 assistant”的描述将由本节替代，当前 CRUD/service 尚未迁移。本次不补齐旧业务依赖的 qa_documents 等结构、不迁移资源接口或 gRPC。
+`qa_messages` 表、唯一索引及行级校验已在 schema 落地；业务尚未接入。目标是将其作为下一轮模型上下文的唯一持久化来源，`qa_events` 继续负责过程展示与续传。下文旧流程中“qa_messages + qa_events 重建上下文”和“仅在 completion.completed 写最终 assistant”的描述将由本节替代；CRUD 已对齐新 schema（不再引用 `qa_documents`、`stage`、`metadata_json` 等旧结构，文档产物写入 `qa_resources`），service/routes 尚未迁移。本次不补齐旧业务依赖的 qa_documents 等结构、不迁移资源接口或 gRPC。
 
 ```text
 用户输入 → 独立完整消息入 qa_messages
@@ -86,13 +86,12 @@ backend/
   core/
     config.py
     db.py
-    storage.py
   routes/
     tasks.py
     capabilities.py
     errors.py
   crud/
-    qa_tasks.py
+    crud.py
     json_utils.py
   services/
     task_service.py
@@ -102,6 +101,9 @@ backend/
   models/
     schema.py
   tests/
+    test_qa_crud.py
+    test_message_schema.py
+    test_agent_client.py
     test_qa_task_flow.py
     test_config.py
     docs/
@@ -120,10 +122,10 @@ backend/
 - `services/task_service.py` 编排 QA task 创建、输入、agent completion、事件写入和取消。
 - `GET /qa/tasks/{task_id}` 是详情读模型：在 summary 之外返回 `qa_documents.display_html` 和最新 `source_indexed.source_selectors`，供前端 evidence link 打开右侧原文。
 - `services/agent_client.py` 封装 agent service HTTP 调用。
-- `crud/qa_tasks.py` 封装 QA 表读写，不做业务决策。
+- `crud/crud.py` 封装 QA 表读写，不做业务决策。
 - `models/schema.py` 定义 QA-only SQLite schema。
 
-数据库初始化会先清理旧字段抽取表，再处理 QA schema 的轻量升级。已有本地库如果仍保留 `qa_tasks.memory_json`，`initialize_database(...)` 会在创建缺失 QA 表之前删除该旧列并保留原有 task 行，保证 memory-free 的 `create_task(...)` 可以继续插入新任务。
+数据库初始化只负责建当前 QA schema：`initialize_database(...)` 设置 WAL 后逐条执行 `SCHEMA_SQL`，不清理旧字段抽取表，也不做 `qa_tasks.memory_json` 之类的列迁移。本分支不做旧库兼容，已有旧库直接删除文件重建即可。
 
 ## 3. 数据流
 
@@ -526,7 +528,7 @@ qa_events
   -> task_id, turn_id, sequence, event_type, status, stage, payload_json, created_at
 ```
 
-旧字段抽取表 `tasks/documents/agent_runs/agent_stage_runs/extracted_fields/field_traces/field_commits/task_events` 会在初始化时删除。当前分支不做旧库迁移兼容。
+旧字段抽取表 `tasks/documents/agent_runs/agent_stage_runs/extracted_fields/field_traces/field_commits/task_events` 已不在 schema 中，初始化也不会主动删除或迁移它们。当前分支不做旧库兼容，旧库需直接重建。
 
 ## 5. 状态模型
 
@@ -585,6 +587,8 @@ cancel_document_qa_completion(completion_id)
 ```
 
 backend 不读取 agent 内存状态，不保存 agent runtime，只保存 agent 通过 SSE 发出的事件。
+
+说明：agent 已迁移到 gRPC（`PrepareResources` / `ChatCompletion` / `CancelCompletion`），core 配置也已改为 gRPC 目标 `agent_service_target`（默认 `127.0.0.1:8001`）。但上面的 `AgentClient` 仍是旧 HTTP/SSE 实现，属于待迁移部分。
 
 ## 7. 已删除部分
 

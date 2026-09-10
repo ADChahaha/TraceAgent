@@ -56,20 +56,22 @@ cd ..
 默认配置：
 
 - SQLite：`backend/backend.sqlite3`
-- Agent service：`http://localhost:8001`
+- Agent service：gRPC `127.0.0.1:8001`
 
 可用环境变量覆盖：
 
 ```text
 BACKEND_DATABASE_PATH=/path/to/backend.sqlite3
-AGENT_SERVICE_BASE_URL=http://localhost:8001
+AGENT_SERVICE_TARGET=127.0.0.1:8001
 AGENT_SERVICE_TIMEOUT_SECONDS=1200
 ```
+
+> 说明：`agent_service_target` 已是 gRPC 目标，但 `AgentClient` 仍是旧 HTTP/SSE 实现，待 service/routes 迁移时一并切换。
 
 启动方式：
 
 ```bash
-AGENT_SERVICE_BASE_URL=http://127.0.0.1:8001 uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+AGENT_SERVICE_TARGET=127.0.0.1:8001 uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 ## 测试

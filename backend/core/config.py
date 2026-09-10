@@ -8,7 +8,7 @@ from pathlib import Path
 @dataclass(slots=True)
 class BackendSettings:
     database_path: Path = Path("backend/backend.sqlite3")
-    agent_service_base_url: str = "http://localhost:8001"
+    agent_service_target: str = "127.0.0.1:8001"
     agent_request_timeout_seconds: float = 1200.0
     agent_cancel_timeout_seconds: float = 2.0
     supported_file_types: tuple[str, ...] = ("pdf", "docx")
@@ -23,9 +23,9 @@ class BackendSettings:
         )
         return cls(
             database_path=database_path,
-            agent_service_base_url=os.getenv(
-                "AGENT_SERVICE_BASE_URL",
-                "http://localhost:8001",
+            agent_service_target=os.getenv(
+                "AGENT_SERVICE_TARGET",
+                "127.0.0.1:8001",
             ),
             agent_request_timeout_seconds=float(
                 os.getenv("AGENT_SERVICE_TIMEOUT_SECONDS", "1200")

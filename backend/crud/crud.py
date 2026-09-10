@@ -11,24 +11,17 @@ def create_task(
     connection: sqlite3.Connection,
     *,
     task_id: str,
-    metadata: dict[str, Any],
+    status: str,
     now: str,
 ) -> dict[str, Any]:
     connection.execute(
         """
         INSERT INTO qa_tasks (
-            id, status, stage, metadata_json, created_at, updated_at
+            id, status, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?)
         """,
-        (
-            task_id,
-            "processing",
-            "document_processing",
-            dumps_json(metadata),
-            now,
-            now,
-        ),
+        (task_id, status, now, now),
     )
     connection.commit()
     task = get_task(connection, task_id)
@@ -60,22 +53,16 @@ def update_task(
     task_id: str,
     now: str,
     status: str | None = None,
-    stage: str | None = None,
     active_turn_id: str | None = None,
     clear_active_turn: bool = False,
-    error_message: str | None = None,
 ) -> dict[str, Any]:
     updates: dict[str, Any] = {"updated_at": now}
     if status is not None:
         updates["status"] = status
-    if stage is not None:
-        updates["stage"] = stage
     if active_turn_id is not None:
         updates["active_turn_id"] = active_turn_id
     if clear_active_turn:
         updates["active_turn_id"] = None
-    if error_message is not None:
-        updates["error_message"] = error_message
     assignments = ", ".join(f"{name} = ?" for name in updates)
     connection.execute(f"UPDATE qa_tasks SET {assignments} WHERE id = ?", [*updates.values(), task_id])
     connection.commit()
@@ -84,64 +71,47 @@ def update_task(
     return task
 
 
-def create_document(
+def create_resource(
     connection: sqlite3.Connection,
     *,
-    document_id: str,
+    resource_id: str,
     task_id: str,
-    filename: str,
-    file_type: str,
-    content_type: str | None,
-    upload_size_bytes: int,
-    upload_sha256: str,
-    html: str,
-    display_html: str,
-    markdown: str,
-    md_list: list[Any],
-    blocks: list[dict[str, Any]],
-    processor_meta: dict[str, Any],
-    warnings: list[Any],
+    resource_type: str,
+    location: str,
     now: str,
 ) -> dict[str, Any]:
     connection.execute(
         """
-        INSERT INTO qa_documents (
-            id, task_id, filename, file_type, content_type, upload_size_bytes,
-            upload_sha256, html, display_html, markdown, md_list_json,
-            blocks_json, processor_meta_json, warnings_json, created_at
+        INSERT INTO qa_resources (
+            id, task_id, type, location, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?)
         """,
-        (
-            document_id,
-            task_id,
-            filename,
-            file_type,
-            content_type,
-            upload_size_bytes,
-            upload_sha256,
-            html,
-            display_html,
-            markdown,
-            dumps_json(md_list),
-            dumps_json(blocks),
-            dumps_json(processor_meta),
-            dumps_json(warnings),
-            now,
-        ),
+        (resource_id, task_id, resource_type, location, now),
     )
     connection.commit()
-    row = connection.execute("SELECT * FROM qa_documents WHERE id = ?", (document_id,)).fetchone()
-    document = row_to_dict(row)
-    assert document is not None
-    return document
+    row = connection.execute("SELECT * FROM qa_resources WHERE id = ?", (resource_id,)).fetchone()
+    resource = row_to_dict(row)
+    assert resource is not None
+    return resource
 
 
-def list_documents(connection: sqlite3.Connection, task_id: str) -> list[dict[str, Any]]:
-    rows = connection.execute(
-        "SELECT * FROM qa_documents WHERE task_id = ? ORDER BY created_at, rowid",
-        (task_id,),
-    ).fetchall()
+def list_resources(
+    connection: sqlite3.Connection,
+    task_id: str,
+    *,
+    resource_type: str | None = None,
+) -> list[dict[str, Any]]:
+    if resource_type is None:
+        rows = connection.execute(
+            "SELECT * FROM qa_resources WHERE task_id = ? ORDER BY created_at, rowid",
+            (task_id,),
+        ).fetchall()
+    else:
+        rows = connection.execute(
+            "SELECT * FROM qa_resources WHERE task_id = ? AND type = ? ORDER BY created_at, rowid",
+            (task_id, resource_type),
+        ).fetchall()
     return [dict(row) for row in rows]
 
 
@@ -153,17 +123,36 @@ def create_message(
     turn_id: str | None,
     role: str,
     content: str,
-    metadata: dict[str, Any],
     now: str,
+    sequence: int,
+    group_id: str,
+    group_index: int,
+    tool_calls_json: str = "[]",
+    tool_call_id: str | None = None,
+    name: str | None = None,
 ) -> dict[str, Any]:
     connection.execute(
         """
         INSERT INTO qa_messages (
-            id, task_id, turn_id, role, content, metadata_json, created_at
+            id, task_id, turn_id, sequence, group_id, group_index, role,
+            content, tool_calls_json, tool_call_id, name, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (message_id, task_id, turn_id, role, content, dumps_json(metadata), now),
+        (
+            message_id,
+            task_id,
+            turn_id,
+            sequence,
+            group_id,
+            group_index,
+            role,
+            content,
+            tool_calls_json,
+            tool_call_id,
+            name,
+            now,
+        ),
     )
     connection.commit()
     row = connection.execute("SELECT * FROM qa_messages WHERE id = ?", (message_id,)).fetchone()
@@ -174,7 +163,7 @@ def create_message(
 
 def list_messages(connection: sqlite3.Connection, task_id: str) -> list[dict[str, Any]]:
     rows = connection.execute(
-        "SELECT * FROM qa_messages WHERE task_id = ? ORDER BY created_at, rowid",
+        "SELECT * FROM qa_messages WHERE task_id = ? ORDER BY sequence ASC, rowid ASC",
         (task_id,),
     ).fetchall()
     return [dict(row) for row in rows]
@@ -185,18 +174,17 @@ def create_turn(
     *,
     turn_id: str,
     task_id: str,
-    user_message_id: str,
     status: str,
     now: str,
 ) -> dict[str, Any]:
     connection.execute(
         """
         INSERT INTO qa_turns (
-            id, task_id, status, user_message_id, created_at, updated_at
+            id, task_id, status, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?)
         """,
-        (turn_id, task_id, status, user_message_id, now, now),
+        (turn_id, task_id, status, now, now),
     )
     connection.commit()
     turn = get_turn(connection, turn_id)
@@ -230,7 +218,6 @@ def update_turn(
     now: str,
     status: str | None = None,
     agent_completion_id: str | None = None,
-    error_message: str | None = None,
     completed_at: str | None = None,
 ) -> dict[str, Any]:
     updates: dict[str, Any] = {"updated_at": now}
@@ -238,8 +225,6 @@ def update_turn(
         updates["status"] = status
     if agent_completion_id is not None:
         updates["agent_completion_id"] = agent_completion_id
-    if error_message is not None:
-        updates["error_message"] = error_message
     if completed_at is not None:
         updates["completed_at"] = completed_at
     assignments = ", ".join(f"{name} = ?" for name in updates)
@@ -257,12 +242,9 @@ def update_turn_status_if_current(
     current_statuses: set[str],
     status: str,
     now: str,
-    error_message: str | None = None,
     completed_at: str | None = None,
 ) -> dict[str, Any] | None:
     updates: dict[str, Any] = {"status": status, "updated_at": now}
-    if error_message is not None:
-        updates["error_message"] = error_message
     if completed_at is not None:
         updates["completed_at"] = completed_at
     placeholders = ", ".join("?" for _ in current_statuses)
@@ -288,8 +270,6 @@ def create_event(
     task_id: str,
     turn_id: str | None,
     event_type: str,
-    status: str,
-    stage: str,
     payload: dict[str, Any],
     now: str,
 ) -> dict[str, Any]:
@@ -297,12 +277,11 @@ def create_event(
     connection.execute(
         """
         INSERT INTO qa_events (
-            id, task_id, turn_id, sequence, event_type, status, stage,
-            payload_json, created_at
+            id, task_id, turn_id, sequence, event_type, payload_json, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        (event_id, task_id, turn_id, sequence, event_type, status, stage, dumps_json(payload), now),
+        (event_id, task_id, turn_id, sequence, event_type, dumps_json(payload), now),
     )
     connection.commit()
     row = connection.execute("SELECT * FROM qa_events WHERE id = ?", (event_id,)).fetchone()

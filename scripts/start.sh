@@ -32,7 +32,7 @@ BACKEND_PORT="${BACKEND_PORT:-8000}"
 FRONTEND_HOST="${FRONTEND_HOST:-127.0.0.1}"
 FRONTEND_PORT="${FRONTEND_PORT:-3000}"
 
-AGENT_SERVICE_BASE_URL="${AGENT_SERVICE_BASE_URL:-http://${AGENT_HOST}:${AGENT_PORT}}"
+AGENT_SERVICE_TARGET="${AGENT_SERVICE_TARGET:-${AGENT_HOST}:${AGENT_PORT}}"
 BACKEND_BASE_URL="${BACKEND_BASE_URL:-http://${BACKEND_HOST}:${BACKEND_PORT}}"
 
 if [[ ! -f "$ROOT_DIR/frontend/.next/BUILD_ID" ]]; then
@@ -83,7 +83,7 @@ start_service "agent    gRPC ${AGENT_HOST}:${AGENT_PORT}" \
   python agent/main.py --host "$AGENT_HOST" --port "$AGENT_PORT"
 
 start_service "backend  http://${BACKEND_HOST}:${BACKEND_PORT}" \
-  env AGENT_SERVICE_BASE_URL="$AGENT_SERVICE_BASE_URL" \
+  env AGENT_SERVICE_TARGET="$AGENT_SERVICE_TARGET" \
   python -m uvicorn backend.main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT"
 
 start_service "frontend http://${FRONTEND_HOST}:${FRONTEND_PORT}" \

@@ -1,6 +1,20 @@
 # Backend Devlog
 
-last updated: 2026-09-08 19:27:49
+last updated: 2026-09-10 15:15:29
+
+## 2026-09-10 15:15:29
+
+### 已完成工作
+
+- 按“只对齐 core”范围：config.py 将 agent 地址从 HTTP `agent_service_base_url` 改为 gRPC 目标 `agent_service_target`（默认 `127.0.0.1:8001`，env `AGENT_SERVICE_TARGET`），同步 `main.py`、`scripts/start.sh`、README。
+- db.py 移除 legacy 表清理与 `qa_tasks.memory_json` 迁移，`initialize_database` 只按 `SCHEMA_SQL` 建当前 QA 表；旧库改为直接重建。
+- 删除 core/storage.py，移除 `task_service.py` 中的 `compute_sha256` 引用。
+- TDD：test_config.py 先红（缺 `agent_service_target`、旧表仍被删），实现后 test_config/test_qa_crud/test_agent_client/test_message_schema 共 43 passed；test_qa_task_flow.py 10 项仍因 service 未迁移失败（与基线一致）。
+- 同步 DESIGN.md 与 tests/docs/test_config.md。
+
+### 下一步
+
+- service/routes/agent_client 迁移到 gRPC + resource_refs 及新 crud/schema。
 
 ## 2026-09-08 19:27:49
 

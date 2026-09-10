@@ -23,7 +23,7 @@ def create_app(
         database = ThreadLocalDatabase(settings.database_path)
         initialize_database(database.connect())
         resolved_agent_client = agent_client or AgentClient(
-            base_url=settings.agent_service_base_url,
+            base_url=settings.agent_service_target,
             timeout_seconds=settings.agent_request_timeout_seconds,
             cancel_timeout_seconds=settings.agent_cancel_timeout_seconds,
         )

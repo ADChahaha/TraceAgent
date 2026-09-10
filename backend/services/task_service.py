@@ -11,8 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.core.config import BackendSettings
-from backend.core.storage import compute_sha256
-from backend.crud import qa_tasks as qa_crud
+from backend.crud import crud as qa_crud
 from backend.crud.json_utils import loads_json
 from backend.services.errors import AgentServiceError, ConflictError, NotFoundError, ValidationError
 from backend.services.time_utils import utc_now
@@ -473,7 +472,6 @@ class QaTaskService:
 
     def _process_document(self, *, task_id: str, upload_file: UploadedFilePayload) -> None:
         file_type = self._infer_file_type(upload_file.filename)
-        upload_sha256 = compute_sha256(upload_file.file_bytes)
         result = self.agent_client.process_document(
             file_bytes=upload_file.file_bytes,
             filename=upload_file.filename,
@@ -490,7 +488,6 @@ class QaTaskService:
             file_type=file_type,
             content_type=upload_file.content_type,
             upload_size_bytes=len(upload_file.file_bytes),
-            upload_sha256=upload_sha256,
             html=result.get("html") or "",
             display_html=result.get("display_html") or result.get("html") or "",
             markdown=result.get("markdown") or "",
