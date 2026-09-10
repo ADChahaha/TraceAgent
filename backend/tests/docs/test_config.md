@@ -6,7 +6,7 @@
 
 ```text
 BackendSettings.from_env() / BackendSettings(...)
-  -> 读取 database_path、agent_service_target、请求/取消超时、supported_file_types
+  -> 读取 database_path、agent_service_target、请求/取消超时、gRPC 消息上限、supported_file_types
 
 create_app(settings=...)
   -> 挂载 /qa/tasks 系列 API 与 /healthz
@@ -20,8 +20,9 @@ initialize_database(connection)
 
 ## 测试函数
 
-- `test_backend_settings_keeps_agent_service_configuration`：验证默认 `agent_service_target == "127.0.0.1:8001"`、请求超时 1200s、取消超时 2s、支持 pdf/docx。
+- `test_backend_settings_keeps_agent_service_configuration`：验证默认 `agent_service_target == "127.0.0.1:8001"`、请求超时 1200s、取消超时 2s、gRPC 消息上限 64 MiB、支持 pdf/docx。
 - `test_backend_settings_loads_agent_target_from_env`：验证 `AGENT_SERVICE_TARGET` 会覆盖默认 gRPC target。
+- `test_backend_settings_loads_agent_grpc_message_limit_from_env`：验证 `AGENT_GRPC_MAX_MESSAGE_BYTES` 会覆盖默认 gRPC 消息上限。
 - `test_backend_settings_loads_agent_cancel_timeout_from_env`：验证 `AGENT_SERVICE_CANCEL_TIMEOUT_SECONDS` 会覆盖后台 best-effort agent cancel 的短超时。
 - `test_backend_registers_qa_routes_and_removes_old_task_routes`：验证只挂载 QA task API，旧 `/tasks` route 已下线。因为 FastAPI 0.141 的 `include_router` 会生成 `_IncludedRouter`，测试用 `_route_paths` 递归展开 `path`、`routes` 和 `original_router.routes` 收集路径。
 - `test_backend_healthz_reports_ok`：验证 `/healthz` 返回 200 和 `{"status": "ok"}`。

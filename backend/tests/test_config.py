@@ -33,7 +33,17 @@ def test_backend_settings_keeps_agent_service_configuration(tmp_path: Path):
     assert settings.agent_service_target == "127.0.0.1:8001"
     assert settings.agent_request_timeout_seconds == 1200.0
     assert settings.agent_cancel_timeout_seconds == 2.0
+    assert settings.agent_grpc_max_message_bytes == 64 * 1024 * 1024
     assert settings.supported_file_types == ("pdf", "docx")
+
+
+def test_backend_settings_loads_agent_grpc_message_limit_from_env(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("BACKEND_DATABASE_PATH", str(tmp_path / "backend.sqlite3"))
+    monkeypatch.setenv("AGENT_GRPC_MAX_MESSAGE_BYTES", "1048576")
+
+    settings = BackendSettings.from_env()
+
+    assert settings.agent_grpc_max_message_bytes == 1048576
 
 
 def test_backend_settings_loads_agent_target_from_env(monkeypatch, tmp_path: Path):
