@@ -48,3 +48,5 @@ manager 只缓存当前 turn，终结后释放。SSE 在捕获的活跃轮终结
 数据库事务失败会回滚并将 manager 标记损坏、取消执行、关闭订阅；当前没有自动重建损坏 manager。部署使用单 backend 进程、单用户；尚无跨进程 owner 协调和租户鉴权。旧 task 路由已删除，frontend 尚未迁移。
 
 [详细设计](SESSION_MANAGER.md) · [接口](API.md) · [数据表](table.md)。Agent 合并方案已取消，AGENT_MERGE.md 仅为历史草案。
+
+Registry 不维护服务关闭标志，也不以服务关闭为由拒绝创建或加载。应用退出由 lifespan 调用 close 清理资源；manager 与订阅仍保留各自的生命周期状态。

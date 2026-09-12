@@ -15,3 +15,5 @@
 - `test_retry_marks_failed_attempt_and_terminal_clears_retry_state`：重试标记原模型尝试失败，终态不会留下仍在重试的展示项。
 - `test_cancelled_cold_load_still_registers_owned_manager`：冷加载请求断开后，Registry 仍接管加载结果，不遗留无注册实例。
 - `test_missing_tool_result_does_not_fabricate_history`：缺少真实工具结果时拒绝入库，不补造失败正文。
+
+- `test_registry_can_load_after_cleanup`：Registry 清理资源后仍可重新加载已有会话，不通过服务关闭标志拒绝访问。

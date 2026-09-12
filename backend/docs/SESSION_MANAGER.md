@@ -150,3 +150,5 @@ detach 只关闭该订阅。manager 只有在无活跃轮、执行句柄、订�
 - [thread_unsubscribe.rs](https://github.com/openai/codex/blob/53c542d944c705f3a66780a19223223bee57cbb6/codex-rs/app-server/tests/suite/v2/thread_unsubscribe.rs)
 
 借鉴点是恢复与事件串行衔接、连接与执行生命周期分离。本仓库的 SQLite 水位、SSE、Python 队列为本地适配，不代表 Codex 完整实现。
+
+Registry 不维护服务关闭标志，也不以服务关闭为由拒绝创建或加载。应用退出由 lifespan 调用 close 清理资源；manager 与订阅仍保留各自的生命周期状态。

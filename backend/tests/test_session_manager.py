@@ -390,3 +390,20 @@ def test_missing_tool_result_does_not_fabricate_history(tmp_path):
             await registry.close()
             db.close()
     asyncio.run(scenario())
+
+
+def test_registry_can_load_after_cleanup(tmp_path):
+    async def scenario():
+        registry, db, agent = await setup(tmp_path)
+        try:
+            manager, context = await registry.complete(content="问题")
+            session_id = manager.session_id
+            await registry.close()
+            restored = await registry.get_or_load(session_id)
+            assert restored is not manager
+            assert restored.session_id == session_id
+            assert restored.active_turn_id is None
+        finally:
+            await registry.close()
+            db.close()
+    asyncio.run(scenario())

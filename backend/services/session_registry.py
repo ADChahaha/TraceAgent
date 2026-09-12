@@ -7,7 +7,7 @@ from pathlib import Path
 
 from backend.core.db import transaction
 from backend.crud import crud
-from backend.services.errors import NotFoundError, ValidationError, BackendServiceError
+from backend.services.errors import NotFoundError, ValidationError
 from backend.services.session_manager import SessionManager
 from backend.services.time_utils import utc_now
 
@@ -21,7 +21,6 @@ class SessionRegistry:
         self.loading = {}
         self.lock = asyncio.Lock()
         self.creation_lock = asyncio.Lock()
-        self.closed = False
         self.reaper = None
 
     async def start(self):
@@ -53,12 +52,7 @@ class SessionRegistry:
             manager = SessionManager(session=session, resources=resources, last_event_seq=seq,
                                      database=self.database, agent_client=self.agent_client, settings=self.settings)
             async with self.lock:
-                closing = self.closed
-                if not closing:
-                    self.managers[session_id] = manager
-            if closing:
-                await manager.close()
-                raise BackendServiceError("服务正在关闭")
+                self.managers[session_id] = manager
             return manager
         finally:
             async with self.lock:
@@ -67,8 +61,6 @@ class SessionRegistry:
 
     async def get_or_load(self, session_id):
         async with self.lock:
-            if self.closed:
-                raise BackendServiceError("服务正在关闭")
             manager = self.managers.get(session_id)
             if manager:
                 manager.last_activity = asyncio.get_running_loop().time()
@@ -106,10 +98,8 @@ class SessionRegistry:
             if Path(file["filename"]).suffix.lower().lstrip(".") not in self.settings.supported_file_types:
                 raise ValidationError("只支持 PDF/DOCX 文件")
         content = content.strip()
-        # 创建与空闲回收、服务关闭共用入口锁。
+        # 创建与空闲回收、资源清理共用入口锁。
         async with self.creation_lock:
-            if self.closed:
-                raise BackendServiceError("服务正在关闭")
             if session_id is None:
                 session_id = uuid.uuid4().hex
                 def create():
@@ -135,7 +125,6 @@ class SessionRegistry:
             await self.evict_idle()
 
     async def close(self):
-        self.closed = True
         if self.reaper:
             self.reaper.cancel()
             await asyncio.gather(self.reaper, return_exceptions=True)
