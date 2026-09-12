@@ -6,7 +6,6 @@ import json
 import sqlite3
 import uuid
 
-from backend.core.db import transaction
 from backend.crud import crud
 from backend.services.errors import BackendServiceError, ConflictError, NotFoundError
 from backend.services.session_history import ResumeContext
@@ -100,7 +99,7 @@ class SessionManager:
         events = []
         def execute():
             db = self.database.connect()
-            with transaction(db):
+            with crud.transaction(db):
                 result = operation(db, events)
                 session = crud.get_session(db, self.session_id)
                 resources = crud.list_resources(db, self.session_id)
@@ -148,7 +147,7 @@ class SessionManager:
         def create(db, events):
             now = utc_now()
             crud.create_turn(db, turn_id=turn_id, session_id=self.session_id, status="queued", now=now, commit=False)
-            sequence = db.execute("SELECT COALESCE(MAX(sequence),0)+1 FROM chat_messages WHERE session_id=?", (self.session_id,)).fetchone()[0]
+            sequence = crud.get_next_message_sequence(db, self.session_id)
             message_id = uuid.uuid4().hex
             crud.create_message(db, message_id=message_id, session_id=self.session_id,
                                 turn_id=turn_id, role="user", content=content, now=now,
@@ -203,7 +202,7 @@ class SessionManager:
         if not self._valid(turn_id, generation):
             return
         def save(db, events):
-            db.execute("DELETE FROM chat_resources WHERE session_id=?", (self.session_id,))
+            crud.delete_resources(db, self.session_id, commit=False)
             for ref in refs:
                 crud.create_resource(db, resource_id=uuid.uuid4().hex, session_id=self.session_id,
                                      resource_type=ref["type"], location=ref["location"], now=utc_now(), commit=False)
@@ -292,7 +291,7 @@ class SessionManager:
                 content = json.dumps({"error": result.get("error_message") or result["error"]}, ensure_ascii=False)
             json.loads(content)
             messages.append({"role": "tool", "content": content, "tool_call_id": call["id"], "name": call["name"]})
-        sequence = db.execute("SELECT COALESCE(MAX(sequence),0)+1 FROM chat_messages WHERE session_id=?", (self.session_id,)).fetchone()[0]
+        sequence = crud.get_next_message_sequence(db, self.session_id)
         for index, message in enumerate(messages):
             crud.create_message(db, message_id=uuid.uuid4().hex, session_id=self.session_id, turn_id=turn_id,
                                 now=utc_now(), sequence=sequence + index, group_id=f"{turn_id}:{mid}",

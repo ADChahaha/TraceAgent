@@ -5,7 +5,6 @@ import math
 import uuid
 from pathlib import Path
 
-from backend.core.db import transaction
 from backend.crud import crud
 from backend.services.errors import NotFoundError, ValidationError
 from backend.services.session_manager import SessionManager
@@ -26,11 +25,11 @@ class SessionRegistry:
     async def start(self):
         def recover():
             db = self.database.connect()
-            with transaction(db):
-                sessions = db.execute("SELECT * FROM chat_sessions WHERE active_turn_id IS NOT NULL OR status IN ('processing','running')").fetchall()
+            with crud.transaction(db):
+                sessions = crud.list_sessions_needing_recovery(db)
                 for session in sessions:
                     now = utc_now()
-                    turns = db.execute("SELECT id FROM chat_turns WHERE session_id=? AND status IN ('queued','in_progress','cancelling')", (session["id"],)).fetchall()
+                    turns = crud.list_unfinished_turns(db, session["id"])
                     for turn in turns:
                         crud.update_turn(db, turn_id=turn["id"], now=now, status="failed", completed_at=now, commit=False)
                         crud.create_event(db, event_id=uuid.uuid4().hex, session_id=session["id"], turn_id=turn["id"],

@@ -5,7 +5,7 @@ import sqlite3
 
 import pytest
 
-from backend.core.db import connect_database, initialize_database, transaction
+from backend.core.db import connect_database, initialize_database
 from backend.crud import crud
 from backend.services.turn_view import TurnView
 from backend.services.subscription import Subscription, SubscriptionClosed
@@ -15,7 +15,7 @@ def test_transaction_rolls_back_all_crud_writes(tmp_path):
     db = connect_database(tmp_path / "atomic.sqlite3")
     initialize_database(db)
     with pytest.raises(sqlite3.IntegrityError):
-        with transaction(db):
+        with crud.transaction(db):
             crud.create_session(db, session_id="s", status="ready", now="now", commit=False)
             crud.create_turn(db, session_id="missing", turn_id="t", status="queued", now="now", commit=False)
     assert crud.get_session(db, "s") is None
@@ -74,3 +74,17 @@ def test_cancelled_subscription_wait_does_not_consume_an_event():
         else:
             assert receive.result() == {"type": "keep"}
     asyncio.run(scenario())
+
+
+def test_services_delegate_sql_to_crud():
+    import ast
+    from pathlib import Path
+
+    services = Path(__file__).resolve().parents[1] / "services"
+    violations = []
+    for path in services.glob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in {"execute", "executemany", "executescript"}):
+                violations.append(f"{path.name}:{node.lineno}")
+    assert not violations, violations

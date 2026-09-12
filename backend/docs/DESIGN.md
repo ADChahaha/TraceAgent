@@ -37,6 +37,19 @@ POST /cancel → manager 事务提交 cancelled、清空 active_turn_id
 
 Registry.complete 直接执行校验和会话创建，不创建独立受理任务；真正的后台执行由 TurnRuntime.start 创建。显式取消请求协程可中断尚未交给 manager 的受理过程。
 
+## 数据访问边界
+
+事务入口 transaction() 和业务 SQL 统一放在 crud/crud.py；service 通过 with crud.transaction(db) 将相关 CRUD 操作组合为一次原子提交。core/db.py 负责连接和数据库初始化：
+
+```text
+Registry.start → list_sessions_needing_recovery / list_unfinished_turns → 遗留轮次收口
+Manager 创建或提交消息组 → get_next_message_sequence → 同事务插入完整消息
+Manager 替换资源 → delete_resources(commit=False) → 同事务插入新资源
+History.build_snapshot → iter_events_through(sequence=内部边界) → 逐条重建展示
+```
+
+历史事件保持逐条读取，避免 CRUD 一次加载全部历史。CRUD 不捕获数据库异常，交给 service 回滚与处理；事务内删除资源不自行提交。
+
 ## 事务和生命周期
 
 五张表为 chat_sessions、chat_resources、chat_turns、chat_messages、chat_events，初始化不迁移旧 qa_* 数据。一个命令的写入在同一工作线程、同一事务完成；CRUD 的 commit=False 由外层提交，提交后才更新投影和广播。

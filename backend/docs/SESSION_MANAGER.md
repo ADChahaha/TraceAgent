@@ -62,7 +62,7 @@ gRPC 只使用现有 PrepareResources 与 ChatCompletion；取消使用原 call.
 
 同一 manager 的创建、取消、Attach、事件、收尾通过一个有界 FIFO 队列。网络读取不占命令循环；runtime 每发一个事件等待确认，限制待处理事件积压。取消等待当前命令完成，不依赖独立优先队列。
 
-每个写命令把完整 SQLite 事务放入一次 asyncio.to_thread，使用线程内连接、BEGIN IMMEDIATE 和 commit=False CRUD。成功提交后才能推进 last_event_seq、更新 TurnView、广播；SQL 异常回滚并标记 manager 损坏，取消执行、关闭订阅。
+service 的数据查询和写入统一调用 CRUD，不直接执行 SQL。每个写命令把完整 SQLite 事务放入一次 asyncio.to_thread，使用线程内连接、crud.transaction 和 commit=False CRUD；CRUD 内部负责 BEGIN IMMEDIATE、提交及异常回滚。成功提交后才能推进 last_event_seq、更新 TurnView、广播；SQL 异常回滚并标记 manager 损坏，取消执行、关闭订阅。
 
 损坏 manager 当前不会在线自动重建；backend 重启扫描持久化状态收口遗留轮次。投影更新异常同样停止该 manager，避免数据库与内存分歧后继续服务。
 
@@ -102,7 +102,7 @@ GET /resume → manager.attach 在串行命令中：
   2. 深拷贝当前轮展示（若存在）
   3. 注册独立订阅，后续新事件进入队列
 请求侧 build_snapshot：
-  4. 查询 sequence <= N 的事件，排除已捕获的当前轮
+  4. 调用 crud.iter_events_through 逐条查询 sequence <= N 的事件，排除已捕获的当前轮
   5. 按 turn 重放 TurnView，附加当前轮副本
   6. 检查快照预算并发送 session.snapshot
   7. 消费队列中的 N 之后增量

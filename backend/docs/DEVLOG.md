@@ -1,6 +1,14 @@
 # Backend Devlog
 
-last updated: 2026-09-12 23:29:25
+last updated: 2026-09-12 23:34:55
+
+## 2026-09-12 23:34:55
+
+### 已完成工作
+
+- 将 service 中的恢复查询、消息序号查询、资源删除和历史事件读取 SQL 下沉到 CRUD；历史事件仍逐条读取，资源替换仍在同一事务中完成。
+- 将 transaction() 从 core/db.py 移到 crud/crud.py，统一负责事务开始、提交和回滚；service 使用 crud.transaction 组合数据操作。
+- 新增 service 不直接执行 SQL 的边界检查，并调整事务回滚测试入口；目标测试先失败后通过，backend 全量 66 项测试通过，设计和对应测试文档同步。
 
 ## 2026-09-12 23:29:25
 

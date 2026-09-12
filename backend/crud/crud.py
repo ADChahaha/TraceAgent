@@ -1,10 +1,23 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from typing import Any
 
 from backend.core.db import row_to_dict
 from backend.crud.json_utils import dumps_json
+
+
+@contextmanager
+def transaction(connection: sqlite3.Connection):
+    """同一线程内开启写事务；失败全部回滚，成功统一提交。"""
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        yield connection
+        connection.commit()
+    except BaseException:
+        connection.rollback()
+        raise
 
 
 def create_session(
@@ -327,3 +340,49 @@ def get_last_event_sequence(connection: sqlite3.Connection, session_id: str) -> 
     if row is None:
         return 0
     return int(row["last_sequence"] or 0)
+
+def list_sessions_needing_recovery(connection: sqlite3.Connection) -> list[dict[str, Any]]:
+    """查询持有活跃轮或仍处于处理、运行状态的会话。"""
+    rows = connection.execute(
+        "SELECT * FROM chat_sessions WHERE active_turn_id IS NOT NULL "
+        "OR status IN ('processing','running')"
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_unfinished_turns(connection: sqlite3.Connection, session_id: str) -> list[dict[str, Any]]:
+    """按会话查询尚未终结的轮次，供启动恢复收口。"""
+    rows = connection.execute(
+        "SELECT id FROM chat_turns WHERE session_id=? "
+        "AND status IN ('queued','in_progress','cancelling')", (session_id,)
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_next_message_sequence(connection: sqlite3.Connection, session_id: str) -> int:
+    """读取下一消息序号；调用方须在同一写事务中分配并插入消息。"""
+    return int(connection.execute(
+        "SELECT COALESCE(MAX(sequence),0)+1 FROM chat_messages WHERE session_id=?",
+        (session_id,),
+    ).fetchone()[0])
+
+
+def delete_resources(connection: sqlite3.Connection, session_id: str, *, commit: bool = True) -> None:
+    """删除会话资源引用；commit=False 时由调用方提交或回滚。"""
+    connection.execute("DELETE FROM chat_resources WHERE session_id=?", (session_id,))
+    if commit:
+        connection.commit()
+
+
+def iter_events_through(connection: sqlite3.Connection, session_id: str, *, sequence: int):
+    """按序逐条读取内部边界之前的事件，避免预先加载全部恢复历史。"""
+    cursor = connection.execute(
+        "SELECT turn_id, event_type, payload_json FROM chat_events "
+        "WHERE session_id=? AND sequence<=? ORDER BY sequence",
+        (session_id, sequence),
+    )
+    try:
+        for row in cursor:
+            yield dict(row)
+    finally:
+        cursor.close()

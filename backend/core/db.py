@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import sqlite3
 import threading
-from contextlib import contextmanager
 from pathlib import Path
 
 from backend.models.schema import SCHEMA_SQL
@@ -59,15 +58,3 @@ def row_to_dict(row: sqlite3.Row | None) -> dict | None:
     if row is None:
         return None
     return dict(row)
-
-
-@contextmanager
-def transaction(connection: sqlite3.Connection):
-    """同一线程内开启写事务；失败全部回滚，成功统一提交。"""
-    connection.execute("BEGIN IMMEDIATE")
-    try:
-        yield connection
-        connection.commit()
-    except BaseException:
-        connection.rollback()
-        raise

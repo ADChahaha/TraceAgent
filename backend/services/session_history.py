@@ -5,6 +5,7 @@ import copy
 import json
 from dataclasses import dataclass
 
+from backend.crud import crud
 from backend.services.subscription import Subscription
 from backend.services.turn_view import TurnView
 from backend.services.errors import BackendServiceError
@@ -26,10 +27,8 @@ async def build_snapshot(database, context):
     def read():
         views = {}
         total = 0
-        rows = database.connect().execute(
-            "SELECT turn_id, event_type, payload_json FROM chat_events "
-            "WHERE session_id=? AND sequence<=? ORDER BY sequence",
-            (context.session_id, context.boundary),
+        rows = crud.iter_events_through(
+            database.connect(), context.session_id, sequence=context.boundary,
         )
         active_id = context.current_turn["id"] if context.current_turn else None
         for row in rows:
