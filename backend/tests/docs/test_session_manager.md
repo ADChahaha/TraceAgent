@@ -7,7 +7,7 @@
 - `test_cancel_rejects_late_event_and_does_not_cancel_new_turn`：旧轮取消后丢弃迟到写入，重复取消旧轮不伤害新轮。
 - `test_concurrent_create_has_one_active_turn_and_one_manager`：并发获取返回同一 manager，重复启动活跃轮拒绝。
 - `test_request_id_retry_reuses_session_after_response_loss`：初次响应丢失后凭请求 ID 找回原会话与轮次，冲突内容拒绝。
-- `test_cancelled_http_request_keeps_idempotency_guard`：请求在受理事务前退出，重试仍等待原受理步骤，不创建第二轮。
+- `test_cancelled_request_stops_acceptance`：受理逻辑等待创建锁时显式取消请求协程，确认等待被取消且没有创建轮次；不依赖私有转发方法。
 - `test_tool_group_is_atomic_and_next_history_uses_original_ids`：同名工具按原调用 ID 配对，乱序成功/失败结果齐备后整组提交。
 - `test_tool_write_failure_rolls_back_group_and_process_event`：注入真实 SQLite 写入失败，assistant/tool 组及过程事件均回滚并关闭异常管理器订阅。
 - `test_idle_unload_and_cold_resume_do_not_keep_history_in_manager`：无订阅的活跃任务不卸载，空闲后冷恢复可查询历史且不常驻历史缓存。

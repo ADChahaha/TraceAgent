@@ -35,6 +35,8 @@ POST /cancel → manager 事务提交 cancelled、清空 active_turn_id
 | agent_client.py | agent_proto 与 grpc.aio 转换 |
 | core/db.py、crud/crud.py | 线程内连接、事务和参数化 SQL |
 
+Registry.complete 直接执行校验、去重和会话创建，不创建独立受理任务；真正的后台执行由 TurnRuntime.start 创建。显式取消请求协程可中断尚未交给 manager 的受理过程。
+
 ## 事务和生命周期
 
 五张表为 chat_sessions、chat_resources、chat_turns、chat_messages、chat_events，初始化不迁移旧 qa_* 数据。一个命令的写入在同一工作线程、同一事务完成；CRUD 的 commit=False 由外层提交，提交后才更新投影和广播。

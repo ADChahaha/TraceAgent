@@ -13,7 +13,7 @@ HTTP handler → session_history.build_snapshot → 首帧 → Subscription.rece
 FastAPI shutdown → registry.close → manager.close → runtime.cancel/wait_closed
 ```
 
-Registry 持有 manager 和尚在受理的请求任务；manager 持有执行句柄与订阅；runtime 持有原始 gRPC call。HTTP 请求消失不会夺走后台任务的所有权。
+Registry 持有 manager；manager 持有执行句柄与订阅；runtime 持有原始 gRPC call。complete 直接执行校验、去重和会话创建，不另建受理任务；已启动的 runtime 独立于页面连接。
 
 | 文件 | 输入、处理与输出 |
 | --- | --- |
@@ -31,7 +31,7 @@ Registry 持有 manager 和尚在受理的请求任务；manager 持有执行句
 ```text
 POST /chat/completion 输入 content、可选 session_id/request_id/files/run_options
   → Registry 校验内容、文件格式和容量、有限正数执行超时
-  → 受理任务独立于请求运行，并持有创建锁
+  → 请求协程执行受理逻辑，并持有创建锁
   → request_id 已存在：比较指纹，一致则 attach，冲突则拒绝
   → 无 session_id：创建 session；有则加载对应唯一 manager
   → manager 检查无活跃轮；failed 会话要求新文件
@@ -41,7 +41,7 @@ POST /chat/completion 输入 content、可选 session_id/request_id/files/run_op
 
 request_id 和请求指纹保存在 turn.created 的 payload_json，不新增 schema 字段。指纹包含内容、原始可选 session_id、选项和文件名/内容摘要；初次省略 session_id 时，重试也应省略。当前幂等键作用域为单用户服务，通过进程内创建锁协调，不支持多 worker 竞争。
 
-即使请求在首帧前取消，已受理任务仍完成并释放它产生的订阅；重试不会绕过尚未完成的创建。冷加载由独立 loading task 持有，调用者取消后仍会把 manager 注册到 Registry，避免无 owner 的执行对象。
+显式取消请求协程会传播到受理逻辑；已经入队的 manager 命令仍按其生命周期收尾，不保证取消发生在创建过程中时跨请求的完整幂等保护。浏览器断开本身不等同于请求协程被取消。冷加载由独立 loading task 持有，调用者取消后仍会把 manager 注册到 Registry，避免无 owner 的执行对象。
 
 ## 3. 资源与执行
 

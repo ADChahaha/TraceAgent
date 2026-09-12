@@ -183,34 +183,38 @@ def test_request_id_retry_reuses_session_after_response_loss(tmp_path):
     asyncio.run(scenario())
 
 
-def test_cancelled_http_request_keeps_idempotency_guard(tmp_path, monkeypatch):
+def test_cancelled_request_stops_acceptance(tmp_path, monkeypatch):
     async def scenario():
-        from backend.services.session_manager import SessionManager
         registry, db, agent = await setup(tmp_path)
-        entered, release = asyncio.Event(), asyncio.Event()
-        original = SessionManager._handle_create
-        async def blocked(self, *args):
-            entered.set()
-            await release.wait()
-            return await original(self, *args)
-        monkeypatch.setattr(SessionManager, "_handle_create", blocked)
+        entered, cancelled = asyncio.Event(), asyncio.Event()
+
+        class BlockedCreationLock:
+            async def __aenter__(self):
+                entered.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    cancelled.set()
+
+            async def __aexit__(self, *args):
+                pass
+
+        original_lock = registry.creation_lock
+        monkeypatch.setattr(registry, "creation_lock", BlockedCreationLock())
+        request = asyncio.create_task(registry.complete(content="问题"))
         try:
-            first = asyncio.create_task(registry.complete(content="问题", request_id="lost"))
             await entered.wait()
-            first.cancel()
+            request.cancel()
             with pytest.raises(asyncio.CancelledError):
-                await first
-            retry = asyncio.create_task(registry.complete(content="问题", request_id="lost"))
-            # 在事件循环让重试获得一次调度后，再放行原请求。
-            await asyncio.sleep(0)
-            release.set()
-            await asyncio.wait_for(retry, 2)
-            assert db.connect().execute("SELECT COUNT(*) FROM chat_turns").fetchone()[0] == 1
+                await request
+            assert cancelled.is_set()
+            assert db.connect().execute("SELECT COUNT(*) FROM chat_turns").fetchone()[0] == 0
         finally:
-            release.set()
+            registry.creation_lock = original_lock
             await registry.close()
             db.close()
     asyncio.run(scenario())
+
 
 
 def test_tool_group_is_atomic_and_next_history_uses_original_ids(tmp_path):

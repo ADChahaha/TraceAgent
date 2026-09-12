@@ -25,8 +25,6 @@ class SessionRegistry:
         self.creation_lock = asyncio.Lock()
         self.closed = False
         self.reaper = None
-        self.requests = set()
-        self.cleanup_tasks = set()
 
     async def start(self):
         def recover():
@@ -94,26 +92,7 @@ class SessionRegistry:
             manager.last_activity = asyncio.get_running_loop().time()
         return manager
 
-    async def complete(self, **params):
-        # 浏览器断开不释放受理中的幂等锁；backend 持有整段受理任务。
-        task = asyncio.create_task(self._complete(**params), name="accept-completion")
-        self.requests.add(task)
-        task.add_done_callback(self.requests.discard)
-        try:
-            return await asyncio.shield(task)
-        except asyncio.CancelledError:
-            def cleanup(done):
-                if done.cancelled() or done.exception() is not None:
-                    return
-                manager, context = done.result()
-                context.subscription.close()
-                released = asyncio.create_task(manager.detach(context.subscription.id))
-                self.cleanup_tasks.add(released)
-                released.add_done_callback(self.cleanup_tasks.discard)
-            task.add_done_callback(cleanup)
-            raise
-
-    async def _complete(self, *, content, session_id=None, files=None, run_options=None, request_id=None):
+    async def complete(self, *, content, session_id=None, files=None, run_options=None, request_id=None):
         if not isinstance(content, str) or not content.strip():
             raise ValidationError("content 不能为空")
         files = files or []
@@ -182,8 +161,6 @@ class SessionRegistry:
         if self.reaper:
             self.reaper.cancel()
             await asyncio.gather(self.reaper, return_exceptions=True)
-        await asyncio.gather(*list(self.requests), return_exceptions=True)
-        await asyncio.gather(*list(self.cleanup_tasks), return_exceptions=True)
         async with self.creation_lock:
             pending = list(self.loading.values())
             loaded = await asyncio.gather(*pending, return_exceptions=True)
