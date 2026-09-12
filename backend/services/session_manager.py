@@ -136,10 +136,10 @@ class SessionManager:
             if not subscription.publish(event):
                 self.subscribers.pop(key, None)
 
-    async def create_completion(self, *, content, files, run_options, request_id, fingerprint):
-        return await self._ask("create", content, files, run_options, request_id, fingerprint)
+    async def create_completion(self, *, content, files, run_options):
+        return await self._ask("create", content, files, run_options)
 
-    async def _handle_create(self, content, files, run_options, request_id, fingerprint):
+    async def _handle_create(self, content, files, run_options):
         if self.active_turn_id:
             raise ConflictError("会话已有活跃轮次")
         if self.session["status"] == "failed" and not files:
@@ -154,7 +154,7 @@ class SessionManager:
                                 turn_id=turn_id, role="user", content=content, now=now,
                                 sequence=sequence, group_id=message_id, group_index=0, commit=False)
             crud.update_session(db, session_id=self.session_id, now=now, status="processing" if files else "running", active_turn_id=turn_id, commit=False)
-            self._emit(db, events, "turn.created", turn_id, {"request_id": request_id, "fingerprint": fingerprint})
+            self._emit(db, events, "turn.created", turn_id)
             self._emit(db, events, "message.created", turn_id, {"message_id": message_id, "role": "user", "content": content})
         await self._write(create)
         runtime = TurnRuntime(self, turn_id, files, run_options)

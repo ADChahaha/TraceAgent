@@ -13,12 +13,12 @@ HTTP handler → session_history.build_snapshot → 首帧 → Subscription.rece
 FastAPI shutdown → registry.close → manager.close → runtime.cancel/wait_closed
 ```
 
-Registry 持有 manager；manager 持有执行句柄与订阅；runtime 持有原始 gRPC call。complete 直接执行校验、去重和会话创建，不另建受理任务；已启动的 runtime 独立于页面连接。
+Registry 持有 manager；manager 持有执行句柄与订阅；runtime 持有原始 gRPC call。complete 直接执行校验和会话创建，不另建受理任务；已启动的 runtime 独立于页面连接。
 
 | 文件 | 输入、处理与输出 |
 | --- | --- |
 | routes/chat.py | JSON/multipart 校验，调用 complete/attach/cancel，生成 SSE 或 JSON |
-| session_registry.py | session_id 查找或单次加载；request_id 去重；回收与启动恢复 |
+| session_registry.py | session_id 查找或单次加载；回收与启动恢复 |
 | session_manager.py | 命令按 FIFO 执行；校验轮次身份，事务提交后更新内存及广播 |
 | turn_runtime.py | 文件准备、读取模型输入、消费事件，最终汇报 WorkerEnded |
 | turn_view.py | 过程事件折叠成当前轮 items，输出深拷贝快照 |
@@ -26,22 +26,21 @@ Registry 持有 manager；manager 持有执行句柄与订阅；runtime 持有�
 | session_history.py | 捕获上下文加数据库历史，输出完整页面快照 |
 | agent_client.py | 现有 protobuf 请求与响应转换，保留可取消原 call |
 
-## 2. 创建和重试
+## 2. 创建轮次
 
 ```text
-POST /chat/completion 输入 content、可选 session_id/request_id/files/run_options
+POST /chat/completion 输入 content、可选 session_id/files/run_options
   → Registry 校验内容、文件格式和容量、有限正数执行超时
   → 请求协程执行受理逻辑，并持有创建锁
-  → request_id 已存在：比较指纹，一致则 attach，冲突则拒绝
   → 无 session_id：创建 session；有则加载对应唯一 manager
   → manager 检查无活跃轮；failed 会话要求新文件
   → 同一事务创建 turn、用户消息、turn.created/message.created，设置 active_turn_id
   → 登记本次请求的订阅并启动 runtime
 ```
 
-request_id 和请求指纹保存在 turn.created 的 payload_json，不新增 schema 字段。指纹包含内容、原始可选 session_id、选项和文件名/内容摘要；初次省略 session_id 时，重试也应省略。当前幂等键作用域为单用户服务，通过进程内创建锁协调，不支持多 worker 竞争。
+每次 POST 都创建新轮次；同一 session 有活跃轮时拒绝新提交。断线后使用 session_id 调用 resume。首帧前丢失连接且尚未拿到 session_id 时，重新提交可能产生独立会话，当前不提供提交去重。创建锁仍用于协调创建、空闲回收与服务关闭。
 
-显式取消请求协程会传播到受理逻辑；已经入队的 manager 命令仍按其生命周期收尾，不保证取消发生在创建过程中时跨请求的完整幂等保护。浏览器断开本身不等同于请求协程被取消。冷加载由独立 loading task 持有，调用者取消后仍会把 manager 注册到 Registry，避免无 owner 的执行对象。
+显式取消请求协程会传播到受理逻辑；已经入队的 manager 命令仍按其生命周期收尾。浏览器断开本身不等同于请求协程被取消。冷加载由独立 loading task 持有，调用者取消后仍会把 manager 注册到 Registry，避免无 owner 的执行对象。
 
 ## 3. 资源与执行
 
@@ -143,7 +142,7 @@ detach 只关闭该订阅。manager 只有在无活跃轮、执行句柄、订�
 
 ## 10. 验证与参考
 
-行为测试覆盖单例加载、请求取消与幂等竞争、取消后迟到事件、快照边界、真实 SQLite 事务回滚、工具乱序配对、慢订阅、提前取消收尾、冷恢复和启动收口。gRPC 测试使用本地真实服务、protobuf 序列化与有效 DOCX 样本；ASGI 测试验证断开后继续执行。各测试文件说明位于 backend/tests/docs/，与开发文档分离。
+行为测试覆盖单例加载、请求取消、独立提交、取消后迟到事件、快照边界、真实 SQLite 事务回滚、工具乱序配对、慢订阅、提前取消收尾、冷恢复和启动收口。gRPC 测试使用本地真实服务、protobuf 序列化与有效 DOCX 样本；ASGI 测试验证断开后继续执行。各测试文件说明位于 backend/tests/docs/，与开发文档分离。
 
 设计参考公开 Codex 固定版本 53c542d944c705f3a66780a19223223bee57cbb6：
 - [thread_state.rs](https://github.com/openai/codex/blob/53c542d944c705f3a66780a19223223bee57cbb6/codex-rs/app-server/src/thread_state.rs)

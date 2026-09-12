@@ -6,7 +6,7 @@ backend 管理多轮 session、稳定模型消息和页面恢复，独立 agent 
 
 ```text
 POST /chat/completion → routes/chat.py 校验输入
-  → SessionRegistry.complete 获取唯一 manager，校验请求幂等
+  → SessionRegistry.complete 获取唯一 manager
   → SessionManager 事务创建 turn、用户消息、事件
   → TurnRuntime 准备资源 → AgentClient.chat_completion → gRPC
   → agent 事件交回 manager → 校验身份和状态 → 事务落库
@@ -26,7 +26,7 @@ POST /cancel → manager 事务提交 cancelled、清空 active_turn_id
 | 文件 | 职责 |
 | --- | --- |
 | routes/chat.py | 三个 API、输入校验、快照和 SSE、断开时 detach |
-| session_registry.py | 唯一加载、请求幂等、空闲回收、启动恢复和关闭 |
+| session_registry.py | 唯一加载、空闲回收、启动恢复和关闭 |
 | session_manager.py | 串行命令、事务、稳定消息配对和状态转换 |
 | turn_runtime.py | 资源准备和 gRPC 消费，向 manager 汇报事件及收尾 |
 | turn_view.py | 当前轮展示投影，历史恢复复用同一逻辑 |
@@ -35,7 +35,7 @@ POST /cancel → manager 事务提交 cancelled、清空 active_turn_id
 | agent_client.py | agent_proto 与 grpc.aio 转换 |
 | core/db.py、crud/crud.py | 线程内连接、事务和参数化 SQL |
 
-Registry.complete 直接执行校验、去重和会话创建，不创建独立受理任务；真正的后台执行由 TurnRuntime.start 创建。显式取消请求协程可中断尚未交给 manager 的受理过程。
+Registry.complete 直接执行校验和会话创建，不创建独立受理任务；真正的后台执行由 TurnRuntime.start 创建。显式取消请求协程可中断尚未交给 manager 的受理过程。
 
 ## 事务和生命周期
 

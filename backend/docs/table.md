@@ -106,4 +106,4 @@ sequence 在同一命令的写事务中为整组分配并插入；唯一约束�
 | `created_at` | `TEXT NOT NULL` | 创建时间。 |
 
 
-`turn.created.payload_json` 同时保存可选 request_id 和请求指纹，供请求重试查询；当前没有新增幂等字段或跨进程唯一约束，创建由单进程 Registry 锁协调。
+`turn.created.payload_json` 当前为空对象，不保存请求去重元数据。

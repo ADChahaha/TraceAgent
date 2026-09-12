@@ -22,7 +22,6 @@ class CompletionInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     content: str = Field(min_length=1)
     session_id: str | None = Field(default=None, min_length=1)
-    request_id: str | None = Field(default=None, min_length=1, max_length=200)
     run_options: dict | None = None
 
 

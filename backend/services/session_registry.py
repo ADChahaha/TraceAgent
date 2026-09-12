@@ -1,15 +1,13 @@
-"""进程级会话注册表：启动恢复、唯一加载、请求去重与空闲回收。"""
+"""进程级会话注册表：启动恢复、唯一加载、空闲回收。"""
 
 import asyncio
-import hashlib
-import json
 import math
 import uuid
 from pathlib import Path
 
 from backend.core.db import transaction
 from backend.crud import crud
-from backend.services.errors import ConflictError, NotFoundError, ValidationError, BackendServiceError
+from backend.services.errors import NotFoundError, ValidationError, BackendServiceError
 from backend.services.session_manager import SessionManager
 from backend.services.time_utils import utc_now
 
@@ -92,7 +90,7 @@ class SessionRegistry:
             manager.last_activity = asyncio.get_running_loop().time()
         return manager
 
-    async def complete(self, *, content, session_id=None, files=None, run_options=None, request_id=None):
+    async def complete(self, *, content, session_id=None, files=None, run_options=None):
         if not isinstance(content, str) or not content.strip():
             raise ValidationError("content 不能为空")
         files = files or []
@@ -102,43 +100,23 @@ class SessionRegistry:
         timeout = run_options.get("tool_execution_timeout")
         if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0):
             raise ValidationError("工具超时必须为有限正数")
-        if request_id is not None and (not isinstance(request_id, str) or not request_id.strip() or len(request_id) > 200):
-            raise ValidationError("request_id 必须是 1–200 字符的非空字符串")
         if len(files) > self.settings.upload_max_files or sum(len(f["content"]) for f in files) > self.settings.upload_max_bytes:
             raise ValidationError("上传文件超过限制")
         for file in files:
             if Path(file["filename"]).suffix.lower().lstrip(".") not in self.settings.supported_file_types:
                 raise ValidationError("只支持 PDF/DOCX 文件")
         content = content.strip()
-        fingerprint = hashlib.sha256(json.dumps({"content": content, "session_id": session_id, "run_options": run_options,
-            "files": [(f["filename"], hashlib.sha256(f["content"]).hexdigest()) for f in files]},
-            sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-        # 单进程创建入口串行：同一个请求即使尚不知道 session_id，也只接受一次。
+        # 创建与空闲回收、服务关闭共用入口锁。
         async with self.creation_lock:
             if self.closed:
                 raise BackendServiceError("服务正在关闭")
-            if request_id:
-                def lookup():
-                    row = self.database.connect().execute(
-                        "SELECT session_id,turn_id,payload_json FROM chat_events "
-                        "WHERE event_type='turn.created' AND json_extract(payload_json,'$.request_id')=? LIMIT 1", (request_id,)).fetchone()
-                    return dict(row) if row else None
-                row = await asyncio.to_thread(lookup)
-                if row:
-                    if json.loads(row["payload_json"])["fingerprint"] != fingerprint:
-                        raise ConflictError("request_id 已用于不同请求")
-                    manager = await self.get_or_load(row["session_id"])
-                    context = await manager.attach()
-                    context.turn_id = row["turn_id"]
-                    return manager, context
             if session_id is None:
                 session_id = uuid.uuid4().hex
                 def create():
                     crud.create_session(self.database.connect(), session_id=session_id, status="ready", now=utc_now())
                 await asyncio.to_thread(create)
             manager = await self.get_or_load(session_id)
-            context = await manager.create_completion(content=content, files=files, run_options=run_options,
-                                                       request_id=request_id, fingerprint=fingerprint)
+            context = await manager.create_completion(content=content, files=files, run_options=run_options)
             return manager, context
 
     async def evict_idle(self):

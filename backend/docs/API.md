@@ -5,14 +5,14 @@ POST /chat/completion 创建轮次；GET /resume 恢复页面及观察流；POST
 ## POST /chat/completion
 
 ```json
-{"content":"总结文档","session_id":"已有会话 ID","request_id":"本次提交唯一 ID","run_options":{"tool_execution_timeout":120}}
+{"content":"总结文档","session_id":"已有会话 ID","run_options":{"tool_execution_timeout":120}}
 ```
 
-content 必填且不可为空白；省略 session_id 创建会话。request_id 可选，最长 200 字符：同键同请求重试复用原 turn，同键不同指纹冲突。重试保持原 content、session_id、文件和选项一致，包括初次省略 session_id 的情况。
+content 必填且不可为空白；省略 session_id 创建会话，传入已有 session_id 则创建下一轮。每次 POST 都按新提交处理；拿到 session_id 后断线使用 GET /resume 恢复。
 
 run_options 当前只支持正的有限数 tool_execution_timeout。上传使用 multipart/form-data，文本字段同上，run_options 为 JSON 文本；file 或 files 字段可重复，支持 PDF/DOCX，默认最多 20 个文件、总内容 32 MiB。
 
-有新文件时 queued turn 先调用 PrepareResources，成功后替换会话资源引用并启动 ChatCompletion。失败会话需上传新文件重试。同一 session 已有活跃轮时新提交冲突，幂等重试只重新观察。
+有新文件时 queued turn 先调用 PrepareResources，成功后替换会话资源引用并启动 ChatCompletion。失败会话需上传新文件重试。同一 session 已有活跃轮时新提交冲突。
 
 返回 text/event-stream，从快照取得 session_id、state.active_turn_id 和 state.turns。
 

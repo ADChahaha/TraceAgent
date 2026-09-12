@@ -166,21 +166,28 @@ def test_concurrent_create_has_one_active_turn_and_one_manager(tmp_path):
     asyncio.run(scenario())
 
 
-def test_request_id_retry_reuses_session_after_response_loss(tmp_path):
+def test_completion_has_no_request_deduplication(tmp_path):
+    from backend.routes.chat import CompletionInput
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        CompletionInput(content="问题", request_id="removed")
+
     async def scenario():
         registry, db, agent = await setup(tmp_path)
         try:
-            manager, first = await registry.complete(content="问题", request_id="request-1")
-            again, replay = await registry.complete(content="问题", request_id="request-1")
-            assert again is manager
-            assert replay.turn_id == first.turn_id
-            with pytest.raises(ConflictError):
-                await registry.complete(content="不同问题", request_id="request-1")
-            assert db.connect().execute("SELECT COUNT(*) FROM chat_turns").fetchone()[0] == 1
+            first, _ = await registry.complete(content="问题")
+            second, _ = await registry.complete(content="问题")
+            assert first.session_id != second.session_id
+            rows = db.connect().execute(
+                "SELECT payload_json FROM chat_events WHERE event_type='turn.created'"
+            ).fetchall()
+            assert len(rows) == 2
+            assert all(row["payload_json"] == "{}" for row in rows)
         finally:
             await registry.close()
             db.close()
     asyncio.run(scenario())
+
 
 
 def test_cancelled_request_stops_acceptance(tmp_path, monkeypatch):
