@@ -8,7 +8,7 @@ import pytest
 
 from agent_proto import agent_pb2 as pb
 from routes import file_extraction_agent as route
-from service.file_extraction_agent import turn_stream as runtime
+from service.file_extraction_agent.core.contracts import MessageDelta
 
 
 @pytest.fixture
@@ -36,12 +36,12 @@ def test_same_id_calls_are_independent(rpc, execution, monkeypatch):
         count += 1
         try:
             entered[index].set()
-            yield {"type": "model_message.delta", "delta": str(index)}
+            yield MessageDelta(str(index), str(index))
             await asyncio.Event().wait()
         finally:
             cleaned[index].set()
 
-    monkeypatch.setattr(runtime, "stream_completion_events", events)
+    monkeypatch.setattr(route, "run_qa_stream", events)
     first = rpc.ChatCompletion(request(), timeout=5)
     second = None
     try:
@@ -53,6 +53,7 @@ def test_same_id_calls_are_independent(rpc, execution, monkeypatch):
         first.cancel()
         assert cleaned[0].wait(2)
         assert not cleaned[1].is_set()
+        assert next(second).type == "source_indexed"
         assert next(second).delta == "1"
     finally:
         first.cancel()
@@ -67,13 +68,13 @@ def test_rpc_termination_cleans_awaiting_execution(rpc, execution, monkeypatch, 
     async def events(**kwargs):
         try:
             entered.set()
-            yield {"type": "model_message.delta", "delta": "正文"}
+            yield MessageDelta("message", "正文")
             await asyncio.Event().wait()
         finally:
             await asyncio.sleep(0)
             cleaned.set()
 
-    monkeypatch.setattr(runtime, "stream_completion_events", events)
+    monkeypatch.setattr(route, "run_qa_stream", events)
     call = rpc.ChatCompletion(request(), timeout=0.5 if ending == "deadline" else 5)
     try:
         assert next(call).type == "completion.created"
@@ -122,11 +123,11 @@ def test_cancel_closes_generator_while_transport_is_sending(rpc, execution, monk
             entered.set()
             while True:
                 # 大事件使不再读取的客户端耗尽流控额度，取消不能依赖继续消费。
-                yield {"type": "model_message.delta", "delta": "x" * (1024 * 1024)}
+                yield MessageDelta("message", "x" * (1024 * 1024))
         finally:
             cleaned.set()
 
-    monkeypatch.setattr(runtime, "stream_completion_events", events)
+    monkeypatch.setattr(route, "run_qa_stream", events)
     call = rpc.ChatCompletion(request(), timeout=5)
     try:
         assert next(call).type == "completion.created"

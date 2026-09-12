@@ -1,4 +1,12 @@
-last updated: 2026-09-12 19:49:47
+last updated: 2026-09-12 20:45:35
+
+## 2026-09-12 20:45:35
+
+### 已完成工作
+
+- 删除 turn_stream.py 字典事件层，routes/file_extraction_agent.py 直接消费 core 类型化输出，构造并编号 protobuf CompletionEvent。
+- 保留模型实时增量、重试、工具启动/逐项结果和唯一终态；取消沿 aclosing 关闭 core/图流并清理工具进程。编码异常统一输出失败终态。
+- TDD：先确认启动事件仍为 dict 导致测试失败，再实现 protobuf 适配；agent-gate 下路由、问答及打包回归 205 项通过。同步设计、API、README 与逐测试文件文档。
 
 ## 2026-09-12 19:49:47
 

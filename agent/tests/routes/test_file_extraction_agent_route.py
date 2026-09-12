@@ -7,7 +7,7 @@ import pytest
 from tests.async_helpers import async_items
 from agent_proto import agent_pb2 as pb
 from routes import file_extraction_agent as qa_routes
-from service.file_extraction_agent import turn_stream as runtime_module
+from langchain_core.messages import AIMessage, ToolMessage
 from service.file_extraction_agent.schemas import RunOptions
 
 @pytest.fixture
@@ -72,21 +72,18 @@ def test_chat_streams_typed_events_and_preserves_json(rpc, execution, monkeypatc
     """事件按序逐条传输，动态 JSON 保留大整数、空值和特殊字符。"""
     payload = {"number": 2 ** 60 + 1, "text": '中文\n"引号"', "null": None}
     async def events(**kwargs):
-        yield {"type": "model_message", "content": "回答", "is_final": False,
-               "tool_call_count": 1, "tool_calls": [{"id": "call1", "name": "read", "args": payload}]}
-        yield {"type": "tool_completed", "tool": "read", "tool_call_id": "call1",
-               "args": payload, "result": payload}
-        if False:
-            yield {}
-    monkeypatch.setattr(runtime_module, "stream_completion_events", events)
+        yield AIMessage(content="回答", tool_calls=[{"id": "call1", "name": "read", "args": payload}])
+        yield ToolMessage(content="结果", name="read", tool_call_id="call1", artifact=payload,
+                          additional_kwargs={"tool_args": payload})
+    monkeypatch.setattr(qa_routes, "run_qa_stream", events)
     result = list(rpc.ChatCompletion(request(), timeout=5))
-    assert [e.seq for e in result] == [1, 2, 3, 4]
+    assert [e.seq for e in result] == [1, 2, 3, 4, 5, 6]
     assert result[0].type == "completion.created"
-    result = result[1:]
+    result = result[2:]
     assert result[0].HasField("is_final") and result[0].is_final is False
     assert json.loads(result[0].tool_calls[0].args_json) == payload
-    assert json.loads(result[1].result_json) == payload
-    assert json.loads(result[1].args_json) == payload
+    assert json.loads(result[2].result_json) == payload
+    assert json.loads(result[2].args_json) == payload
     assert result[-1].type == "completion.completed"
     assert "completion_id" not in result[0].DESCRIPTOR.fields_by_name
 
@@ -102,7 +99,7 @@ def test_chat_preserves_history_options_and_model_defaults(rpc, execution, monke
         if False:
             yield {}
     monkeypatch.setattr(qa_routes, "build_qa_model", build)
-    monkeypatch.setattr(runtime_module, "stream_completion_events", events)
+    monkeypatch.setattr(qa_routes, "run_qa_stream", events)
     history = [{"id": "a", "name": "read", "args": {"path": "a.md"}}]
     messages = [
         pb.QaMessage(role="assistant", content="", tool_calls_json=json.dumps(history)),
@@ -124,7 +121,7 @@ def test_chat_model_override_precedence(rpc, execution, monkeypatch):
     """兼容扁平模型参数，嵌套模型配置优先。"""
     configs = []
     monkeypatch.setattr(qa_routes, "build_qa_model", lambda config: configs.append(config))
-    monkeypatch.setattr(runtime_module, "stream_completion_events",
+    monkeypatch.setattr(qa_routes, "run_qa_stream",
                         lambda **kwargs: async_items([]))
     flat = dict(base_url="https://example.com/v1", openai_api_key="key", model="qa",
                 api_transport="chat_completions", temperature=0.2, top_p=0.9, top_k=40)
@@ -153,9 +150,9 @@ def test_chat_runtime_failure_is_terminal_event(rpc, execution, monkeypatch):
     """开始执行后的异常通过 completion.failed 保留原始错误文本。"""
     def fail(**kwargs):
         raise RuntimeError('失败\n"原因"')
-    monkeypatch.setattr(runtime_module, "stream_completion_events", fail)
+    monkeypatch.setattr(qa_routes, "run_qa_stream", fail)
     events = list(rpc.ChatCompletion(request(), timeout=5))
-    assert len(events) == 2
+    assert len(events) == 3
     assert events[0].type == "completion.created"
     assert events[-1].type == "completion.failed"
     assert events[-1].error_message == '失败\n"原因"'

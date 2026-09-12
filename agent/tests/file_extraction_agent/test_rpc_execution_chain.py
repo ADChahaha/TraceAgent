@@ -4,7 +4,8 @@ import asyncio
 
 import pytest
 
-from service.file_extraction_agent import turn_stream as module
+from service.file_extraction_agent.core.contracts import MessageDelta
+from routes import file_extraction_agent as module
 
 
 async def test_execution_stays_in_consuming_task(monkeypatch):
@@ -14,17 +15,18 @@ async def test_execution_stays_in_consuming_task(monkeypatch):
     async def events(**kwargs):
         assert asyncio.current_task() is owner
         advanced.append(1)
-        yield {"type": "model_message.delta", "delta": "正文"}
+        yield MessageDelta("message", "正文")
         advanced.append(2)
 
-    monkeypatch.setattr(module, "stream_completion_events", events)
+    monkeypatch.setattr(module, "run_qa_stream", events)
     runtime = module.stream_completion({}, object(), [])
     stream = runtime
     try:
-        assert (await anext(stream))["type"] == "completion.created"
+        assert (await anext(stream)).type == "completion.created"
         await asyncio.sleep(0)
         assert advanced == []
-        assert (await anext(stream))["delta"] == "正文"
+        assert (await anext(stream)).type == "source_indexed"
+        assert (await anext(stream)).delta == "正文"
         await asyncio.sleep(0)
         assert advanced == [1]
     finally:
@@ -44,7 +46,7 @@ async def test_consumer_cancellation_waits_for_inner_cleanup(monkeypatch):
             cleaning.set()
             await release.wait()
 
-    monkeypatch.setattr(module, "stream_completion_events", events)
+    monkeypatch.setattr(module, "run_qa_stream", events)
     async def consume():
         async for event in module.stream_completion({}, object(), []):
             received.append(event)
@@ -59,4 +61,4 @@ async def test_consumer_cancellation_waits_for_inner_cleanup(monkeypatch):
         release.set()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(task, 1)
-    assert [e["type"] for e in received] == ["completion.created"]
+    assert [e.type for e in received] == ["completion.created", "source_indexed"]

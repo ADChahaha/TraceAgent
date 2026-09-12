@@ -2,7 +2,7 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import pytest
-from service.file_extraction_agent import turn_stream as module
+from routes import file_extraction_agent as module
 
 async def test_waiting_streams_leave_executor_free_and_cancel_cleanly(monkeypatch):
     entered, cleaned = [], []
@@ -13,7 +13,7 @@ async def test_waiting_streams_leave_executor_free_and_cancel_cleanly(monkeypatc
             yield {}
         finally:
             cleaned.append(1)
-    monkeypatch.setattr(module, "stream_completion_events", events)
+    monkeypatch.setattr(module, "run_qa_stream", events)
     asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
     async def consume():
         return [e async for e in module.stream_completion({}, object(), [])]

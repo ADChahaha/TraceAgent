@@ -15,7 +15,7 @@ ChatCompletion（resource_refs + messages）
   → 经 S3ObjectStore（boto3）从 storage 服务读取资源
   → 路径创建工具上下文，运行配置绑定执行器，图内保存完整 messages 和重试状态
   → 模型文本增量 / 完整消息 / 重试通知 / 单个工具结果
-  → turn_stream 输出不含 completion ID、带 seq 的事件字典，由传输层编码
+  → routes/file_extraction_agent.stream_completion 直接构造不含 completion ID、带 seq 的 CompletionEvent
   → 释放本轮运行时，保留文档资源
 ```
 
@@ -29,8 +29,7 @@ ChatCompletion（resource_refs + messages）
 | routes/document_resources.py | 在线程中校验上传类型、解析与准备资源，回到事件循环映射 RPC 错误 |
 | service/document_processor | PDF 调 MinerU、DOCX 调 python-docx，输出带 CSS 的 HTML |
 | service/document_resources | HTML 转文件、文档分块和 embedding 索引构建、发布到 storage 服务 |
-| routes/file_extraction_agent.py | 路径问答 gRPC 适配；固定字段转 protobuf，动态字段保留 JSON |
-| service/file_extraction_agent/turn_stream.py | stream_completion 直接迭代本轮事件、编号与关闭内层流 |
+| routes/file_extraction_agent.py | 校验与装配；直接将 core 输出编码为 protobuf，分配 seq、处理终态并关闭内层流；动态字段保留 JSON |
 | service/file_extraction_agent/core/loop.py | Agent 接口：校验输入、组装工作区/工具/历史消息、执行图并转换原生流输出、关闭图流 |
 | service/file_extraction_agent/core/contracts.py | 模型与工具调用协议、单一 BoundModel、异步工具、消息输出和 JSON 类型，不承担执行 |
 | service/file_extraction_agent/core/messages.py | 提示词、历史转换、响应校验、终止信号与消息 JSON 归一化 |
@@ -80,14 +79,14 @@ prepare 子进程同样在取消时清理；已创建但未消费的生成器不
 
 ## 问答运行时
 
-`stream_completion(workspace, qa_model, messages, run_options)` 是普通异步生成器函数，不创建运行时对象。路由负责输入校验、模型装配和资源预检；图使用 QaState 保存消息与重试状态，工具只接收本轮 workspace payload。不同 RPC 不共享可变执行状态；completion_id 保留格式校验，但不用于注册、去重或取消。
+`routes/file_extraction_agent.stream_completion(workspace, qa_model, messages, run_options)` 是普通异步生成器函数，直接消费 `core.loop.run_qa_stream` 的类型化输出并生成 protobuf，不经过字典事件层。路由负责输入校验、模型装配和资源预检；图使用 QaState 保存消息与重试状态，工具只接收本轮 workspace payload。不同 RPC 不共享可变执行状态；completion_id 保留格式校验，但不用于注册、去重或取消。
 
 ```text
 模型节点返回 AIMessage
-  → turn_stream 输出 model_message.started/delta/done、重试通知和 tool_started
+  → 路由直接输出 model_message.started/delta/done、重试通知和 tool_started
   → 工具节点并行执行，按共享 deadline 逐项经 custom 输出 ToolMessage，完整历史供下一轮模型使用
   → 每项携带调用 ID、名称、参数和成功/失败结果
-  → turn_stream 直接输出 tool_completed / tool_failed，不维护 pending 配对字典
+  → 路由直接输出 tool_completed / tool_failed，不维护 pending 配对字典
 ```
 
 正常完成输出 completion.completed；普通执行异常输出 completion.failed；CancelledError/GeneratorExit 直接传播，不补发终态。生成器逐层关闭，工具 finally 清理子进程。资源参数错误在首事件前返回 INVALID_ARGUMENT。

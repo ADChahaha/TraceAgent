@@ -1,15 +1,14 @@
 from __future__ import annotations
+import json
 
 import asyncio
-from unittest.mock import AsyncMock
-from tests.async_helpers import async_items, wait_event
 from unittest.mock import Mock, AsyncMock
 import pytest
 from langchain_core.messages import ToolMessage
-from service.file_extraction_agent import turn_stream as runtime_module
-from langchain_core.messages import AIMessage, AIMessageChunk
+from routes import file_extraction_agent as runtime_module
+from langchain_core.messages import AIMessage
 from service.file_extraction_agent.core.model import ConfiguredChatModel
-from service.file_extraction_agent.turn_stream import stream_completion_events
+from routes.file_extraction_agent import stream_completion
 from service.file_extraction_agent.schemas import DocumentQaMessage
 
 
@@ -54,10 +53,11 @@ def _input(resource_path):
     )
 
 
-async def test_stream_completion_events_yields_objects_and_terminal_completion(resource_path):
+async def test_stream_completion_yields_protobuf_and_terminal_completion(resource_path):
     model, provider = _scripted_model()
-    events = [item async for item in stream_completion_events(**_input(resource_path), qa_model=model)]
-    assert [e["type"] for e in events] == [
+    events = [item async for item in stream_completion(**_input(resource_path), qa_model=model)]
+    assert [e.type for e in events] == [
+        "completion.created",
         "source_indexed",
         "model_message.started",
         "model_message.delta",
@@ -72,28 +72,30 @@ async def test_stream_completion_events_yields_objects_and_terminal_completion(r
         "model_message.started",
         "model_message.delta",
         "model_message.done",
+        "completion.completed",
     ]
     history = provider.ainvoke.call_args.args[0]
     assert [m.tool_call_id for m in history if m.type == "tool"] == ["call-ls", "call-grep"]
-    assert all(("seq" not in event for event in events))
+    assert [event.seq for event in events] == list(range(1, len(events) + 1))
 
 
 async def test_tool_started_is_yielded_before_tool_execution(resource_path):
     model, provider = _scripted_model()
-    stream = stream_completion_events(**_input(resource_path), qa_model=model)
-    assert (await anext(stream))["type"] == "source_indexed"
-    assert (await anext(stream))["type"] == "model_message.started"
-    assert (await anext(stream))["type"] == "model_message.delta"
-    assert (await anext(stream))["type"] == "model_message.done"
-    assert (await anext(stream))["type"] == "tool_started"
+    stream = stream_completion(**_input(resource_path), qa_model=model)
+    assert (await anext(stream)).type == "completion.created"
+    assert (await anext(stream)).type == "source_indexed"
+    assert (await anext(stream)).type == "model_message.started"
+    assert (await anext(stream)).type == "model_message.delta"
+    assert (await anext(stream)).type == "model_message.done"
+    assert (await anext(stream)).type == "tool_started"
     assert provider.ainvoke.call_count == 1
-    assert (await anext(stream))["type"] == "tool_completed"
+    assert (await anext(stream)).type == "tool_completed"
     await stream.aclose()
 
 
 async def test_cancel_before_execution_does_not_call_model(resource_path):
     model, provider = _scripted_model()
-    stream = stream_completion_events(**_input(resource_path), qa_model=model)
+    stream = stream_completion(**_input(resource_path), qa_model=model)
     async def consume():
         return [event async for event in stream]
     task = asyncio.create_task(consume())
@@ -106,9 +108,9 @@ async def test_cancel_before_execution_does_not_call_model(resource_path):
 
 async def test_cancel_after_model_skips_tools_and_next_model(resource_path):
     model, provider = _scripted_model()
-    stream = stream_completion_events(**_input(resource_path), qa_model=model)
+    stream = stream_completion(**_input(resource_path), qa_model=model)
     try:
-        while (await anext(stream))["type"] != "model_message.done":
+        while (await anext(stream)).type != "model_message.done":
             pass
     finally:
         await stream.aclose()
@@ -141,7 +143,7 @@ async def test_executor_failure_returns_entire_failed_batch(resource_path, monke
     monkeypatch.setattr(executor, "_execute_tools_parallel", fail)
     events = []
     async def consume():
-        async for item in stream_completion_events(**_input(resource_path), qa_model=model):
+        async for item in stream_completion(**_input(resource_path), qa_model=model):
             events.append(item)
     if cancelled:
         task = asyncio.create_task(consume())
@@ -155,12 +157,14 @@ async def test_executor_failure_returns_entire_failed_batch(resource_path, monke
             await asyncio.gather(task, return_exceptions=True)
     else:
         await consume()
-    replies = [e for e in events if e["type"] == "tool_failed"]
-    assert [(e["tool_call_id"], e["args"]) for e in replies] == ([] if cancelled else [
+    replies = [e for e in events if e.type == "tool_failed"]
+    assert [(e.tool_call_id, json.loads(e.args_json)) for e in replies] == ([] if cancelled else [
         ("a", {"path": "first"}),
         ("b", {"path": "second"}),
     ])
-    assert not any(e["type"].startswith("completion.") for e in events)
+    assert [e.type for e in events if e.type.startswith("completion.")] == (
+        ["completion.created"] if cancelled else ["completion.created", "completion.completed"]
+    )
     assert provider.ainvoke.call_count == (1 if cancelled else 2)
 
 
@@ -189,17 +193,17 @@ async def test_executor_failure_preserves_published_results(resource_path, monke
         raise RuntimeError("后续结果转换失败")
 
     monkeypatch.setattr(executor, "_execute_tools_parallel", fail_after_result)
-    events = [event async for event in stream_completion_events(**_input(resource_path), qa_model=model)]
-    replies = [event for event in events if event["type"] in {"tool_completed", "tool_failed"}]
-    assert [event["tool_call_id"] for event in replies] == ["b", "a"]
-    assert replies[0]["result"] == result
-    assert replies[0]["type"] == ("tool_completed" if published_status == "success" else "tool_failed")
-    assert replies[1]["type"] == "tool_failed"
+    events = [event async for event in stream_completion(**_input(resource_path), qa_model=model)]
+    replies = [event for event in events if event.type in {"tool_completed", "tool_failed"}]
+    assert [event.tool_call_id for event in replies] == ["b", "a"]
+    assert json.loads(replies[0].result_json) == result
+    assert replies[0].type == ("tool_completed" if published_status == "success" else "tool_failed")
+    assert replies[1].type == "tool_failed"
     history = [message for message in provider.ainvoke.call_args.args[0] if isinstance(message, ToolMessage)]
     assert [message.tool_call_id for message in history] == ["a", "b"]
     assert history[1] == published
     assert history[0].status == "error"
-    assert history[0].artifact == replies[1]["result"]
+    assert history[0].artifact == json.loads(replies[1].result_json)
 
 
 async def test_closing_event_stream_closes_message_generator(resource_path, monkeypatch):
@@ -213,9 +217,10 @@ async def test_closing_event_stream_closes_message_generator(resource_path, monk
             closed.append(True)
 
     monkeypatch.setattr(runtime_module, "run_qa_stream", messages)
-    stream = stream_completion_events(**_input(resource_path), qa_model=object())
-    await anext(stream)
-    assert (await anext(stream))["type"] == "model_message.done"
+    stream = stream_completion(**_input(resource_path), qa_model=object())
+    assert (await anext(stream)).type == "completion.created"
+    assert (await anext(stream)).type == "source_indexed"
+    assert (await anext(stream)).type == "model_message.done"
     await stream.aclose()
     assert closed == [True]
 

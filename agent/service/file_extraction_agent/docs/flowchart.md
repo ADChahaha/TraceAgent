@@ -9,7 +9,7 @@ flowchart TD
     C --> D[build_qa_model]
     D --> E[stream_completion 直接迭代]
     E --> F[run_qa_stream 模型与工具循环]
-    F --> G[业务事件编号并编码 protobuf]
+    F --> G[路由直接将 core 输出编码 protobuf 并编号]
     G --> H[gRPC 发送]
     X[客户端 call.cancel 或 deadline] --> Y[取消 handler]
     Y --> Z[取消 await 并逐层关闭生成器]

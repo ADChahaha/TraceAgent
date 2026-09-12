@@ -6,7 +6,7 @@ import threading
 from langchain_core.messages import AIMessageChunk
 
 from service.file_extraction_agent.core import executor, loop, model_invocation
-from service.file_extraction_agent.turn_stream import stream_completion
+from routes.file_extraction_agent import stream_completion
 from service.file_extraction_agent.schemas import DocumentQaMessage
 
 
@@ -42,8 +42,8 @@ def test_runtime_executes_model_and_tools_on_event_loop(resource_path, monkeypat
         runtime = stream_completion(resource_path, Model(), [DocumentQaMessage(role="user", content="问题")])
         events = [event async for event in runtime]
         assert calls == ["model", "tool", "model"]
-        assert events[-1]["type"] == "completion.completed"
-        assert [e["seq"] for e in events] == list(range(1, len(events) + 1))
+        assert events[-1].type == "completion.completed"
+        assert [e.seq for e in events] == list(range(1, len(events) + 1))
 
     asyncio.run(run())
 
@@ -134,15 +134,15 @@ def test_tool_result_streams_before_sibling_finishes_and_cancel_cleans_up(resour
             while True:
                 event = await asyncio.wait_for(anext(stream), 1)
                 events.append(event)
-                if event["type"] == "tool_completed":
-                    assert event["tool_call_id"] == "fast"
+                if event.type == "tool_completed":
+                    assert event.tool_call_id == "fast"
                     assert not closed.is_set()
                     break
             await stream.aclose()
             assert closed.is_set()
             assert len(model_calls) == 1
-            assert [e["tool_call_id"] for e in events if e["type"] == "tool_completed"] == ["fast"]
-            assert [e["type"] for e in events if e["type"].startswith("completion.")] == ["completion.created"]
+            assert [e.tool_call_id for e in events if e.type == "tool_completed"] == ["fast"]
+            assert [e.type for e in events if e.type.startswith("completion.")] == ["completion.created"]
         finally:
             await stream.aclose()
 

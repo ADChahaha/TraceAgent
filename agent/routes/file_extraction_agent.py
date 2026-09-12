@@ -8,13 +8,20 @@ import json
 import re
 from contextlib import aclosing
 from dataclasses import fields
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Iterator
 
 import grpc
+from langchain_core.messages import AIMessage, ToolMessage
 
 from agent_proto import agent_pb2 as pb
 from service.file_extraction_agent.core.tools.worker_client import prepare_workspace
-from service.file_extraction_agent.turn_stream import stream_completion
+from service.file_extraction_agent.core.contracts import (
+    AgentOutput, MessageDelta, MessageStarted, ModelFailed, ModelRetry, QaModel,
+)
+from service.file_extraction_agent.core.loop import run_qa_stream
+from service.file_extraction_agent.core.messages import (
+    _message_stop_signal, _terminal_stop_signals, visible_text,
+)
 from service.file_extraction_agent.core.model import build_qa_model
 from service.file_extraction_agent.schemas import DocumentQaMessage, ModelConfig, RunOptions
 
@@ -59,19 +66,84 @@ def _json(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
-def event_message(event: dict[str, Any]) -> pb.CompletionEvent:
-    """固定字段按 protobuf 类型传输，动态 args/result 保留 JSON 的数值和空值。"""
-    values = {key: value for key, value in event.items()
-              if key not in {"args", "result", "tool_calls"}}
-    for name in ("args", "result"):
-        if name in event:
-            values[f"{name}_json"] = _json(event[name])
-    if "tool_calls" in event:
-        values["tool_calls"] = [
-            pb.ToolCall(id=call["id"], name=call["name"], args_json=_json(call["args"]))
-            for call in event["tool_calls"]
-        ]
-    return pb.CompletionEvent(**values)
+def _model_message_event(message: AIMessage) -> pb.CompletionEvent:
+    """完整模型消息 → 可见正文、工具调用与终止信号 → protobuf。"""
+    stop_signal = _message_stop_signal(message)
+    event = pb.CompletionEvent(
+        type="model_message.done", message_id=message.id or "",
+        content=visible_text(message.content), tool_call_count=len(message.tool_calls),
+        tool_calls=[pb.ToolCall(id=call["id"], name=call["name"], args_json=_json(call["args"]))
+                    for call in message.tool_calls],
+        is_final=not message.tool_calls and stop_signal in _terminal_stop_signals(),
+    )
+    if stop_signal:
+        event.stop_signal = stop_signal
+    return event
+
+
+def _tool_message_event(message: ToolMessage) -> pb.CompletionEvent:
+    """工具消息 → 优先 artifact，否则解析正文 → 成功/失败 protobuf，动态数据保留 JSON。"""
+    result = message.artifact
+    if result is None:
+        try:
+            result = json.loads(message.content)
+        except (TypeError, json.JSONDecodeError):
+            result = message.content
+    failed = message.status == "error" or isinstance(result, dict) and result.get("ok") is False
+    return pb.CompletionEvent(
+        type="tool_failed" if failed else "tool_completed", tool=message.name,
+        tool_call_id=message.tool_call_id,
+        args_json=_json(message.additional_kwargs["tool_args"]), result_json=_json(result),
+    )
+
+
+def _output_events(output: AgentOutput) -> Iterator[pb.CompletionEvent]:
+    """单项 core 输出直接编码 protobuf；模型消息另发工具启动事件，最终模型失败抛异常。"""
+    if isinstance(output, MessageStarted):
+        yield pb.CompletionEvent(type="model_message.started", message_id=output.message_id)
+    elif isinstance(output, MessageDelta):
+        yield pb.CompletionEvent(type="model_message.delta", message_id=output.message_id, delta=output.delta)
+    elif isinstance(output, ModelRetry):
+        yield pb.CompletionEvent(
+            type="model_request.retrying", message_id=output.message_id,
+            attempt=output.attempt, max_attempts=output.max_attempts,
+            retry_delay_ms=output.retry_delay_ms, error=output.error,
+        )
+    elif isinstance(output, ModelFailed):
+        raise RuntimeError(output.error)
+    elif isinstance(output, AIMessage):
+        yield _model_message_event(output)
+        for call in output.tool_calls:
+            yield pb.CompletionEvent(type="tool_started", tool=call["name"],
+                                     tool_call_id=call["id"], args_json=_json(call["args"]))
+    elif isinstance(output, ToolMessage):
+        yield _tool_message_event(output)
+    else:
+        raise TypeError(f"unexpected agent output: {type(output).__name__}")
+
+
+async def stream_completion(
+    workspace: dict[str, Any], qa_model: QaModel, messages: list[DocumentQaMessage],
+    run_options: RunOptions | None = None,
+) -> AsyncIterator[pb.CompletionEvent]:
+    """core 流 → 直接编码并编号 protobuf → 唯一终态；取消传播并关闭内层流。"""
+    seq = 1
+    yield pb.CompletionEvent(type="completion.created", status="in_progress", seq=seq)
+    try:
+        seq += 1
+        yield pb.CompletionEvent(type="source_indexed", tool="source_index", result_json=_json({"ok": True}), seq=seq)
+        async with aclosing(run_qa_stream(
+            workspace=workspace, qa_model=qa_model, messages=messages, run_options=run_options,
+        )) as outputs:
+            async for output in outputs:
+                for event in _output_events(output):
+                    seq += 1
+                    event.seq = seq
+                    yield event
+    except Exception as exc:
+        yield pb.CompletionEvent(type="completion.failed", status="failed", error_message=str(exc), seq=seq + 1)
+    else:
+        yield pb.CompletionEvent(type="completion.completed", status="completed", seq=seq + 1)
 
 
 async def create_chat_completion(request, context) -> AsyncIterator[pb.CompletionEvent]:
@@ -98,4 +170,4 @@ async def create_chat_completion(request, context) -> AsyncIterator[pb.Completio
         async for event in events:
             if context.done():
                 return
-            yield event_message(event)
+            yield event

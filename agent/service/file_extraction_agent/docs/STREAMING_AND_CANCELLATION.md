@@ -6,13 +6,13 @@
 ```text
 ChatCompletion(resource_path, messages)
   → 路由校验资源、装配模型并直接消费 stream_completion
-  → loop.run_qa_stream 初始化工作区、工具和模型消息
+  → loop.run_qa_stream 使用已准备的 workspace 绑定工具并转换模型消息
   → graph.build_qa_graph 编译 agent / retry_wait / tools
   → loop 消费 graph.astream(messages, updates, custom)
       ├─ messages：可见模型 chunk → MessageStarted / MessageDelta
       ├─ updates：模型完整结果或失败 → AIMessage / ModelRetry / ModelFailed
       └─ custom：单个工具结果 → ToolMessage
-  → stream_completion_events 包装业务事件 → stream_completion 编号 → gRPC
+  → 路由 stream_completion 直接构造并编号 protobuf → gRPC
 ```
 
 ## 模型与重试

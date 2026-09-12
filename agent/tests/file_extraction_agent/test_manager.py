@@ -1,55 +1,58 @@
 """请求内事件转换和模型配置验证；旧注册表生命周期由 RPC 测试替代。"""
 import pytest
+import json
+from agent_proto import agent_pb2 as pb
 from langchain_core.messages import AIMessage, ToolMessage
 from tests.async_helpers import async_items
 from service.file_extraction_agent.core import model as model_module
 from service.file_extraction_agent.core.model import build_chat_model, normalize_model_config
-from service.file_extraction_agent import turn_stream as runtime_module
-from service.file_extraction_agent.turn_stream import stream_completion
+from routes import file_extraction_agent as runtime_module
+from routes.file_extraction_agent import stream_completion
 from service.file_extraction_agent.schemas import DocumentQaMessage, ModelConfig, RunOptions
 
 async def test_runtime_yields_event_objects_with_sequence(resource_path, monkeypatch):
-    """运行时直接输出事件对象，传输编码由接口层负责。"""
+    """路由直接输出带编号的 protobuf 事件。"""
     monkeypatch.setattr(
         runtime_module,
-        "stream_completion_events",
+        "run_qa_stream",
         lambda **kwargs: async_items(
             [
-                {"type": "model_message.done", "content": "你好\n世界"},
+                AIMessage(content="你好\n世界", response_metadata={"finish_reason": "stop"}),
             ]
         ),
     )
     runtime = stream_completion(resource_path, object(), [DocumentQaMessage(role="user", content="问题")])
     assert [item async for item in runtime] == [
-        {"type": "completion.created", "status": "in_progress", "seq": 1},
-        {"type": "model_message.done", "content": "你好\n世界", "seq": 2},
-        {"type": "completion.completed", "status": "completed", "seq": 3},
+        pb.CompletionEvent(type="completion.created", status="in_progress", seq=1),
+        pb.CompletionEvent(type="source_indexed", tool="source_index", result_json='{"ok":true}', seq=2),
+        pb.CompletionEvent(type="model_message.done", message_id="", content="你好\n世界",
+                           tool_call_count=0, is_final=True, stop_signal="stop", seq=3),
+        pb.CompletionEvent(type="completion.completed", status="completed", seq=4),
     ]
 
 
-async def test_turn_stream_streams_without_manager(resource_path, monkeypatch):
-    import json
-    from service.file_extraction_agent import turn_stream
+async def test_route_streams_without_manager(resource_path, monkeypatch):
+    from routes import file_extraction_agent as route
 
     monkeypatch.setattr(
-        turn_stream,
+        route,
         "run_qa_stream",
         lambda **kwargs: async_items(
             [AIMessage(content="回答", response_metadata={"finish_reason": "stop"})]
         ),
     )
-    runtime = turn_stream.stream_completion(
+    runtime = route.stream_completion(
         resource_path, object(), [DocumentQaMessage(role="user", content="问题")]
     )
     events = [item async for item in runtime]
-    assert [event["type"] for event in events] == [
+    assert [event.type for event in events] == [
         "completion.created",
         "source_indexed",
         "model_message.done",
         "completion.completed",
     ]
-    assert [event["seq"] for event in events] == [1, 2, 3, 4]
-    assert all(("id" not in event for event in events))
+    assert [event.seq for event in events] == [1, 2, 3, 4]
+    assert "completion_id" not in pb.CompletionEvent.DESCRIPTOR.fields_by_name
 
 
 async def test_startup_events_only_acknowledge_without_reading_documents(resource_path, monkeypatch):
@@ -60,14 +63,16 @@ async def test_startup_events_only_acknowledge_without_reading_documents(resourc
 
     monkeypatch.setattr(DocumentFileTree, "entries", forbidden)
     monkeypatch.setattr(DocumentFileTree, "read", forbidden)
-    stream = runtime_module.stream_completion_events(
+    stream = runtime_module.stream_completion(
         workspace=resource_path,
         messages=[DocumentQaMessage(role="user", content="问题")],
         qa_model=object(),
     )
     try:
+        assert (await anext(stream)).type == "completion.created"
         source = await anext(stream)
-        assert source == {"type": "source_indexed", "tool": "source_index", "result": {"ok": True}}
+        assert source.type == "source_indexed" and source.tool == "source_index"
+        assert json.loads(source.result_json) == {"ok": True}
     finally:
         await stream.aclose()
 
@@ -105,13 +110,14 @@ async def test_stream_wraps_messages_and_pairs_same_name_calls(tmp_path, monkeyp
     monkeypatch.setattr(runtime_module, "run_qa_stream", lambda *args, **kwargs: async_items([m for item in model_messages for m in (item if isinstance(item, list) else [item])]))
     events = [
         item
-        async for item in runtime_module.stream_completion_events(
+        async for item in runtime_module.stream_completion(
             workspace=resource_path,
             messages=[DocumentQaMessage(role="user", content="问题")],
             qa_model=object(),
         )
     ]
-    assert [e["type"] for e in events] == [
+    assert [e.type for e in events] == [
+        "completion.created",
         "source_indexed",
         "model_message.done",
         "tool_started",
@@ -119,13 +125,14 @@ async def test_stream_wraps_messages_and_pairs_same_name_calls(tmp_path, monkeyp
         "tool_completed",
         "tool_failed",
         "model_message.done",
+        "completion.completed",
     ]
-    results = [e for e in events if e["type"] in {"tool_completed", "tool_failed"}]
-    assert [(e["tool_call_id"], e["args"]["path"]) for e in results] == [("a", "first"), ("b", "second")]
-    assert events[-1]["is_final"] is True
+    results = [e for e in events if e.type in {"tool_completed", "tool_failed"}]
+    assert [(e.tool_call_id, json.loads(e.args_json)["path"]) for e in results] == [("a", "first"), ("b", "second")]
+    assert events[-2].is_final is True
 
 
-async def test_graph_keeps_events_as_objects_until_stream_boundary(tmp_path, monkeypatch, resource_path):
+async def test_route_outputs_protobuf_without_dictionary_boundary(tmp_path, monkeypatch, resource_path):
     monkeypatch.setattr(
         runtime_module,
         "run_qa_stream",
@@ -135,16 +142,15 @@ async def test_graph_keeps_events_as_objects_until_stream_boundary(tmp_path, mon
     )
     events = [
         item
-        async for item in runtime_module.stream_completion_events(
+        async for item in runtime_module.stream_completion(
             workspace=resource_path,
             messages=[DocumentQaMessage(role="user", content="问题")],
             qa_model=object(),
         )
     ]
-    assert all((isinstance(event, dict) for event in events))
-    assert [event["type"] for event in events] == [
-        "source_indexed",
-        "model_message.done",
+    assert all((isinstance(event, pb.CompletionEvent) for event in events))
+    assert [event.type for event in events] == [
+        "completion.created", "source_indexed", "model_message.done", "completion.completed",
     ]
 
 
@@ -261,15 +267,15 @@ def test_qa_records_text_from_responses_api_content_blocks(tmp_path):
         tool_calls=[{"id": "call-1", "name": "ls", "args": {"path": ""}}],
     )
     event = runtime_module._model_message_event(message)
-    assert event["content"] == "I will inspect root. "
+    assert event.content == "I will inspect root. "
 
 
 def test_qa_records_terminal_stop_message_as_final_answer(tmp_path):
     message = AIMessage(content="最终答案。", response_metadata={"finish_reason": "stop"})
     event = runtime_module._model_message_event(message)
-    assert event["content"] == "最终答案。"
-    assert event["is_final"] is True
-    assert event["stop_signal"] == "stop"
+    assert event.content == "最终答案。"
+    assert event.is_final is True
+    assert event.stop_signal == "stop"
 
 
 def test_qa_records_model_message_content_and_tool_calls_without_reasoning(tmp_path):
@@ -279,11 +285,10 @@ def test_qa_records_model_message_content_and_tool_calls_without_reasoning(tmp_p
         tool_calls=[{"id": "call-1", "name": "ls", "args": {"path": ""}}],
     )
     event = runtime_module._model_message_event(message)
-    assert event == {
-        "message_id": "",
-        "type": "model_message.done",
-        "content": "I will inspect the root listing while calling a tool.",
-        "tool_call_count": 1,
-        "tool_calls": [{"id": "call-1", "name": "ls", "args": {"path": ""}}],
-        "is_final": False,
-    }
+    assert event == pb.CompletionEvent(
+        message_id="", type="model_message.done",
+        content="I will inspect the root listing while calling a tool.", tool_call_count=1,
+        tool_calls=[pb.ToolCall(id="call-1", name="ls", args_json='{"path":""}')],
+        is_final=False,
+    )
+    assert not event.HasField("stop_signal")

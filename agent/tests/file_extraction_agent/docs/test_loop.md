@@ -4,7 +4,7 @@
 
 执行链路：资源路径初始化工具上下文，运行参数绑定执行器；输入消息 → prompt/历史转换 → 绑定工具 → 正式 LangGraph agent/tools 循环 → 原样 yield AIMessage/ToolMessage；运行异常向外抛出，图内无事件或取消缓冲。
 
-messages.py 的 build_qa_messages 直接接收消息列表；独立 graph.py 的 build_qa_graph 接收 RunOptions 以及 model_invocation.py 与 executor.py 的执行函数；工具执行器不接收状态容器。工具并行提交并共享超时期限；按原始调用 ID 返回消息。超时失败先返回，被取消的工具协程不会修改已返回消息。model_invocation 测试覆盖 单次固定调用、失败对象和响应终止信号校验；turn_stream 负责事件格式与最终回答标记。
+messages.py 的 build_qa_messages 直接接收消息列表；独立 graph.py 的 build_qa_graph 接收 RunOptions 以及 model_invocation.py 与 executor.py 的执行函数；工具执行器不接收状态容器。工具并行提交并共享超时期限；按原始调用 ID 返回消息。超时失败先返回，被取消的工具协程不会修改已返回消息。model_invocation 测试覆盖 单次固定调用、失败对象和响应终止信号校验；gRPC 路由负责 protobuf 事件格式与最终回答标记。
 
 ## 测试函数
 

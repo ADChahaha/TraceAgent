@@ -11,12 +11,12 @@ from langchain_core.outputs import ChatGenerationChunk
 from pydantic import PrivateAttr
 
 from service.file_extraction_agent.core import graph, loop, model_invocation
-from service.file_extraction_agent.turn_stream import stream_completion
+from routes.file_extraction_agent import stream_completion
+from service.file_extraction_agent.schemas import DocumentQaMessage
 
 
 def runtime_events(*, resource_path, messages, qa_model):
     return stream_completion(resource_path, qa_model, messages)
-from service.file_extraction_agent.schemas import DocumentQaMessage
 
 
 class StreamingModel(BaseChatModel):
@@ -56,18 +56,18 @@ async def test_native_messages_arrive_before_model_finishes(resource_path):
         qa_model=model,
     )) as events:
         received = []
-        while not any(e["type"] == "model_message.delta" for e in received):
+        while not any(e.type == "model_message.delta" for e in received):
             received.append(await asyncio.wait_for(anext(events), 2))
         assert not model._closed.is_set()
-        assert received[-1]["delta"] == "前半"
+        assert received[-1].delta == "前半"
         model._release.set()
         received.extend([e async for e in events])
-    done = [e for e in received if e["type"] == "model_message.done"]
-    assert len(done) == 1 and done[0]["content"] == "前半后半"
-    message_events = [e for e in received if e["type"].startswith("model_message.")]
-    assert message_events[0]["type"] == "model_message.started"
-    assert len({e["message_id"] for e in message_events}) == 1
-    assert "".join(e["delta"] for e in message_events if "delta" in e) == "前半后半"
+    done = [e for e in received if e.type == "model_message.done"]
+    assert len(done) == 1 and done[0].content == "前半后半"
+    message_events = [e for e in received if e.type.startswith("model_message.")]
+    assert message_events[0].type == "model_message.started"
+    assert len({e.message_id for e in message_events}) == 1
+    assert "".join(e.delta for e in message_events if e.HasField("delta")) == "前半后半"
 
 
 async def test_graph_retries_same_model_five_times_and_reports_before_wait(resource_path, monkeypatch):
@@ -86,21 +86,21 @@ async def test_graph_retries_same_model_five_times_and_reports_before_wait(resou
         qa_model=model,
     )) as events:
         received = []
-        while not any(e["type"] == "model_request.retrying" for e in received):
+        while not any(e.type == "model_request.retrying" for e in received):
             received.append(await asyncio.wait_for(anext(events), 2))
         assert model._calls == 1
-        assert received[-1]["attempt"] == 2
+        assert received[-1].attempt == 2
         release.set()
         received.extend([e async for e in events])
     assert model._calls == 5
     assert waits == [0.4375, 0.875, 1.75, 3.5]
-    retries = [e for e in received if e["type"] == "model_request.retrying"]
-    assert [e["retry_delay_ms"] for e in retries] == [round(delay * 1000) for delay in waits]
-    assert len([e for e in received if e["type"] == "model_request.retrying"]) == 4
-    starts = [e["message_id"] for e in received if e["type"] == "model_message.started"]
+    retries = [e for e in received if e.type == "model_request.retrying"]
+    assert [e.retry_delay_ms for e in retries] == [round(delay * 1000) for delay in waits]
+    assert len([e for e in received if e.type == "model_request.retrying"]) == 4
+    starts = [e.message_id for e in received if e.type == "model_message.started"]
     assert len(starts) == len(set(starts)) == 5
-    assert not any(e["type"] == "model_message.done" for e in received)
-    assert received[-1]["type"] == "completion.failed"
+    assert not any(e.type == "model_message.done" for e in received)
+    assert received[-1].type == "completion.failed"
 
 
 @pytest.mark.parametrize("headers, expected", [
@@ -165,8 +165,8 @@ async def test_server_retry_delay_reaches_event_and_wait(resource_path, monkeypa
         resource_path=resource_path, messages=[DocumentQaMessage(role="user", content="问题")], qa_model=model,
     )]
     assert model._calls == 5 and waits == [30.0] * 4
-    assert [e["retry_delay_ms"] for e in events if e["type"] == "model_request.retrying"] == [30000] * 4
-    assert events[-1]["type"] == "completion.failed"
+    assert [e.retry_delay_ms for e in events if e.type == "model_request.retrying"] == [30000] * 4
+    assert events[-1].type == "completion.failed"
 
 
 async def test_single_model_call_returns_failure_without_retry():
@@ -189,8 +189,6 @@ async def test_cancel_model_closes_stream_without_retry():
 
 
 async def test_runtime_cancel_during_retry_wait_stops_next_attempt(resource_path, monkeypatch):
-    from service.file_extraction_agent.turn_stream import stream_completion
-
     model = StreamingModel(failures=5)
     entered, closed = asyncio.Event(), asyncio.Event()
 
@@ -214,8 +212,8 @@ async def test_runtime_cancel_during_retry_wait_stops_next_attempt(resource_path
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, 2)
     assert closed.is_set() and model._calls == 1
-    assert not any(e["type"] == "completion.cancelled" for e in received)
-    assert sum(e["type"].startswith("completion.") and e["type"] != "completion.created" for e in received) == 0
+    assert not any(e.type == "completion.cancelled" for e in received)
+    assert sum(e.type.startswith("completion.") and e.type != "completion.created" for e in received) == 0
 
 
 async def test_retry_success_keeps_failed_partial_text_out_of_history(monkeypatch):

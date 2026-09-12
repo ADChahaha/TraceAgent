@@ -61,7 +61,7 @@ ChatCompletion 为服务端流 RPC。输入转换为现有 DocumentQaMessage、R
 
 ## 问答事件
 
-运行时逐条 yield 事件字典，接口层转换为 CompletionEvent，gRPC 自行分帧；不再套 SSE 文本。seq 从 1 连续递增，每条流绑定一个 completion，不重复携带 completion_id。
+路由直接消费 core 的类型化输出，逐条构造并 yield CompletionEvent，gRPC 自行分帧；不经过字典事件层。seq 从 1 连续递增，每条流绑定一个 completion，不重复携带 completion_id。
 
 | type | 内容 |
 | --- | --- |
@@ -104,7 +104,7 @@ finally:
   → executor 清理工具 Task，run_operation finally kill 子进程
 ```
 
-stream_completion 是异步生成器函数，直接输出带 seq 的事件；无 manager、运行时对象、独立 producer 或队列。正常完成/普通失败输出唯一终态，取消不生成终态。gRPC 负责传输流控，handler 退出时关闭当前生成器，包括暂停在 yield 的情况。
+routes/file_extraction_agent.py 中的 stream_completion 是异步生成器函数，直接输出带 seq 的 protobuf 事件；无 manager、运行时对象、独立 producer 或队列。正常完成/普通失败输出唯一终态，取消不生成终态。gRPC 负责传输流控，handler 退出时关闭当前生成器，包括暂停在 yield 的情况。
 
 call.cancel() 同步返回，只表示本地取消请求结果，不确认远端已经清理完。backend 自己记录取消状态并拒绝迟到写入；RPC 意外断开也不能视为成功完成。同步阻塞工作不会被 asyncio 强制中断，取消不撤销已产生的副作用。资源保留供下一轮使用。
 

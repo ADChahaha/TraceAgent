@@ -1,8 +1,8 @@
-# 流式模型与重试测试
+# test_streaming_retry
 
-通过真实 BaseChatModel 回调驱动 LangGraph，由 loop 消费图流，使用 Event 控制模型输出和退避，不请求外部模型。
+真实 LangChain 回调 → 图的 messages/updates → 路由 protobuf 流；验证实时增量、重试状态和取消。单次模型与 HTTP 流测试直接验证底层调用。
 
-- `test_native_messages_arrive_before_model_finishes`：第二块被阻塞时先收到第一块，验证消息 ID、完整结果和无重复文本。
+- `test_native_messages_arrive_before_model_finishes`：模型尚未结束时已收到 protobuf 增量；完整正文只出现一次，消息 ID 一致。
 - `test_graph_retries_same_model_five_times_and_reports_before_wait`：固定随机源验证 0.5 秒起步的指数抖动，事件等待时间与实际等待一致；同配置五次、消息 ID 独立。
 - `test_model_failure_preserves_valid_retry_after`：保留限流响应中的毫秒、秒数或 HTTP 日期，校验 120 秒边界及无效/非有限值。
 - `test_retry_backoff_caps_base_and_honors_server_delay`：指数基数以 8 秒封顶，服务端有效等待不叠加随机抖动。
@@ -12,7 +12,3 @@
 - `test_runtime_cancel_during_retry_wait_stops_next_attempt`：业务取消打断退避，关闭等待并直接结束，不输出取消终态。
 - `test_retry_success_keeps_failed_partial_text_out_of_history`：第五次成功，前四次局部文本不进入历史，重试状态归零。
 - `test_chatopenai_native_callback_and_http_stream_close`：真实 ChatOpenAI 和 SDK 消费受控 SSE 响应，验证原生增量及取消关闭 HTTP 响应。
-
-stream_completion 直接消费事件；完成/失败由外层生成器输出，取消消费 Task 会传播 CancelledError 并清理退避或模型流，不补发取消终态。
-
-事件流模块引用同步为 turn_stream；仅重命名，不改变测试目标行为。
