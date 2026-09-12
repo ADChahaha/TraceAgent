@@ -89,7 +89,7 @@ def test_backend_healthz_reports_ok(tmp_path: Path):
     assert response.json() == {"status": "ok"}
 
 
-def test_database_initialization_creates_qa_schema_without_migrating_legacy_tables():
+def test_database_initialization_creates_chat_schema_without_migrating_legacy_tables():
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row
     connection.executescript(
@@ -123,10 +123,10 @@ def test_database_initialization_creates_qa_schema_without_migrating_legacy_tabl
             "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()
     }
-    qa_task_columns = {row["name"] for row in connection.execute("PRAGMA table_info(qa_tasks)").fetchall()}
+    chat_session_columns = {row["name"] for row in connection.execute("PRAGMA table_info(chat_sessions)").fetchall()}
 
-    assert {"qa_tasks", "qa_resources", "qa_messages", "qa_turns", "qa_events"} <= table_names
-    assert qa_task_columns == {"id", "status", "active_turn_id", "created_at", "updated_at"}
+    assert {"chat_sessions", "chat_resources", "chat_messages", "chat_turns", "chat_events"} <= table_names
+    assert chat_session_columns == {"id", "status", "active_turn_id", "created_at", "updated_at"}
     # 初始化只负责建当前 schema，不再清理或迁移旧表；旧库按“重建新库”处理。
     assert "tasks" in table_names
     assert "extracted_fields" in table_names

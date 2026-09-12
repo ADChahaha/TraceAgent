@@ -1,11 +1,11 @@
-"""对齐 models/schema.py 的 QA CRUD 行为验证：所有读写严格贴合新表结构。"""
+"""对齐 models/schema.py 的 Chat CRUD 行为验证：所有读写严格贴合新表结构。"""
 
 import sqlite3
 
 import pytest
 
 from backend.core.db import connect_database, initialize_database
-from backend.crud import crud as qa_crud
+from backend.crud import crud as chat_crud
 
 
 @pytest.fixture
@@ -16,29 +16,29 @@ def db(tmp_path):
     connection.close()
 
 
-def create_task(db, task_id="task-1", status="processing", now="2026-01-01T00:00:00Z"):
-    return qa_crud.create_task(db, task_id=task_id, status=status, now=now)
+def create_session(db, session_id="session-1", status="processing", now="2026-01-01T00:00:00Z"):
+    return chat_crud.create_session(db, session_id=session_id, status=status, now=now)
 
 
-def create_turn(db, turn_id="turn-1", task_id="task-1", status="queued", now="2026-01-01T00:00:00Z"):
-    return qa_crud.create_turn(db, turn_id=turn_id, task_id=task_id, status=status, now=now)
+def create_turn(db, turn_id="turn-1", session_id="session-1", status="queued", now="2026-01-01T00:00:00Z"):
+    return chat_crud.create_turn(db, turn_id=turn_id, session_id=session_id, status=status, now=now)
 
 
-def test_create_task_writes_only_schema_columns(db):
-    task = create_task(db)
-    assert set(task) == {"id", "status", "active_turn_id", "created_at", "updated_at"}
-    assert task["id"] == "task-1"
-    assert task["status"] == "processing"
-    assert task["active_turn_id"] is None
-    assert qa_crud.get_task(db, "task-1") == task
-    assert qa_crud.get_task(db, "missing") is None
+def test_create_session_writes_only_schema_columns(db):
+    session = create_session(db)
+    assert set(session) == {"id", "status", "active_turn_id", "created_at", "updated_at"}
+    assert session["id"] == "session-1"
+    assert session["status"] == "processing"
+    assert session["active_turn_id"] is None
+    assert chat_crud.get_session(db, "session-1") == session
+    assert chat_crud.get_session(db, "missing") is None
 
 
-def test_update_task_status_and_active_turn(db):
-    create_task(db)
-    updated = qa_crud.update_task(
+def test_update_session_status_and_active_turn(db):
+    create_session(db)
+    updated = chat_crud.update_session(
         db,
-        task_id="task-1",
+        session_id="session-1",
         now="2026-01-02T00:00:00Z",
         status="running",
         active_turn_id="turn-1",
@@ -48,72 +48,72 @@ def test_update_task_status_and_active_turn(db):
     assert updated["updated_at"] == "2026-01-02T00:00:00Z"
 
 
-def test_update_task_clear_active_turn(db):
-    create_task(db)
-    qa_crud.update_task(db, task_id="task-1", now="t1", active_turn_id="turn-1")
-    cleared = qa_crud.update_task(db, task_id="task-1", now="t2", clear_active_turn=True)
+def test_update_session_clear_active_turn(db):
+    create_session(db)
+    chat_crud.update_session(db, session_id="session-1", now="t1", active_turn_id="turn-1")
+    cleared = chat_crud.update_session(db, session_id="session-1", now="t2", clear_active_turn=True)
     assert cleared["active_turn_id"] is None
 
 
-def test_list_tasks_orders_by_updated_at_desc(db):
-    create_task(db, task_id="old", now="2026-01-01T00:00:00Z")
-    create_task(db, task_id="new", now="2026-01-03T00:00:00Z")
-    create_task(db, task_id="mid", now="2026-01-02T00:00:00Z")
-    ids = [task["id"] for task in qa_crud.list_tasks(db, limit=10)]
+def test_list_sessions_orders_by_updated_at_desc(db):
+    create_session(db, session_id="old", now="2026-01-01T00:00:00Z")
+    create_session(db, session_id="new", now="2026-01-03T00:00:00Z")
+    create_session(db, session_id="mid", now="2026-01-02T00:00:00Z")
+    ids = [session["id"] for session in chat_crud.list_sessions(db, limit=10)]
     assert ids == ["new", "mid", "old"]
 
 
 def test_create_and_list_resource_columns(db):
-    create_task(db)
-    first = qa_crud.create_resource(
+    create_session(db)
+    first = chat_crud.create_resource(
         db,
         resource_id="res-1",
-        task_id="task-1",
+        session_id="session-1",
         resource_type="display_html",
         location="<p id=\"p1\">text</p>",
         now="2026-01-01T00:00:00Z",
     )
-    qa_crud.create_resource(
+    chat_crud.create_resource(
         db,
         resource_id="res-2",
-        task_id="task-1",
+        session_id="session-1",
         resource_type="markdown",
         location="# title",
         now="2026-01-02T00:00:00Z",
     )
-    assert set(first) == {"id", "task_id", "type", "location", "created_at"}
-    resources = qa_crud.list_resources(db, "task-1")
+    assert set(first) == {"id", "session_id", "type", "location", "created_at"}
+    resources = chat_crud.list_resources(db, "session-1")
     assert [resource["id"] for resource in resources] == ["res-1", "res-2"]
     assert resources[1]["type"] == "markdown"
     assert resources[1]["location"] == "# title"
 
 
 def test_list_resources_filters_by_type(db):
-    create_task(db)
-    qa_crud.create_resource(db, resource_id="res-1", task_id="task-1",
+    create_session(db)
+    chat_crud.create_resource(db, resource_id="res-1", session_id="session-1",
                             resource_type="html", location="<h1>x</h1>", now="t1")
-    qa_crud.create_resource(db, resource_id="res-2", task_id="task-1",
+    chat_crud.create_resource(db, resource_id="res-2", session_id="session-1",
                             resource_type="markdown", location="# x", now="t2")
-    filtered = qa_crud.list_resources(db, "task-1", resource_type="markdown")
+    filtered = chat_crud.list_resources(db, "session-1", resource_type="markdown")
     assert [resource["id"] for resource in filtered] == ["res-2"]
 
 
-def test_resource_unique_per_task_type_location(db):
-    create_task(db)
-    qa_crud.create_resource(db, resource_id="res-1", task_id="task-1",
+def test_resource_unique_per_session_type_location(db):
+    create_session(db)
+    chat_crud.create_resource(db, resource_id="res-1", session_id="session-1",
                             resource_type="html", location="<h1>x</h1>", now="t1")
     with pytest.raises(sqlite3.IntegrityError):
-        qa_crud.create_resource(db, resource_id="res-2", task_id="task-1",
+        chat_crud.create_resource(db, resource_id="res-2", session_id="session-1",
                                 resource_type="html", location="<h1>x</h1>", now="t2")
 
 
 def test_create_and_list_message_columns(db):
-    create_task(db)
+    create_session(db)
     create_turn(db)
-    message = qa_crud.create_message(
+    message = chat_crud.create_message(
         db,
         message_id="msg-1",
-        task_id="task-1",
+        session_id="session-1",
         turn_id="turn-1",
         role="user",
         content="合同可以提前终止吗？",
@@ -123,7 +123,7 @@ def test_create_and_list_message_columns(db):
         group_index=0,
     )
     assert set(message) == {
-        "id", "task_id", "turn_id", "sequence", "group_id", "group_index",
+        "id", "session_id", "turn_id", "sequence", "group_id", "group_index",
         "role", "content", "tool_calls_json", "tool_call_id", "name", "created_at",
     }
     assert message["role"] == "user"
@@ -131,29 +131,29 @@ def test_create_and_list_message_columns(db):
     assert message["tool_calls_json"] == "[]"
     assert message["tool_call_id"] is None
     assert message["name"] is None
-    assert [row["id"] for row in qa_crud.list_messages(db, "task-1")] == ["msg-1"]
+    assert [row["id"] for row in chat_crud.list_messages(db, "session-1")] == ["msg-1"]
 
 
 def test_list_messages_orders_by_sequence(db):
-    create_task(db)
+    create_session(db)
     create_turn(db)
-    qa_crud.create_message(db, message_id="later", task_id="task-1", turn_id="turn-1",
+    chat_crud.create_message(db, message_id="later", session_id="session-1", turn_id="turn-1",
                            role="user", content="第二个问题", now="t2",
                            sequence=2, group_id="g2", group_index=0)
-    qa_crud.create_message(db, message_id="earlier", task_id="task-1", turn_id="turn-1",
+    chat_crud.create_message(db, message_id="earlier", session_id="session-1", turn_id="turn-1",
                            role="user", content="第一个问题", now="t1",
                            sequence=1, group_id="g1", group_index=0)
-    assert [row["id"] for row in qa_crud.list_messages(db, "task-1")] == ["earlier", "later"]
+    assert [row["id"] for row in chat_crud.list_messages(db, "session-1")] == ["earlier", "later"]
 
 
 def test_create_tool_message_with_tool_call_fields(db):
-    create_task(db)
+    create_session(db)
     create_turn(db)
     tool_calls = '[{"id":"call-a","type":"function","function":{"name":"read","arguments":"{}"}}]'
-    tool = qa_crud.create_message(
+    tool = chat_crud.create_message(
         db,
         message_id="msg-tool",
-        task_id="task-1",
+        session_id="session-1",
         turn_id="turn-1",
         role="assistant",
         content="查询中",
@@ -164,10 +164,10 @@ def test_create_tool_message_with_tool_call_fields(db):
         tool_calls_json=tool_calls,
     )
     assert tool["tool_calls_json"] == tool_calls
-    result = qa_crud.create_message(
+    result = chat_crud.create_message(
         db,
         message_id="msg-result",
-        task_id="task-1",
+        session_id="session-1",
         turn_id="turn-1",
         role="tool",
         content='{"ok":true}',
@@ -184,22 +184,22 @@ def test_create_tool_message_with_tool_call_fields(db):
 
 
 def test_create_turn_writes_only_schema_columns(db):
-    create_task(db)
+    create_session(db)
     turn = create_turn(db)
     assert set(turn) == {
-        "id", "task_id", "status", "agent_completion_id",
+        "id", "session_id", "status", "agent_completion_id",
         "created_at", "updated_at", "completed_at",
     }
     assert turn["status"] == "queued"
     assert turn["agent_completion_id"] is None
     assert turn["completed_at"] is None
-    assert qa_crud.get_turn(db, "turn-1") == turn
+    assert chat_crud.get_turn(db, "turn-1") == turn
 
 
 def test_update_turn_status_and_completion_id(db):
-    create_task(db)
+    create_session(db)
     create_turn(db)
-    updated = qa_crud.update_turn(
+    updated = chat_crud.update_turn(
         db,
         turn_id="turn-1",
         now="2026-01-02T00:00:00Z",
@@ -209,7 +209,7 @@ def test_update_turn_status_and_completion_id(db):
     assert updated["status"] == "in_progress"
     assert updated["agent_completion_id"] == "cmp-1"
     assert updated["completed_at"] is None
-    finished = qa_crud.update_turn(
+    finished = chat_crud.update_turn(
         db,
         turn_id="turn-1",
         now="2026-01-03T00:00:00Z",
@@ -220,9 +220,9 @@ def test_update_turn_status_and_completion_id(db):
 
 
 def test_update_turn_status_if_current_conditional(db):
-    create_task(db)
+    create_session(db)
     create_turn(db)
-    updated = qa_crud.update_turn_status_if_current(
+    updated = chat_crud.update_turn_status_if_current(
         db,
         turn_id="turn-1",
         current_statuses={"queued", "in_progress"},
@@ -232,7 +232,7 @@ def test_update_turn_status_if_current_conditional(db):
     )
     assert updated is not None
     assert updated["status"] == "completed"
-    stale = qa_crud.update_turn_status_if_current(
+    stale = chat_crud.update_turn_status_if_current(
         db,
         turn_id="turn-1",
         current_statuses={"queued", "in_progress"},
@@ -240,39 +240,39 @@ def test_update_turn_status_if_current_conditional(db):
         now="2026-01-03T00:00:00Z",
     )
     assert stale is None
-    assert qa_crud.get_turn(db, "turn-1")["status"] == "completed"
+    assert chat_crud.get_turn(db, "turn-1")["status"] == "completed"
 
 
 def test_get_active_turn_finds_non_terminal_turn(db):
-    create_task(db)
+    create_session(db)
     create_turn(db, turn_id="turn-done", status="completed")
     create_turn(db, turn_id="turn-active", status="in_progress", now="2026-01-02T00:00:00Z")
-    active = qa_crud.get_active_turn(db, "task-1")
+    active = chat_crud.get_active_turn(db, "session-1")
     assert active is not None
     assert active["id"] == "turn-active"
 
 
 def test_create_event_assigns_sequence_and_columns(db):
-    create_task(db)
-    first = qa_crud.create_event(
+    create_session(db)
+    first = chat_crud.create_event(
         db,
         event_id="event-1",
-        task_id="task-1",
+        session_id="session-1",
         turn_id=None,
-        event_type="task.created",
+        event_type="session.created",
         payload={"metadata": {}},
         now="2026-01-01T00:00:00Z",
     )
-    second = qa_crud.create_event(
+    second = chat_crud.create_event(
         db,
         event_id="event-2",
-        task_id="task-1",
+        session_id="session-1",
         turn_id="turn-1",
         event_type="turn.created",
         payload={"turn_id": "turn-1"},
         now="2026-01-02T00:00:00Z",
     )
-    assert set(first) == {"id", "task_id", "turn_id", "sequence",
+    assert set(first) == {"id", "session_id", "turn_id", "sequence",
                           "event_type", "payload_json", "created_at"}
     assert first["sequence"] == 1
     assert second["sequence"] == 2
@@ -280,24 +280,24 @@ def test_create_event_assigns_sequence_and_columns(db):
 
 
 def test_list_events_after_sequence(db):
-    create_task(db)
+    create_session(db)
     for index in range(3):
-        qa_crud.create_event(
+        chat_crud.create_event(
             db,
             event_id=f"event-{index + 1}",
-            task_id="task-1",
+            session_id="session-1",
             turn_id=None,
             event_type="agent.event",
             payload={"index": index},
             now=f"2026-01-0{index + 1}T00:00:00Z",
         )
-    events = qa_crud.list_events(db, "task-1", after_sequence=1)
+    events = chat_crud.list_events(db, "session-1", after_sequence=1)
     assert [event["sequence"] for event in events] == [2, 3]
 
 
 def test_get_last_event_sequence(db):
-    create_task(db)
-    assert qa_crud.get_last_event_sequence(db, "task-1") == 0
-    qa_crud.create_event(db, event_id="event-1", task_id="task-1", turn_id=None,
-                         event_type="task.created", payload={}, now="t1")
-    assert qa_crud.get_last_event_sequence(db, "task-1") == 1
+    create_session(db)
+    assert chat_crud.get_last_event_sequence(db, "session-1") == 0
+    chat_crud.create_event(db, event_id="event-1", session_id="session-1", turn_id=None,
+                         event_type="session.created", payload={}, now="t1")
+    assert chat_crud.get_last_event_sequence(db, "session-1") == 1

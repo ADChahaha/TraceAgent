@@ -3,7 +3,7 @@ from __future__ import annotations
 
 SCHEMA_SQL = [
     """
-    CREATE TABLE IF NOT EXISTS qa_tasks (
+    CREATE TABLE IF NOT EXISTS chat_sessions (
         id TEXT PRIMARY KEY,
         status TEXT NOT NULL,
         active_turn_id TEXT,
@@ -12,48 +12,48 @@ SCHEMA_SQL = [
     )
     """,
     """
-    CREATE TABLE IF NOT EXISTS qa_resources (
+    CREATE TABLE IF NOT EXISTS chat_resources (
         id TEXT PRIMARY KEY,
-        task_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
         type TEXT NOT NULL,
         location TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        FOREIGN KEY(task_id) REFERENCES qa_tasks(id),
-        UNIQUE(task_id, type, location)
+        FOREIGN KEY(session_id) REFERENCES chat_sessions(id),
+        UNIQUE(session_id, type, location)
     )
     """,
     """
-    CREATE TABLE IF NOT EXISTS qa_turns (
+    CREATE TABLE IF NOT EXISTS chat_turns (
         id TEXT PRIMARY KEY,
-        task_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
         status TEXT NOT NULL,
         agent_completion_id TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         completed_at TEXT,
-        FOREIGN KEY(task_id) REFERENCES qa_tasks(id)
+        FOREIGN KEY(session_id) REFERENCES chat_sessions(id)
     )
     """,
     """
-    CREATE TABLE IF NOT EXISTS qa_events (
+    CREATE TABLE IF NOT EXISTS chat_events (
         id TEXT PRIMARY KEY,
-        task_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
         turn_id TEXT,
         sequence INTEGER NOT NULL,
         event_type TEXT NOT NULL,
         payload_json TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        FOREIGN KEY(task_id) REFERENCES qa_tasks(id),
-        UNIQUE(task_id, sequence)
+        FOREIGN KEY(session_id) REFERENCES chat_sessions(id),
+        UNIQUE(session_id, sequence)
     )
     """,
-    "CREATE INDEX IF NOT EXISTS idx_qa_resources_task_id ON qa_resources(task_id)",
-    # 复合外键保证消息的 task_id 与 turn 所属 task 一致。
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_qa_turns_task_id_id ON qa_turns(task_id, id)",
+    "CREATE INDEX IF NOT EXISTS idx_chat_resources_session_id ON chat_resources(session_id)",
+    # 复合外键保证消息的 session_id 与 turn 所属 session 一致。
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_turns_session_id_id ON chat_turns(session_id, id)",
     """
-    CREATE TABLE IF NOT EXISTS qa_messages (
+    CREATE TABLE IF NOT EXISTS chat_messages (
         id TEXT PRIMARY KEY,
-        task_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
         turn_id TEXT,
         sequence INTEGER NOT NULL CHECK(sequence > 0),
         group_id TEXT NOT NULL CHECK(length(group_id) > 0),
@@ -64,10 +64,10 @@ SCHEMA_SQL = [
         tool_call_id TEXT,
         name TEXT,
         created_at TEXT NOT NULL,
-        FOREIGN KEY(task_id) REFERENCES qa_tasks(id),
-        FOREIGN KEY(task_id, turn_id) REFERENCES qa_turns(task_id, id),
-        UNIQUE(task_id, sequence),
-        UNIQUE(task_id, group_id, group_index),
+        FOREIGN KEY(session_id) REFERENCES chat_sessions(id),
+        FOREIGN KEY(session_id, turn_id) REFERENCES chat_turns(session_id, id),
+        UNIQUE(session_id, sequence),
+        UNIQUE(session_id, group_id, group_index),
         CHECK(turn_id IS NOT NULL OR role = 'system'),
         CHECK(
             (role = 'tool' AND tool_call_id IS NOT NULL AND length(tool_call_id) > 0
@@ -81,9 +81,9 @@ SCHEMA_SQL = [
     )
     """,
     """
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_qa_messages_group_tool_call
-    ON qa_messages(task_id, group_id, tool_call_id) WHERE tool_call_id IS NOT NULL
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_messages_group_tool_call
+    ON chat_messages(session_id, group_id, tool_call_id) WHERE tool_call_id IS NOT NULL
     """,
-    "CREATE INDEX IF NOT EXISTS idx_qa_turns_task_id ON qa_turns(task_id)",
-    "CREATE INDEX IF NOT EXISTS idx_qa_events_task_sequence ON qa_events(task_id, sequence)",
+    "CREATE INDEX IF NOT EXISTS idx_chat_turns_session_id ON chat_turns(session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_chat_events_session_sequence ON chat_events(session_id, sequence)",
 ]

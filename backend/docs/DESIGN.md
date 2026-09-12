@@ -4,6 +4,19 @@
 
 接口细节见 [API.md](API.md)。
 
+## 持久化层命名（已落地）
+
+`models/schema.py` 与 `crud/crud.py` 统一使用 `chat_sessions/chat_resources/chat_turns/chat_messages/chat_events`，关联字段为 `session_id`，外键及索引同步改名。CRUD 会话入口为 `create_session/get_session/list_sessions/update_session`，其他关联操作也接收 `session_id`。
+
+```text
+调用方传入 session_id 及资源、轮次、消息或事件字段
+  -> crud.crud 执行对应 chat_* 表的参数化 SQL
+  -> SQLite 校验会话外键、消息角色及唯一约束，非法行抛出 IntegrityError
+  -> 写操作提交事务，查询返回 dict / list；单条查询缺失时返回 None
+```
+
+初始化只创建当前表，不迁移或删除旧 `qa_*` 数据；旧库需重建。本次仅对齐 schema/CRUD；下文旧 task/qa_* 业务流程以及 service/routes/API 尚待迁移，不代表已兼容当前持久化层。字段以 [table.md](table.md) 为准。
+
 ## 已确认的稳定消息历史设计（待实现）
 
 `qa_messages` 表、唯一索引及行级校验已在 schema 落地；业务尚未接入。目标是将其作为下一轮模型上下文的唯一持久化来源，`qa_events` 继续负责过程展示与续传。下文旧流程中“qa_messages + qa_events 重建上下文”和“仅在 completion.completed 写最终 assistant”的描述将由本节替代；CRUD 已对齐新 schema（不再引用 `qa_documents`、`stage`、`metadata_json` 等旧结构，文档产物写入 `qa_resources`），service/routes 尚未迁移。本次不补齐旧业务依赖的 qa_documents 等结构、不迁移资源接口或 gRPC。
@@ -507,28 +520,18 @@ GET /qa/tasks/{task_id}
 
 ## 4. 数据表
 
-QA-only schema：
-
-字段级说明见 [table.md](table.md)。
+当前 schema 使用五张 Chat 表，字段级说明见 [table.md](table.md)。
 
 ```text
-qa_tasks
-  -> id, status, stage, metadata_json, active_turn_id, error_message, timestamps
-
-qa_documents
-  -> task_id, filename, file_type, html, display_html, markdown, md_list_json, blocks_json, processor_meta_json, warnings_json
-
-qa_messages
-  -> task_id, turn_id, role(user/assistant/system), content, metadata_json, created_at
-
-qa_turns
-  -> task_id, status(queued/in_progress/cancelling/completed/cancelled/failed), agent_completion_id, user_message_id, error_message, timestamps
-
-qa_events
-  -> task_id, turn_id, sequence, event_type, status, stage, payload_json, created_at
+chat_sessions -> id, status, active_turn_id, created_at, updated_at
+chat_resources -> id, session_id, type, location, created_at
+chat_turns -> id, session_id, status, agent_completion_id, created_at, updated_at, completed_at
+chat_messages -> id, session_id, turn_id, sequence, group_id, group_index, role,
+                 content, tool_calls_json, tool_call_id, name, created_at
+chat_events -> id, session_id, turn_id, sequence, event_type, payload_json, created_at
 ```
 
-旧字段抽取表 `tasks/documents/agent_runs/agent_stage_runs/extracted_fields/field_traces/field_commits/task_events` 已不在 schema 中，初始化也不会主动删除或迁移它们。当前分支不做旧库兼容，旧库需直接重建。
+消息序号与组内位置在会话内唯一；消息通过 `(session_id, turn_id)` 复合外键关联轮次，禁止跨会话关联。原有消息校验及条件终态更新逻辑保持不变。
 
 ## 5. 状态模型
 

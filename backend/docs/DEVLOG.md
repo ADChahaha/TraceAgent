@@ -1,6 +1,19 @@
 # Backend Devlog
 
-last updated: 2026-09-10 15:15:29
+last updated: 2026-09-12 21:35:35
+
+## 2026-09-12 21:35:35
+
+### 已完成工作
+
+- schema/CRUD 统一为 `chat_sessions/chat_resources/chat_turns/chat_messages/chat_events`，关联字段改为 `session_id`；会话 CRUD 函数、外键和索引同步改名，原有约束与读写逻辑保持不变。
+- 同步表设计、DESIGN.md 及三个测试文件对应的 tests/docs 说明；旧库沿用重建策略，不迁移数据。
+- TDD：新命名测试先因缺表和缺会话函数失败，实现后 CRUD/消息约束 34 项通过；全量 backend 测试 44 通过、10 失败，差异检查通过。
+
+### 当前问题与下一步
+
+- service/routes 尚未迁移。相同的 10 项业务测试在修改前因 `create_task` 不接受 `metadata` 失败，本次改名后因仍调用旧 `create_task` 失败；后续需接入新会话 CRUD。
+
 
 ## 2026-09-10 15:15:29
 

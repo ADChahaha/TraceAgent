@@ -11,14 +11,14 @@ from backend.core.db import connect_database, initialize_database
 def db(tmp_path):
     connection = connect_database(tmp_path / "messages.sqlite3")
     initialize_database(connection)
-    for task_id in ("a", "b"):
+    for session_id in ("a", "b"):
         connection.execute(
-            "INSERT INTO qa_tasks(id, status, created_at, updated_at) VALUES (?, 'ready', 'now', 'now')",
-            (task_id,),
+            "INSERT INTO chat_sessions(id, status, created_at, updated_at) VALUES (?, 'ready', 'now', 'now')",
+            (session_id,),
         )
         connection.execute(
-            "INSERT INTO qa_turns(id, task_id, status, created_at, updated_at) VALUES (?, ?, 'in_progress', 'now', 'now')",
-            (f"turn-{task_id}", task_id),
+            "INSERT INTO chat_turns(id, session_id, status, created_at, updated_at) VALUES (?, ?, 'in_progress', 'now', 'now')",
+            (f"turn-{session_id}", session_id),
         )
     connection.commit()
     yield connection
@@ -26,12 +26,12 @@ def db(tmp_path):
 
 
 def insert_message(db, **overrides):
-    values = dict(id="m1", task_id="a", turn_id="turn-a", sequence=1,
+    values = dict(id="m1", session_id="a", turn_id="turn-a", sequence=1,
                   group_id="g1", group_index=0, role="assistant", content="正文",
                   tool_calls_json="[]", tool_call_id=None, name=None, created_at="now")
     values.update(overrides)
     db.execute(
-        f"INSERT INTO qa_messages ({', '.join(values)}) VALUES ({', '.join('?' for _ in values)})",
+        f"INSERT INTO chat_messages ({', '.join(values)}) VALUES ({', '.join('?' for _ in values)})",
         tuple(values.values()),
     )
 
@@ -41,7 +41,7 @@ def test_message_table_survives_reinitialization_and_orders_history(db):
     insert_message(db, id="first")
     db.commit()
     initialize_database(db)
-    assert [row["id"] for row in db.execute("SELECT * FROM qa_messages ORDER BY sequence")] == ["first", "second"]
+    assert [row["id"] for row in db.execute("SELECT * FROM chat_messages ORDER BY sequence")] == ["first", "second"]
     assert db.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
@@ -50,7 +50,7 @@ def test_message_table_survives_reinitialization_and_orders_history(db):
     {"role": "tool"}, {"tool_call_id": "call-a"},
     {"tool_calls_json": "not json"}, {"tool_calls_json": "{}"},
     {"role": "user", "tool_calls_json": '[{"id":"call-a"}]'},
-    {"turn_id": None}, {"task_id": "missing"}, {"turn_id": "turn-b"},
+    {"turn_id": None}, {"session_id": "missing"}, {"turn_id": "turn-b"},
 ])
 def test_message_table_rejects_invalid_rows(db, changes):
     with pytest.raises(sqlite3.IntegrityError):
@@ -82,9 +82,9 @@ def test_message_group_transaction_rolls_back_on_write_failure(db):
             insert_message(db, tool_calls_json='[{"id":"call-a","type":"function","function":{"name":"read","arguments":"{}"}}]')
             insert_message(db, id="result", sequence=2, group_index=1,
                            role="tool", tool_call_id=None, name="read")
-    assert db.execute("SELECT COUNT(*) FROM qa_messages").fetchone()[0] == 0
+    assert db.execute("SELECT COUNT(*) FROM chat_messages").fetchone()[0] == 0
 
 
 def test_system_message_can_exist_without_turn(db):
     insert_message(db, role="system", turn_id=None)
-    assert db.execute("SELECT turn_id FROM qa_messages").fetchone()[0] is None
+    assert db.execute("SELECT turn_id FROM chat_messages").fetchone()[0] is None
