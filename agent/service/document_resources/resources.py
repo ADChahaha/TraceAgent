@@ -53,9 +53,10 @@ def prepare_resources(
         backend = os.getenv("EMBEDDING_BACKEND", "openvino")
         chunk_size = int(os.getenv("EMBEDDING_CHUNK_SIZE", "256"))
         overlap = int(os.getenv("EMBEDDING_CHUNK_OVERLAP", "32"))
+        embedder = model.get_embedder(model_id=model_id, backend=backend)
         index = build_index(
-            _document_streams(document), embedder=model.get_embedder(model_id=model_id, backend=backend),
-            model_id=model_id, tokenize=model.get_tokenizer(model_id),
+            _document_streams(document), embedder=embedder,
+            model_id=model_id, tokenize=embedder.tokenize,
             chunk_size=chunk_size, overlap=overlap,
         )
         index_dir = temporary / "index"

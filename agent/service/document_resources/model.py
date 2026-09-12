@@ -15,8 +15,8 @@ get_embedder(model_id, backend)
   -> backend 为 openvino 时传 backend="openvino"（需 optimum-intel）
   -> 返回编码器包装，文档向量由 index.build_index 做 L2 归一化后落盘
 
-get_tokenizer(model_id)
-  -> 从句子编码器的 tokenizer 构造一个返回带字符 offsets 的 token 序列函数
+embedder.tokenize(text)
+  -> 复用同一个句子编码器的 tokenizer，返回带字符 offsets 的 token 序列
   -> 该函数的返回形如 [(start, end), ...]，供 index.chunk_text 使用
 ```
 
@@ -74,16 +74,6 @@ def get_embedder(
     return wrapper
 
 
-def get_tokenizer(model_id: str | None = None) -> Callable[[str], Sequence[tuple[int, int]]]:
-    """Return a tokenization function returning character-offset token spans."""
-
-    model_id = model_id or os.getenv("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
-    from sentence_transformers import SentenceTransformer
-
-    model = SentenceTransformer(model_id, trust_remote_code=True)
-    return _model_tokenize(model)
-
-
 def _model_tokenize(model: Any) -> Callable[[str], Sequence[tuple[int, int]]]:
     def tokenize(text: str) -> Sequence[tuple[int, int]]:
         encoded = model.tokenizer(text, return_offsets_mapping=True, return_tensors=None)
@@ -93,4 +83,4 @@ def _model_tokenize(model: Any) -> Callable[[str], Sequence[tuple[int, int]]]:
     return tokenize
 
 
-__all__ = ["EmbeddingModel", "get_embedder", "get_tokenizer", "DEFAULT_EMBEDDING_MODEL"]
+__all__ = ["EmbeddingModel", "get_embedder", "DEFAULT_EMBEDDING_MODEL"]

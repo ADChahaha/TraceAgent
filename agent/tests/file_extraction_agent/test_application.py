@@ -51,3 +51,22 @@ async def test_invalid_request_never_prepares(monkeypatch, completion_id, messag
     monkeypatch.setattr(app, "prepare_workspace", prepare)
     with pytest.raises(ValueError):
         await anext(app.stream_completion(completion_id=completion_id, resource_refs=[], messages=messages))
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), object()])
+async def test_service_rejects_invalid_json_without_transport(monkeypatch, invalid):
+    """直接消费业务流也拒绝非法动态值，并关闭 core；不依赖 protobuf 校验。"""
+    from langchain_core.messages import ToolMessage
+    app = importlib.import_module("service.file_extraction_agent.application")
+    closed = []
+    async def outputs(**kwargs):
+        try:
+            yield ToolMessage(content="结果", artifact={"nested": [invalid]}, tool_call_id="call",
+                              name="read", additional_kwargs={"tool_args": {}})
+        finally:
+            closed.append(True)
+    monkeypatch.setattr(app, "run_qa_stream", outputs)
+    events = [event async for event in app.stream_execution({}, object(), [])]
+    assert [event.type for event in events] == ["completion.created", "source_indexed", "completion.failed"]
+    assert [event.seq for event in events] == [1, 2, 3]
+    assert closed == [True]

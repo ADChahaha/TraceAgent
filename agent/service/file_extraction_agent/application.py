@@ -10,6 +10,7 @@ from contextlib import aclosing
 from typing import Any, AsyncIterator, Iterator
 
 from langchain_core.messages import AIMessage, ToolMessage
+from pydantic import ConfigDict, JsonValue, TypeAdapter
 from service.file_extraction_agent.core.tools.worker_client import prepare_workspace
 from service.file_extraction_agent.core.contracts import (
     AgentOutput, MessageDelta, MessageStarted, ModelFailed, ModelRetry, QaModel,
@@ -24,10 +25,12 @@ from service.file_extraction_agent.schemas import (
 )
 
 
-def _json(value):
-    """验证动态数据可无损表示为标准 JSON；保留原始值供传输层编码。"""
-    json.dumps(value, ensure_ascii=False, allow_nan=False)
-    return value
+_JSON_VALUE = TypeAdapter(JsonValue, config=ConfigDict(allow_inf_nan=False))
+
+
+def _json_value(value: object) -> JsonValue:
+    """校验嵌套 JSON 值和有限数值；不构造 JSON 字符串，无效值抛 ValueError。"""
+    return _JSON_VALUE.validate_python(value)
 
 
 def _model_message_event(message: AIMessage) -> CompletionEvent:
@@ -36,7 +39,7 @@ def _model_message_event(message: AIMessage) -> CompletionEvent:
     event = CompletionEvent(
         type="model_message.done", message_id=message.id or "",
         content=visible_text(message.content), tool_call_count=len(message.tool_calls),
-        tool_calls=[CompletionToolCall(id=call["id"], name=call["name"], args=_json(call["args"]))
+        tool_calls=[CompletionToolCall(id=call["id"], name=call["name"], args=_json_value(call["args"]))
                     for call in message.tool_calls],
         is_final=not message.tool_calls and stop_signal in _terminal_stop_signals(),
     )
@@ -57,7 +60,7 @@ def _tool_message_event(message: ToolMessage) -> CompletionEvent:
     return CompletionEvent(
         type="tool_failed" if failed else "tool_completed", tool=message.name,
         tool_call_id=message.tool_call_id,
-        args=_json(message.additional_kwargs["tool_args"]), result=_json(result),
+        args=_json_value(message.additional_kwargs["tool_args"]), result=_json_value(result),
     )
 
 
@@ -79,7 +82,7 @@ def _output_events(output: AgentOutput) -> Iterator[CompletionEvent]:
         yield _model_message_event(output)
         for call in output.tool_calls:
             yield CompletionEvent(type="tool_started", tool=call["name"],
-                                     tool_call_id=call["id"], args=_json(call["args"]))
+                                     tool_call_id=call["id"], args=_json_value(call["args"]))
     elif isinstance(output, ToolMessage):
         yield _tool_message_event(output)
     else:
@@ -95,7 +98,7 @@ async def stream_execution(
     yield CompletionEvent(type="completion.created", status="in_progress", seq=seq)
     try:
         seq += 1
-        yield CompletionEvent(type="source_indexed", tool="source_index", result=_json({"ok": True}), seq=seq)
+        yield CompletionEvent(type="source_indexed", tool="source_index", result=_json_value({"ok": True}), seq=seq)
         async with aclosing(run_qa_stream(
             workspace=workspace, qa_model=qa_model, messages=messages, run_options=run_options,
         )) as outputs:

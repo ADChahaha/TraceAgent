@@ -18,11 +18,13 @@ def resources(tmp_path, monkeypatch):
     monkeypatch.setenv("DOCUMENT_RESOURCES_ROOT", str(tmp_path))
     calls = []
     class Embedder:
+        def tokenize(self, text):
+            return [(i, i + 1) for i in range(len(text))]
+
         def encode(self, texts):
             calls.extend(texts)
             return np.array([[1.0, 0.0] for _ in texts], dtype=np.float32)
     monkeypatch.setattr(embedding_model, "get_embedder", lambda **kwargs: Embedder())
-    monkeypatch.setattr(embedding_model, "get_tokenizer", lambda *a, **k: lambda text: [(i, i + 1) for i in range(len(text))])
     return tmp_path, calls
 
 

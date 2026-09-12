@@ -9,3 +9,4 @@
 - `test_tool_result_fallback_and_failure_status`：验证无 artifact 时的 JSON/文本回退，以及工具失败判定。
 - `test_failure_closes_core_and_emits_one_terminal`：模型失败通知和普通异常均关闭内层流，只产生一个失败终态。
 - `test_encoding_failure_closes_core_and_keeps_sequence`：非法 JSON 数值编码失败时关闭内层流，失败终态序号仍连续。
+- `test_dynamic_result_serializes_once`：嵌套结果中的大整数、null 与中文保持不变，整个业务流到 protobuf 输出只对该结果执行一次 JSON 序列化。

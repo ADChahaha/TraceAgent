@@ -1,4 +1,4 @@
-"""Public schemas for document QA completions."""
+"""问答契约：消息与配置输入 → application 执行 → 类型化业务事件。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal, Protocol, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, JsonValue, model_validator
 
 
 class Unset(Enum):
@@ -61,14 +61,6 @@ class ResourceRefProtocol(Protocol):
 ResourceRefs = Sequence[ResourceRefProtocol]
 
 
-CompletionStatus = Literal[
-    "queued",
-    "in_progress",
-    "cancelling",
-    "cancelled",
-    "completed",
-    "failed",
-]
 MessageRole = Literal["system", "user", "assistant", "tool"]
 ModelApiTransport = Literal["responses", "chat_completions"]
 
@@ -100,26 +92,6 @@ class ResourceRef(BaseModel):
     location: str
 
 
-class DocumentQaCompletionRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    completion_id: str
-    resource_path: list[ResourceRef]
-    messages: list[DocumentQaMessage]
-    stream: bool = True
-    run_options: "RunOptions | None" = None
-
-    @model_validator(mode="after")
-    def validate_request(self) -> "DocumentQaCompletionRequest":
-        if not self.completion_id.strip():
-            raise ValueError("completion_id is required")
-        if not self.resource_path:
-            raise ValueError("resource_path is required")
-        if not self.messages:
-            raise ValueError("messages must be a non-empty list")
-        return self
-
-
 @dataclass
 class ModelConfig:
     provider: str = "openai"
@@ -141,10 +113,8 @@ class RunOptions:
 
 
 __all__ = [
-    "CompletionStatus",
     "MessageRole",
     "DocumentQaMessage",
-    "DocumentQaCompletionRequest",
     "ResourceRef",
     "ResourceRefProtocol",
     "ResourceRefs",

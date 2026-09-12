@@ -155,7 +155,6 @@ class DocumentFileTree:
 @dataclass
 class ToolWorkspace:
     document: DocumentFileTree
-    embedding: EmbeddingResources | None = None
 
 
 def load_workspace_payload(resource_refs: ResourceRefs) -> dict[str, Any]:

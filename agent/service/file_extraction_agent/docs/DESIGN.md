@@ -20,6 +20,7 @@ resource_refs([{type, location}]) + messages + 模型/运行配置
 ```
 
 schemas.CompletionEvent 使用普通 dataclass，动态 args/result 保留原值；Unset 区分字段缺省与 JSON null。编码器保留显式零值和 false。
+application 用 Pydantic JsonValue 校验嵌套动态值并拒绝非有限数值，不生成 JSON 字符串；路由在输出时只序列化一次。请求级校验由 application 完成，schemas 只保留正在使用的消息、配置、资源引用与事件类型。
 
 ## 存储访问
 

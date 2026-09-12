@@ -20,3 +20,5 @@
 `test_qa_uses_prepared_path_without_rebuilding_or_deleting` 使用真实 LangChain 流式回调，验证 DOCX 资源准备后两轮 RPC 均输出增量和唯一 done，资源保持不变。
 
 模型装配替身注入问答路由；两轮真实图仍复用同一资源并验证资源不被重建或删除。
+
+embedding 替身同时提供 encode 与 tokenize，资源构建复用同一个实例，不再注入独立 get_tokenizer。

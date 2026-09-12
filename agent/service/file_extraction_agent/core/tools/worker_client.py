@@ -24,7 +24,6 @@ import asyncio
 import json
 import os
 import sys
-from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +32,6 @@ from service.file_extraction_agent.schemas import ResourceRefs
 WORKER_MODULE = "service.file_extraction_agent.core.tools.worker"
 WORKER_TIMEOUT_SECONDS = 120.0
 AGENT_ROOT = Path(__file__).resolve().parents[4]
-RunOperation = Callable[..., Awaitable[dict[str, Any]]]
 
 
 def _worker_command() -> list[str]:

@@ -3,85 +3,30 @@ from __future__ import annotations
 import pytest
 
 from service.file_extraction_agent.schemas import (
-    CompletionStatus,
-    DocumentQaCompletionRequest,
     DocumentQaMessage,
     ModelConfig,
     RunOptions,
 )
 
 
-def test_completion_request_accepts_resource_path_and_append_only_messages():
-    request = DocumentQaCompletionRequest(
-        completion_id="cmp_123",
-        resource_path=[{"type": "documents", "location": "s3://res_test/documents"}],
-        messages=[
-            {"role": "user", "content": "上一轮问题"},
-            {"role": "assistant", "content": "上一轮回答摘要"},
-            {"role": "user", "content": "可以提前终止吗？"},
-        ],
-    )
-
-    assert request.completion_id == "cmp_123"
-    assert request.resource_path[0].location == "s3://res_test/documents"
-    assert request.messages[-1] == DocumentQaMessage(role="user", content="可以提前终止吗？")
-    assert not hasattr(request, "memory")
+def test_message_accepts_tool_history():
+    """当前入口使用的消息对象保留工具调用与对应结果。"""
+    assistant = DocumentQaMessage(role="assistant", content="", tool_calls=[
+        {"id": "call", "name": "read", "args": {"path": "documents/a.md"}},
+    ])
+    result = DocumentQaMessage(role="tool", content="结果", tool_call_id="call", name="read")
+    assert assistant.tool_calls[0]["id"] == result.tool_call_id
 
 
-def test_completion_request_rejects_memory_field():
-    with pytest.raises(ValueError, match="memory"):
-        DocumentQaCompletionRequest(
-            completion_id="cmp_123",
-            resource_path=[{"type": "documents", "location": "s3://res_test/documents"}],
-            messages=[{"role": "user", "content": "问题"}],
-            memory={"prior_answers": ["会破坏 append-only prompt cache"]},
-        )
-
-
-def test_completion_request_accepts_openai_tool_messages():
-    request = DocumentQaCompletionRequest(
-        completion_id="cmp_123",
-        resource_path=[{"type": "documents", "location": "s3://res_test/documents"}],
-        messages=[
-            {"role": "user", "content": "看通知期限"},
-            {
-                "role": "assistant",
-                "content": "我先读通知条款。",
-                "tool_calls": [
-                    {
-                        "id": "call_read_notice",
-                        "type": "function",
-                        "function": {
-                            "name": "read",
-                            "arguments": "{\"path\":\"/abs/0001-contract/0001-section/0001-block.md\"}",
-                        },
-                    }
-                ],
-            },
-            {
-                "role": "tool",
-                "tool_call_id": "call_read_notice",
-                "name": "read",
-                "content": "{\"ok\":true}",
-            },
-            {"role": "user", "content": "所以是多少天？"},
-        ],
-    )
-
-    assert request.messages[1].tool_calls[0]["id"] == "call_read_notice"
-    assert request.messages[2].role == "tool"
-    assert request.messages[2].tool_call_id == "call_read_notice"
-
-
-def test_completion_status_values_match_public_events():
-    assert CompletionStatus.__args__ == (
-        "queued",
-        "in_progress",
-        "cancelling",
-        "cancelled",
-        "completed",
-        "failed",
-    )
+@pytest.mark.parametrize("values", [
+    {"role": "user", "content": " "},
+    {"role": "tool", "content": "结果"},
+    {"role": "user", "content": "问题", "memory": {}},
+])
+def test_message_rejects_invalid_content_or_extra_fields(values):
+    """空正文、缺工具 ID 或未定义字段不能进入历史。"""
+    with pytest.raises(ValueError):
+        DocumentQaMessage.model_validate(values)
 
 
 def test_model_config_keeps_model_transport_and_sampling_options():

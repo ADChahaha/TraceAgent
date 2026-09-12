@@ -8,6 +8,7 @@ files（PDF / DOCX）
   -> route 将 protobuf 转成 UploadedFile(filename, content)，在线程中调用 application.prepare_uploaded_resources
   -> application 校验全部文件类型，调用 document_processor.process
   -> prepare_resources(documents, raw_files) 在本机临时目录生成 Markdown 文件树并构建索引
+       -> get_embedder(model_id, backend) 取得缓存模型；同一实例的 tokenize 分块、encode 生成向量
   -> 校验临时产物（manifest/index/文档引用）
   -> 通过 S3ObjectStore（boto3）发布到 storage 服务（bucket = res_*）：
        documents 文件树整棵打成单个对象 documents.zip（成员名保留 documents/... 逻辑路径）
@@ -28,6 +29,7 @@ files（PDF / DOCX）
 - 本包导出上传入口 `prepare_uploaded_resources` 和 HTML 入口 `prepare_resources`；均返回 `list[ResourceRef]`（强类型，type + location）。
 - `documents.py` 负责 HTML 转文件（本地临时目录）；`index.py` 负责文档分块和索引构建；
   `model.py` 只供生成阶段加载模型与 tokenizer。
+- 模型按 model_id/backend 缓存，分块复用 embedder.tokenize；不再为 tokenizer 单独构造 SentenceTransformer。
 - `_validate_prepared` 只校验本次临时产物，成功后才发布到 storage；不提供消费端 `load_resource`。
   生成包不导入 Agent 工具。
 - 两边遵守相同存储格式：manifest 版本 1，记录模型/后端；index/index.json 记录维度与 chunks，

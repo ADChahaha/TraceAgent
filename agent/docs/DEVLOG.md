@@ -1,4 +1,13 @@
-last updated: 2026-09-12 21:06:37
+last updated: 2026-09-12 21:15:59
+
+## 2026-09-12 21:15:59
+
+### 已完成工作
+
+- 删除未接入业务的 DocumentQaCompletionRequest/CompletionStatus、RunOperation 类型别名和 ToolWorkspace.embedding 字段；请求级校验继续由 application 负责。
+- 资源准备取得缓存 embedder → 同一实例的 tokenize 分块、encode 生成向量，删除重复加载模型的 get_tokenizer。
+- 动态事件值经 Pydantic JsonValue 校验有限数值 → 路由仅序列化一次；保留非法值失败终态、连续编号和流关闭语义。max_retries 兼容配置留待单独处理。
+- TDD：先复现重复构造模型与重复 JSON 序列化，再实现清理；agent-gate 下 RPC、问答和打包回归 217 项全部通过。同步两个模块设计及逐测试文件文档。
 
 ## 2026-09-12 21:06:37
 

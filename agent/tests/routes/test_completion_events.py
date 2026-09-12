@@ -117,3 +117,22 @@ async def test_encoding_failure_closes_core_and_keeps_sequence(monkeypatch):
     assert [e.type for e in events] == ["completion.created", "source_indexed", "completion.failed"]
     assert [e.seq for e in events] == [1, 2, 3]
     assert closed == [True]
+
+
+async def test_dynamic_result_serializes_once(monkeypatch):
+    """业务层保留动态 JSON 值，只有线级输出时序列化一次。"""
+    payload = {"large": 2 ** 60 + 1, "nested": [None, {"text": "中文"}]}
+    original = json.dumps
+    serializations = []
+    def dumps(value, *args, **kwargs):
+        if value == payload:
+            serializations.append(value)
+        return original(value, *args, **kwargs)
+    monkeypatch.setattr(json, "dumps", dumps)
+    output = ToolMessage(content="结果", artifact=payload, tool_call_id="call", name="read",
+                         additional_kwargs={"tool_args": {}})
+    monkeypatch.setattr(route, "run_qa_stream", lambda **kwargs: async_items([output]))
+    events = [event async for event in wire_stream({}, object(), [])]
+    assert events[-1].type == "completion.completed"
+    assert json.loads(events[2].result_json) == payload
+    assert len(serializations) == 1
