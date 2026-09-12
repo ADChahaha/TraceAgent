@@ -1,4 +1,14 @@
-last updated: 2026-09-12 19:39:38
+last updated: 2026-09-12 19:49:47
+
+## 2026-09-12 19:49:47
+
+### 已完成工作
+
+- 移除 core 的 should_stop/StopCheck 和 SyncTool；取消由消费 Task 传播，保留模型流与工具子进程清理。
+- ConfiguredChatModel 直接保存单个 provider/use_stream，绑定后返回 BoundModel，删除候选列表和额外校验包装；模型 SDK 仍延迟加载。
+- messages.visible_text 统一增量与完整正文提取，忽略非文本和无效 text 值。
+- 按确认删除 openai_models.py、DeepSeek reasoning_content 专用处理及 thinking 参数注入，使用标准 ChatOpenAI。
+- TDD：新增模型配置/文本测试先失败后通过；相关回归 197 项验证通过（196 项在回归通过，修正取消测试驱动方式后所在文件 13 项通过）；协议打包检查通过。同步设计与测试文档。
 
 ## 2026-09-12 19:39:38
 

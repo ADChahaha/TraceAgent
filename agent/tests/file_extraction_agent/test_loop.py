@@ -24,7 +24,7 @@ from service.file_extraction_agent.schemas import DocumentQaMessage
 
 async def test_qa_stream_yields_only_original_messages(tmp_path, monkeypatch, resource_path):
     from unittest.mock import Mock, AsyncMock
-    from service.file_extraction_agent.core.model import ConfiguredChatModel, ModelCallAttempt
+    from service.file_extraction_agent.core.model import ConfiguredChatModel
 
     class _FakeLs:
         name = "ls"
@@ -39,7 +39,7 @@ async def test_qa_stream_yields_only_original_messages(tmp_path, monkeypatch, re
     first = AIMessage(content="读取结构", tool_calls=[{"id": "ls-1", "name": "ls", "args": {}}])
     final = AIMessage(content="完成", response_metadata={"finish_reason": "stop"})
     provider.ainvoke.side_effect = [first, final]
-    model = ConfiguredChatModel([ModelCallAttempt("test", provider, False)])
+    model = ConfiguredChatModel(provider, use_stream=False)
     messages = [
         item
         async for item in qa_module.run_qa_stream(
@@ -347,13 +347,13 @@ async def test_qa_uses_responses_api_stream_and_merges_content_with_tool_calls()
     assert message.tool_calls == [{"name": "ls", "args": {"path": ""}, "id": "call-1", "type": "tool_call"}]
 
 
-async def test_qa_rejects_multiple_dynamic_configurations():
-    class MultipleModels:
-        def model_call_attempts(self):
-            return [object(), object()]
-
-    with pytest.raises(ValueError, match="exactly one fixed"):
-        await _invoke_model_message(MultipleModels(), [])
+async def test_qa_uses_explicit_non_streaming_model():
+    from service.file_extraction_agent.core.contracts import BoundModel
+    class Provider:
+        async def ainvoke(self, messages):
+            return AIMessage(content="回答", response_metadata={"finish_reason": "stop"})
+    result = await _invoke_model_message(BoundModel(Provider(), use_stream=False), [])
+    assert result.content == "回答"
 
 
 async def test_qa_returns_incomplete_response_failure():
@@ -388,13 +388,8 @@ async def test_qa_rejects_plan_only_message_without_terminal_stop_signal():
             del messages
             yield AIMessageChunk(content="我会先在同一份入试要项里查相关依据。")
 
-    class FallbackModel:
-
-        def model_call_attempts(self):
-            return [SimpleNamespace(name="responses_stream", model=PlanOnlyModel(), use_stream=True)]
-
     from service.file_extraction_agent.core.contracts import ModelCallFailure
-    result = await _invoke_model_message(FallbackModel(), ["messages"])
+    result = await _invoke_model_message(PlanOnlyModel(), ["messages"])
     assert isinstance(result, ModelCallFailure)
     assert "terminal stop signal" in result.error
 

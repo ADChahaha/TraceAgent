@@ -9,3 +9,5 @@
 - `test_chat_rejects_invalid_input_before_first_event`：无效 ID、角色、历史工具 JSON 或空消息在首事件前返回 INVALID_ARGUMENT。
 - `test_chat_runtime_failure_is_terminal_event`：开始执行后的异常通过 completion.failed 保留原始错误文本。
 - `test_legacy_request_fields_are_not_in_protocol`：新契约只接收资源路径，不定义旧业务字段。
+
+事件流模块引用同步为 turn_stream；仅重命名，不改变测试目标行为。

@@ -1,6 +1,6 @@
 """固定模型与工具 → 构建模型 / 指数退避 / 工具节点 → 返回编译后的图。
 
-本模块负责建图、节点执行、重试路由及节点停止检查。工具结果通过 custom 逐项发布，取消传播至工具 Task；
+本模块负责建图、节点执行、重试路由。工具结果通过 custom 逐项发布，取消传播至工具 Task；
 模型失败经 updates 输出并路由至退避节点，取消异常保持传播。
 """
 
@@ -24,7 +24,6 @@ from service.file_extraction_agent.core.contracts import (
     ModelCallFailure,
     ModelInvoker,
     QaModel,
-    StopCheck,
     Tool,
     ToolExecutor,
 )
@@ -60,7 +59,6 @@ def build_qa_graph(
     tools: Sequence[Tool],
     run_options: RunOptions | None = None,
     *,
-    should_stop: StopCheck | None = None,
     invoke_model: ModelInvoker | None = None,
     execute_tools: ToolExecutor | None = None,
 ) -> CompiledStateGraph[QaState, None, QaState, QaState]:
@@ -70,15 +68,8 @@ def build_qa_graph(
     execute = execute_tools or executor._execute_tools_parallel
     timeout = (run_options or RunOptions()).tool_execution_timeout
 
-    def stopped() -> bool:
-        return should_stop is not None and should_stop()
-
     async def call_model(state: QaState) -> Command[Literal["tools", "retry_wait", "__end__"]]:
-        if stopped():
-            return Command(update={"messages": []}, goto="__end__")
         message = await invoke(model, state["messages"])
-        if stopped():
-            return Command(update={"messages": []}, goto="__end__")
         attempt = state.get("model_attempt", 0) + 1
         if isinstance(message, ModelCallFailure):
             retry = attempt < MODEL_MAX_ATTEMPTS
@@ -104,17 +95,13 @@ def build_qa_graph(
         )
 
     async def retry_wait(state: QaState) -> Command[Literal["agent", "__end__"]]:
-        if stopped():
-            return Command(update={"messages": []}, goto="__end__")
         await _wait_retry(state["retry_delay_seconds"])
-        return Command(update={"messages": []}, goto="__end__" if stopped() else "agent")
+        return Command(update={"messages": []}, goto="agent")
 
     async def run_tools(state: MessagesState) -> Command[Literal["agent", "__end__"]]:
         message = state["messages"][-1]
         if not isinstance(message, AIMessage):
             raise TypeError("tools node requires an AIMessage")
-        if stopped():
-            return Command(update={"messages": []}, goto="__end__")
         writer = get_stream_writer()
         published: dict[str, ToolMessage] = {}
 
@@ -140,7 +127,7 @@ def build_qa_graph(
         for reply in replies:
             if reply.tool_call_id not in published:
                 emit(reply)
-        return Command(update={"messages": replies}, goto="__end__" if stopped() else "agent")
+        return Command(update={"messages": replies}, goto="agent")
 
     graph = StateGraph(QaState)
     graph.add_node("agent", call_model)

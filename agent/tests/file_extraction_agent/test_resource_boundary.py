@@ -31,13 +31,13 @@ async def test_graph_keeps_retry_state_with_options_bound_outside():
     from service.file_extraction_agent.core.executor import _execute_tools_parallel
     from unittest.mock import Mock, AsyncMock
     from langchain_core.messages import AIMessage
-    from service.file_extraction_agent.core.model import ConfiguredChatModel, ModelCallAttempt
+    from service.file_extraction_agent.core.model import ConfiguredChatModel
 
     provider = Mock(spec=["bind_tools", "ainvoke"])
     provider.bind_tools.return_value = provider
     provider.ainvoke = AsyncMock()
     provider.ainvoke.return_value = AIMessage(content="回答", response_metadata={"finish_reason": "stop"})
-    model = ConfiguredChatModel([ModelCallAttempt("test", provider, False)])
+    model = ConfiguredChatModel(provider, use_stream=False)
     graph = build_qa_graph(model, [], run_options=RunOptions(tool_execution_timeout=0.1),
                            invoke_model=_invoke_model_message, execute_tools=_execute_tools_parallel)
     messages = build_qa_messages([DocumentQaMessage(role="user", content="问题")])

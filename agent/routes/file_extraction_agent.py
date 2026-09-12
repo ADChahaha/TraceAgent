@@ -14,7 +14,7 @@ import grpc
 
 from agent_proto import agent_pb2 as pb
 from service.file_extraction_agent.core.tools.worker_client import prepare_workspace
-from service.file_extraction_agent.completion_runtime import stream_completion
+from service.file_extraction_agent.turn_stream import stream_completion
 from service.file_extraction_agent.core.model import build_qa_model
 from service.file_extraction_agent.schemas import DocumentQaMessage, ModelConfig, RunOptions
 

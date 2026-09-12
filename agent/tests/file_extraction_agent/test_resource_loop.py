@@ -4,7 +4,7 @@ from unittest.mock import Mock, AsyncMock
 from langchain_core.messages import AIMessage, ToolMessage
 from service.file_extraction_agent.core import loop
 from service.file_extraction_agent.core import executor
-from service.file_extraction_agent.core.model import ConfiguredChatModel, ModelCallAttempt
+from service.file_extraction_agent.core.model import ConfiguredChatModel
 from service.file_extraction_agent.schemas import DocumentQaMessage, RunOptions
 
 
@@ -45,13 +45,11 @@ async def test_workspace_graph_streams_tool_results_and_stops_after_cancel(monke
             {"id": "b", "name": "read", "args": {"path": "bad"}},
         ],
     )
-    cancelled = False
     stream = loop.run_qa_stream(
         workspace=workspace,
         messages=messages,
         run_options=options,
-        qa_model=ConfiguredChatModel([ModelCallAttempt("test", provider, False)]),
-        should_stop=lambda: cancelled,
+        qa_model=ConfiguredChatModel(provider, use_stream=False),
     )
     from service.file_extraction_agent.core.contracts import MessageStarted, MessageDelta
     assert isinstance(await anext(stream), MessageStarted)
@@ -59,7 +57,7 @@ async def test_workspace_graph_streams_tool_results_and_stops_after_cancel(monke
     assert isinstance(await anext(stream), AIMessage)
     batch = [await anext(stream), await anext(stream)]
     batch.sort(key=lambda result: result.tool_call_id)
-    cancelled = True
+    await stream.aclose()
     assert all((isinstance(result, ToolMessage) for result in batch))
     assert [(result.tool_call_id, result.name, result.status) for result in batch] == [
         ("a", "read", "success"),

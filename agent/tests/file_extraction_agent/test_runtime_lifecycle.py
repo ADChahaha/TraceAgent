@@ -1,6 +1,6 @@
 """直接迭代事件 → 完成或失败；取消测试见 test_rpc_execution_chain.py。"""
 import pytest
-from service.file_extraction_agent import completion_runtime as module
+from service.file_extraction_agent import turn_stream as module
 from service.file_extraction_agent.core.contracts import ModelFailed
 
 @pytest.mark.asyncio

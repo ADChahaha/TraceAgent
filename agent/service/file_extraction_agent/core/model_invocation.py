@@ -19,8 +19,6 @@ from langchain_core.messages import (
 from service.file_extraction_agent.core.contracts import (
     BoundModel,
     ChatModel,
-    ModelAttempts,
-    ModelCallAttempt,
     ModelCallFailure,
 )
 
@@ -50,12 +48,12 @@ def _retry_after_seconds(exc: Exception) -> float | None:
     return delay if math.isfinite(delay) and 0 < delay <= 120 else None
 
 
-async def _invoke_model_message(model: BoundModel, messages: Sequence[BaseMessage]) -> AIMessage | ModelCallFailure:
-    attempt = _model_call_attempts(model)[0]
+async def _invoke_model_message(model: ChatModel | BoundModel, messages: Sequence[BaseMessage]) -> AIMessage | ModelCallFailure:
+    bound = model if isinstance(model, BoundModel) else BoundModel(model)
     try:
         response = (
-            await _stream_model_message(attempt.model, messages)
-            if attempt.use_stream else await attempt.model.ainvoke(messages)
+            await _stream_model_message(bound.model, messages)
+            if bound.use_stream else await bound.model.ainvoke(messages)
         )
         if not isinstance(response, AIMessage):
             raise TypeError("model must return an AIMessage")
@@ -66,15 +64,6 @@ async def _invoke_model_message(model: BoundModel, messages: Sequence[BaseMessag
             error=f"{type(exc).__name__}: {exc}",
             retry_after_seconds=_retry_after_seconds(exc),
         )
-
-
-def _model_call_attempts(model: BoundModel) -> list[ModelCallAttempt]:
-    if isinstance(model, ModelAttempts):
-        attempts = model.model_call_attempts()
-        if len(attempts) != 1:
-            raise ValueError("exactly one fixed model configuration is required")
-        return attempts
-    return [ModelCallAttempt("stream", model, True)]
 
 
 async def _stream_model_message(model: ChatModel, messages: Sequence[BaseMessage]) -> AIMessage:

@@ -6,3 +6,5 @@
 - `test_consumer_cancellation_waits_for_inner_cleanup`：取消传播到内层等待，清理完成前消费者不退出，且不补发终态。
 
 执行入口改为直接消费 stream_completion(...) 异步生成器，不创建运行时对象。
+
+事件流模块引用同步为 turn_stream；仅重命名，不改变测试目标行为。

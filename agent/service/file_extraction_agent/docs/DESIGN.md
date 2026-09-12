@@ -8,11 +8,11 @@ resource_refs([{type, location}]) + messages + 模型/运行配置
        -> worker 按 resource_refs 拉取 documents.zip、加载并校验索引
        -> 返回 workspace payload（归档 bytes + 已解析索引），父进程只保存这份数据
   -> 路由装配模型，直接消费 stream_completion 异步生成器
-  -> completion_runtime.stream_completion_events 包装业务事件
+  -> turn_stream.stream_completion_events 包装业务事件
   -> run_qa_stream 用 workspace 调 build_tools；四个工具只经 worker_client.run_operation
      把 operation、参数和全量 workspace 下发给一次性工具子进程
   -> messages.build_qa_messages 转换历史消息
-  -> loop.stream_qa_graph 调 graph.build_qa_graph，绑定 RunOptions、执行函数和停止信号
+  -> loop.stream_qa_graph 调 graph.build_qa_graph，绑定 RunOptions 与执行函数
   -> QaState 保存完整 messages 与请求次数、失败信息、退避时长
   -> LangGraph agent 单次请求 / retry_wait 指数退避 / tools 工具节点
   -> loop 消费 graph.astream，转换 messages 增量、updates 模型结果和 custom 单个工具结果，输出类型化通知
@@ -72,26 +72,26 @@ RunOptions 只保留 tool_execution_timeout，默认 60 秒；删除从未参与
 ## 循环职责拆分
 
 - loop.py：校验输入 → 初始化工具和消息 → 调用 build_qa_graph → 消费 graph.astream → 合并原生消息增量与节点更新 → 输出类型化通知并关闭图流。
-- graph.py：绑定依赖 → 定义 QaState 及模型/退避/工具节点 → 配置路由与节点停止检查 → 返回编译后的图。
-- contracts.py：声明模型/工具 Protocol、ModelCallAttempt、AgentOutput 和 JSON 类型。消息使用 LangChain 的具体类型；外部动态工具结果先以 object 接收，再由 messages 归一化为 JsonValue。
+- graph.py：绑定依赖 → 定义 QaState 及模型/退避/工具节点 → 配置路由，取消沿异步等待传播 → 返回编译后的图。
+- contracts.py：声明模型/工具 Protocol、BoundModel、AgentOutput 和 JSON 类型。消息使用 LangChain 的具体类型；外部动态工具结果先以 object 接收，再由 messages 归一化为 JsonValue。
 - messages.py：完整历史 → 系统提示与角色/工具参数转换 → 模型输入；响应 → 终止信号校验，不完整响应抛 RuntimeError。JSON 归一化供工具结果封装复用。
 - model_invocation.py：固定模型与消息 → 单次 astream/ainvoke → 聚合与校验 → AIMessage 或 ModelCallFailure；finally 关闭响应流。重试由 graph 控制。
 - executor.py：调用列表和工具集合 → create_task 并发 ainvoke → FIRST_COMPLETED 按共享 deadline 等待 → on_result 立即发布单项 ToolMessage → 按调用顺序返回完整历史；异常/超时转失败结果，取消时清理未完成 Task，不等待迟到线程。
 
 ## 消息批次与事件
 
-模型配置来自既有文件/环境配置及显式请求覆盖；ConfiguredChatModel 只保存一个选定配置，API 不变、streaming=True，不再尝试其他 API 或降级 ainvoke。SDK max_retries 固定为 0，避免与图的五次尝试相乘；旧配置字段暂保留解析，但不再控制 SDK 重试。
+模型配置来自既有文件/环境配置及显式请求覆盖；ConfiguredChatModel 直接保存单个 provider 和 use_stream，绑定工具后返回 BoundModel；单次调用显式选择 astream 或 ainvoke，不再维护候选列表。生产配置固定 streaming=True，不自动降级。SDK max_retries 固定为 0，避免与图的五次尝试相乘；旧配置字段暂保留解析，但不再控制 SDK 重试。
 
 对外模型事件为 model_message.started、model_message.delta、model_message.done，重试事件为 model_request.retrying。前端按 message_id 追加 delta；done.content 只能确认或替换，不能再次追加。重试标记旧尝试失败，新 ID 开始新正文。done 只代表本条消息完成，整轮仍以 completion 终态为准。协议是消费端行为变更，backend/前端的持久化及显示适配尚未在本次实施。
 
 
-每条 gRPC 流已绑定本轮请求，所有事件均不重复携带 completion ID；事件包装入口也不接收该参数。completion_id 仅供运行时注册、取消和状态查询使用。tool_call_id 及模型 tool_calls 内的 ID 仍保留，用于调用与结果配对。
+每条 gRPC 流已绑定本轮请求，所有事件均不重复携带 completion ID；事件包装入口也不接收该参数。completion_id 仅保留请求格式校验，不用于注册、去重或取消。tool_call_id 及模型 tool_calls 内的 ID 仍保留，用于调用与结果配对。
 
 ```text
 模型节点调用 model_invocation._invoke_model_message
   → 校验响应完整性及工具 ID 唯一性
   → yield AIMessage
-  → completion_runtime 输出 model_message.done；有调用则输出 tool_started
+  → turn_stream 输出 model_message.done；有调用则输出 tool_started
 
 工具节点调用 executor._execute_tools_parallel
   → asyncio.create_task 并发执行整批工具协程
@@ -99,7 +99,7 @@ RunOptions 只保留 tool_execution_timeout，默认 60 秒；删除从未参与
   → 每项 ToolMessage 携带 tool_call_id、name、additional_kwargs.tool_args、artifact、status
   → 每项完成经 on_result → graph custom → loop yield ToolMessage
   → 全部完成后才将完整结果写入图状态，供下一轮模型使用
-  → completion_runtime 直接输出 tool_completed / tool_failed
+  → turn_stream 直接输出 tool_completed / tool_failed
 ```
 
 事件包装不维护 pending 配对字典。工具节点按调用 ID 保留已发布的完整 ToolMessage；执行器异常时仅为未发布项补失败结果，再按原调用顺序写入模型历史，已发布结果不覆盖、不重复输出。普通模型调用失败在图中指数退避，五次耗尽后通过 ModelFailed 以 completion.failed 收口。
@@ -169,3 +169,18 @@ ls/read/grep 与检索结果使用 `documents/...` key，不传本机绝对路�
 本次将 agent 对外传输改为 gRPC；问答仍接收资源定位数组，不接收任务 metadata。backend 尚未迁移。每个 RPC 直接持有自己的执行流，不维护活动 completion 注册表。
 
 接口见 [agent API](../../../docs/API.md)，资源准备见 [资源设计](../../document_resources/docs/DESIGN.md)。
+
+## 模型装配与文本归一化
+
+```text
+ModelConfig 或环境变量
+  → 校验 provider 与 api_transport
+  → _chat_model_class 延迟加载标准 ChatOpenAI
+  → use_responses_api 选择 Responses / Chat Completions，SDK 重试固定关闭
+  → ConfiguredChatModel 保存单个 provider，bind_tools 返回 BoundModel
+  → model_invocation 按 use_stream 调用并校验完整消息
+```
+
+已删除 openai_models.py 和 DeepSeek 专用 reasoning_content 保存/回传及 thinking 参数注入；reasoning_effort 等通用配置继续按标准 SDK 传入。重试由图统一控制。工具契约仅支持 ainvoke，不再声明同步工具。
+
+messages.visible_text 统一处理增量和完整消息：字符串直接返回，列表只保留字符串和 text 块中的字符串，忽略推理、非文本块及无效 text 值。取消仅依赖 Task/生成器关闭，不再传递 should_stop 回调；模型流关闭、工具子任务取消和子进程清理继续保留。

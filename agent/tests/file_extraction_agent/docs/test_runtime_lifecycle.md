@@ -6,3 +6,5 @@
 - `test_inner_failure_raises_without_completion_event`：模型失败在内层抛异常，不重复产生 completion 终态。
 
 执行入口改为直接消费 stream_completion(...) 异步生成器，不创建运行时对象。
+
+事件流模块引用同步为 turn_stream；仅重命名，不改变测试目标行为。

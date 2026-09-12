@@ -8,3 +8,5 @@
 - `test_tool_result_streams_before_sibling_finishes_and_cancel_cleans_up`：快速工具先输出，关闭流清理慢工具且不再调用模型。
 
 执行入口改为直接消费 stream_completion(...) 异步生成器，不创建运行时对象。
+
+事件流模块引用同步为 turn_stream；仅重命名，不改变测试目标行为。

@@ -11,7 +11,7 @@ from langchain_core.outputs import ChatGenerationChunk
 from pydantic import PrivateAttr
 
 from service.file_extraction_agent.core import graph, loop, model_invocation
-from service.file_extraction_agent.completion_runtime import stream_completion
+from service.file_extraction_agent.turn_stream import stream_completion
 
 
 def runtime_events(*, resource_path, messages, qa_model):
@@ -189,7 +189,7 @@ async def test_cancel_model_closes_stream_without_retry():
 
 
 async def test_runtime_cancel_during_retry_wait_stops_next_attempt(resource_path, monkeypatch):
-    from service.file_extraction_agent.completion_runtime import stream_completion
+    from service.file_extraction_agent.turn_stream import stream_completion
 
     model = StreamingModel(failures=5)
     entered, closed = asyncio.Event(), asyncio.Event()

@@ -6,10 +6,10 @@ from tests.async_helpers import async_items, wait_event
 from unittest.mock import Mock, AsyncMock
 import pytest
 from langchain_core.messages import ToolMessage
-from service.file_extraction_agent import completion_runtime as runtime_module
+from service.file_extraction_agent import turn_stream as runtime_module
 from langchain_core.messages import AIMessage, AIMessageChunk
-from service.file_extraction_agent.core.model import ConfiguredChatModel, ModelCallAttempt
-from service.file_extraction_agent.completion_runtime import stream_completion_events
+from service.file_extraction_agent.core.model import ConfiguredChatModel
+from service.file_extraction_agent.turn_stream import stream_completion_events
 from service.file_extraction_agent.schemas import DocumentQaMessage
 
 
@@ -44,7 +44,7 @@ def _scripted_model():
         ),
         AIMessage(content="答案。", response_metadata={"finish_reason": "stop"}),
     ]
-    return (ConfiguredChatModel([ModelCallAttempt("test_invoke", provider, False)]), provider)
+    return (ConfiguredChatModel(provider, use_stream=False), provider)
 
 
 def _input(resource_path):
@@ -93,27 +93,25 @@ async def test_tool_started_is_yielded_before_tool_execution(resource_path):
 
 async def test_cancel_before_execution_does_not_call_model(resource_path):
     model, provider = _scripted_model()
-    events = [
-        item
-        async for item in stream_completion_events(
-            **_input(resource_path), qa_model=model, should_stop=lambda: True
-        )
-    ]
-    assert not any(e["type"].startswith("completion.") for e in events)
+    stream = stream_completion_events(**_input(resource_path), qa_model=model)
+    async def consume():
+        return [event async for event in stream]
+    task = asyncio.create_task(consume())
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await stream.aclose()
     provider.ainvoke.assert_not_called()
 
 
 async def test_cancel_after_model_skips_tools_and_next_model(resource_path):
     model, provider = _scripted_model()
-    cancel = False
-    stream = stream_completion_events(**_input(resource_path), qa_model=model, should_stop=lambda: cancel)
-    assert (await anext(stream))["type"] == "source_indexed"
-    assert (await anext(stream))["type"] == "model_message.started"
-    assert (await anext(stream))["type"] == "model_message.delta"
-    assert (await anext(stream))["type"] == "model_message.done"
-    cancel = True
-    events = [item async for item in stream]
-    assert [e["type"] for e in events] == ["tool_started"]
+    stream = stream_completion_events(**_input(resource_path), qa_model=model)
+    try:
+        while (await anext(stream))["type"] != "model_message.done":
+            pass
+    finally:
+        await stream.aclose()
     assert provider.ainvoke.call_count == 1
 
 
@@ -121,7 +119,6 @@ async def test_cancel_after_model_skips_tools_and_next_model(resource_path):
 async def test_executor_failure_returns_entire_failed_batch(resource_path, monkeypatch, cancelled):
     from service.file_extraction_agent.core import executor
 
-    stopped = False
     model, provider = _scripted_model()
     provider.ainvoke.side_effect = [
         AIMessage(
@@ -134,18 +131,30 @@ async def test_executor_failure_returns_entire_failed_batch(resource_path, monke
         AIMessage(content="失败说明", response_metadata={"finish_reason": "stop"}),
     ]
 
-    def fail(*args, **kwargs):
-        nonlocal stopped
-        stopped = cancelled
+    entered = asyncio.Event()
+    async def fail(*args, **kwargs):
+        if cancelled:
+            entered.set()
+            await asyncio.Event().wait()
         raise RuntimeError("执行中断")
 
     monkeypatch.setattr(executor, "_execute_tools_parallel", fail)
-    events = [
-        item
-        async for item in stream_completion_events(
-            **_input(resource_path), qa_model=model, should_stop=lambda: stopped
-        )
-    ]
+    events = []
+    async def consume():
+        async for item in stream_completion_events(**_input(resource_path), qa_model=model):
+            events.append(item)
+    if cancelled:
+        task = asyncio.create_task(consume())
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 2)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+    else:
+        await consume()
     replies = [e for e in events if e["type"] == "tool_failed"]
     assert [(e["tool_call_id"], e["args"]) for e in replies] == ([] if cancelled else [
         ("a", {"path": "first"}),
@@ -211,52 +220,40 @@ async def test_closing_event_stream_closes_message_generator(resource_path, monk
     assert closed == [True]
 
 
-@pytest.mark.parametrize("cancel_at", ["before_model", "during_model", "after_model", "after_tools"])
-async def test_graph_checks_cancellation_before_each_node(cancel_at):
+@pytest.mark.parametrize("phase", ["model", "tools"])
+async def test_graph_task_cancellation_cleans_active_node(phase):
     from langchain_core.messages import HumanMessage
     from service.file_extraction_agent.core.graph import build_qa_graph
-
-    stopped = cancel_at == "before_model"
+    started, cleaned = asyncio.Event(), asyncio.Event()
+    calls = []
     model, _ = _scripted_model()
-    calls = [
-        {"id": "a", "name": "read", "args": {"path": "first"}},
-        {"id": "b", "name": "read", "args": {"path": "second"}},
-    ]
-
-    async def invoke_model(model, messages):
-        nonlocal stopped
-        if cancel_at == "during_model":
-            stopped = True
-        return AIMessage(content="读取", tool_calls=calls)
-
-    invoke = AsyncMock(side_effect=invoke_model)
-    execute = AsyncMock(return_value=[
-        ToolMessage(content="正文", tool_call_id=call["id"]) for call in calls
-    ])
-    graph = build_qa_graph(model, [], invoke_model=invoke, execute_tools=execute,
-                           should_stop=lambda: stopped)
-    updates = graph.astream({"messages": [HumanMessage(content="问题")]}, stream_mode="updates")
-    published = []
-    async for update in updates:
-        for node, batch in update.items():
-            if batch["messages"]:
-                published.append((node, batch["messages"]))
-                if (node == "agent" and cancel_at == "after_model") or (
-                    node == "tools" and cancel_at == "after_tools"
-                ):
-                    stopped = True
-    if cancel_at in {"before_model", "during_model"}:
-        assert published == []
-        execute.assert_not_called()
-        assert invoke.call_count == (cancel_at == "during_model")
-    elif cancel_at == "after_model":
-        assert [node for node, _ in published] == ["agent"]
-        execute.assert_not_called()
-        assert invoke.call_count == 1
-    else:
-        assert [node for node, _ in published] == ["agent", "tools"]
-        assert [message.tool_call_id for message in published[1][1]] == ["a", "b"]
-        assert invoke.call_count == execute.call_count == 1
+    async def wait():
+        try:
+            started.set()
+            await asyncio.Event().wait()
+        finally:
+            cleaned.set()
+    async def invoke(model, messages):
+        calls.append("model")
+        if phase == "model":
+            await wait()
+        return AIMessage(content="读取", tool_calls=[{"id": "a", "name": "read", "args": {}}])
+    async def execute(*args, **kwargs):
+        calls.append("tools")
+        await wait()
+        return []
+    graph = build_qa_graph(model, [], invoke_model=invoke, execute_tools=execute)
+    task = asyncio.create_task(graph.ainvoke({"messages": [HumanMessage(content="问题")]}))
+    try:
+        await asyncio.wait_for(started.wait(), 2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 2)
+        assert cleaned.is_set()
+        assert calls == (["model"] if phase == "model" else ["model", "tools"])
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.parametrize("ids", [["", "b"], ["a", "a"]])

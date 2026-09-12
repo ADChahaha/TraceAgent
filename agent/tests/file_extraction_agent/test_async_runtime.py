@@ -2,7 +2,7 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import pytest
-from service.file_extraction_agent import completion_runtime as module
+from service.file_extraction_agent import turn_stream as module
 
 async def test_waiting_streams_leave_executor_free_and_cancel_cleanly(monkeypatch):
     entered, cleaned = [], []

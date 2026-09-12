@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from service.file_extraction_agent import completion_runtime as module
+from service.file_extraction_agent import turn_stream as module
 
 
 async def test_execution_stays_in_consuming_task(monkeypatch):

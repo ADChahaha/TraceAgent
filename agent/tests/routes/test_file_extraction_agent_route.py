@@ -7,7 +7,7 @@ import pytest
 from tests.async_helpers import async_items
 from agent_proto import agent_pb2 as pb
 from routes import file_extraction_agent as qa_routes
-from service.file_extraction_agent import completion_runtime as runtime_module
+from service.file_extraction_agent import turn_stream as runtime_module
 from service.file_extraction_agent.schemas import RunOptions
 
 @pytest.fixture

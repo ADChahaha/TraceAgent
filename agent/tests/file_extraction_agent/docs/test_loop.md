@@ -4,7 +4,7 @@
 
 执行链路：资源路径初始化工具上下文，运行参数绑定执行器；输入消息 → prompt/历史转换 → 绑定工具 → 正式 LangGraph agent/tools 循环 → 原样 yield AIMessage/ToolMessage；运行异常向外抛出，图内无事件或取消缓冲。
 
-messages.py 的 build_qa_messages 直接接收消息列表；独立 graph.py 的 build_qa_graph 接收 RunOptions 以及 model_invocation.py 与 executor.py 的执行函数；工具执行器不接收状态容器。工具并行提交并共享超时期限；按原始调用 ID 返回消息。超时失败先返回，被取消的工具协程不会修改已返回消息。model_invocation 测试覆盖 单次固定调用、失败对象和响应终止信号校验；completion_runtime 负责事件格式与最终回答标记。
+messages.py 的 build_qa_messages 直接接收消息列表；独立 graph.py 的 build_qa_graph 接收 RunOptions 以及 model_invocation.py 与 executor.py 的执行函数；工具执行器不接收状态容器。工具并行提交并共享超时期限；按原始调用 ID 返回消息。超时失败先返回，被取消的工具协程不会修改已返回消息。model_invocation 测试覆盖 单次固定调用、失败对象和响应终止信号校验；turn_stream 负责事件格式与最终回答标记。
 
 ## 测试函数
 
@@ -28,10 +28,12 @@ messages.py 的 build_qa_messages 直接接收消息列表；独立 graph.py 的
 测试使用协程与异步迭代器驱动实际 Agent 链路；模型替身提供 astream/ainvoke，取消等待使用事件循环。
 工具执行替身通过 `run_tool(execute)` 归一化失败；不再传入未使用的状态、工具名或参数。
 
-- `test_qa_rejects_multiple_dynamic_configurations`：拒绝配置候选列表，禁止失败后探测其他配置。
+- `test_qa_uses_explicit_non_streaming_model`：显式 BoundModel(use_stream=False) 只调用 ainvoke 并返回完整消息。
 - `test_qa_returns_incomplete_response_failure`：缺失工具调用的响应返回明确的 without tool calls 失败说明，不在单次调用内重试。
 - 五次固定配置和指数退避的图验证见 test_streaming_retry.md。
 
 模型装配对象重命名为 ConfiguredChatModel，明确只保存一个固定调用配置。
 
 `test_qa_stream_yields_only_original_messages` 现在验证逐个 ToolMessage 输出，而非整批列表；完整工具历史仍按调用顺序保存。
+
+模型替身直接保存单个 provider 与 use_stream，构建测试通过延迟加载工厂注入模型类。

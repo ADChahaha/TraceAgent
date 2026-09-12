@@ -225,3 +225,20 @@ def _plain_json(value: object) -> JsonValue:
     if isinstance(value, list | tuple):
         return [_plain_json(item) for item in value]
     return str(value)
+
+
+def visible_text(content: object) -> str:
+    """字符串或内容块 → 仅保留字符串和有效 text 块 → 可见正文；其他值忽略。"""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts = []
+    for item in content:
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, dict) and item.get("type") == "text":
+            text = item.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+    return "".join(parts)

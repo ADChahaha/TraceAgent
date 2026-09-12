@@ -6,7 +6,7 @@ import threading
 from langchain_core.messages import AIMessageChunk
 
 from service.file_extraction_agent.core import executor, loop, model_invocation
-from service.file_extraction_agent.completion_runtime import stream_completion
+from service.file_extraction_agent.turn_stream import stream_completion
 from service.file_extraction_agent.schemas import DocumentQaMessage
 
 

@@ -4,8 +4,8 @@ from langchain_core.messages import AIMessage, ToolMessage
 from tests.async_helpers import async_items
 from service.file_extraction_agent.core import model as model_module
 from service.file_extraction_agent.core.model import build_chat_model, normalize_model_config
-from service.file_extraction_agent import completion_runtime as runtime_module
-from service.file_extraction_agent.completion_runtime import stream_completion
+from service.file_extraction_agent import turn_stream as runtime_module
+from service.file_extraction_agent.turn_stream import stream_completion
 from service.file_extraction_agent.schemas import DocumentQaMessage, ModelConfig, RunOptions
 
 async def test_runtime_yields_event_objects_with_sequence(resource_path, monkeypatch):
@@ -27,18 +27,18 @@ async def test_runtime_yields_event_objects_with_sequence(resource_path, monkeyp
     ]
 
 
-async def test_completion_runtime_streams_without_manager(resource_path, monkeypatch):
+async def test_turn_stream_streams_without_manager(resource_path, monkeypatch):
     import json
-    from service.file_extraction_agent import completion_runtime
+    from service.file_extraction_agent import turn_stream
 
     monkeypatch.setattr(
-        completion_runtime,
+        turn_stream,
         "run_qa_stream",
         lambda **kwargs: async_items(
             [AIMessage(content="回答", response_metadata={"finish_reason": "stop"})]
         ),
     )
-    runtime = completion_runtime.stream_completion(
+    runtime = turn_stream.stream_completion(
         resource_path, object(), [DocumentQaMessage(role="user", content="问题")]
     )
     events = [item async for item in runtime]
@@ -206,13 +206,12 @@ def test_build_chat_model_builds_responses_transport_by_default(monkeypatch):
         def __init__(self, **kwargs):
             captured.append(kwargs)
 
-    monkeypatch.setattr(model_module, "ChatOpenAI", FakeChatOpenAI)
+    monkeypatch.setattr(model_module, "_chat_model_class", lambda: FakeChatOpenAI)
     model = build_chat_model(
         ModelConfig(base_url="https://example.com/v1", api_key="key", model_name="qa"), "qa"
     )
-    attempts = model.model_call_attempts()
-    assert [attempt.name for attempt in attempts] == ["responses_stream"]
-    assert [attempt.use_stream for attempt in attempts] == [True]
+    assert model.use_stream is True
+    assert isinstance(model.model, FakeChatOpenAI)
     assert [kwargs["use_responses_api"] for kwargs in captured] == [True]
     assert [kwargs["streaming"] for kwargs in captured] == [True]
     assert [kwargs["timeout"] for kwargs in captured] == [8.0]
@@ -226,7 +225,7 @@ def test_build_chat_model_builds_chat_completions_transport_when_configured(monk
         def __init__(self, **kwargs):
             captured.append(kwargs)
 
-    monkeypatch.setattr(model_module, "ChatOpenAI", FakeChatOpenAI)
+    monkeypatch.setattr(model_module, "_chat_model_class", lambda: FakeChatOpenAI)
     model = build_chat_model(
         ModelConfig(
             base_url="https://example.com/v1",
@@ -236,9 +235,8 @@ def test_build_chat_model_builds_chat_completions_transport_when_configured(monk
         ),
         "qa",
     )
-    attempts = model.model_call_attempts()
-    assert [attempt.name for attempt in attempts] == ["chat_completions_stream"]
-    assert [attempt.use_stream for attempt in attempts] == [True]
+    assert model.use_stream is True
+    assert isinstance(model.model, FakeChatOpenAI)
     assert [kwargs["use_responses_api"] for kwargs in captured] == [False]
     assert [kwargs["streaming"] for kwargs in captured] == [True]
 

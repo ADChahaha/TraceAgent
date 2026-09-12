@@ -14,3 +14,5 @@
 - `test_chatopenai_native_callback_and_http_stream_close`：真实 ChatOpenAI 和 SDK 消费受控 SSE 响应，验证原生增量及取消关闭 HTTP 响应。
 
 stream_completion 直接消费事件；完成/失败由外层生成器输出，取消消费 Task 会传播 CancelledError 并清理退避或模型流，不补发取消终态。
+
+事件流模块引用同步为 turn_stream；仅重命名，不改变测试目标行为。

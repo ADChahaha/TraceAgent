@@ -1,4 +1,8 @@
-"""构建文档问答使用的 LangChain 模型。"""
+"""环境配置或 ModelConfig → 校验 provider/传输 → 延迟加载 ChatOpenAI → 单一模型。
+
+Responses/Chat Completions 由 use_responses_api 选择，生产调用固定流式、SDK 重试关闭。
+无效配置抛 TypeError/ValueError；本模块不再保存候选列表或注入厂商专用参数。
+"""
 
 from __future__ import annotations
 
@@ -9,19 +13,18 @@ from typing import TypedDict
 
 from pydantic import SecretStr
 
-from service.file_extraction_agent.core.contracts import JsonObject, ModelCallAttempt, Tool
+from service.file_extraction_agent.core.contracts import BoundModel, ChatModel, JsonObject, Tool
 
 from service.file_extraction_agent.schemas import ModelConfig
 
 DEFAULT_MODEL_REQUEST_TIMEOUT_SECONDS = 8.0
 
 
-def __getattr__(name: str):
-    if name == "ChatOpenAI":
-        from langchain_openai import ChatOpenAI
+def _chat_model_class():
+    """真正装配模型时才加载 SDK，服务启动和工具 worker 不加载模型重依赖。"""
+    from langchain_openai import ChatOpenAI
 
-        return ChatOpenAI
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return ChatOpenAI
 
 
 class ChatModelOptions(TypedDict, total=False):
@@ -74,71 +77,26 @@ def build_chat_model(config: ModelConfig, model_name: str) -> "ConfiguredChatMod
     extra_body: JsonObject = {}
     if config.top_k is not None:
         extra_body["top_k"] = config.top_k
-    if _should_enable_deepseek_thinking(config, model_name):
-        extra_body["thinking"] = {"type": "enabled"}
-    elif _should_disable_deepseek_thinking(config, model_name):
-        extra_body["thinking"] = {"type": "disabled"}
     if extra_body:
         kwargs["extra_body"] = extra_body
 
-    if _should_enable_deepseek_thinking(config, model_name):
-        from service.file_extraction_agent.core.openai_models import DeepSeekReasoningChatOpenAI
-
-        model_cls = DeepSeekReasoningChatOpenAI
-    else:
-        model_cls = ChatOpenAI
-    return ConfiguredChatModel(
-        [
-            ModelCallAttempt(
-                name=name,
-                model=model_cls(**kwargs, use_responses_api=use_responses_api, streaming=streaming),
-                use_stream=streaming,
-            )
-            for name, use_responses_api, streaming in _transport_attempt_specs(transport)
-        ]
+    model = _chat_model_class()(
+        **kwargs, use_responses_api=transport == "responses", streaming=True,
     )
+    return ConfiguredChatModel(model)
 
 
 class ConfiguredChatModel:
-    """保存文件选定的单一调用配置，绑定工具时保留同一配置。"""
+    """单个 provider → 绑定工具 → BoundModel，保留显式流式或非流式调用方式。"""
 
-    def __init__(self, attempts: list[ModelCallAttempt]):
-        if len(attempts) != 1:
-            raise ValueError("exactly one fixed model configuration is required")
-        self._attempts = attempts
+    def __init__(self, model: ChatModel, *, use_stream: bool = True):
+        self.model = model
+        self.use_stream = use_stream
 
-    @property
-    def attempts(self) -> list[ModelCallAttempt]:
-        return list(self._attempts)
-
-    def bind_tools(self, tools: Sequence[Tool]) -> "ConfiguredChatModel":
-        bound_attempts = []
-        for attempt in self._attempts:
-            bind_tools = getattr(attempt.model, "bind_tools", None)
-            bound_model = bind_tools(tools) if callable(bind_tools) else attempt.model
-            bound_attempts.append(
-                ModelCallAttempt(
-                    name=attempt.name,
-                    model=bound_model,
-                    use_stream=attempt.use_stream,
-                )
-            )
-        return ConfiguredChatModel(bound_attempts)
-
-    def model_call_attempts(self) -> list[ModelCallAttempt]:
-        return self.attempts
-
-
-def _transport_attempt_specs(transport: str) -> list[tuple[str, bool, bool]]:
-    if transport == "responses":
-        return [
-            ("responses_stream", True, True),
-        ]
-    if transport == "chat_completions":
-        return [
-            ("chat_completions_stream", False, True),
-        ]
-    raise ValueError("MODEL_API_TRANSPORT must be responses or chat_completions")
+    def bind_tools(self, tools: Sequence[Tool]) -> BoundModel:
+        bind = getattr(self.model, "bind_tools", None)
+        model = bind(tools) if callable(bind) else self.model
+        return BoundModel(model, self.use_stream)
 
 
 def _normalize_api_transport(value: str | None) -> str:
@@ -213,16 +171,3 @@ def _int_env(value: str | None, default: int) -> int:
     if value in {None, ""}:
         return default
     return int(value)
-
-
-def _should_disable_deepseek_thinking(config: ModelConfig, model_name: str) -> bool:
-    base_url = (config.base_url or "").lower()
-    model = (model_name or "").lower()
-    return "api.deepseek.com" in base_url or "deepseek" in model
-
-
-def _should_enable_deepseek_thinking(config: ModelConfig, model_name: str) -> bool:
-    return bool(config.reasoning_effort) and _should_disable_deepseek_thinking(config, model_name)
-
-
-__all__ = ["build_qa_model", "normalize_model_config", "build_chat_model"]

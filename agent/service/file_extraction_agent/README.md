@@ -9,18 +9,18 @@ completion_id + resource_refs + messages + 模型/运行配置
   → build_tools(payload) 绑定四个工具；每次调用经 run_operation 启动工具子进程
   → build_qa_graph 绑定 RunOptions；图内 MessagesState 仅保存消息
   → 模型返回 AIMessage；有工具调用则并行执行并返回完整 ToolMessage 批次
-  → completion_runtime 包装无 completion ID 的事件，按消费顺序加 seq 并输出事件字典，由 gRPC 接口编码
+  → turn_stream 包装无 completion ID 的事件，按消费顺序加 seq 并输出事件字典，由 gRPC 接口编码
   → 完成、失败或取消后关闭本轮生成器，保留文档资源
 ```
 
 ## 文件与职责
 
-- `completion_runtime.py`：stream_completion 异步生成器、事件包装、连续编号和内层流关闭。
+- `turn_stream.py`：stream_completion 异步生成器、事件包装、连续编号和内层流关闭。
 - `core/loop.py`：校验输入、绑定子进程工具与消息，委托 graph 执行，转发输出并关闭内层流。
 - `core/messages.py`：提示词、历史消息转换、响应校验与终止信号解析。
 - `core/model_invocation.py`：模型调用、重试、退避和流式消息聚合。
 - `core/executor.py`：并行执行工具、处理超时并封装结果。
-- `core/graph.py`：绑定模型与工具执行器，构建并执行仅含消息的图，负责节点路由、取消边界、更新转换及图流关闭。
+- `core/graph.py`：绑定模型与工具执行器，构建并执行仅含消息的图，负责节点路由与重试；取消沿 await 传播，图流由 loop 关闭。
 - `core/tools/workspace.py`：资源定位解析、拉取 `documents.zip`、序列化/还原 workspace payload。
 - `core/tools/worker_client.py`：父进程侧子进程客户端，组装请求、等待响应并在 finally kill。
 - `core/tools/embedding.py`：清单与索引读取校验、payload 序列化，以及检索工具工厂。
@@ -36,7 +36,7 @@ import asyncio
 from contextlib import aclosing
 
 from service.file_extraction_agent.core.tools.worker_client import prepare_workspace
-from service.file_extraction_agent.completion_runtime import stream_completion
+from service.file_extraction_agent.turn_stream import stream_completion
 from service.file_extraction_agent.core.model import build_qa_model
 from service.file_extraction_agent.schemas import DocumentQaMessage, ResourceRef
 
@@ -68,3 +68,5 @@ stream_completion 返回异步生成器，aclosing 确保提前退出也关闭�
 gRPC 入口是 ChatCompletion。无效资源在首事件前返回 INVALID_ARGUMENT；执行失败输出 completion.failed。取消原 call 时由 grpc.aio 取消 handler，沿 await 传播并清理模型、工具子任务和子进程，不输出取消终态。没有活动 ID 注册表，也没有单独取消接口。
 
 详见 [设计](docs/DESIGN.md)、[循环](docs/agent_loop.md)、[工具](docs/tools.md) 和 [API](../../docs/API.md)。
+
+模型由标准 ChatOpenAI 延迟装配，直接保存单个 provider 和调用方式；已移除 DeepSeek 专用适配及 thinking 参数注入。增量与完整正文统一使用 messages.visible_text，工具仅支持异步执行。

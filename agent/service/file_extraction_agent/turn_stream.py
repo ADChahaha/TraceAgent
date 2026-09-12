@@ -16,20 +16,20 @@ from service.file_extraction_agent.core.loop import run_qa_stream
 from service.file_extraction_agent.core.contracts import (
     MessageStarted, MessageDelta, ModelRetry, ModelFailed, QaModel,
 )
-from service.file_extraction_agent.core.messages import _message_stop_signal, _terminal_stop_signals
+from service.file_extraction_agent.core.messages import _message_stop_signal, _terminal_stop_signals, visible_text
 from service.file_extraction_agent.schemas import DocumentQaMessage, RunOptions
 
 
 async def stream_completion_events(
     *, workspace: dict[str, Any], messages: list[DocumentQaMessage],
     qa_model: QaModel | None = None,
-    run_options: RunOptions | None = None, should_stop=None,
+    run_options: RunOptions | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """仅包装 Agent 普通事件；最终模型失败抛异常，取消向内层传播。"""
     yield {"type": "source_indexed", "tool": "source_index", "result": {"ok": True}}
     async with aclosing(run_qa_stream(
         workspace=workspace, messages=messages, qa_model=qa_model,
-        run_options=run_options, should_stop=should_stop,
+        run_options=run_options,
     )) as outputs:
         async for output in outputs:
             if isinstance(output, MessageStarted):
@@ -56,7 +56,7 @@ def _model_message_event(message: AIMessage) -> dict[str, Any]:
     event = {
         "type": "model_message.done",
         "message_id": message.id or "",
-        "content": _message_content_text(message.content),
+        "content": visible_text(message.content),
         "tool_call_count": len(message.tool_calls),
         "tool_calls": [{"id": call["id"], "name": call["name"], "args": call["args"]} for call in message.tool_calls],
         "is_final": not message.tool_calls and stop_signal in _terminal_stop_signals(),
@@ -76,23 +76,6 @@ def _tool_message_event(message: ToolMessage) -> dict[str, Any]:
     failed = message.status == "error" or isinstance(result, dict) and result.get("ok") is False
     return {"type": "tool_failed" if failed else "tool_completed", "tool": message.name,
             "args": message.additional_kwargs["tool_args"], "tool_call_id": message.tool_call_id, "result": result}
-
-
-def _message_content_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, list):
-        return ""
-    parts: list[str] = []
-    for item in content:
-        if isinstance(item, str):
-            parts.append(item)
-            continue
-        if not isinstance(item, dict):
-            continue
-        if item.get("type") == "text" and isinstance(item.get("text"), str):
-            parts.append(item["text"])
-    return "".join(parts)
 
 
 async def stream_completion(

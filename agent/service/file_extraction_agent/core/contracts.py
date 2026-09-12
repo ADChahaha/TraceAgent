@@ -13,7 +13,6 @@ from langchain_core.messages import AIMessage, BaseMessage, BaseMessageChunk, To
 from pydantic import JsonValue
 
 JsonObject: TypeAlias = dict[str, JsonValue]
-StopCheck: TypeAlias = Callable[[], bool]
 
 
 @dataclass(frozen=True)
@@ -61,14 +60,7 @@ class AsyncTool(Protocol):
     def ainvoke(self, input: dict[str, object]) -> Awaitable[object]: ...
 
 
-class SyncTool(Protocol):
-    @property
-    def name(self) -> str: ...
-
-    def invoke(self, input: dict[str, object]) -> object: ...
-
-
-Tool: TypeAlias = AsyncTool | SyncTool
+Tool: TypeAlias = AsyncTool
 
 
 class ChatModel(Protocol):
@@ -77,26 +69,19 @@ class ChatModel(Protocol):
     def ainvoke(self, input: Sequence[BaseMessage]) -> Awaitable[BaseMessage]: ...
 
 
-@dataclass
-class ModelCallAttempt:
-    name: str
+@dataclass(frozen=True)
+class BoundModel:
+    """单一模型和调用方式；不表示重试候选，重试次数由图管理。"""
+
     model: ChatModel
-    use_stream: bool
-
-
-@runtime_checkable
-class ModelAttempts(Protocol):
-    def model_call_attempts(self) -> list[ModelCallAttempt]: ...
-
-
-BoundModel: TypeAlias = ChatModel | ModelAttempts
+    use_stream: bool = True
 
 
 class QaModel(Protocol):
-    def bind_tools(self, tools: Sequence[Tool]) -> BoundModel: ...
+    def bind_tools(self, tools: Sequence[Tool]) -> ChatModel | BoundModel: ...
 
 
-ModelInvoker: TypeAlias = Callable[[BoundModel, Sequence[BaseMessage]], Awaitable[AIMessage | ModelCallFailure]]
+ModelInvoker: TypeAlias = Callable[[ChatModel | BoundModel, Sequence[BaseMessage]], Awaitable[AIMessage | ModelCallFailure]]
 
 
 class ToolExecutor(Protocol):

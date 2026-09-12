@@ -7,3 +7,5 @@
 - `test_removed_cancel_rpc_is_unimplemented`：协议移除独立取消方法，旧路径返回 UNIMPLEMENTED。
 - `test_cancel_during_prepare_cleans_before_any_event`：首事件前取消也能清理正在等待的资源预检。
 - `test_cancel_closes_generator_while_transport_is_sending`：发送大事件时客户端停止读取并取消，服务端关闭暂停在 yield 附近的生成器。
+
+事件流模块引用同步为 turn_stream；仅重命名，不改变测试目标行为。

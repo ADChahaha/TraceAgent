@@ -8,7 +8,7 @@ import pytest
 
 from agent_proto import agent_pb2 as pb
 from routes import file_extraction_agent as route
-from service.file_extraction_agent import completion_runtime as runtime
+from service.file_extraction_agent import turn_stream as runtime
 
 
 @pytest.fixture

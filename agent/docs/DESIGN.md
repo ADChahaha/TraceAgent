@@ -15,7 +15,7 @@ ChatCompletion（resource_refs + messages）
   → 经 S3ObjectStore（boto3）从 storage 服务读取资源
   → 路径创建工具上下文，运行配置绑定执行器，图内保存完整 messages 和重试状态
   → 模型文本增量 / 完整消息 / 重试通知 / 单个工具结果
-  → completion_runtime 输出不含 completion ID、带 seq 的事件字典，由传输层编码
+  → turn_stream 输出不含 completion ID、带 seq 的事件字典，由传输层编码
   → 释放本轮运行时，保留文档资源
 ```
 
@@ -30,9 +30,9 @@ ChatCompletion（resource_refs + messages）
 | service/document_processor | PDF 调 MinerU、DOCX 调 python-docx，输出带 CSS 的 HTML |
 | service/document_resources | HTML 转文件、文档分块和 embedding 索引构建、发布到 storage 服务 |
 | routes/file_extraction_agent.py | 路径问答 gRPC 适配；固定字段转 protobuf，动态字段保留 JSON |
-| service/file_extraction_agent/completion_runtime.py | stream_completion 直接迭代本轮事件、编号与关闭内层流 |
+| service/file_extraction_agent/turn_stream.py | stream_completion 直接迭代本轮事件、编号与关闭内层流 |
 | service/file_extraction_agent/core/loop.py | Agent 接口：校验输入、组装工作区/工具/历史消息、执行图并转换原生流输出、关闭图流 |
-| service/file_extraction_agent/core/contracts.py | 模型与工具调用协议、消息输出和 JSON 类型，不承担执行 |
+| service/file_extraction_agent/core/contracts.py | 模型与工具调用协议、单一 BoundModel、异步工具、消息输出和 JSON 类型，不承担执行 |
 | service/file_extraction_agent/core/messages.py | 提示词、历史转换、响应校验、终止信号与消息 JSON 归一化 |
 | service/file_extraction_agent/core/model_invocation.py | 单次模型调用、流式聚合和失败结果 |
 | service/file_extraction_agent/core/executor.py | 工具并行执行、共享超时、逐项结果回调与取消清理 |
@@ -84,10 +84,10 @@ prepare 子进程同样在取消时清理；已创建但未消费的生成器不
 
 ```text
 模型节点返回 AIMessage
-  → completion_runtime 输出 model_message.started/delta/done、重试通知和 tool_started
+  → turn_stream 输出 model_message.started/delta/done、重试通知和 tool_started
   → 工具节点并行执行，按共享 deadline 逐项经 custom 输出 ToolMessage，完整历史供下一轮模型使用
   → 每项携带调用 ID、名称、参数和成功/失败结果
-  → completion_runtime 直接输出 tool_completed / tool_failed，不维护 pending 配对字典
+  → turn_stream 直接输出 tool_completed / tool_failed，不维护 pending 配对字典
 ```
 
 正常完成输出 completion.completed；普通执行异常输出 completion.failed；CancelledError/GeneratorExit 直接传播，不补发终态。生成器逐层关闭，工具 finally 清理子进程。资源参数错误在首事件前返回 INVALID_ARGUMENT。
@@ -102,3 +102,5 @@ prepare 子进程同样在取消时清理；已创建但未消费的生成器不
 - 取消通过原 gRPC call 定位执行，不需要跨实例按 completion ID 路由。
 
 接口示例见 [API.md](API.md)，资源细节见 [资源设计](../service/document_resources/docs/DESIGN.md)，问答细节见 [问答设计](../service/file_extraction_agent/docs/DESIGN.md)。
+
+模型装配仅保存一个 provider 和调用方式，工具契约仅支持异步调用。取消沿 Task 传播，不再额外传递停止标志；可见文本统一由 messages.visible_text 提取。已移除 DeepSeek 专用模型适配，所有模型使用标准 ChatOpenAI。

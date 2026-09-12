@@ -31,7 +31,7 @@ def test_wheel_contains_resource_and_qa_modules(tmp_path):
         "service/document_resources/index.py",
         "service/document_processor/docx/docx_processor.py", "service/file_extraction_agent/core/loop.py",
         "service/file_extraction_agent/core/tools/embedding.py",
-        "service/file_extraction_agent/core/graph.py", "service/file_extraction_agent/completion_runtime.py",
+        "service/file_extraction_agent/core/graph.py", "service/file_extraction_agent/turn_stream.py",
         "service/file_extraction_agent/core/messages.py", "service/file_extraction_agent/core/model_invocation.py",
         "service/file_extraction_agent/core/executor.py",
     } <= names

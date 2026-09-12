@@ -5,3 +5,7 @@ workspace payload → 绑定子进程工具 → 配置工具超时 → 模型发
 - `test_workspace_graph_streams_tool_results_and_stops_after_cancel`：验证 payload 只用于绑定工具、超时传入 executor；逐项收到同名工具的成功和失败 ToolMessage，保留 ID、名称及参数，取消后不调用下一轮模型。
 
 使用真实 LangGraph 和 ConfiguredChatModel，只替换工具绑定与 provider。
+
+模型替身直接保存单个 provider 与 use_stream，构建测试通过延迟加载工厂注入模型类。
+
+批次结果返回后直接关闭生成器，验证不再进入下一次模型调用，不使用停止标志。
