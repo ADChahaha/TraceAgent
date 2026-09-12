@@ -5,18 +5,17 @@
 ```text
 completion_id + resource_refs + messages + 模型/运行配置
   → 路由层 prepare_workspace 子进程：拉取归档 + 校验索引 → workspace payload
-  → CompletionManager 装配问答模型并注册 CompletionRuntime
+  → 路由装配问答模型并直接消费 stream_completion
   → build_tools(payload) 绑定四个工具；每次调用经 run_operation 启动工具子进程
   → build_qa_graph 绑定 RunOptions；图内 MessagesState 仅保存消息
   → 模型返回 AIMessage；有工具调用则并行执行并返回完整 ToolMessage 批次
-  → completion_runtime 包装无 completion ID 的事件，按 FIFO 加 seq 并输出事件字典，由 gRPC 接口编码
-  → 完成、失败或取消后移除本轮运行时，保留文档资源
+  → completion_runtime 包装无 completion ID 的事件，按消费顺序加 seq 并输出事件字典，由 gRPC 接口编码
+  → 完成、失败或取消后关闭本轮生成器，保留文档资源
 ```
 
 ## 文件与职责
 
-- `manager.py`：创建、注册、查找运行时，转发取消/状态查询，注入运行时收尾时移除注册项的闭包。
-- `completion_runtime.py`：单轮运行时、事件包装、生产协程、队列、异步事件等待与取消收尾。
+- `completion_runtime.py`：stream_completion 异步生成器、事件包装、连续编号和内层流关闭。
 - `core/loop.py`：校验输入、绑定子进程工具与消息，委托 graph 执行，转发输出并关闭内层流。
 - `core/messages.py`：提示词、历史消息转换、响应校验与终止信号解析。
 - `core/model_invocation.py`：模型调用、重试、退避和流式消息聚合。
@@ -37,7 +36,8 @@ import asyncio
 from contextlib import aclosing
 
 from service.file_extraction_agent.core.tools.worker_client import prepare_workspace
-from service.file_extraction_agent.manager import completion_manager
+from service.file_extraction_agent.completion_runtime import stream_completion
+from service.file_extraction_agent.core.model import build_qa_model
 from service.file_extraction_agent.schemas import DocumentQaMessage, ResourceRef
 
 
@@ -47,12 +47,12 @@ async def main():
         ResourceRef(type="documents", location="s3://res_example/documents"),
         ResourceRef(type="index", location="s3://res_example/index"),
     ])
-    runtime = completion_manager.create(
-        completion_id="cmp_001",
+    stream = stream_completion(
+        qa_model=build_qa_model(None),
         workspace=workspace,
         messages=[DocumentQaMessage(role="user", content="付款期限是多少？")],
     )
-    async with aclosing(runtime.stream()) as events:
+    async with aclosing(stream) as events:
         async for frame in events:
             print(frame)
 
@@ -62,9 +62,9 @@ if __name__ == "__main__":
 ```
 
 从 agent 目录、已激活的 agent-gate 环境运行此脚本。prepare_workspace 的预检在子进程执行；
-stream 返回异步迭代器，aclosing 确保已开始消费的流在提前退出时也关闭并移除注册项。
+stream_completion 返回异步生成器，aclosing 确保提前退出也关闭内层流。
 模型配置和服务启动见 [服务 README](../../README.md)。
 
-gRPC 入口是 `ChatCompletion`。无效资源在事件流开始前返回 INVALID_ARGUMENT；运行失败由 completion.failed 收口。取消时已发布工具批次先返回完整结果，再结束本轮；模型流和工具子进程都支持取消，工具子进程会在取消/超时/结束时被 kill。注册表仅在进程内有效，使用单进程部署。
+gRPC 入口是 ChatCompletion。无效资源在首事件前返回 INVALID_ARGUMENT；执行失败输出 completion.failed。取消原 call 时由 grpc.aio 取消 handler，沿 await 传播并清理模型、工具子任务和子进程，不输出取消终态。没有活动 ID 注册表，也没有单独取消接口。
 
 详见 [设计](docs/DESIGN.md)、[循环](docs/agent_loop.md)、[工具](docs/tools.md) 和 [API](../../docs/API.md)。

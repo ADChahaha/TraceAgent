@@ -6,7 +6,7 @@ import threading
 from langchain_core.messages import AIMessageChunk
 
 from service.file_extraction_agent.core import executor, loop, model_invocation
-from service.file_extraction_agent.completion_runtime import CompletionRuntime
+from service.file_extraction_agent.completion_runtime import stream_completion
 from service.file_extraction_agent.schemas import DocumentQaMessage
 
 
@@ -39,8 +39,8 @@ def test_runtime_executes_model_and_tools_on_event_loop(resource_path, monkeypat
                 return {"ok": True}
 
         monkeypatch.setattr(loop, "build_tools", lambda workspace: [Tool()])
-        runtime = CompletionRuntime(resource_path, Model(), [DocumentQaMessage(role="user", content="问题")])
-        events = [event async for event in runtime.astream()]
+        runtime = stream_completion(resource_path, Model(), [DocumentQaMessage(role="user", content="问题")])
+        events = [event async for event in runtime]
         assert calls == ["model", "tool", "model"]
         assert events[-1]["type"] == "completion.completed"
         assert [e["seq"] for e in events] == list(range(1, len(events) + 1))
@@ -127,8 +127,8 @@ def test_tool_result_streams_before_sibling_finishes_and_cancel_cleans_up(resour
                 return {"ok": True}
 
         monkeypatch.setattr(loop, "build_tools", lambda workspace: [Tool()])
-        runtime = CompletionRuntime(resource_path, Model(), [DocumentQaMessage(role="user", content="问题")])
-        stream = runtime.astream()
+        runtime = stream_completion(resource_path, Model(), [DocumentQaMessage(role="user", content="问题")])
+        stream = runtime
         events = []
         try:
             while True:
@@ -138,16 +138,12 @@ def test_tool_result_streams_before_sibling_finishes_and_cancel_cleans_up(resour
                     assert event["tool_call_id"] == "fast"
                     assert not closed.is_set()
                     break
-            runtime.terminate()
-            events.extend(await asyncio.wait_for(collect(stream), 1))
+            await stream.aclose()
             assert closed.is_set()
             assert len(model_calls) == 1
             assert [e["tool_call_id"] for e in events if e["type"] == "tool_completed"] == ["fast"]
             assert [e["type"] for e in events if e["type"].startswith("completion.")] == ["completion.created"]
         finally:
             await stream.aclose()
-
-    async def collect(stream):
-        return [event async for event in stream]
 
     asyncio.run(run())

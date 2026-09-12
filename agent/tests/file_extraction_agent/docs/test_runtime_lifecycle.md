@@ -1,9 +1,8 @@
-# Runtime 生命周期测试
+# test_runtime_lifecycle
 
-用受控异步生成器驱动真实 runtime，验证内层只生产普通事件，外层根据 producer 结果决定完成或失败，主动取消直接结束流。
+普通事件或执行异常 → 外层统一编号并生成终态；内层仅报告模型失败。
 
-- `test_outer_stream_alone_emits_terminal`：普通事件返回或抛异常时，astream 独自生成开始和唯一终态，序号连续。
-- `test_cancel_closes_without_terminal_and_waits_for_cleanup`：跨线程与重复取消不输出取消终态，等待异步 finally，移除回调只运行一次。
-- `test_cancel_before_producer_starts_does_not_hang`：开始事件后立即取消、producer 尚未进入函数体也能结束。
-- `test_inner_failure_raises_without_completion_event`：ModelFailed 转异常，内层不再生成 completion 事件。
-- `test_runtime_aclose_owns_stream_cleanup`：调用方仅关闭 runtime，覆盖未启动、暂停消费时等待 producer 清理、关闭事件生成器及重复关闭只通知一次。
+- `test_outer_stream_alone_emits_terminal`：正常与失败路径各输出唯一终态，序号连续。
+- `test_inner_failure_raises_without_completion_event`：模型失败在内层抛异常，不重复产生 completion 终态。
+
+执行入口改为直接消费 stream_completion(...) 异步生成器，不创建运行时对象。

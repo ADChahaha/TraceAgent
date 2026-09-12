@@ -11,11 +11,11 @@ from langchain_core.outputs import ChatGenerationChunk
 from pydantic import PrivateAttr
 
 from service.file_extraction_agent.core import graph, loop, model_invocation
-from service.file_extraction_agent.completion_runtime import CompletionRuntime
+from service.file_extraction_agent.completion_runtime import stream_completion
 
 
 def runtime_events(*, resource_path, messages, qa_model):
-    return CompletionRuntime(resource_path, qa_model, messages).astream()
+    return stream_completion(resource_path, qa_model, messages)
 from service.file_extraction_agent.schemas import DocumentQaMessage
 
 
@@ -189,7 +189,7 @@ async def test_cancel_model_closes_stream_without_retry():
 
 
 async def test_runtime_cancel_during_retry_wait_stops_next_attempt(resource_path, monkeypatch):
-    from service.file_extraction_agent.completion_runtime import CompletionRuntime
+    from service.file_extraction_agent.completion_runtime import stream_completion
 
     model = StreamingModel(failures=5)
     entered, closed = asyncio.Event(), asyncio.Event()
@@ -202,16 +202,17 @@ async def test_runtime_cancel_during_retry_wait_stops_next_attempt(resource_path
             closed.set()
 
     monkeypatch.setattr(graph, "_wait_retry", wait_retry)
-    runtime = CompletionRuntime(resource_path, model, [DocumentQaMessage(role="user", content="问题")])
+    runtime = stream_completion(resource_path, model, [DocumentQaMessage(role="user", content="问题")])
     received = []
 
     async def consume():
-        received.extend([e async for e in runtime.astream()])
+        received.extend([e async for e in runtime])
 
     task = asyncio.create_task(consume())
     await asyncio.wait_for(entered.wait(), 2)
-    runtime.terminate()
-    await asyncio.wait_for(task, 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 2)
     assert closed.is_set() and model._calls == 1
     assert not any(e["type"] == "completion.cancelled" for e in received)
     assert sum(e["type"].startswith("completion.") and e["type"] != "completion.created" for e in received) == 0

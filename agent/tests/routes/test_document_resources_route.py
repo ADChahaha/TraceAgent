@@ -98,10 +98,10 @@ def test_prepare_rejects_unsupported_or_missing_files(resources, rpc, files):
 def test_qa_uses_prepared_path_without_rebuilding_or_deleting(resources, rpc, monkeypatch, s3_store):
     """两轮真实图执行复用同一资源，不重建向量、不删除资源。"""
     from tests.file_extraction_agent.test_streaming_retry import StreamingModel
-    from service.file_extraction_agent import manager
+    from routes import file_extraction_agent as qa_route
     model = StreamingModel()
     model._release.set()
-    monkeypatch.setattr(manager, "build_qa_model", lambda config: model)
+    monkeypatch.setattr(qa_route, "build_qa_model", lambda config: model)
     refs = list(upload(rpc).resource_path)
     bucket = _bucket(refs)
     before = sorted(s3_store.list_objects(bucket))

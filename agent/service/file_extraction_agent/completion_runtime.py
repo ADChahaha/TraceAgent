@@ -1,17 +1,14 @@
-"""模型/工具输出 → 普通事件队列 → astream 统一输出完成或失败；取消直接关闭。
+"""本轮输入 → 直接迭代模型/工具事件 → 编号和终态；调用方取消沿 await 传播。
 
-取消只保存 cancel_requested。producer Task 表达执行结果；跨线程入口安排取消，
-流关闭等待 producer 清理，通过取走 on_close 回调保证注册项只移除一次。
+不创建后台 producer、队列或注册表。关闭事件流时等待内层生成器清理。
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
-import threading
 from contextlib import aclosing
 from dataclasses import asdict
-from typing import Any, AsyncGenerator, AsyncIterator, Callable
+from typing import Any, AsyncGenerator, AsyncIterator
 
 from langchain_core.messages import AIMessage, ToolMessage
 
@@ -21,8 +18,6 @@ from service.file_extraction_agent.core.contracts import (
 )
 from service.file_extraction_agent.core.messages import _message_stop_signal, _terminal_stop_signals
 from service.file_extraction_agent.schemas import DocumentQaMessage, RunOptions
-
-_DONE = object()
 
 
 async def stream_completion_events(
@@ -100,116 +95,26 @@ def _message_content_text(content: Any) -> str:
     return "".join(parts)
 
 
-class CompletionRuntime:
-    """单消费者流：启动 producer → FIFO 普通事件 → 唯一终态出口 → 清理注册项。"""
-
-    def __init__(self, workspace: dict[str, Any], qa_model: QaModel,
-                 messages: list[DocumentQaMessage], run_options: RunOptions | None = None,
-                 on_close: Callable[[], None] | None = None) -> None:
-        self.workspace = workspace
-        self.messages = messages
-        self.run_options = run_options
-        self.model = qa_model
-        self.cancel_requested = False
-        self._lock = threading.Lock()
-        self._producer: asyncio.Task | None = None
-        self._queue: asyncio.Queue = asyncio.Queue()
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._on_close = on_close
-        self._events: AsyncGenerator[dict[str, Any], None] | None = None
-
-    def astream(self) -> AsyncGenerator[dict[str, Any], None]:
-        with self._lock:
-            if self._events is not None:
-                raise RuntimeError("completion stream can only be consumed once")
-            self._events = self._stream()
-            return self._events
-
-    async def _stream(self) -> AsyncGenerator[dict[str, Any], None]:
-        with self._lock:
-            if not self.cancel_requested:
-                self._loop = asyncio.get_running_loop()
-                self._producer = asyncio.create_task(self._produce(), name="qa-completion")
-                # Task 在进入函数体前被取消，也必须唤醒队列消费者。
-                self._producer.add_done_callback(lambda _: self._queue.put_nowait(_DONE))
-        try:
-            if self.cancel_requested:
-                return
-            seq = 1
-            yield {"type": "completion.created", "status": "in_progress", "seq": seq}
-            while not self.cancel_requested:
-                event = await self._queue.get()
-                if self.cancel_requested:
-                    return
-                if event is _DONE:
-                    if self._producer.cancelled():
-                        return
-                    error = self._producer.exception()
-                    # 移除注册项后再交付终态，取消入口不会把已完成轮次重新标记。
-                    self._notify_closed()
-                    if self.cancel_requested:
-                        return
-                    seq += 1
-                    if error is None:
-                        yield {"type": "completion.completed", "status": "completed", "seq": seq}
-                    else:
-                        yield {"type": "completion.failed", "status": "failed", "error_message": str(error), "seq": seq}
-                    return
-                seq += 1
-                yield {**event, "seq": seq}
-        finally:
-            with self._lock:
-                self._loop = None
-            self._cancel_producer()
-            if self._producer is not None:
-                await asyncio.gather(self._producer, return_exceptions=True)
-            self._notify_closed()
-
-    stream = astream
-
-    async def _produce(self) -> None:
+async def stream_completion(
+    workspace: dict[str, Any], qa_model: QaModel,
+    messages: list[DocumentQaMessage], run_options: RunOptions | None = None,
+) -> AsyncGenerator[dict[str, Any], None]:
+    """本轮输入 → 普通事件 → 连续编号及终态；取消/关闭直接传播并清理内层流。"""
+    seq = 1
+    yield {"type": "completion.created", "status": "in_progress", "seq": seq}
+    try:
         async with aclosing(stream_completion_events(
-            workspace=self.workspace, messages=self.messages,
-            run_options=self.run_options, qa_model=self.model,
-            should_stop=lambda: self.cancel_requested,
+            workspace=workspace, messages=messages,
+            run_options=run_options, qa_model=qa_model,
         )) as events:
             async for event in events:
-                with self._lock:
-                    if self.cancel_requested:
-                        return
-                    self._queue.put_nowait(event)
-
-    def terminate(self) -> None:
-        """同步取消入口；跨线程只调度取消，不直接操作异步 Task。"""
-        with self._lock:
-            if self.cancel_requested:
-                return
-            self.cancel_requested = True
-            if self._loop is not None:
-                self._loop.call_soon_threadsafe(self._cancel_producer)
-
-    def _cancel_producer(self) -> None:
-        task = self._producer
-        if task is not None and not task.done() and not task.cancelling():
-            task.cancel()
-
-    def _notify_closed(self) -> None:
-        with self._lock:
-            callback, self._on_close = self._on_close, None
-        if callback is not None:
-            callback()
-
-    def close(self) -> None:
-        """关闭初始化后尚未迭代的运行时；已启动流由其 finally 等待清理。"""
-        self.terminate()
-        if self._producer is None:
-            self._notify_closed()
-
-    async def aclose(self) -> None:
-        """调用方停止消费后统一关闭：取消执行 → 关闭事件流 → 等待其 finally 清理。"""
-        self.close()
-        if self._events is not None:
-            await self._events.aclose()
+                seq += 1
+                yield {**event, "seq": seq}
+    except Exception as exc:
+        yield {"type": "completion.failed", "status": "failed",
+               "error_message": str(exc), "seq": seq + 1}
+    else:
+        yield {"type": "completion.completed", "status": "completed", "seq": seq + 1}
 
 
-__all__ = ["CompletionRuntime", "stream_completion_events"]
+__all__ = ["stream_completion", "stream_completion_events"]

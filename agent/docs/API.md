@@ -5,7 +5,7 @@
 ```text
 PrepareResources(files) → 解析与索引构建 → resource_path([{type, location}])
 ChatCompletion(resource_path + messages) → 校验资源 → 单轮执行 → CompletionEvent 流
-CancelCompletion(completion_id) → 立即确认取消请求 → 原问答流随后收尾
+取消原 ChatCompletion call → RPC 取消传播 → handler 关闭本轮执行流
 ```
 
 `resource_path` 是 `repeated ResourceRef`，每项 `{type, location}`，location 为
@@ -48,9 +48,9 @@ PrepareResources 为一元 RPC：一次传入全部文件的 filename/bytes，�
 
 ## 问答请求
 
-ChatCompletion 为服务端流 RPC。输入转换为现有 DocumentQaMessage、RunOptions 和 ModelConfig，然后交给 CompletionManager：
+ChatCompletion 为服务端流 RPC。输入转换为现有 DocumentQaMessage、RunOptions 和 ModelConfig，然后由 handler 直接消费 stream_completion：
 
-- completion_id：1–128 位，以字母或数字开头，其余允许字母、数字、下划线、短横线；活动 ID 不可重复。
+- completion_id：1–128 位，以字母或数字开头，其余允许字母、数字、下划线、短横线；只保留格式校验，不再用于活动去重或取消查找。
 - resource_path：repeated ResourceRef，必须同时包含 documents 与 index 定位（同 bucket）；缺失、损坏、版本错误或引用越界均拒绝，不自动重建。
 - messages：非空，支持 system/user/assistant/tool，保留完整历史，不自动摘要或裁剪。tool 必须有 tool_call_id。
 - QaMessage.tool_calls_json：可选 JSON 数组，内容为原历史工具调用；tool_call_id、name 使用独立字段。
@@ -83,27 +83,30 @@ args_json、result_json 及 ToolCall.args_json 用 JSON 字符串保留动态结
 
 ## 取消与连接生命周期
 
-```python
-response = client.CancelCompletion(
-    pb.CompletionRequest(completion_id="cmp_001"), timeout=2,
-)
-print(response.status)
-```
+客户端保存原 call；停止消费时在 finally 中取消，不再发单独的 CancelCompletion RPC。
 
-业务取消命中活动注册项时返回 cancelling，移除后返回 not_found。取消接口不等待模型或工具清理；原问答流不再发 completion.cancelled。
+```python
+call = client.ChatCompletion(request, timeout=300)
+try:
+    for event in call:
+        print(event)
+        if event.type == "model_message.delta":
+            break  # 示例：提前停止消费。
+finally:
+    call.cancel()
+```
 
 ```text
-CancelCompletion → manager 找到 runtime → 设置 cancel_requested → 返回 cancelling
-  → 取消 producer 及未完成工具 Task
-  → 等待协程 finally 清理
-  → 关闭原流并移除注册项，不发送取消终态
+原 call.cancel() / deadline / 已检测到的断连
+  → grpc.aio 取消对应 handler
+  → 取消沿 await 传播到模型/图执行
+  → aclosing 逐层关闭生成器
+  → executor 清理工具 Task，run_operation finally kill 子进程
 ```
 
-内层只生成 Agent 普通事件，completion.created/completed/failed 由 astream 统一输出。
-正常消费按 FIFO 连续编号；取消后丢弃未消费队列内容，但已发给传输层的内容不能撤回。
-backend 必须自己记录取消状态，并拒收迟到内容；不依赖取消终态判断取消成功。未主动取消时意外断流仍须由消费端识别，不能一律视为成功。
+stream_completion 是异步生成器函数，直接输出带 seq 的事件；无 manager、运行时对象、独立 producer 或队列。正常完成/普通失败输出唯一终态，取消不生成终态。gRPC 负责传输流控，handler 退出时关闭当前生成器，包括暂停在 yield 的情况。
 
-每个工具完成立即输出 tool_completed/tool_failed。Task 取消会清理模型流和工具协程，并 kill 尚未结束的工具子进程；迟到结果不输出。RPC 断连/deadline 同样触发清理。
+call.cancel() 同步返回，只表示本地取消请求结果，不确认远端已经清理完。backend 自己记录取消状态并拒绝迟到写入；RPC 意外断开也不能视为成功完成。同步阻塞工作不会被 asyncio 强制中断，取消不撤销已产生的副作用。资源保留供下一轮使用。
 
 ## 探活和错误
 
@@ -112,14 +115,14 @@ backend 必须自己记录取消状态，并拒收迟到内容；不依赖取消
 
 | 情况 | 响应 |
 | --- | --- |
-| 上传类型/参数、消息或资源校验失败，活动 ID 重复 | INVALID_ARGUMENT，首事件前返回 |
+| 上传类型/参数、消息或资源校验失败 | INVALID_ARGUMENT，首事件前返回 |
 | 文档解析、资源准备或问答初始化异常 | INTERNAL |
 | 开始执行后的模型/工具循环异常 | 原流的 completion.failed；普通工具失败可继续执行 |
 | 消息超过配置上限 | RESOURCE_EXHAUSTED |
 | 客户端直接取消或 deadline 到期 | 客户端观察 CANCELLED / DEADLINE_EXCEEDED |
 
-每次 RPC 应设置符合 OCR、embedding 或问答耗时的 deadline；取消请求使用独立短超时。不要盲目重试资源准备或问答创建：响应丢失时服务端可能已执行，本版不提供持久幂等或事件重放。
+每次 RPC 应设置符合 OCR、embedding 或问答耗时的 deadline。不要盲目重试资源准备或问答创建：响应丢失时服务端可能已执行，本版不提供持久幂等或事件重放。
 
-部署参数、消息上限和协议生成命令见 [README](../README.md)。问答内存队列仍未设置容量上限；本次未引入多实例路由、持久任务或新的资源生命周期。
+部署参数、消息上限和协议生成命令见 [README](../README.md)。问答不再另设内存事件队列；本次未引入持久任务或新的资源生命周期。
 
 重试优先采用有效 retry-after-ms / Retry-After（秒数或 HTTP 日期，大于 0 且不超过 120 秒）；无效值回退到随机指数退避。retry_delay_ms 是本次实际等待时间的毫秒表示。

@@ -8,7 +8,7 @@ PrepareResources(files: filename + bytes)
   → 发布到 storage 服务 → resource_path([{type, location}])（文档树为 documents.zip 归档，不再内联返回 HTML）
 
 ChatCompletion(completion_id + resource_path + messages)
-  → CompletionManager → 经 S3ObjectStore 读取资源 → 模型/工具循环 → 带 seq 的事件字典
+  → 路由预检资源 → stream_completion 直接消费模型/工具循环 → 带 seq 的事件字典
   → gRPC CompletionEvent 流 → 清理本轮注册项，保留文档资源
 ```
 
@@ -72,6 +72,6 @@ dev 依赖固定代码生成器版本，测试会重新生成并比对绑定；�
 
 模型由文件/环境配置选定，单次请求失败通过图的 retry_wait 节点采用以 0.5 秒起步、8 秒封顶并乘 0.75–1 随机系数的指数间隔退避，总共最多五次，配置保持不变。LangGraph messages 通道实时提供可见文本，updates 通道提供完整结果和重试通知。SDK 内层重试关闭。
 
-事件为 model_message.started / delta / done 和 model_request.retrying；按 message_id 区分尝试，done 正文不能重复追加。Runtime 保留单个 producer Task、FIFO 队列与消费者；取消模型或退避会清理对应异步流。工具结果经 custom 通道逐项输出；取消会取消未完成工具 Task 并 kill 对应子进程，不补造中断结果，也不输出取消终态；backend 自己记录取消。子进程计算的迟到结果不输出。消费端需按新协议适配，详见 docs/API.md。
+事件为 model_message.started / delta / done 和 model_request.retrying；按 message_id 区分尝试，done 正文不能重复追加。handler 直接消费 stream_completion 异步生成器，无运行时类、producer 或队列；取消原 gRPC call 沿 await 传播并清理模型或退避流。工具结果经 custom 通道逐项输出；取消会取消未完成工具 Task 并 kill 对应子进程，不补造中断结果，也不输出取消终态；backend 自己记录取消。子进程计算的迟到结果不输出。消费端需按新协议适配，详见 docs/API.md。
 
 重试优先采用有效 retry-after-ms / Retry-After（秒数或 HTTP 日期，大于 0 且不超过 120 秒）；无效值回退到随机指数退避。retry_delay_ms 是本次实际等待时间的毫秒表示。

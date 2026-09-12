@@ -1,4 +1,17 @@
-last updated: 2026-09-11 00:03:23
+last updated: 2026-09-12 19:39:38
+
+## 2026-09-12 19:39:38
+
+### 已完成工作
+
+- 问答执行绑定原 ChatCompletion RPC：删除 manager 注册表、CompletionRuntime 类和独立 CancelCompletion 协议，重新生成绑定。
+- 路由直接消费 stream_completion 异步生成器；取消沿 await 传播，关闭内层模型/图流并由工具 finally 清理子进程。
+- TDD：先确认同 ID 并发、协议移除和直接消费 Task 测试因旧行为失败，再实现；相关回归 191 项通过，追加的首事件前取消和发送中取消场景也通过（合计 193 项）。协议生成与独立 wheel 检查通过。
+- 同步设计、API、使用示例及逐测试文件说明。
+
+### 下一步
+
+- backend 接入 gRPC 时保存原 call，通过 call.cancel() 取消；本地取消不代表远端清理完成，仍须阻止旧轮迟到写入。
 
 ## 2026-09-11 00:03:23
 

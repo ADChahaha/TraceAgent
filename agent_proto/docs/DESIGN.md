@@ -11,7 +11,7 @@ agent_proto/agent.proto
 ```
 
 - Python 导入名为 agent_proto，网络服务名为 traceagent.v1.AgentService。
-- 业务方法为 PrepareResources、ChatCompletion、CancelCompletion；不提供问答查询或能力查询。旧 GetCompletion、GetCapabilities 调用返回 UNIMPLEMENTED；问答进展与终态由原事件流交付，探活使用标准 Health 服务。
+- 业务方法为 PrepareResources、ChatCompletion；不提供问答查询或能力查询。旧 CancelCompletion、GetCompletion、GetCapabilities 调用返回 UNIMPLEMENTED；问答进展与终态由原事件流交付，探活使用标准 Health 服务。
 - 运行依赖只有 grpcio 和 protobuf；协议源码和生成绑定一起随独立 wheel 发布，不复制进 agent wheel。
 - agent 声明 traceagent-protocol 依赖；本仓库安装时先提供本地共享包，避免依赖不存在的公共发布版本。backend 业务代码本次不改。
 - 包含生成代码的目录本身映射为 Python 包 agent_proto；setuptools 仅打包该包，不发现 agent/backend。
@@ -21,3 +21,5 @@ agent_proto/agent.proto
 
 - CompletionEvent 新增 message_id、delta、attempt、max_attempts、retry_delay_ms（15–19），支持模型增量和指数退避通知。字段追加可解码，但旧 model_message 被 started/delta/done 替代属于业务契约变更，消费端需同步升级。
 - PrepareResourcesResponse 删除 `documents` 字段（编号 2）并保留为 reserved，同时移除 `Document` 消息：文档树改为以 `documents.zip` 归档对象发布，调用方只拿 resource_path，不再内联接收 HTML。
+
+取消通过原 ChatCompletion call.cancel() 传播；删除 CompletionRequest/CompletionResponse。completion_id 保留格式约束，不再承担活动去重或取消路由。

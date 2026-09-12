@@ -42,7 +42,7 @@ def test_capabilities_is_not_exposed(rpc, rpc_channel):
 
 
 def test_blocking_preparation_keeps_control_rpcs_responsive(monkeypatch, rpc_server_factory):
-    """单线程执行器忙于文档解析时，事件循环仍可取消和探活。"""
+    """单线程执行器忙于文档解析时，事件循环仍可探活。"""
     from routes import document_resources
     started = threading.Event()
     release = threading.Event()
@@ -62,7 +62,6 @@ def test_blocking_preparation_keeps_control_rpcs_responsive(monkeypatch, rpc_ser
             files=[pb.UploadedFile(filename="a.docx", content=b"test")]), timeout=5)
         try:
             assert started.wait(2)
-            assert stub.CancelCompletion(pb.CompletionRequest(completion_id="missing"), timeout=1).status == "not_found"
             assert health_pb2_grpc.HealthStub(channel).Check(
                 health_pb2.HealthCheckRequest(), timeout=1).status == health_pb2.HealthCheckResponse.SERVING
         finally:

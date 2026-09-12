@@ -1,12 +1,12 @@
-"""protobuf 请求 → 工具子进程预检 + 业务校验与模型配置 → manager 事件流 → protobuf 响应。
+"""protobuf 输入 → 校验、资源预检和模型装配 → 请求内事件流 → protobuf 输出。
 
-输入错误在首事件前返回 INVALID_ARGUMENT，初始化异常返回 INTERNAL；
-预检在 prepare 子进程中完成，失败或取消都会 kill 进程。
-执行异常保留 completion.failed。业务取消立即返回，RPC 断连则通知本轮
-CompletionRuntime 并由事件流 finally 清理，避免旧 ID 回调误取消新问答。
+首事件前参数错误映射 INVALID_ARGUMENT，其他初始化错误映射 INTERNAL。
+RPC 取消沿 await 传播，handler 退出时关闭本轮流；不按 ID 注册或查找执行。
 """
 
 import json
+import re
+from contextlib import aclosing
 from dataclasses import fields
 from typing import Any, AsyncIterator
 
@@ -14,7 +14,8 @@ import grpc
 
 from agent_proto import agent_pb2 as pb
 from service.file_extraction_agent.core.tools.worker_client import prepare_workspace
-from service.file_extraction_agent.manager import completion_manager
+from service.file_extraction_agent.completion_runtime import stream_completion
+from service.file_extraction_agent.core.model import build_qa_model
 from service.file_extraction_agent.schemas import DocumentQaMessage, ModelConfig, RunOptions
 
 
@@ -75,34 +76,26 @@ def event_message(event: dict[str, Any]) -> pb.CompletionEvent:
 
 async def create_chat_completion(request, context) -> AsyncIterator[pb.CompletionEvent]:
     try:
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", request.completion_id) is None:
+            raise ValueError("completion_id must be a safe non-empty identifier")
         messages = _messages(request)
+        if not messages:
+            raise ValueError("messages must be a non-empty list")
         run_options = _options(request.run_options, RunOptions) if request.HasField("run_options") else None
         model_config = _model_config(request)
         workspace = await prepare_workspace(request.resource_path)
-        runtime = completion_manager.create(
-            completion_id=request.completion_id,
-            workspace=workspace,
-            messages=messages,
-            run_options=run_options,
-            model_config=model_config,
-        )
+        if not workspace:
+            raise ValueError("workspace is required")
+        qa_model = build_qa_model(model_config)
     except ValueError as exc:
         await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
     except Exception as exc:
         await context.abort(grpc.StatusCode.INTERNAL, f"completion initialization failed: {exc}")
 
-    events = runtime.stream()
-    try:
-        context.add_done_callback(lambda _: runtime.close())
+    async with aclosing(stream_completion(workspace, qa_model, messages, run_options)) as events:
         if context.done():
             return
         async for event in events:
             if context.done():
                 return
             yield event_message(event)
-    finally:
-        await runtime.aclose()
-
-
-async def cancel_chat_completion(request, context):
-    return pb.CompletionResponse(**completion_manager.terminate(request.completion_id))

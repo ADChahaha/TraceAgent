@@ -13,4 +13,4 @@
 - `test_retry_success_keeps_failed_partial_text_out_of_history`：第五次成功，前四次局部文本不进入历史，重试状态归零。
 - `test_chatopenai_native_callback_and_http_stream_close`：真实 ChatOpenAI 和 SDK 消费受控 SSE 响应，验证原生增量及取消关闭 HTTP 响应。
 
-本轮契约调整：内层只输出普通 Agent 事件；完成/失败由 astream 唯一出口生成，取消直接结束且不输出 cancelled。对应测试改用 producer 结果或外层流验证，保留配对、重试和资源清理覆盖。
+stream_completion 直接消费事件；完成/失败由外层生成器输出，取消消费 Task 会传播 CancelledError 并清理退避或模型流，不补发取消终态。

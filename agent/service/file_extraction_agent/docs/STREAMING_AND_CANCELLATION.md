@@ -5,14 +5,14 @@
 
 ```text
 ChatCompletion(resource_path, messages)
-  → manager 校验资源、装配模型并注册 CompletionRuntime
+  → 路由校验资源、装配模型并直接消费 stream_completion
   → loop.run_qa_stream 初始化工作区、工具和模型消息
   → graph.build_qa_graph 编译 agent / retry_wait / tools
   → loop 消费 graph.astream(messages, updates, custom)
       ├─ messages：可见模型 chunk → MessageStarted / MessageDelta
       ├─ updates：模型完整结果或失败 → AIMessage / ModelRetry / ModelFailed
       └─ custom：单个工具结果 → ToolMessage
-  → stream_completion_events 包装业务事件 → runtime 队列 → seq → gRPC
+  → stream_completion_events 包装业务事件 → stream_completion 编号 → gRPC
 ```
 
 ## 模型与重试
@@ -46,32 +46,11 @@ executor 接收 tool_calls、tools、共享 timeout 和 on_result
 ## 取消
 
 ```text
-CancelCompletion(id)
-  -> runtime 锁内设置 cancel_requested，拒收后续结果；manager 返回 cancelling
-  -> call_soon_threadsafe 安排 producer.cancel；Task 完成回调写内部结束通知
-  -> 图中断模型等待或工具节点等待
-  -> executor finally 取消未完成工具 Task，gather 等待协程清理
-  -> run_operation 的 finally kill 尚未退出的工具子进程
-  -> consumer 不再交付队列内容，等待 producer 清理后直接退出，不发取消终态
-  -> 关闭流并按对象身份移除注册项
+客户端取消原 ChatCompletion call
+  → grpc.aio 取消 handler，取消沿 await 传播
+  → aclosing 关闭 stream_completion、run_qa_stream 和图流
+  → executor 取消未完成工具 Task，worker_client finally kill 子进程
+  → 执行退出，不发送取消终态
 ```
 
-不等待工具正常计算结束，不补造 TOOL_ABORTED 或其他工具结果。已发送结果不能撤回，取消后未消费的队列结果及迟到结果不再输出。
-重复取消不再次中断正在进行的清理。正常终态交付前移除注册项，之后取消返回 not_found。
-断连/deadline 同样取消生产协程；prepare 阶段的取消直接 kill prepare 子进程，不会注册运行时。
-连接不可用时不保证交付终态。
-
-Task.cancel 是协作式取消；清理协程必须传播 CancelledError，finally 的异步清理仍可能等待。
-工具计算在子进程中执行，父进程取消后子进程会被 kill；已经产生的副作用不会撤销。
-本实现不引入独立进程池、常驻 worker 或固定清理宽限期。
-
-## 消费端与历史
-
-agent 不负责持久化跨轮历史。backend/前端需按 message_id 展示增量，按 tool_call_id 接收逐项结果。
-取消可能留下有 tool_calls 但缺少结果的消息；消费端必须处理这种中断状态，不能直接当作完整工具历史回传模型。
-backend/前端的历史与展示适配不在本次实现范围内。
-
-覆盖测试包括：模型实时增量、同配置重试、工具快慢并发、取消执行 finally、线程未释放时 RPC 已终止、FIFO 和唯一终态。
-实际模块边界见 [DESIGN.md](DESIGN.md)，对外字段见 [API.md](../../../docs/API.md)。
-
-completion 生命周期由 astream 统一管理，内层 ModelFailed 转为异常；正常返回发 completed，异常发 failed，主动取消无终态。
+没有运行时类、注册表、独立 producer 或事件队列。暂停消费由 gRPC 流控处理；停止消费后客户端应取消原 call。取消不撤回已经交付的事件，backend 负责禁止旧轮迟到写入。call.cancel 返回不代表远端清理完成；同步阻塞工作可能延迟取消。

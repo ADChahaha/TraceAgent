@@ -15,6 +15,3 @@ class AgentService(agent_pb2_grpc.AgentServiceServicer):
                 yield event
         finally:
             await stream.aclose()
-
-    async def CancelCompletion(self, request, context):
-        return await file_extraction_agent.cancel_chat_completion(request, context)
