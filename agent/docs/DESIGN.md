@@ -1,5 +1,7 @@
 # Agent Service Design
 
+> 迁移中：本服务计划整体并入 backend，见 [backend/docs/AGENT_MERGE.md](../../backend/docs/AGENT_MERGE.md)（待实施）。
+
 agent 在同一个进程中提供两个阶段：准备可复用的本机文档资源，以及基于资源路径执行一次问答。多轮会话、任务与事件持久化由 backend 管理。
 
 ```text
