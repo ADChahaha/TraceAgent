@@ -1,83 +1,42 @@
 # Backend
 
-`backend` 是多文档 QA 的会话和事件服务。它接收前端上传的 PDF/DOCX，调用 `agent service` 的 `document_processor` 做文档标准化；用户每次提问时，backend 把已保存的 `documents + append-only messages` 交给 agent 的 document QA chat completion，并把模型过程事件持久化为可续传 SSE。
-
-它不再维护旧的 `task_spec` 字段抽取、字段提交、result/trace/replay/audit API。backend 是多轮 QA 状态事实来源；agent 只执行单次 completion。
-
-## 实现链路
+backend 用 SessionManager 管理多轮会话，通过独立 agent 的 gRPC 服务执行任务。浏览器关闭后任务继续；GET /resume 读取数据库历史、合并当前轮快照并订阅后续事件。
 
 ```text
-前端上传一个或多个 PDF/DOCX
-  -> FastAPI POST /qa/tasks 读取每个文件 bytes
-  -> 校验 PDF/DOCX 类型和 metadata
-  -> 调 agent document_processor 得到 html / display_html / markdown / blocks
-  -> 保存 qa_tasks / qa_documents
-  -> 写入 task.created / document.processed / task.ready 事件
-
-用户提交问题
-  -> POST /qa/tasks/{task_id}/inputs
-  -> 保存 user message 和 turn.created
-  -> 读取 qa_documents 组装 documents(filename + html)
-  -> 读取 qa_messages 组装多轮 messages
-  -> 调 agent POST /v1/document-qa/chat/completions
-  -> 持久化 agent.event，包括 model_message、tool_* 和 completion.*
-  -> completion.completed 时保存 assistant message，清理 active_turn_id
-  -> 前端通过 GET /qa/tasks/{task_id}/events?after_seq=n 续传事件
+问题与可选文件 → POST /chat/completion → manager 创建 turn
+  → PrepareResources（有新文件时）→ ChatCompletion → 事件落库 → SSE
+重新打开 → GET /resume → 历史与当前轮快照 → 后续 SSE
+用户取消 → POST /cancel → 本地终态 → 原 gRPC call.cancel()
 ```
-
-## 主要 API
-
-```text
-POST /qa/tasks
-GET  /qa/tasks
-GET  /qa/tasks/{task_id}
-POST /qa/tasks/{task_id}/inputs
-GET  /qa/tasks/{task_id}/events?after_seq=0
-POST /qa/tasks/{task_id}/cancel
-GET  /capabilities
-GET  /healthz
-```
-
-详细请求和响应见 [`docs/API.md`](docs/API.md)，设计边界见 [`docs/DESIGN.md`](docs/DESIGN.md)。
 
 ## 运行
 
-### 安装依赖
+从仓库根目录运行：
 
-`backend` 有独立的 Python 依赖入口。第一次运行前，从仓库根目录执行：
-
-```bash
-conda activate agent-gate
-cd backend
-pip install -e ".[dev]"
-cd ..
+```powershell
+python -m pip install -e ./agent_proto -e "./backend[dev]"
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --workers 1
 ```
 
-默认配置：
+独立启动 agent，默认 gRPC 地址 127.0.0.1:8001。一个 backend worker 保证每个 session 唯一 owner；进程重启会将遗留活跃轮标为失败。
 
-- SQLite：`backend/backend.sqlite3`
-- Agent service：gRPC `127.0.0.1:8001`
+| 环境变量 | 默认值 |
+| --- | --- |
+| BACKEND_DATABASE_PATH | backend/backend.sqlite3 |
+| AGENT_SERVICE_TARGET | 127.0.0.1:8001 |
+| AGENT_SERVICE_TIMEOUT_SECONDS | 1200 |
+| AGENT_GRPC_MAX_MESSAGE_BYTES | 67108864 |
 
-可用环境变量覆盖：
+队列、上传和回收参数通过 BackendSettings 配置。旧 AGENT_SERVICE_CANCEL_TIMEOUT_SECONDS 字段保留，但原 call.cancel() 不使用独立取消 RPC 超时。
 
-```text
-BACKEND_DATABASE_PATH=/path/to/backend.sqlite3
-AGENT_SERVICE_TARGET=127.0.0.1:8001
-AGENT_SERVICE_TIMEOUT_SECONDS=1200
+## 接口与验证
+
+执行接口为 POST /chat/completion、GET /resume、POST /cancel，另保留 GET /healthz、GET /capabilities。旧 /qa/tasks 已移除，前端需要迁移。
+
+```powershell
+python -m pytest backend/tests -q
 ```
 
-> 说明：`agent_service_target` 已是 gRPC 目标，但 `AgentClient` 仍是旧 HTTP/SSE 实现，待 service/routes 迁移时一并切换。
+[设计](docs/DESIGN.md) · [接口](docs/API.md) · [恢复机制](docs/SESSION_MANAGER.md) · [数据表](docs/table.md)
 
-启动方式：
-
-```bash
-AGENT_SERVICE_TARGET=127.0.0.1:8001 uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-## 测试
-
-后端测试使用 fake agent client，不依赖真实 OCR 或 LLM：
-
-```bash
-PYTHONPATH=. pytest backend/tests -q
-```
+当前面向单用户本地服务，没有租户鉴权。数据库初始化不迁移旧 qa_* 数据。

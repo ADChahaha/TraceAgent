@@ -6,9 +6,9 @@ from fastapi import FastAPI
 
 from backend.core.config import BackendSettings
 from backend.core.db import ThreadLocalDatabase, initialize_database
-from backend.routes import capabilities_router, tasks_router
+from backend.routes import capabilities_router, chat_router
 from backend.services.agent_client import AgentClient
-from backend.services.task_service import QaTaskService
+from backend.services.session_registry import SessionRegistry
 
 
 def create_app(
@@ -23,30 +23,34 @@ def create_app(
         database = ThreadLocalDatabase(settings.database_path)
         initialize_database(database.connect())
         resolved_agent_client = agent_client or AgentClient(
-            base_url=settings.agent_service_target,
+            target=settings.agent_service_target,
             timeout_seconds=settings.agent_request_timeout_seconds,
-            cancel_timeout_seconds=settings.agent_cancel_timeout_seconds,
+            max_message_bytes=settings.agent_grpc_max_message_bytes,
         )
-        qa_task_service = QaTaskService(
-            connection=database,
+        registry = SessionRegistry(
+            database=database,
             settings=settings,
             agent_client=resolved_agent_client,
         )
         app.state.database = database
         app.state.agent_client = resolved_agent_client
-        app.state.qa_task_service = qa_task_service
+        app.state.session_registry = registry
         try:
+            await registry.start()
             yield
         finally:
+            await registry.close()
+            if agent_client is None:
+                await resolved_agent_client.close()
             database.close()
 
     app = FastAPI(
         title="Agent Gate Backend",
-        description="多文档 QA 任务、事件续传和取消 API。",
+        description="会话 completion、快照恢复与轮次取消 API。",
         lifespan=lifespan,
     )
     app.state.settings = settings
-    app.include_router(tasks_router)
+    app.include_router(chat_router)
     app.include_router(capabilities_router)
     return app
 

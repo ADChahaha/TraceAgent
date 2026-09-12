@@ -1,6 +1,20 @@
 # Backend Devlog
 
-last updated: 2026-09-12 21:35:35
+last updated: 2026-09-12 22:41:37
+
+## 2026-09-12 22:41:37
+
+### 已完成工作
+
+- 接入 SessionRegistry、每会话 SessionManager 和独立 TurnRuntime，通过现有 gRPC 协议准备资源、执行和取消；创建、取消、事件入库经同一串行入口，完整工具消息组原子提交。
+- API 收敛为 POST /chat/completion、GET /resume、POST /cancel。页面断开仅解除订阅；恢复按数据库历史与当前轮快照生成首帧，再接实时增量，无客户端游标。
+- 实现请求幂等、慢订阅隔离、空闲回收及重启遗留轮次收口；修复首帧前断开导致重复创建、协程启动前取消漏收尾和订阅等待取消丢事件的问题。
+- 按 TDD 验证行为，backend 全量 64 项测试通过；包含真实 gRPC、有效 DOCX 样本、SQLite 回滚和 ASGI 断开场景。设计、API、表说明及对应测试文档已同步。
+
+### 当前边界与下一步
+
+- 当前使用单 backend worker；进程重启将未完成轮次标为 failed，不自动重新执行 agent。
+- frontend 尚需从旧 /qa/tasks 接入新接口；尚无租户鉴权和历史分页。
 
 ## 2026-09-12 21:35:35
 

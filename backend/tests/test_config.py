@@ -64,17 +64,15 @@ def test_backend_settings_loads_agent_cancel_timeout_from_env(monkeypatch, tmp_p
     assert settings.agent_cancel_timeout_seconds == 0.5
 
 
-def test_backend_registers_qa_routes_and_removes_old_task_routes(tmp_path: Path):
+def test_backend_registers_chat_completion_resume_cancel(tmp_path: Path):
     app = create_app(settings=BackendSettings(database_path=tmp_path / "backend.sqlite3"))
     registered_paths = _route_paths(app.routes)
 
     with TestClient(app) as client:
         old_response = client.get("/tasks")
 
-    assert "/qa/tasks" in registered_paths
-    assert "/qa/tasks/{task_id}/inputs" in registered_paths
-    assert "/qa/tasks/{task_id}/events" in registered_paths
-    assert "/qa/tasks/{task_id}/cancel" in registered_paths
+    assert {"/chat/completion", "/resume", "/cancel"} <= registered_paths
+    assert "/qa/tasks" not in registered_paths
     assert "/tasks" not in registered_paths
     assert old_response.status_code == 404
 

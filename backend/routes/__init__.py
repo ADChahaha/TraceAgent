@@ -1,7 +1,7 @@
 from backend.routes.capabilities import router as capabilities_router
-from backend.routes.tasks import router as tasks_router
+from backend.routes.chat import router as chat_router
 
 __all__ = [
     "capabilities_router",
-    "tasks_router",
+    "chat_router",
 ]

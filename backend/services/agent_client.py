@@ -1,128 +1,61 @@
-from __future__ import annotations
+"""业务参数转换为 protobuf；资源调用与 completion 流均走独立 agent 的 gRPC。"""
 
-import json
-from typing import Any
+import grpc
+from google.protobuf.json_format import MessageToDict
 
-import httpx
-
+from agent_proto import agent_pb2 as pb, agent_pb2_grpc as rpc
 from backend.services.errors import AgentServiceError
 
 
+class CompletionCall:
+    """保留原始 call 的取消能力，同时把流事件转换为普通字典。"""
+
+    def __init__(self, call):
+        self.call = call
+        self.iterator = call.__aiter__()
+
+    def cancel(self):
+        return self.call.cancel()
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            event = await self.iterator.__anext__()
+        except grpc.RpcError as exc:
+            raise AgentServiceError(f"agent gRPC: {exc.code().name}: {exc.details()}") from exc
+        result = MessageToDict(event, preserving_proto_field_name=True)
+        result["seq"] = event.seq
+        result.setdefault("tool_calls", [])
+        return result
+
+
 class AgentClient:
-    def __init__(
-        self,
-        *,
-        base_url: str,
-        timeout_seconds: float = 60.0,
-        cancel_timeout_seconds: float = 2.0,
-    ):
-        self.base_url = base_url.rstrip("/")
+    def __init__(self, *, target, timeout_seconds=1200.0, max_message_bytes=64 * 1024 * 1024):
         self.timeout_seconds = timeout_seconds
-        self.cancel_timeout_seconds = cancel_timeout_seconds
+        self.channel = grpc.aio.insecure_channel(target, options=[
+            ("grpc.max_send_message_length", max_message_bytes),
+            ("grpc.max_receive_message_length", max_message_bytes),
+        ])
+        self.stub = rpc.AgentServiceStub(self.channel)
 
-    def process_document(
-        self,
-        *,
-        file_bytes: bytes,
-        filename: str,
-        content_type: str | None,
-        file_type: str,
-    ) -> dict[str, Any]:
-        normalized_file_type = str(file_type).strip().lower().lstrip(".")
-        endpoint_by_file_type = {
-            "pdf": "/v1/document-processor/process",
-            "docx": "/v1/document-processor/docx/process",
-        }
-        endpoint = endpoint_by_file_type.get(normalized_file_type)
-        if endpoint is None:
-            raise ValueError(f"Unsupported file type: {file_type!r}")
-
-        files = {
-            "file": (
-                filename,
-                file_bytes,
-                content_type or "application/octet-stream",
-            )
-        }
-        data = {"file_type": normalized_file_type}
-        return self._post(
-            endpoint,
-            files=files,
-            data=data,
-        )
-
-    def create_document_qa_completion_stream(
-        self,
-        *,
-        completion_id: str,
-        documents: list[dict[str, Any]],
-        messages: list[dict[str, str]],
-        metadata: dict[str, Any] | None = None,
-        run_options: dict[str, Any] | None = None,
-    ):
-        payload: dict[str, Any] = {
-            "completion_id": completion_id,
-            "documents": documents,
-            "messages": messages,
-            "stream": True,
-            "metadata": metadata or {},
-        }
-        if run_options is not None:
-            payload["run_options"] = run_options
-        url = f"{self.base_url}/v1/document-qa/chat/completions"
+    async def prepare_resources(self, files):
+        request = pb.PrepareResourcesRequest(files=[pb.UploadedFile(filename=f["filename"], content=f["content"]) for f in files])
         try:
-            with httpx.Client(timeout=self.timeout_seconds) as client:
-                with client.stream("POST", url, json=payload) as response:
-                    response.raise_for_status()
-                    yield from _iter_sse_payloads(response)
-        except httpx.HTTPStatusError as exc:
-            exc.response.read()
-            raise AgentServiceError(
-                f"agent service returned {exc.response.status_code}: {exc.response.text}"
-            ) from exc
-        except httpx.HTTPError as exc:
-            raise AgentServiceError(f"agent service request failed: {exc}") from exc
-        except json.JSONDecodeError as exc:
-            raise AgentServiceError(f"agent service returned invalid SSE JSON: {exc}") from exc
+            response = await self.stub.PrepareResources(request, timeout=self.timeout_seconds)
+        except grpc.RpcError as exc:
+            raise AgentServiceError(f"agent gRPC: {exc.code().name}: {exc.details()}") from exc
+        return [{"type": ref.type, "location": ref.location} for ref in response.resource_path]
 
-    def cancel_document_qa_completion(self, completion_id: str) -> dict[str, Any]:
-        return self._post(
-            f"/v1/document-qa/chat/completions/{completion_id}/cancel",
-            timeout_seconds=self.cancel_timeout_seconds,
+    def chat_completion(self, *, completion_id, resource_path, messages, run_options=None):
+        request = pb.ChatCompletionRequest(
+            completion_id=completion_id,
+            resource_path=[pb.ResourceRef(**ref) for ref in resource_path],
+            messages=[pb.QaMessage(**message) for message in messages],
+            run_options=pb.RunOptions(**(run_options or {})),
         )
+        return CompletionCall(self.stub.ChatCompletion(request, timeout=self.timeout_seconds))
 
-    def _post(self, path: str, *, timeout_seconds: float | None = None, **kwargs) -> dict[str, Any]:
-        url = f"{self.base_url}{path}"
-        try:
-            with httpx.Client(timeout=timeout_seconds or self.timeout_seconds) as client:
-                response = client.post(url, **kwargs)
-                response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise AgentServiceError(
-                f"agent service returned {exc.response.status_code}: {exc.response.text}"
-            ) from exc
-        except httpx.HTTPError as exc:
-            raise AgentServiceError(f"agent service request failed: {exc}") from exc
-        return response.json()
-
-
-def _iter_sse_payloads(response: httpx.Response):
-    event_lines: list[str] = []
-    for line in response.iter_lines():
-        if line == "":
-            payload = _parse_sse_payload(event_lines)
-            event_lines = []
-            if payload is not None:
-                yield payload
-            continue
-        event_lines.append(line)
-    payload = _parse_sse_payload(event_lines)
-    if payload is not None:
-        yield payload
-
-
-def _parse_sse_payload(lines: list[str]) -> dict[str, Any] | None:
-    data_lines = [line.removeprefix("data: ") for line in lines if line.startswith("data: ")]
-    if not data_lines:
-        return None
-    return json.loads("\n".join(data_lines))
+    async def close(self):
+        await self.channel.close()

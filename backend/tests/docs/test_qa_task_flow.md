@@ -1,56 +1,7 @@
 # test_qa_task_flow.py
 
-这份测试覆盖 backend 破坏式重构后的 QA-only 任务流。旧的 `/tasks + task_spec + field extraction + result/trace/audit` API 不再是目标行为；backend 现在只负责多文档 QA 会话、消息、turn、事件续传和取消。
+保留原测试文件路径，契约改为三个会话接口。通过 TestClient 或直接 ASGI 消息驱动请求，检查流首帧、恢复结果和断连时后台生命周期。
 
-实现链路：
-
-```text
-POST /qa/tasks 上传 PDF/DOCX
-  -> route 读取 multipart files/file 和 metadata
-  -> qa_task_service 先校验 PDF 或 DOCX 类型并保存 qa_tasks
-  -> 写入 task.created 事件
-  -> 立刻返回 processing/document_processing task snapshot
-  -> 后台线程调用 agent document_processor
-  -> 保存 qa_documents，写入 document.processed 和 task.ready
-
-POST /qa/tasks/{task_id}/inputs
-  -> 校验 task 存在且没有 active turn
-  -> 保存 user message 和 turn.created
-  -> 立刻返回 queued turn snapshot
-  -> 后台调用 agent POST /v1/document-qa/chat/completions
-  -> backend 从 qa_messages + qa_events 重建 OpenAI 风格 messages；同 turn 的 assistant tool_calls 和 tool 结果会一起传给 agent
-  -> 持久化 agent.event
-  -> completion.completed/cancelled/failed 映射成 turn.completed/cancelled/failed
-  -> 只把 is_final=true 的 model_message 保存为 assistant message，供下一轮传给 agent
-
-GET /qa/tasks/{task_id}/events?after_seq=n
-  -> 从 qa_events 读取 seq > n 的事件并以 SSE 返回
-  -> 当前没有 active turn 且已发完已有事件时关闭
-
-GET /qa/tasks/{task_id}
-  -> 返回 task summary
-  -> 同时返回 qa_documents 的 document_id/filename/display_html
-  -> 从最近的 source_indexed agent.event 提取 source_selectors，供前端 evidence review 定位原文
-
-POST /qa/tasks/{task_id}/cancel
-  -> 标记 active turn cancelling
-  -> 写入 turn.cancel_requested 事件
-  -> 立即写入 turn.cancelled 并清空 active_turn_id
-  -> 如果已有 agent_completion_id，后台 best-effort 转发 agent cancel
-  -> 如果 agent completion 已经在同一个 turn runtime lock 内提交终态，cancel 只能在锁后观察到无 active turn 并失败
-```
-
-## 测试函数
-
-- `test_create_qa_task_processes_documents_without_task_spec`：验证创建 QA task 不再需要 `task_spec`，接口先返回 `processing/document_processing`，后台会调用 document_processor 保存文档，并且旧 `/tasks` route 已下线。
-- `test_create_qa_task_accepts_docx_and_forwards_docx_type`：验证 `.docx` 上传会被 backend 接受，并以 `file_type=docx` 和原始 content type 转发给 agent document_processor。
-- `test_qa_input_runs_agent_completion_and_persists_events`：验证用户输入接口先返回 `queued`，后台会调用 document QA completion，持久化 user message、turn、agent model message 和 terminal event，且 evidence link 保留在 `model_message` 内容中；同时确认 backend 不再向 agent completion 传 `memory`。
-- `test_qa_input_runs_agent_completion_and_persists_events`：同时验证现有 task detail 端点会返回 `documents[].display_html` 和 `source_selectors`，前端无需调用旧 replay 或新 review 端点即可打开 evidence 原文。
-- `test_qa_second_input_sends_prior_messages_to_agent`：验证第二轮输入会把上一轮 user/assistant/tool 对话一起传给 agent，backend 是多轮状态事实来源。
-  这里的历史不是压缩摘要，而是按 OpenAI chat 结构重建的 `assistant.tool_calls` 和 `role=tool` 消息。
-- `test_qa_completed_turn_saves_only_final_model_message`：验证 backend 只把 `is_final=true` 的 `model_message` 作为最终 assistant message；普通无工具过程消息不会写入下一轮历史。
-- `test_qa_task_rejects_new_input_while_turn_is_active`：验证同一个 QA task 同时只允许一个 active turn。
-- `test_qa_cancel_active_turn_calls_agent_cancel`：验证 cancel 会标记 active turn、写入 `turn.cancel_requested` 和 `turn.cancelled`，并后台转发 agent cancel。
-- `test_qa_cancel_does_not_wait_for_agent_cancel_when_provider_is_stuck`：验证 agent/provider cancel 卡住时，backend cancel 仍会立即本地收口并让 stream 回到 idle。
-- `test_qa_cancelled_turn_ignores_late_agent_completion`：验证旧 agent SSE 在 cancel 后迟到的 `model_message/completion.completed` 不会覆盖 cancelled 状态，也不会保存迟到 assistant message。
-- `test_qa_completed_terminal_event_wins_over_racing_cancel`：验证 agent terminal event 已经在 turn runtime lock 内提交时，cancel 不能插入并改成 cancelled；最终只能保留 `turn.completed`，cancel 侧看到无 active turn。
+- `test_completion_and_resume_return_snapshot_without_cursor`：completion 发起、resume 恢复完成历史、不重复执行，不暴露 SSE 游标；取消终态幂等，校验错误和旧路由下线。
+- `test_multipart_prepares_resource_references`：上传后资源引用送到 completion，非法文件在调用前拒绝。
+- `test_http_disconnect_does_not_cancel_background_turn`：收到首帧后断开真实 ASGI 请求，后台继续消费并完成。
