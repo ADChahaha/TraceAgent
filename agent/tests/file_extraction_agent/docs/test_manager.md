@@ -1,5 +1,7 @@
 # test_manager
 
+业务依赖注入 application 层，统一调用 wire_stream；涉及线级断言时，通过 `wire_stream` 组合业务事件流与生产 protobuf 编码器，RPC 用例仍经过真实路由。
+
 模型配置或类型化消息 → 模型装配与路由事件适配 → 验证 protobuf 字段、可见文本和工具调用配对。
 
 - `test_runtime_yields_event_objects_with_sequence`：直接比较 protobuf 事件，验证启动确认、完整正文及终态的字段与序号。
@@ -15,3 +17,5 @@
 - `test_qa_records_text_from_responses_api_content_blocks`：从 Responses 内容块提取可见文本。
 - `test_qa_records_terminal_stop_message_as_final_answer`：终止消息标记为最终回答。
 - `test_qa_records_model_message_content_and_tool_calls_without_reasoning`：保留文本和工具调用，不输出隐藏推理。
+
+输出适配器位于 `routes/file_extraction_agent.py`；编码错误回传业务流处理终态。

@@ -1,11 +1,12 @@
 # 文档资源设计
 
 本模块负责把解析后的 HTML 准备成可跨轮复用的资源，并发布到独立的 storage 服务。
-gRPC 层通过 `PrepareResources` 串联文件解析与资源准备；问答接口只接收返回的资源定位数组。
+application 层通过 `prepare_uploaded_resources` 串联文件解析与资源准备，gRPC 层只适配上传数据和响应；问答接口只接收返回的资源定位数组。
 
 ```text
 files（PDF / DOCX）
-  -> route 校验全部文件类型，调用 document_processor.process
+  -> route 将 protobuf 转成 UploadedFile(filename, content)，在线程中调用 application.prepare_uploaded_resources
+  -> application 校验全部文件类型，调用 document_processor.process
   -> prepare_resources(documents, raw_files) 在本机临时目录生成 Markdown 文件树并构建索引
   -> 校验临时产物（manifest/index/文档引用）
   -> 通过 S3ObjectStore（boto3）发布到 storage 服务（bucket = res_*）：
@@ -20,9 +21,11 @@ files（PDF / DOCX）
 
 已发布资源由 Agent 工具经 storage 服务读取：文档树从 `documents.zip` 整包解到内存虚拟文件系统，索引仍从独立对象读取；本模块不提供消费端加载接口。
 
+上传入口对空批次或不支持的类型抛 ValueError；解析失败包装 RuntimeError 并标明文件名；构建和发布异常直接传播，由路由映射 RPC 状态。
+
 ## 边界
 
-- 本包对外只导出 `prepare_resources`；返回 `list[ResourceRef]`（强类型，type + location）。
+- 本包导出上传入口 `prepare_uploaded_resources` 和 HTML 入口 `prepare_resources`；均返回 `list[ResourceRef]`（强类型，type + location）。
 - `documents.py` 负责 HTML 转文件（本地临时目录）；`index.py` 负责文档分块和索引构建；
   `model.py` 只供生成阶段加载模型与 tokenizer。
 - `_validate_prepared` 只校验本次临时产物，成功后才发布到 storage；不提供消费端 `load_resource`。

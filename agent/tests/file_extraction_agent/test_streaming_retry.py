@@ -11,7 +11,7 @@ from langchain_core.outputs import ChatGenerationChunk
 from pydantic import PrivateAttr
 
 from service.file_extraction_agent.core import graph, loop, model_invocation
-from routes.file_extraction_agent import stream_completion
+from tests.async_helpers import wire_stream as stream_completion
 from service.file_extraction_agent.schemas import DocumentQaMessage
 
 

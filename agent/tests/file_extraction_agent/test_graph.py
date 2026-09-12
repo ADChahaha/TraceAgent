@@ -5,10 +5,10 @@ import asyncio
 from unittest.mock import Mock, AsyncMock
 import pytest
 from langchain_core.messages import ToolMessage
-from routes import file_extraction_agent as runtime_module
+from service.file_extraction_agent import application as runtime_module
 from langchain_core.messages import AIMessage
 from service.file_extraction_agent.core.model import ConfiguredChatModel
-from routes.file_extraction_agent import stream_completion
+from tests.async_helpers import wire_stream as stream_completion
 from service.file_extraction_agent.schemas import DocumentQaMessage
 
 

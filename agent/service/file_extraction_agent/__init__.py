@@ -1,5 +1,5 @@
-"""文档问答包：workspace 与完整历史 → core.run_qa_stream → 类型化模型/工具输出。
+"""文档问答包：普通请求 → application 预检与装配 → core 执行 → 类型化业务事件。
 
-schemas 定义输入契约，core 执行模型/工具循环；gRPC 路由负责编码、编号与终态。调用方持有并关闭异步生成器，
-取消沿消费 Task 传播；本包不管理 session、活动 ID 注册表或数据库。
+application.stream_completion 提供完整业务入口，schemas 定义输入和事件契约。
+路由仅进行协议适配；调用方关闭异步流时，取消逐层传播并清理工具进程。
 """

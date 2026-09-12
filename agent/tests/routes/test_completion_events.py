@@ -1,13 +1,15 @@
 """core 类型化输出 → 路由直接生成 protobuf → 校验事件、编号、JSON 与关闭语义。"""
 
 from contextlib import aclosing
+from tests.async_helpers import wire_stream
+
 import json
 
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
 from agent_proto import agent_pb2 as pb
-from routes import file_extraction_agent as route
+from service.file_extraction_agent import application as route
 from service.file_extraction_agent.core.contracts import (
     MessageDelta, MessageStarted, ModelFailed, ModelRetry,
 )
@@ -15,7 +17,7 @@ from tests.async_helpers import async_items
 
 
 async def test_stream_returns_protobuf_from_first_event():
-    async with aclosing(route.stream_completion({}, object(), [])) as events:
+    async with aclosing(wire_stream({}, object(), [])) as events:
         first = await anext(events)
         assert isinstance(first, pb.CompletionEvent)
         assert first == pb.CompletionEvent(type="completion.created", status="in_progress", seq=1)
@@ -37,7 +39,7 @@ async def test_typed_outputs_preserve_wire_events_and_json(monkeypatch):
         AIMessage(id="final", content="回答", response_metadata={"finish_reason": "stop"}),
     ]
     monkeypatch.setattr(route, "run_qa_stream", lambda **kwargs: async_items(outputs))
-    events = [event async for event in route.stream_completion({}, object(), [])]
+    events = [event async for event in wire_stream({}, object(), [])]
     assert all(isinstance(event, pb.CompletionEvent) for event in events)
     assert [event.seq for event in events] == list(range(1, len(events) + 1))
     assert [event.type for event in events] == [
@@ -71,7 +73,7 @@ async def test_tool_result_fallback_and_failure_status(
     output = ToolMessage(content=content, artifact=artifact, status=status,
                          tool_call_id="call", name="read", additional_kwargs={"tool_args": {}})
     monkeypatch.setattr(route, "run_qa_stream", lambda **kwargs: async_items([output]))
-    events = [event async for event in route.stream_completion({}, object(), [])]
+    events = [event async for event in wire_stream({}, object(), [])]
     assert events[2].type == expected_type
     assert json.loads(events[2].result_json) == expected_result
 
@@ -91,7 +93,7 @@ async def test_failure_closes_core_and_emits_one_terminal(monkeypatch, failure):
             closed.append(True)
 
     monkeypatch.setattr(route, "run_qa_stream", outputs)
-    events = [event async for event in route.stream_completion({}, object(), [])]
+    events = [event async for event in wire_stream({}, object(), [])]
     assert events[-1].type == "completion.failed"
     assert events[-1].error_message == (str(failure) if isinstance(failure, Exception) else failure.error)
     assert [e.type for e in events if e.type.startswith("completion.")] == [
@@ -111,7 +113,7 @@ async def test_encoding_failure_closes_core_and_keeps_sequence(monkeypatch):
             closed.append(True)
 
     monkeypatch.setattr(route, "run_qa_stream", outputs)
-    events = [event async for event in route.stream_completion({}, object(), [])]
+    events = [event async for event in wire_stream({}, object(), [])]
     assert [e.type for e in events] == ["completion.created", "source_indexed", "completion.failed"]
     assert [e.seq for e in events] == [1, 2, 3]
     assert closed == [True]

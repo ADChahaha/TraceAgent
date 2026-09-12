@@ -11,11 +11,11 @@ PrepareResources（files: filename + bytes）
      type ∈ {documents, index, raw}，location 为 s3://<bucket>[/<key>]
 
 ChatCompletion（resource_refs + messages）
-  → 路由调用 prepare_workspace 预检资源，校验消息并装配模型
+  → application.stream_completion 校验请求、调用 prepare_workspace 预检资源并装配模型
   → 经 S3ObjectStore（boto3）从 storage 服务读取资源
   → 路径创建工具上下文，运行配置绑定执行器，图内保存完整 messages 和重试状态
   → 模型文本增量 / 完整消息 / 重试通知 / 单个工具结果
-  → routes/file_extraction_agent.stream_completion 直接构造不含 completion ID、带 seq 的 CompletionEvent
+  → application.stream_execution 构造不含 completion ID、带 seq 的业务 CompletionEvent，再由 routes/file_extraction_agent.py 中的编码函数编码 protobuf
   → 释放本轮运行时，保留文档资源
 ```
 
@@ -26,10 +26,12 @@ ChatCompletion（resource_refs + messages）
 | ../agent_proto/agent.proto | 仓库根目录的共享契约；独立发布 traceagent-protocol，agent/backend 均可依赖 |
 | main.py | grpc.aio 启停、阻塞工作执行器、消息大小配置、异步 Health 与 CLI 探活 |
 | routes/__init__.py | 注册异步业务方法，通过 async for 转发问答流 |
-| routes/document_resources.py | 在线程中校验上传类型、解析与准备资源，回到事件循环映射 RPC 错误 |
+| routes/document_resources.py | protobuf 转 UploadedFile，在线程中调用上传入口，编码响应并映射 RPC 错误 |
+| service/document_resources/application.py | 校验上传批次，调用 processor 解析，再调用 prepare_resources 发布 |
 | service/document_processor | PDF 调 MinerU、DOCX 调 python-docx，输出带 CSS 的 HTML |
 | service/document_resources | HTML 转文件、文档分块和 embedding 索引构建、发布到 storage 服务 |
-| routes/file_extraction_agent.py | 校验与装配；直接将 core 输出编码为 protobuf，分配 seq、处理终态并关闭内层流；动态字段保留 JSON |
+| routes/file_extraction_agent.py | protobuf 转普通参数，调用 application，编码输出并映射 RPC 错误、传播取消 |
+| service/file_extraction_agent/application.py | 校验与资源预检、模型装配、core 输出归一化、事件编号与唯一终态 |
 | service/file_extraction_agent/core/loop.py | Agent 接口：校验输入、组装工作区/工具/历史消息、执行图并转换原生流输出、关闭图流 |
 | service/file_extraction_agent/core/contracts.py | 模型与工具调用协议、单一 BoundModel、异步工具、消息输出和 JSON 类型，不承担执行 |
 | service/file_extraction_agent/core/messages.py | 提示词、历史转换、响应校验、终止信号与消息 JSON 归一化 |
@@ -54,7 +56,7 @@ main.py 读取监听地址、阻塞工作线程数和消息上限
   → ChatCompletion 的资源预检和每个工具调用通过一次性 worker 子进程执行
   → 取消和探活直接在事件循环处理
   → routes 转换 protobuf 与业务对象，保留参数缺省值及显式零值
-  → handler 直接消费 stream_completion，按顺序分配 seq 并编码 CompletionEvent
+  → handler 消费 application.stream_completion，保留业务层分配的 seq 并编码 CompletionEvent
   → handler 使用 aclosing 关闭生成器，RPC 取消沿 await 传播
   → SIGINT/SIGTERM 唤醒 asyncio.Event，await server.stop(5) 停服
 ```
@@ -79,14 +81,14 @@ prepare 子进程同样在取消时清理；已创建但未消费的生成器不
 
 ## 问答运行时
 
-`routes/file_extraction_agent.stream_completion(workspace, qa_model, messages, run_options)` 是普通异步生成器函数，直接消费 `core.loop.run_qa_stream` 的类型化输出并生成 protobuf，不经过字典事件层。路由负责输入校验、模型装配和资源预检；图使用 QaState 保存消息与重试状态，工具只接收本轮 workspace payload。不同 RPC 不共享可变执行状态；completion_id 保留格式校验，但不用于注册、去重或取消。
+`service/file_extraction_agent/application.stream_completion` 接收普通请求参数，负责业务校验、模型装配和资源预检；内部 `stream_execution(workspace, qa_model, messages, run_options)` 消费 `core.loop.run_qa_stream` 并生成类型化业务事件。路由只做协议适配，application/core 不依赖 protobuf 或 gRPC，路由内的编码函数负责输出适配；图使用 QaState 保存消息与重试状态，工具只接收本轮 workspace payload。不同 RPC 不共享可变执行状态；completion_id 保留格式校验，但不用于注册、去重或取消。
 
 ```text
 模型节点返回 AIMessage
-  → 路由直接输出 model_message.started/delta/done、重试通知和 tool_started
+  → application 输出 model_message.started/delta/done、重试通知和 tool_started
   → 工具节点并行执行，按共享 deadline 逐项经 custom 输出 ToolMessage，完整历史供下一轮模型使用
   → 每项携带调用 ID、名称、参数和成功/失败结果
-  → 路由直接输出 tool_completed / tool_failed，不维护 pending 配对字典
+  → application 输出 tool_completed / tool_failed，不维护 pending 配对字典
 ```
 
 正常完成输出 completion.completed；普通执行异常输出 completion.failed；CancelledError/GeneratorExit 直接传播，不补发终态。生成器逐层关闭，工具 finally 清理子进程。资源参数错误在首事件前返回 INVALID_ARGUMENT。

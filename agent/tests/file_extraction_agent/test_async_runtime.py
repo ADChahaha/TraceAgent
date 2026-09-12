@@ -1,8 +1,10 @@
 """多个请求内事件流异步等待，不占用阻塞执行器。"""
+from tests.async_helpers import wire_stream
+
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import pytest
-from routes import file_extraction_agent as module
+from service.file_extraction_agent import application as module
 
 async def test_waiting_streams_leave_executor_free_and_cancel_cleanly(monkeypatch):
     entered, cleaned = [], []
@@ -16,7 +18,7 @@ async def test_waiting_streams_leave_executor_free_and_cancel_cleanly(monkeypatc
     monkeypatch.setattr(module, "run_qa_stream", events)
     asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
     async def consume():
-        return [e async for e in module.stream_completion({}, object(), [])]
+        return [e async for e in wire_stream({}, object(), [])]
     tasks = [asyncio.create_task(consume()) for _ in range(4)]
     try:
         await asyncio.sleep(0)

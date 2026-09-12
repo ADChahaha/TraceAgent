@@ -4,18 +4,19 @@
 
 ```text
 completion_id + resource_refs + messages + 模型/运行配置
-  → 路由层 prepare_workspace 子进程：拉取归档 + 校验索引 → workspace payload
-  → 路由装配问答模型并直接消费 stream_completion
+  → application 调 prepare_workspace 子进程：拉取归档 + 校验索引 → workspace payload
+  → application 装配问答模型，stream_execution 消费 core 输出
   → build_tools(payload) 绑定四个工具；每次调用经 run_operation 启动工具子进程
   → build_qa_graph 绑定 RunOptions；图内 MessagesState 仅保存消息
   → 模型返回 AIMessage；有工具调用则并行执行并返回完整 ToolMessage 批次
-  → 路由 stream_completion 直接将 core 输出编码为 CompletionEvent，按消费顺序加 seq
+  → application 将 core 输出转换为业务 CompletionEvent，按消费顺序加 seq；路由编码函数编码 protobuf
   → 完成、失败或取消后关闭本轮生成器，保留文档资源
 ```
 
 ## 文件与职责
 
-- `../../routes/file_extraction_agent.py`：gRPC 校验与装配，直接将 core 输出转换为 protobuf，负责编号、终态及内层流关闭。
+- `../../routes/file_extraction_agent.py`：适配 gRPC 输入、调用业务入口与输出适配器，映射 RPC 错误并传播取消。
+- `application.py`：校验、资源预检、模型装配、业务事件语义、编号、唯一终态及执行流关闭。
 - `core/loop.py`：校验输入、绑定子进程工具与消息，委托 graph 执行，转发输出并关闭内层流。
 - `core/messages.py`：提示词、历史消息转换、响应校验与终止信号解析。
 - `core/model_invocation.py`：单次模型调用、流式消息聚合与响应校验；重试和退避由 graph 控制。
@@ -35,21 +36,19 @@ completion_id + resource_refs + messages + 模型/运行配置
 import asyncio
 from contextlib import aclosing
 
-from service.file_extraction_agent.core.tools.worker_client import prepare_workspace
-from service.file_extraction_agent.core.loop import run_qa_stream
-from service.file_extraction_agent.core.model import build_qa_model
+from service.file_extraction_agent.application import stream_completion
 from service.file_extraction_agent.schemas import DocumentQaMessage, ResourceRef
 
 
 async def main():
     # 替换成 PrepareResources 返回的实际定位，并预先配置问答模型。
-    workspace = await prepare_workspace([
+    refs = [
         ResourceRef(type="documents", location="s3://res_example/documents.zip"),
         ResourceRef(type="index", location="s3://res_example/index"),
-    ])
-    stream = run_qa_stream(
-        qa_model=build_qa_model(None),
-        workspace=workspace,
+    ]
+    stream = stream_completion(
+        completion_id="example",
+        resource_refs=refs,
         messages=[DocumentQaMessage(role="user", content="付款期限是多少？")],
     )
     async with aclosing(stream) as events:
@@ -62,7 +61,7 @@ if __name__ == "__main__":
 ```
 
 从 agent 目录、已激活的 agent-gate 环境运行此脚本。prepare_workspace 的预检在子进程执行；
-run_qa_stream 返回类型化的模型、工具和重试输出；aclosing 确保提前退出也关闭内层流。gRPC 路由消费相同输出，负责构造 CompletionEvent、编号和终态。
+stream_completion 返回类型化业务事件并负责编号和终态；aclosing 确保提前退出也关闭内层流。gRPC 路由通过 路由编码函数编码输出。
 模型配置和服务启动见 [服务 README](../../README.md)。
 
 gRPC 入口是 ChatCompletion。无效资源在首事件前返回 INVALID_ARGUMENT；执行失败输出 completion.failed。取消原 call 时由 grpc.aio 取消 handler，沿 await 传播并清理模型、工具子任务和子进程，不输出取消终态。没有活动 ID 注册表，也没有单独取消接口。

@@ -1,4 +1,12 @@
-last updated: 2026-09-12 20:45:35
+last updated: 2026-09-12 21:06:37
+
+## 2026-09-12 21:06:37
+
+### 已完成工作
+
+- routes 只适配输入/输出、映射 RPC 错误并传播取消；资源解析与发布编排、问答预检与模型装配、业务事件编号和终态迁入两个 application.py。protobuf 编码函数保留在 routes/file_extraction_agent.py，不新增独立 completion_events.py。
+- 普通 Python 参数 → application → 类型化业务事件 → 路由 protobuf 编码；编码异常回传业务流，输出唯一失败终态并关闭内层执行。
+- TDD：新增业务入口与编码异常用例先失败后通过。agent-gate 下大范围回归 210 passed、1 failed（既有测试读取尚未写完的 PID 文件）；最终位置下 70 项相关回归全部通过，包含该竞态用例重跑。同步设计、调用示例与逐测试文件文档。
 
 ## 2026-09-12 20:45:35
 

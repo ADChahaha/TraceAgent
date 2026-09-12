@@ -1,11 +1,13 @@
 """调用方直接驱动事件生成，取消沿当前 Task 传播并等待清理。"""
 
+from tests.async_helpers import wire_stream
+
 import asyncio
 
 import pytest
 
 from service.file_extraction_agent.core.contracts import MessageDelta
-from routes import file_extraction_agent as module
+from service.file_extraction_agent import application as module
 
 
 async def test_execution_stays_in_consuming_task(monkeypatch):
@@ -19,7 +21,7 @@ async def test_execution_stays_in_consuming_task(monkeypatch):
         advanced.append(2)
 
     monkeypatch.setattr(module, "run_qa_stream", events)
-    runtime = module.stream_completion({}, object(), [])
+    runtime = wire_stream({}, object(), [])
     stream = runtime
     try:
         assert (await anext(stream)).type == "completion.created"
@@ -48,7 +50,7 @@ async def test_consumer_cancellation_waits_for_inner_cleanup(monkeypatch):
 
     monkeypatch.setattr(module, "run_qa_stream", events)
     async def consume():
-        async for event in module.stream_completion({}, object(), []):
+        async for event in wire_stream({}, object(), []):
             received.append(event)
 
     task = asyncio.create_task(consume())

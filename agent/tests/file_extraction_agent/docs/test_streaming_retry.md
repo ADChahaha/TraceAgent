@@ -1,5 +1,7 @@
 # test_streaming_retry
 
+业务依赖注入 application 层；涉及线级断言时，通过 `wire_stream` 组合业务事件流与生产 protobuf 编码器，RPC 用例仍经过真实路由。
+
 真实 LangChain 回调 → 图的 messages/updates → 路由 protobuf 流；验证实时增量、重试状态和取消。单次模型与 HTTP 流测试直接验证底层调用。
 
 - `test_native_messages_arrive_before_model_finishes`：模型尚未结束时已收到 protobuf 增量；完整正文只出现一次，消息 ID 一致。

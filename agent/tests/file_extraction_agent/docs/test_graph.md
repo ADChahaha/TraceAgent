@@ -1,8 +1,10 @@
 # test_graph
 
+业务依赖注入 application 层；涉及线级断言时，通过 `wire_stream` 组合业务事件流与生产 protobuf 编码器，RPC 用例仍经过真实路由。
+
 预设模型响应与替身工具 → 真实 LangGraph → core 输出 → 路由 protobuf 流；验证调用历史、事件顺序、执行器异常和取消。
 
-- `test_stream_completion_yields_protobuf_and_terminal_completion`：真实模型/工具循环经路由输出 protobuf，验证完整事件顺序、连续序号和工具历史。
+- `test_stream_completion_yields_protobuf_and_terminal_completion`：真实模型/工具循环经业务事件经适配器输出 protobuf，验证完整事件顺序、连续序号和工具历史。
 - `test_tool_started_is_yielded_before_tool_execution`：工具结果执行前已向外产出开始调度事件。
 - `test_cancel_before_execution_does_not_call_model`：早取消不调用 provider。
 - `test_cancel_after_model_skips_tools_and_next_model`：模型调用已发布后取消，跳过工具执行且不请求下一轮模型。

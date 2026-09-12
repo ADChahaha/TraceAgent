@@ -8,8 +8,8 @@ PrepareResources(files: filename + bytes)
   → 发布到 storage 服务 → resource_path([{type, location}])（文档树为 documents.zip 归档，不再内联返回 HTML）
 
 ChatCompletion(completion_id + resource_path + messages)
-  → 路由预检资源 → stream_completion 直接消费 core 模型/工具输出 → 带 seq 的 protobuf CompletionEvent
-  → gRPC CompletionEvent 流 → 清理本轮注册项，保留文档资源
+  → 路由适配输入 → application 预检资源、执行问答并生成带 seq 的业务事件 → 路由编码函数编码 protobuf
+  → gRPC CompletionEvent 流 → 关闭本轮执行流，保留文档资源
 ```
 
 本次只迁移 agent；backend 仍使用旧 HTTP 客户端，尚不能调用新服务。

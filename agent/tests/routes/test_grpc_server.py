@@ -43,7 +43,7 @@ def test_capabilities_is_not_exposed(rpc, rpc_channel):
 
 def test_blocking_preparation_keeps_control_rpcs_responsive(monkeypatch, rpc_server_factory):
     """单线程执行器忙于文档解析时，事件循环仍可探活。"""
-    from routes import document_resources
+    from service.document_resources import application as document_resources
     started = threading.Event()
     release = threading.Event()
 

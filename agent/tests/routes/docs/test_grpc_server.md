@@ -1,5 +1,7 @@
 # gRPC 服务入口测试
 
+业务依赖注入 application 层；涉及线级断言时，通过 `wire_stream` 组合业务事件流与生产 protobuf 编码器，RPC 用例仍经过真实路由。
+
 导入 main → 检查 gRPC server 工厂 → 后续通过真实本机 RPC 验证启动与生命周期。
 
 - `test_entrypoint_provides_grpc_server`：入口提供异步 create_server，并移除旧 FastAPI app。

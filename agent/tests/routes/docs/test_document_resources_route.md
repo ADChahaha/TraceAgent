@@ -1,5 +1,7 @@
 # 文档资源 gRPC 测试
 
+业务依赖注入 application 层；涉及线级断言时，通过 `wire_stream` 组合业务事件流与生产 protobuf 编码器，RPC 用例仍经过真实路由。
+
 真实 DOCX 上传 → 真实 HTML 解析与文档树生成 → 替身 embedding → 发布到 storage 服务（返回资源定位数组）→ 路径问答。通过本机 RPC 验证新资源契约及错误码。
 
 - `test_prepare_real_docx_publishes_complete_resource`：真实多文档上传发布单个 `documents.zip` 和独立的 manifest/index/vectors/raw 对象，不再内联返回 HTML，也不再在桶里散落 `documents/` 前缀对象。

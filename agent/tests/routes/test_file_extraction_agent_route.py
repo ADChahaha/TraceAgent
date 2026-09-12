@@ -6,7 +6,7 @@ import grpc
 import pytest
 from tests.async_helpers import async_items
 from agent_proto import agent_pb2 as pb
-from routes import file_extraction_agent as qa_routes
+from service.file_extraction_agent import application as qa_routes
 from langchain_core.messages import AIMessage, ToolMessage
 from service.file_extraction_agent.schemas import RunOptions
 
@@ -162,3 +162,19 @@ def test_legacy_request_fields_are_not_in_protocol():
     """新契约只接收资源路径，不定义旧业务字段。"""
     fields = pb.ChatCompletionRequest.DESCRIPTOR.fields_by_name
     assert not {"documents", "metadata", "memory", "task_spec"} & set(fields.keys())
+
+
+def test_protobuf_encoding_failure_is_terminal_and_closes(rpc, execution, monkeypatch):
+    """非法 UTF-8 正文在协议编码时失败，由业务流收口并清理 core。"""
+    from service.file_extraction_agent.core.contracts import MessageDelta
+    closed = []
+    async def outputs(**kwargs):
+        try:
+            yield MessageDelta("m", "\ud800")
+        finally:
+            closed.append(True)
+    monkeypatch.setattr(qa_routes, "run_qa_stream", outputs)
+    events = list(rpc.ChatCompletion(request(), timeout=5))
+    assert [e.type for e in events] == ["completion.created", "source_indexed", "completion.failed"]
+    assert [e.seq for e in events] == [1, 2, 3]
+    assert closed == [True]

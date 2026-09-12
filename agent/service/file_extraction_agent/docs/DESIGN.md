@@ -4,10 +4,10 @@
 
 ```text
 resource_refs([{type, location}]) + messages + 模型/运行配置
-  -> route 调 tools/worker_client.prepare_workspace 启动 prepare 子进程
+  -> route 将 protobuf 转成普通参数，application.stream_completion 校验 ID/消息后调 tools/worker_client.prepare_workspace 启动 prepare 子进程
        -> worker 按 resource_refs 拉取 documents.zip、加载并校验索引
        -> 返回 workspace payload（归档 bytes + 已解析索引），父进程只保存这份数据
-  -> 路由装配模型，消费自身的 stream_completion protobuf 异步生成器
+  -> application 装配模型，消费 stream_execution 业务事件流
   -> run_qa_stream 用 workspace 调 build_tools；四个工具只经 worker_client.run_operation
      把 operation、参数和全量 workspace 下发给一次性工具子进程
   -> messages.build_qa_messages 转换历史消息
@@ -15,9 +15,11 @@ resource_refs([{type, location}]) + messages + 模型/运行配置
   -> QaState 保存完整 messages 与请求次数、失败信息、退避时长
   -> LangGraph agent 单次请求 / retry_wait 指数退避 / tools 工具节点
   -> loop 消费 graph.astream，转换 messages 增量、updates 模型结果和 custom 单个工具结果，输出类型化通知
-  -> 路由 stream_completion 直接将类型化输出编码为 CompletionEvent，按消费顺序分配 seq
-  -> gRPC 转发 protobuf；不经过字典事件层，core 不依赖 protobuf
+  -> application.stream_execution 归一化 core 输出为业务 CompletionEvent，按消费顺序分配 seq
+  -> routes/file_extraction_agent.py 中的编码函数 只映射字段并编码 JSON，gRPC 转发 protobuf；application/core 不依赖传输协议
 ```
+
+schemas.CompletionEvent 使用普通 dataclass，动态 args/result 保留原值；Unset 区分字段缺省与 JSON null。编码器保留显式零值和 false。
 
 ## 存储访问
 
@@ -36,13 +38,14 @@ resource_refs([{type, location}]) + messages + 模型/运行配置
 
 ## 请求内执行
 
-路由校验 completion_id 格式、非空 messages 与资源，调用 build_qa_model 后消费自身的 stream_completion。该函数直接迭代 core 类型化输出；同步辅助函数只负责映射 protobuf，模型消息另输出对应的 tool_started。没有 manager、运行时类、独立 producer、锁或队列；completion_id 不再用于活动去重，相同 ID 的 RPC 互不影响。
+application.stream_completion 校验 completion_id 格式、非空 messages 与资源，调用 build_qa_model 后消费 stream_execution。后者迭代 core 类型化输出，解释模型终止信号与工具结果，生成模型事件和对应的 tool_started。路由只做输入转换、输出编码、RPC 错误映射和取消传播。没有 manager、运行时类、独立 producer、锁或队列；completion_id 不再用于活动去重，相同 ID 的 RPC 互不影响。
 
 ```text
-handler 使用 aclosing 消费 stream_completion(workspace, qa_model, messages, run_options)
+handler 使用 aclosing 消费 application.stream_completion(completion_id, resource_refs, messages, model_config, run_options)
+  → application 预检资源、装配模型，调用 stream_execution(workspace, qa_model, messages, run_options)
   → 输出 completion.created
   → 输出 source_indexed，直接 async for 消费 core.run_qa_stream
-  → 模型、工具、重试通知直接编码成 protobuf 并逐条编号
+  → 模型、工具、重试通知转换成业务事件并逐条编号，路由编码 protobuf
   → 正常结束输出 completion.completed；普通异常输出 completion.failed
   → RPC 取消沿 await 传播，不转换 CancelledError/GeneratorExit，不生成取消终态
   → aclosing 逐层关闭生成器，等待模型和工具清理
@@ -62,11 +65,11 @@ loop.stream_qa_graph 使用 graph.astream(stream_mode=["messages", "updates", "c
 
 失败结果保留 retry_after_seconds：从响应头优先解析 retry-after-ms，其次 Retry-After 秒数或 HTTP 日期；仅接受有限且大于 0、不超过 120 秒的值，否则回退到随机指数退避。graph 优先采用该值，不叠加抖动。等待时间只计算一次，事件使用同一值换算毫秒。
 
-失败更新转换成 ModelRetry 或 ModelFailed。重试通知在退避结束前输出，携带失败尝试的 message_id、下一次 attempt、max_attempts=5、retry_delay_ms、error；下一次请求使用新 ID。路由将 ModelFailed 转异常，由 stream_completion 统一输出 completion.failed；编码异常也进入同一失败出口并关闭 core 流。关闭图流传播取消，模型与退避中的 CancelledError 不转换为失败或重试。
+失败更新转换成 ModelRetry 或 ModelFailed。重试通知在退避结束前输出，携带失败尝试的 message_id、下一次 attempt、max_attempts=5、retry_delay_ms、error；下一次请求使用新 ID。application 将 ModelFailed 转异常，由 stream_execution 统一输出 completion.failed；动态值在输出前校验为合法 JSON，无效值也进入同一失败出口并关闭 core 流；protobuf 编码失败经 athrow 回传业务流，由同一终态出口处理，复用未发送事件的序号。关闭图流传播取消，模型与退避中的 CancelledError 不转换为失败或重试。
 
 RunOptions 只保留 tool_execution_timeout，默认 60 秒；删除从未参与执行的 max_tool_calls。LangGraph 的递归保护仍为 10000，由 graph 内部配置。
 
-路由负责输入校验、prepare_workspace 子进程预检和模型装配。首事件前参数错误映射 INVALID_ARGUMENT，其他初始化错误映射 INTERNAL。prepare 取消或失败在 finally kill；source_indexed 仅返回 ok=true，不遍历文档。标准库与内部依赖在顶部导入，重型 embedding 依赖仍延迟加载。
+application 负责业务校验、prepare_workspace 子进程预检和模型装配；路由只适配 protobuf 与普通参数。首事件前参数错误映射 INVALID_ARGUMENT，其他初始化错误映射 INTERNAL。prepare 取消或失败在 finally kill；source_indexed 仅返回 ok=true，不遍历文档。标准库与内部依赖在顶部导入，重型 embedding 依赖仍延迟加载。
 
 ## 循环职责拆分
 
@@ -90,7 +93,7 @@ RunOptions 只保留 tool_execution_timeout，默认 60 秒；删除从未参与
 模型节点调用 model_invocation._invoke_model_message
   → 校验响应完整性及工具 ID 唯一性
   → yield AIMessage
-  → 路由输出 model_message.done；有调用则输出 tool_started
+  → application 输出 model_message.done；有调用则输出 tool_started
 
 工具节点调用 executor._execute_tools_parallel
   → asyncio.create_task 并发执行整批工具协程
@@ -98,7 +101,7 @@ RunOptions 只保留 tool_execution_timeout，默认 60 秒；删除从未参与
   → 每项 ToolMessage 携带 tool_call_id、name、additional_kwargs.tool_args、artifact、status
   → 每项完成经 on_result → graph custom → loop yield ToolMessage
   → 全部完成后才将完整结果写入图状态，供下一轮模型使用
-  → 路由直接输出 tool_completed / tool_failed
+  → application 输出 tool_completed / tool_failed
 ```
 
 事件包装不维护 pending 配对字典。工具节点按调用 ID 保留已发布的完整 ToolMessage；执行器异常时仅为未发布项补失败结果，再按原调用顺序写入模型历史，已发布结果不覆盖、不重复输出。普通模型调用失败在图中指数退避，五次耗尽后通过 ModelFailed 以 completion.failed 收口。

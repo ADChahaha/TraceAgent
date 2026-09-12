@@ -1,5 +1,7 @@
 # test_rpc_owned_execution
 
+业务依赖注入 application 层；涉及线级断言时，通过 `wire_stream` 组合业务事件流与生产 protobuf 编码器，RPC 用例仍经过真实路由。
+
 真实 gRPC 客户端 → 路由消费 core 替身 → 客户端取消、deadline 或发送背压 → 验证服务端 finally 和 RPC 隔离。
 
 - `test_same_id_calls_are_independent`：相同请求 ID 的两个 RPC 可以并行，取消其中一个不影响另一个。

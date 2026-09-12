@@ -5,14 +5,14 @@
 
 ```text
 ChatCompletion(resource_path, messages)
-  → 路由校验资源、装配模型并直接消费 stream_completion
+  → 路由适配普通参数，application.stream_completion 预检资源、装配模型
   → loop.run_qa_stream 使用已准备的 workspace 绑定工具并转换模型消息
   → graph.build_qa_graph 编译 agent / retry_wait / tools
   → loop 消费 graph.astream(messages, updates, custom)
       ├─ messages：可见模型 chunk → MessageStarted / MessageDelta
       ├─ updates：模型完整结果或失败 → AIMessage / ModelRetry / ModelFailed
       └─ custom：单个工具结果 → ToolMessage
-  → 路由 stream_completion 直接构造并编号 protobuf → gRPC
+  → application.stream_execution 生成并编号业务事件 → 路由编码函数编码 protobuf → gRPC
 ```
 
 ## 模型与重试
@@ -34,7 +34,7 @@ executor 接收 tool_calls、tools、共享 timeout 和 on_result
   -> 工具经 worker_client.run_operation 启动一次性子进程并等待 stdout
   -> asyncio.wait(FIRST_COMPLETED) 等待下一项完成或共享 deadline
   -> 完成项归一化成 ToolMessage，立即调用 on_result
-  -> graph writer 写 custom → loop → tool_completed / tool_failed
+  -> graph writer 写 custom → loop → application 生成 tool_completed / tool_failed
   -> 全部完成后按原调用顺序返回完整历史，tools 节点更新 messages
   -> graph 再调用下一轮模型
 ```

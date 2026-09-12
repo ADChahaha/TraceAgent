@@ -1,4 +1,7 @@
 """请求内事件转换和模型配置验证；旧注册表生命周期由 RPC 测试替代。"""
+from tests.async_helpers import wire_stream
+
+from routes.file_extraction_agent import encode_completion_event
 import pytest
 import json
 from agent_proto import agent_pb2 as pb
@@ -6,8 +9,8 @@ from langchain_core.messages import AIMessage, ToolMessage
 from tests.async_helpers import async_items
 from service.file_extraction_agent.core import model as model_module
 from service.file_extraction_agent.core.model import build_chat_model, normalize_model_config
-from routes import file_extraction_agent as runtime_module
-from routes.file_extraction_agent import stream_completion
+from service.file_extraction_agent import application as runtime_module
+from tests.async_helpers import wire_stream as stream_completion
 from service.file_extraction_agent.schemas import DocumentQaMessage, ModelConfig, RunOptions
 
 async def test_runtime_yields_event_objects_with_sequence(resource_path, monkeypatch):
@@ -32,7 +35,7 @@ async def test_runtime_yields_event_objects_with_sequence(resource_path, monkeyp
 
 
 async def test_route_streams_without_manager(resource_path, monkeypatch):
-    from routes import file_extraction_agent as route
+    from service.file_extraction_agent import application as route
 
     monkeypatch.setattr(
         route,
@@ -41,7 +44,7 @@ async def test_route_streams_without_manager(resource_path, monkeypatch):
             [AIMessage(content="回答", response_metadata={"finish_reason": "stop"})]
         ),
     )
-    runtime = route.stream_completion(
+    runtime = wire_stream(
         resource_path, object(), [DocumentQaMessage(role="user", content="问题")]
     )
     events = [item async for item in runtime]
@@ -63,7 +66,7 @@ async def test_startup_events_only_acknowledge_without_reading_documents(resourc
 
     monkeypatch.setattr(DocumentFileTree, "entries", forbidden)
     monkeypatch.setattr(DocumentFileTree, "read", forbidden)
-    stream = runtime_module.stream_completion(
+    stream = wire_stream(
         workspace=resource_path,
         messages=[DocumentQaMessage(role="user", content="问题")],
         qa_model=object(),
@@ -110,7 +113,7 @@ async def test_stream_wraps_messages_and_pairs_same_name_calls(tmp_path, monkeyp
     monkeypatch.setattr(runtime_module, "run_qa_stream", lambda *args, **kwargs: async_items([m for item in model_messages for m in (item if isinstance(item, list) else [item])]))
     events = [
         item
-        async for item in runtime_module.stream_completion(
+        async for item in wire_stream(
             workspace=resource_path,
             messages=[DocumentQaMessage(role="user", content="问题")],
             qa_model=object(),
@@ -142,7 +145,7 @@ async def test_route_outputs_protobuf_without_dictionary_boundary(tmp_path, monk
     )
     events = [
         item
-        async for item in runtime_module.stream_completion(
+        async for item in wire_stream(
             workspace=resource_path,
             messages=[DocumentQaMessage(role="user", content="问题")],
             qa_model=object(),
@@ -266,13 +269,13 @@ def test_qa_records_text_from_responses_api_content_blocks(tmp_path):
         ],
         tool_calls=[{"id": "call-1", "name": "ls", "args": {"path": ""}}],
     )
-    event = runtime_module._model_message_event(message)
+    event = encode_completion_event(runtime_module._model_message_event(message))
     assert event.content == "I will inspect root. "
 
 
 def test_qa_records_terminal_stop_message_as_final_answer(tmp_path):
     message = AIMessage(content="最终答案。", response_metadata={"finish_reason": "stop"})
-    event = runtime_module._model_message_event(message)
+    event = encode_completion_event(runtime_module._model_message_event(message))
     assert event.content == "最终答案。"
     assert event.is_final is True
     assert event.stop_signal == "stop"
@@ -284,7 +287,7 @@ def test_qa_records_model_message_content_and_tool_calls_without_reasoning(tmp_p
         additional_kwargs={"reasoning_content": "hidden reasoning must not be persisted"},
         tool_calls=[{"id": "call-1", "name": "ls", "args": {"path": ""}}],
     )
-    event = runtime_module._model_message_event(message)
+    event = encode_completion_event(runtime_module._model_message_event(message))
     assert event == pb.CompletionEvent(
         message_id="", type="model_message.done",
         content="I will inspect the root listing while calling a tool.", tool_call_count=1,

@@ -6,7 +6,7 @@ import threading
 from langchain_core.messages import AIMessageChunk
 
 from service.file_extraction_agent.core import executor, loop, model_invocation
-from routes.file_extraction_agent import stream_completion
+from tests.async_helpers import wire_stream as stream_completion
 from service.file_extraction_agent.schemas import DocumentQaMessage
 
 

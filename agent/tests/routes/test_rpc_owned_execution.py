@@ -7,7 +7,7 @@ import grpc
 import pytest
 
 from agent_proto import agent_pb2 as pb
-from routes import file_extraction_agent as route
+from service.file_extraction_agent import application as route
 from service.file_extraction_agent.core.contracts import MessageDelta
 
 

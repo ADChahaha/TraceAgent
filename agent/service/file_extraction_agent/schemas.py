@@ -2,10 +2,49 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 from typing import Literal, Protocol, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+
+
+class Unset(Enum):
+    """区分未提供的动态字段与显式 JSON null。"""
+
+    VALUE = "unset"
+
+
+@dataclass
+class CompletionToolCall:
+    id: str
+    name: str
+    args: JsonValue
+
+
+@dataclass
+class CompletionEvent:
+    """业务事件：application 确定语义和序号，传输层只负责字段编码。"""
+
+    type: str
+    seq: int = 0
+    status: str | None = None
+    message_id: str | None = None
+    content: str | None = None
+    delta: str | None = None
+    tool_call_count: int | None = None
+    tool_calls: list[CompletionToolCall] = field(default_factory=list)
+    is_final: bool | None = None
+    stop_signal: str | None = None
+    tool: str | None = None
+    tool_call_id: str | None = None
+    args: JsonValue | Unset = Unset.VALUE
+    result: JsonValue | Unset = Unset.VALUE
+    attempt: int | None = None
+    max_attempts: int | None = None
+    retry_delay_ms: int | None = None
+    error: str | None = None
+    error_message: str | None = None
 
 
 class ResourceRefProtocol(Protocol):

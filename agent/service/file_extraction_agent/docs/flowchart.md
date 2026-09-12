@@ -4,13 +4,15 @@
 
 ```mermaid
 flowchart TD
-    A[ChatCompletion 请求] --> B[校验消息与资源定位]
+    A[ChatCompletion 请求] --> R[路由适配普通参数]
+    R --> B[application 校验消息与资源定位]
     B --> C[prepare_workspace 子进程]
     C --> D[build_qa_model]
-    D --> E[stream_completion 直接迭代]
+    D --> E[application.stream_execution 迭代]
     E --> F[run_qa_stream 模型与工具循环]
-    F --> G[路由直接将 core 输出编码 protobuf 并编号]
-    G --> H[gRPC 发送]
+    F --> G[application 生成业务事件、编号和终态]
+    G --> P[路由编码函数编码 protobuf]
+    P --> H[gRPC 发送]
     X[客户端 call.cancel 或 deadline] --> Y[取消 handler]
     Y --> Z[取消 await 并逐层关闭生成器]
     Z --> W[关闭模型流与清理工具子进程]

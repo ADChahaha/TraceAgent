@@ -14,3 +14,13 @@ async def wait_event(event, timeout=None):
         return True
     except TimeoutError:
         return False
+
+
+async def wire_stream(workspace, qa_model, messages, run_options=None):
+    """测试组合：service 执行事件 → 生产 protobuf 编码器，保留线级回归断言。"""
+    from contextlib import aclosing
+    from service.file_extraction_agent.application import stream_execution
+    from routes.file_extraction_agent import encode_completion_stream
+    async with aclosing(encode_completion_stream(stream_execution(workspace, qa_model, messages, run_options))) as events:
+        async for event in events:
+            yield event
