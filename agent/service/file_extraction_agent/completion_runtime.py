@@ -20,20 +20,20 @@ from service.file_extraction_agent.core.contracts import (
     MessageStarted, MessageDelta, ModelRetry, ModelFailed, QaModel,
 )
 from service.file_extraction_agent.core.messages import _message_stop_signal, _terminal_stop_signals
-from service.file_extraction_agent.schemas import DocumentQaMessage, ResourceRefs, RunOptions
+from service.file_extraction_agent.schemas import DocumentQaMessage, RunOptions
 
 _DONE = object()
 
 
 async def stream_completion_events(
-    *, resource_path: ResourceRefs, messages: list[DocumentQaMessage],
+    *, workspace: dict[str, Any], messages: list[DocumentQaMessage],
     qa_model: QaModel | None = None,
     run_options: RunOptions | None = None, should_stop=None,
 ) -> AsyncIterator[dict[str, Any]]:
     """仅包装 Agent 普通事件；最终模型失败抛异常，取消向内层传播。"""
     yield {"type": "source_indexed", "tool": "source_index", "result": {"ok": True}}
     async with aclosing(run_qa_stream(
-        resource_path=resource_path, messages=messages, qa_model=qa_model,
+        workspace=workspace, messages=messages, qa_model=qa_model,
         run_options=run_options, should_stop=should_stop,
     )) as outputs:
         async for output in outputs:
@@ -103,10 +103,10 @@ def _message_content_text(content: Any) -> str:
 class CompletionRuntime:
     """单消费者流：启动 producer → FIFO 普通事件 → 唯一终态出口 → 清理注册项。"""
 
-    def __init__(self, resource_path: ResourceRefs, qa_model: QaModel,
+    def __init__(self, workspace: dict[str, Any], qa_model: QaModel,
                  messages: list[DocumentQaMessage], run_options: RunOptions | None = None,
                  on_close: Callable[[], None] | None = None) -> None:
-        self.resource_path = resource_path
+        self.workspace = workspace
         self.messages = messages
         self.run_options = run_options
         self.model = qa_model
@@ -169,7 +169,7 @@ class CompletionRuntime:
 
     async def _produce(self) -> None:
         async with aclosing(stream_completion_events(
-            resource_path=self.resource_path, messages=self.messages,
+            workspace=self.workspace, messages=self.messages,
             run_options=self.run_options, qa_model=self.model,
             should_stop=lambda: self.cancel_requested,
         )) as events:

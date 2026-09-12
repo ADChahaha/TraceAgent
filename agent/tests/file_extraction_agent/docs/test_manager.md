@@ -1,6 +1,6 @@
 # test_manager.py
 
-执行链路：manager 委托工具层预检资源路径和索引 → 注册独立 completion_runtime.CompletionRuntime → 接收模型消息和逐项工具结果 → 锁内队列提交 → consumer 分配 seq 并返回事件字典 → 运行时通过 on_close 移除注册表，保留资源。
+执行链路：路由层先经 prepare 子进程取得 workspace payload（归档 bytes + 已解析索引）→ manager 校验请求、装配模型并注册独立 completion_runtime.CompletionRuntime → 接收模型消息和逐项工具结果 → 锁内队列提交 → consumer 分配 seq 并返回事件字典 → 运行时通过 on_close 移除注册表，保留资源。
 
 测试消费 manager.create(...) 返回的运行时：迭代其 stream()，断连仅调用运行时 close；测试覆盖未迭代就关闭（runtime.close）、断连唤醒和 ID 复用后的隔离。
 
@@ -9,7 +9,7 @@
 ## 测试函数
 
 - `test_disconnect_before_iteration_does_not_start_producer`：注册回调后立即断开，首次迭代不创建 producer，仍清理注册项。
-- `test_unstarted_stream_close_removes_registration`：预检注册后尚未迭代就关闭，runtime.close() 仍移除注册项且不启动执行。
+- `test_unstarted_stream_close_removes_registration`：注册后尚未迭代就关闭，runtime.close() 仍移除注册项且不启动执行。
 - `test_disconnect_wakes_consumer_and_stops_producer`：断连唤醒阻塞 consumer 并设置 producer 停止信号；旧回调不取消复用相同 ID 的新运行时。
 - `test_runtime_yields_event_objects_with_sequence`：运行时逐条输出带连续 seq 的事件字典，保留正文换行并完成收尾；不输出 SSE 文本。
 - `test_manager_keeps_id_outside_runtime_and_cleans_only_matching_entry`：CompletionRuntime 构造函数和对象不接收或保存 ID；ID 仅保存在注册表和 manager 的流清理闭包；一轮结束只清理对应注册项，另一轮仍可按 ID 取消并清理。
@@ -21,7 +21,7 @@
 - `test_graph_keeps_events_as_objects_until_stream_boundary`：图执行器返回事件字典，仅包装索引和 Agent 事件，不生成生命周期事件。
 - `test_stream_preserves_runtime_failure_with_special_characters`：运行时异常含换行、制表符、引号和反斜杠时，仍输出一个保留原始异常文本的失败事件。
 - `test_stream_preserves_terminal_words_in_data`：正文含终态字样时仍输出后续真实终态。
-- `test_create_completion_stream_builds_completion_input_and_runs_graph`：用 fake model builder 和 fake stream graph 确认 `completion_manager.create(...)` 只传递资源路径、messages 和 qa model，completion ID 留在运行时管理层。
+- `test_create_completion_stream_builds_completion_input_and_runs_graph`：用 fake model builder 和 fake stream graph 确认 `completion_manager.create(...)` 只传递 workspace、messages 和 qa model，completion ID 留在运行时管理层。
 - `test_create_completion_stream_validates_input_before_iteration`：确认 completion 输入校验发生在返回事件 iterator 前，route 层可以把业务入参错误稳定映射为传输层参数错误。
 - `test_create_completion_stream_registers_completion_runtime_before_iteration`：确认 active completion 会在返回 iterator 前注册，backend 立即调用 cancel 时不会因为流还没开始迭代而得到 `not_found`；早取消后 consumer 直接结束，不再启动 graph/provider producer。
 - `test_create_completion_stream_cancel_does_not_wait_for_blocked_graph`：取消 producer 打断阻塞等待，Task 完成回调唤醒 consumer，等待清理后直接结束。
@@ -29,7 +29,7 @@
 - `test_create_completion_stream_emits_only_one_terminal_event_when_cancel_races_completed`：取消与完成竞争时，不重复输出终态；取消先被观察到则直接关闭。
 - `test_terminate_interrupts_active_tool_batch`：取消中断活动工具等待，无需释放工具 gate 即可关闭，无迟到工具结果。
 - `test_should_stop_is_wired_to_cancel_requested`：验证 `_produce` 把 `should_stop=lambda: self.cancel_requested` 注入到 `stream_completion_events`，使取消信号能在图执行外部被观测——cancel 前 should_stop 为 False，terminate 后变为 True。
-- `test_completion_manager_create_runs_graph_and_returns_events`：确认 `CompletionManager.create(...)` 会校验路径、传递消息、创建 qa model，并返回可消费的事件流。
+- `test_completion_manager_create_runs_graph_and_returns_events`：确认 `CompletionManager.create(...)` 会校验 workspace、传递消息、创建 qa model，并返回可消费的事件流。
 - `test_completion_manager_create_registers_before_iteration_and_terminate_cancels`：确认 `create` 在返回事件流前先注册 runtime，`terminate` 能把 active completion 取消，早取消后 consumer 直接结束且不再启动 producer。
 - `test_completion_manager_terminate_returns_not_found_for_unknown`：确认 `terminate` 对未知 completion id 返回 `not_found`。
 - `test_completion_manager_get_status_returns_none_for_unknown`：确认 `get_status` 对未知 completion id 返回 `None`。
@@ -42,7 +42,7 @@
 - `test_qa_records_text_from_responses_api_content_blocks`：只提取 Responses 内容块中的可见文本。
 - `test_qa_records_terminal_stop_message_as_final_answer`：合法终止消息标为最终回答。
 - `test_qa_records_model_message_content_and_tool_calls_without_reasoning`：保留工具调用和可见文本，不泄露推理。
-事件替身和事件断言均不携带 completion ID；取消/状态接口仍按 ID 定位运行时。运行时测试通过真实 resource_path 进入，保留取消竞态、FIFO、终态唯一和消息包装覆盖。原每轮建树/清理测试由资源准备和损坏资源测试替代。
+事件替身和事件断言均不携带 completion ID；取消/状态接口仍按 ID 定位运行时。运行时测试把 `resource_path` fixture 的值当作 workspace 传入，保留取消竞态、FIFO、终态唯一和消息包装覆盖。原每轮建树/清理测试由 prepare payload 与损坏资源测试替代。
 
 模型装配替身注入 manager；事件生成和图执行替身注入 completion_runtime。现有取消竞态、FIFO、注册表移除和终态测试覆盖拆分后的协作。
 

@@ -1,4 +1,4 @@
-"""Agent 入口：资源路径与历史 → 初始化工具和消息 → 执行图 → 转换并输出类型化通知。
+"""Agent 入口：workspace payload 与历史 → 绑定工具和消息 → 执行图 → 转换并输出类型化通知。
 
 本模块消费 LangGraph messages/updates/custom，管理消息 ID 并转换增量、完整结果和失败通知。
 节点路由由 graph 决定；无效输入抛 ValueError，执行异常向运行时传播，关闭时等待内层流清理。
@@ -6,10 +6,9 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import aclosing
-from typing import cast
+from typing import Any, cast
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage, AnyMessage, ToolMessage
@@ -21,28 +20,26 @@ from service.file_extraction_agent.core.contracts import (
 from service.file_extraction_agent.core.graph import MODEL_MAX_ATTEMPTS, build_qa_graph
 from service.file_extraction_agent.core.messages import build_qa_messages
 from service.file_extraction_agent.core.tools import build_tools
-from service.file_extraction_agent.core.tools.workspace import open_workspace
-from service.file_extraction_agent.schemas import DocumentQaMessage, ResourceRefs, RunOptions
+from service.file_extraction_agent.schemas import DocumentQaMessage, RunOptions
 
 QA_RECURSION_LIMIT = 10000
 
 
 async def run_qa_stream(
     *,
-    resource_path: ResourceRefs,
+    workspace: dict[str, Any],
     messages: list[DocumentQaMessage],
     qa_model: QaModel,
     run_options: RunOptions | None = None,
     should_stop: StopCheck | None = None,
 ) -> AsyncGenerator[AgentOutput, None]:
-    """校验路径和消息 → 初始化共享工具上下文 → 执行并消费图流 → 输出模型消息或单个工具结果。"""
+    """校验 messages/workspace → 绑定子进程工具 → 执行并消费图流 → 输出模型消息或单个工具结果。"""
     if not messages:
         raise ValueError("messages must be a non-empty list")
-    if not resource_path:
-        raise ValueError("resource_path is required")
+    if not workspace:
+        raise ValueError("workspace is required")
     if should_stop is not None and should_stop():
         return
-    workspace = await asyncio.to_thread(open_workspace, resource_path)
     async with aclosing(
         stream_qa_graph(
             qa_model=qa_model,

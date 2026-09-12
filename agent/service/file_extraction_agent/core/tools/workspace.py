@@ -1,15 +1,19 @@
 """资源定位数组 → 打开对象存储 → 文档工具上下文；索引读取委托 embedding.py。
 
-open_workspace 接收资源定位数组（[{type, location}]），按 type 找到 documents 与
-index 位置，打开 ObjectStore 并构造文件访问器与 embedding 访问器。
-validate_resource 额外校验索引以支持流开始前的资源预检。
+load_workspace_payload 在工具子进程里执行：按 type 找到 documents 与 index 位置，
+从 storage 服务拉取 documents.zip、加载并校验索引，最后序列化成父进程保存、
+每次工具调用原样下发的 workspace payload。
+document_tree_from_payload 在只读工具子进程里执行：只用 payload 中的归档 bytes
+重建文档树，不再访问对象存储。
 非法位置、越界 key、损坏资源均以 ValueError 结束，不生成任何文件或向量。
 """
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from service.object_store import (
     ArchiveObjectStore,
@@ -18,7 +22,10 @@ from service.object_store import (
     build_s3_object_store,
     parse_resource_path,
 )
-from service.file_extraction_agent.core.tools.embedding import EmbeddingResources
+from service.file_extraction_agent.core.tools.embedding import (
+    EmbeddingResources,
+    index_to_payload,
+)
 from service.file_extraction_agent.core.tools.base import order_key
 from service.file_extraction_agent.schemas import ResourceRefs
 
@@ -148,11 +155,11 @@ class DocumentFileTree:
 @dataclass
 class ToolWorkspace:
     document: DocumentFileTree
-    embedding: EmbeddingResources
+    embedding: EmbeddingResources | None = None
 
 
-def open_workspace(resource_refs: ResourceRefs) -> ToolWorkspace:
-    """解析资源定位 → 拉取文档树归档到内存 → 组合 store 创建工具访问上下文。"""
+def load_workspace_payload(resource_refs: ResourceRefs) -> dict[str, Any]:
+    """资源定位 → 拉取归档并加载校验索引 → 父进程保存的 workspace payload。"""
     documents_location = _location_by_type(resource_refs, "documents")
     index_location = _location_by_type(resource_refs, "index")
     if not documents_location or not index_location:
@@ -167,11 +174,17 @@ def open_workspace(resource_refs: ResourceRefs) -> ToolWorkspace:
         raise ValueError(f"missing document archive: {doc_key}")
     archive = ArchiveObjectStore(doc_bucket, archive_bytes)
     composite = CompositeObjectStore(archive, store)
-    document = DocumentFileTree(composite, doc_bucket, "documents")
     embedding = EmbeddingResources(composite, idx_bucket, idx_key)
-    return ToolWorkspace(document, embedding)
+    index = embedding.load_index()
+    return {
+        "bucket": doc_bucket,
+        "documents_archive_b64": base64.b64encode(archive_bytes).decode("ascii"),
+        "index": index_to_payload(index),
+    }
 
 
-def validate_resource(resource_refs: ResourceRefs) -> None:
-    """工具侧预检路径、清单、向量和引用；失败在首个响应事件前返回。"""
-    open_workspace(resource_refs).embedding.load_index()
+def document_tree_from_payload(payload: dict[str, Any]) -> DocumentFileTree:
+    """workspace payload → 归档内文档树；只读工具子进程不访问 storage 服务。"""
+    bucket = str(payload["bucket"])
+    archive = ArchiveObjectStore(bucket, base64.b64decode(str(payload["documents_archive_b64"])))
+    return DocumentFileTree(archive, bucket, "documents")

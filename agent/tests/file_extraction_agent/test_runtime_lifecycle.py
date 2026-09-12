@@ -74,7 +74,7 @@ async def test_inner_failure_raises_without_completion_event(monkeypatch):
     monkeypatch.setattr(module, "run_qa_stream", outputs)
     output = []
     with pytest.raises(RuntimeError, match="请求耗尽"):
-        async for event in module.stream_completion_events(resource_path=[], messages=[], qa_model=object()):
+        async for event in module.stream_completion_events(workspace=[], messages=[], qa_model=object()):
             output.append(event)
     assert all(not event["type"].startswith("completion.") for event in output)
 

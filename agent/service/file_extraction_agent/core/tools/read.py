@@ -1,10 +1,11 @@
-"""`read` tool: read one `.md` block file from the workspace tree."""
+"""`read` tool: read one `.md` block file from the workspace tree.
+
+同步叶子逻辑在工具子进程中执行；父进程工具只通过 run_operation 下发参数和 workspace。
+"""
 
 from __future__ import annotations
 
-import asyncio
-
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.tools import BaseTool, tool
 from service.file_extraction_agent.core.contracts import JsonObject
@@ -13,6 +14,7 @@ if TYPE_CHECKING:
     from service.file_extraction_agent.core.tools.workspace import ToolWorkspace
 
 from service.file_extraction_agent.core.tools.base import run_tool
+from service.file_extraction_agent.core.tools.worker_client import run_operation
 
 
 def _read(state: ToolWorkspace, path: str) -> JsonObject:
@@ -43,7 +45,7 @@ def _locator_error(path: str) -> JsonObject | None:
     return None
 
 
-def build_read(state: ToolWorkspace) -> BaseTool:
+def build_read(workspace: dict[str, Any], *, run_operation=run_operation) -> BaseTool:
     @tool
     async def read(path: str) -> JsonObject:
         """Read one .md block file.
@@ -55,7 +57,7 @@ def build_read(state: ToolWorkspace) -> BaseTool:
         with actual values — then move on or cite it in your answer with a link.
         """
 
-        return await asyncio.to_thread(_read, state, path)
+        return await run_operation(operation="read", args={"path": path}, workspace=workspace)
 
     return read
 

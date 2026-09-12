@@ -23,7 +23,7 @@ def test_async_stream_preserves_events_and_cleanup(resource_path, monkeypatch, e
             manager.terminate("async")
     monkeypatch.setattr(runtime_module, "stream_completion_events", source)
     manager = CompletionManager()
-    stream = manager.create(completion_id="async", resource_path=resource_path,
+    stream = manager.create(completion_id="async", workspace=resource_path,
                             messages=[DocumentQaMessage(role="user", content="问题")]).stream()
 
     async def consume():
@@ -52,7 +52,7 @@ def test_waiting_streams_leave_executor_free_and_cancel_cleanly(resource_path, m
 
     async def run():
         asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
-        streams = [manager.create(completion_id=f"async{i}", resource_path=resource_path,
+        streams = [manager.create(completion_id=f"async{i}", workspace=resource_path,
                    messages=[DocumentQaMessage(role="user", content="问题")]).stream() for i in range(4)]
         tasks = []
         try:

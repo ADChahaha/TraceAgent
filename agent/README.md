@@ -37,10 +37,10 @@ python main.py --check-health 127.0.0.1:8001 --timeout 5
 | --- | --- | --- |
 | `--host` / `AGENT_HOST` | 127.0.0.1 | 监听地址 |
 | `--port` / `AGENT_PORT` | 8001 | gRPC 端口 |
-| `--workers` / `AGENT_GRPC_WORKERS` | 16 | 文档处理、初始化及工具内同步 I/O/计算的线程数，至少 1；不限制活动 RPC 流数 |
+| `--workers` / `AGENT_GRPC_WORKERS` | 16 | 文档处理、初始化及同步 I/O/计算的线程数，至少 1；不限制活动 RPC 流数 |
 | `--max-message-bytes` / `AGENT_GRPC_MAX_MESSAGE_BYTES` | 67108864 | 单条请求和响应的 64 MiB 上限 |
 
-服务使用 `grpc.aio`：RPC 方法与事件等待运行在事件循环中，文档处理和问答初始化通过 `asyncio.to_thread` 执行。问答流等待事件不占工作线程，也没有 workers−2 的活动流限制；模型 astream/ainvoke、图执行、工具调度和事件生产都运行在协程中，只有同步文件操作与本地计算交给线程。客户端也须配置足够的消息收发上限，尤其是多文件 bytes 上传。当前使用明文 gRPC，与原本机服务部署边界一致。
+服务使用 `grpc.aio`：RPC 方法与事件等待运行在事件循环中，文档处理通过 `asyncio.to_thread` 执行；问答资源预检和每个问答工具调用由 `python -m service.file_extraction_agent.core.tools.worker` 一次性子进程执行。问答流等待事件不占工作线程，也没有 workers−2 的活动流限制；模型 astream/ainvoke、图执行、工具调度和事件生产都运行在协程中。工具子进程会在调用结束、超时或取消时被 kill。客户端也须配置足够的消息收发上限，尤其是多文件 bytes 上传。当前使用明文 gRPC，与原本机服务部署边界一致。
 
 准备阶段需要 embedding 依赖；PDF 使用 MinerU，DOCX 使用 python-docx。默认 embedding 后端为 OpenVINO。问答模型配置 `BASE_URL`、`OPENAI_API_KEY`、`MODEL`；可选 `MODEL_API_TRANSPORT=responses` 或 `chat_completions`。PDF 语言由 `DOCUMENT_PROCESSOR_MINERU_LANG` 指定，默认 japan。
 
@@ -72,6 +72,6 @@ dev 依赖固定代码生成器版本，测试会重新生成并比对绑定；�
 
 模型由文件/环境配置选定，单次请求失败通过图的 retry_wait 节点采用以 0.5 秒起步、8 秒封顶并乘 0.75–1 随机系数的指数间隔退避，总共最多五次，配置保持不变。LangGraph messages 通道实时提供可见文本，updates 通道提供完整结果和重试通知。SDK 内层重试关闭。
 
-事件为 model_message.started / delta / done 和 model_request.retrying；按 message_id 区分尝试，done 正文不能重复追加。Runtime 保留单个 producer Task、FIFO 队列与消费者；取消模型或退避会清理对应异步流。工具结果经 custom 通道逐项输出；取消会取消未完成工具 Task 并等待协程清理，不补造中断结果，也不输出取消终态；backend 自己记录取消。线程中的计算自行结束，迟到结果不输出。消费端需按新协议适配，详见 docs/API.md。
+事件为 model_message.started / delta / done 和 model_request.retrying；按 message_id 区分尝试，done 正文不能重复追加。Runtime 保留单个 producer Task、FIFO 队列与消费者；取消模型或退避会清理对应异步流。工具结果经 custom 通道逐项输出；取消会取消未完成工具 Task 并 kill 对应子进程，不补造中断结果，也不输出取消终态；backend 自己记录取消。子进程计算的迟到结果不输出。消费端需按新协议适配，详见 docs/API.md。
 
 重试优先采用有效 retry-after-ms / Retry-After（秒数或 HTTP 日期，大于 0 且不超过 120 秒）；无效值回退到随机指数退避。retry_delay_ms 是本次实际等待时间的毫秒表示。

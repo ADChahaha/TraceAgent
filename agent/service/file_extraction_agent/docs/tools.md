@@ -1,17 +1,19 @@
 # 问答工具
 
-四个工具复用 ToolWorkspace，通过 S3ObjectStore 读取文档与已有索引：
+四个工具都不在父进程读资源：workspace payload（归档 bytes + 已解析索引）由 prepare 子进程生成，
+每次调用经 worker_client.run_operation 下发给一次性工具子进程执行。
 
 ```text
 模型 tool_calls
   → executor 并发 await tool.ainvoke
-  → 工具通过 asyncio.to_thread 执行对象读取、字面搜索或 query embedding
+  → 工具把 operation、参数和全量 workspace 下发给工具子进程
+  → 子进程读取归档内对象、执行字面搜索或 query embedding
   → 返回 JSON 对象，由 executor 封装为 ToolMessage
   → 模型 read 核实候选内容后，使用返回的 key 引用
 ```
 
 普通异常由 run_tool 转为 `{"ok":false,"errors":[{"message":"异常说明"}]}`；
-工具共享超时由 executor 处理。取消协程不能强杀已运行的同步线程。
+工具共享超时由 executor 处理。取消、超时或结束都会 kill 工具子进程，不等待其自然结束。
 
 ## 路径如何传递
 
@@ -79,7 +81,8 @@ max_results 默认 20，范围限制为 1–50；传 0 使用默认值。
 
 ## search_embedding(query, top_k=5)
 
-校验 query → 加载或复用清单、索引和清单指定的查询模型 → encode([query])
+校验 query → 在一次性工具子进程里从 `workspace.index` 解码 chunks/vectors
+→ 加载清单指定的 OpenVINO 查询模型 → encode([query])
 → 归一化查询向量，按相似度排序 → 返回候选及 covered_files。
 不重建文档向量，不支持 scope。top_k 默认 5，范围限制为 1–20；传 0 使用默认值。
 

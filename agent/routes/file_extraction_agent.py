@@ -1,19 +1,19 @@
-"""protobuf 请求 → 业务校验与模型配置 → manager 事件流 → protobuf 响应。
+"""protobuf 请求 → 工具子进程预检 + 业务校验与模型配置 → manager 事件流 → protobuf 响应。
 
 输入错误在首事件前返回 INVALID_ARGUMENT，初始化异常返回 INTERNAL；
+预检在 prepare 子进程中完成，失败或取消都会 kill 进程。
 执行异常保留 completion.failed。业务取消立即返回，RPC 断连则通知本轮
 CompletionRuntime 并由事件流 finally 清理，避免旧 ID 回调误取消新问答。
 """
 
-import asyncio
 import json
-import threading
 from dataclasses import fields
 from typing import Any, AsyncIterator
 
 import grpc
 
 from agent_proto import agent_pb2 as pb
+from service.file_extraction_agent.core.tools.worker_client import prepare_workspace
 from service.file_extraction_agent.manager import completion_manager
 from service.file_extraction_agent.schemas import DocumentQaMessage, ModelConfig, RunOptions
 
@@ -75,12 +75,16 @@ def event_message(event: dict[str, Any]) -> pb.CompletionEvent:
 
 async def create_chat_completion(request, context) -> AsyncIterator[pb.CompletionEvent]:
     try:
-        runtime = await _create_runtime(
+        messages = _messages(request)
+        run_options = _options(request.run_options, RunOptions) if request.HasField("run_options") else None
+        model_config = _model_config(request)
+        workspace = await prepare_workspace(request.resource_path)
+        runtime = completion_manager.create(
             completion_id=request.completion_id,
-            resource_path=request.resource_path,
-            messages=_messages(request),
-            run_options=_options(request.run_options, RunOptions) if request.HasField("run_options") else None,
-            model_config=_model_config(request),
+            workspace=workspace,
+            messages=messages,
+            run_options=run_options,
+            model_config=model_config,
         )
     except ValueError as exc:
         await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
@@ -98,32 +102,6 @@ async def create_chat_completion(request, context) -> AsyncIterator[pb.Completio
             yield event_message(event)
     finally:
         await runtime.aclose()
-
-
-async def _create_runtime(**kwargs):
-    """线程初始化 → 交接运行时；取消与交接互斥，迟到结果在线程内关闭。"""
-    lock = threading.Lock()
-    abandoned = False
-    runtime = None
-
-    def initialize():
-        nonlocal runtime
-        created = completion_manager.create(**kwargs)
-        with lock:
-            if abandoned:
-                created.close()
-            else:
-                runtime = created
-        return created
-
-    try:
-        return await asyncio.to_thread(initialize)
-    except asyncio.CancelledError:
-        with lock:
-            abandoned = True
-            if runtime is not None:
-                runtime.close()
-        raise
 
 
 async def cancel_chat_completion(request, context):

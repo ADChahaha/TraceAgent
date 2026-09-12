@@ -1,15 +1,13 @@
 """`grep` tool: full-text search across readable blocks using pure Python search.
 
-在 ObjectStore 下按 key 前缀遍历 .md 对象，用正则匹配内容并返回候选行。
-不再依赖 ripgrep 子进程。
+同步叶子逻辑在工具子进程中执行；父进程工具只通过 run_operation 下发参数和 workspace。
 """
 
 from __future__ import annotations
 
-import asyncio
 import re
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.tools import BaseTool, tool
 from service.file_extraction_agent.core.contracts import JsonObject
@@ -18,6 +16,7 @@ if TYPE_CHECKING:
     from service.file_extraction_agent.core.tools.workspace import ToolWorkspace
 
 from service.file_extraction_agent.core.tools.base import run_tool
+from service.file_extraction_agent.core.tools.worker_client import run_operation
 
 
 def _grep(
@@ -63,7 +62,7 @@ def _grep_output(state: ToolWorkspace, query: str, scope: str, max_results: int)
     return "\n".join(lines)
 
 
-def build_grep(state: ToolWorkspace) -> BaseTool:
+def build_grep(workspace: dict[str, Any], *, run_operation=run_operation) -> BaseTool:
     @tool
     async def grep(query: str, scope: str = "", max_results: int = 20) -> JsonObject:
         """Full-text search across readable blocks.
@@ -75,8 +74,10 @@ def build_grep(state: ToolWorkspace) -> BaseTool:
         max_results: default 20, max 50.
         """
 
-        return await asyncio.to_thread(
-            _grep, state, query=query, scope=scope, max_results=max_results
+        return await run_operation(
+            operation="grep",
+            args={"query": query, "scope": scope, "max_results": max_results},
+            workspace=workspace,
         )
 
     return grep

@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import asyncio
-import base64
 import inspect
+from types import SimpleNamespace
 
-import pytest
 from service.document_resources.schemas import InputDocument
 
 from service.file_extraction_agent.core.tools import (
@@ -12,13 +10,11 @@ from service.file_extraction_agent.core.tools import (
     _grep,
     _ls,
     _read,
-    _search_embedding,
     build_tools,
 )
 from service.document_resources.documents import materialize_tree
 from service.file_extraction_agent.core.tools.workspace import DocumentFileTree
 from service.file_extraction_agent.schemas import RunOptions
-from types import SimpleNamespace
 from service.file_extraction_agent.schemas import DocumentQaMessage
 
 
@@ -68,17 +64,72 @@ def _paragraph_path_containing(state, text):
     raise AssertionError(f"missing paragraph containing {text}")
 
 
-def test_build_tools_exposes_qa_navigation_tools_only(tmp_path):
-    tools = build_tools(_state(tmp_path))
+class _RecordingRunner:
+    """假 run_operation：记录下发的 operation/args/workspace，返回固定结果。"""
+
+    def __init__(self, result=None):
+        self.calls: list[dict] = []
+        self.result = result if result is not None else {"ok": True}
+
+    async def __call__(self, *, operation, args, workspace=None):
+        self.calls.append({"operation": operation, "args": args, "workspace": workspace})
+        return self.result
+
+
+def _fake_workspace() -> dict:
+    return {"bucket": "res_example", "documents_archive_b64": "fake", "index": {"model_id": "m"}}
+
+
+def test_build_tools_exposes_qa_navigation_tools_only():
+    tools = build_tools(_fake_workspace())
     tool_names = [getattr(tool, "name", getattr(tool, "__name__", "")) for tool in tools]
 
     assert tool_names == ["ls", "grep", "read", "search_embedding"]
     assert all(inspect.iscoroutinefunction(tool.coroutine) for tool in tools)
 
 
-def test_embedding_tool_does_not_advertise_unused_scope(tmp_path):
-    search = next(tool for tool in build_tools(_state(tmp_path)) if tool.name == "search_embedding")
+def test_embedding_tool_does_not_advertise_unused_scope():
+    search = next(tool for tool in build_tools(_fake_workspace()) if tool.name == "search_embedding")
     assert set(search.args) == {"query", "top_k"}
+
+
+async def test_tools_forward_operation_args_and_full_workspace_to_worker():
+    workspace = _fake_workspace()
+    runner = _RecordingRunner({"ok": True, "text": "正文"})
+    tools = {tool.name: tool for tool in build_tools(workspace, run_operation=runner)}
+
+    assert await tools["read"].ainvoke({"path": "documents/a.md"}) == {"ok": True, "text": "正文"}
+    assert await tools["ls"].ainvoke({"path": ""}) == {"ok": True, "text": "正文"}
+    assert await tools["grep"].ainvoke({"query": "notice", "scope": "", "max_results": 5}) == {
+        "ok": True,
+        "text": "正文",
+    }
+    assert await tools["search_embedding"].ainvoke({"query": "notice", "top_k": 3}) == {
+        "ok": True,
+        "text": "正文",
+    }
+    assert [call["operation"] for call in runner.calls] == ["read", "ls", "grep", "search_embedding"]
+    assert runner.calls[0]["args"] == {"path": "documents/a.md"}
+    assert runner.calls[2]["args"] == {"query": "notice", "scope": "", "max_results": 5}
+    assert runner.calls[3]["args"] == {"query": "notice", "top_k": 3}
+    assert all(call["workspace"] is workspace for call in runner.calls)
+
+
+async def test_search_embedding_rejects_empty_query_without_starting_worker():
+    class _ForbiddenRunner:
+        async def __call__(self, *, operation, args, workspace=None):
+            raise AssertionError("worker must not start for an empty query")
+
+    search = next(
+        tool
+        for tool in build_tools(_fake_workspace(), run_operation=_ForbiddenRunner())
+        if tool.name == "search_embedding"
+    )
+
+    result = await search.ainvoke({"query": "   ", "top_k": 3})
+
+    assert result["ok"] is False
+    assert result["errors"][0]["code"] == "BAD_QUERY"
 
 
 def test_model_path_examples_can_be_read_from_object_store():
@@ -94,7 +145,7 @@ def test_model_path_examples_can_be_read_from_object_store():
     assert links
     for path in links:
         assert _read(state, path)["ok"], path
-    for tool in build_tools(state):
+    for tool in build_tools(_fake_workspace()):
         if tool.name in {"ls", "read"}:
             assert "absolute" not in tool.description.lower()
 
@@ -109,6 +160,7 @@ def test_module_exports_qa_helpers_only():
     assert "_review_evidences" not in tools_all
     assert "_write_field" not in tools_all
     assert "_submit_result" not in tools_all
+    assert "_search_embedding" not in tools_all
 
 
 def test_run_tool_only_needs_operation_and_normalizes_failure():
@@ -188,128 +240,10 @@ def test_grep_matches_case_insensitively_and_limits_results(tmp_path):
     assert "services" in result["output"].lower()
 
 
-def _add_files_to(state, extra):
-    from pathlib import Path
-
-    doc_dir = next((e.path for e in state.document.entries() if e.kind == "dir"), None)
-    base = Path(doc_dir)
-    for name, text in extra:
-        (base / name).write_text(text, encoding="utf-8")
-
-
-def _fake_embedder(texts):
-    import numpy as np
-
-    rows = []
-    for text in texts:
-        n = sum(ord(ch) for ch in text) or 1
-        rows.append([float(n % 2), float(len(text) % 3), float(n % 5)])
-    return np.array(rows, dtype=np.float32)
-
-
-def _fake_index():
-    import numpy as np
-
-    from service.file_extraction_agent.core.tools.embedding import Chunk, EmbeddingIndex
-
-    chunks = [
-        Chunk(document="contract.pdf", chunk_id="contract.pdf#c1", text="Either party may terminate with notice.", token_range=(0, 6), covered_files=["/abs/0001/docs/0001-termination.md"]),
-        Chunk(document="contract.pdf", chunk_id="contract.pdf#c2", text="Payment is due within 30 days.", token_range=(6, 12), covered_files=["/abs/0001/docs/0003-terms.md"]),
-        Chunk(document="contract.pdf", chunk_id="contract.pdf#c3", text="Notice must be written in the same language.", token_range=(12, 18), covered_files=["/abs/0001/docs/0002-notice.md"]),
-    ]
-    vectors = _fake_embedder([chunk.text for chunk in chunks])
-    return EmbeddingIndex(model_id="fake-a8m", chunks=chunks, vectors=vectors, dimension=3)
-
-
-def _install_fake_index(monkeypatch):
-    monkeypatch.setattr(
-        "service.file_extraction_agent.core.tools.embedding._get_index", lambda _state: _fake_index()
-    )
-
-
-def _install_worker(monkeypatch, response):
-    calls: dict = {}
-
-    async def fake_run_worker(request):
-        calls["request"] = request
-        return response
-
-    monkeypatch.setattr(
-        "service.file_extraction_agent.core.tools.embedding._run_worker", fake_run_worker
-    )
-    return calls
-
-
-async def test_search_embedding_sends_index_request_and_returns_worker_results(tmp_path, monkeypatch):
-    state = _state(tmp_path)
-    _install_fake_index(monkeypatch)
-    response = {
-        "ok": True,
-        "query": "payment",
-        "results": [
-            {
-                "score": 0.9,
-                "document": "contract.pdf",
-                "chunk_id": "contract.pdf#c1",
-                "text": "Either party may terminate with notice.",
-                "token_range": [0, 6],
-                "covered_files": ["documents/a/1.md"],
-            }
-        ],
-    }
-    calls = _install_worker(monkeypatch, response)
-
-    result = await _search_embedding(state, query="payment", top_k=3)
-
-    assert result == response
-    request = calls["request"]
-    assert request["query"] == "payment"
-    assert request["top_k"] == 3
-    assert request["model_id"] == "fake-a8m"
-    assert request["dimension"] == 3
-    assert len(request["chunks"]) == 3
-    assert len(base64.b64decode(request["vectors_b64"])) == 3 * 3 * 4
-
-
-async def test_search_embedding_returns_result_without_event_state(tmp_path, monkeypatch):
-    state = _state(tmp_path)
-    _install_fake_index(monkeypatch)
-    _install_worker(monkeypatch, {"ok": True, "query": "payment", "results": []})
-
-    result = await _search_embedding(state, query="payment", top_k=1)
-    assert result["ok"] is True
-    assert not hasattr(state, "events")
-
-
-async def test_search_embedding_rejects_empty_query(tmp_path, monkeypatch):
-    state = _state(tmp_path)
-
-    async def forbidden(request):
-        raise AssertionError("worker must not start for an empty query")
-
-    monkeypatch.setattr(
-        "service.file_extraction_agent.core.tools.embedding._run_worker", forbidden
-    )
-
-    result = await _search_embedding(state, query="   ", top_k=3)
-
-    assert result["ok"] is False
-    assert result["errors"][0]["code"] == "BAD_QUERY"
-
-
-class _FakeEmbedding:
-    def __init__(self):
-        self._slot = asyncio.Semaphore(1)
-
-    def search_slot(self):
-        return self._slot
-
-
 def _prepare_test_state(*, documents, messages, workspace_root):
     """工具和 prompt 测试只准备文件树，不引入 completion 管理字段。"""
     return SimpleNamespace(
         document=DocumentFileTree.from_local_dir(materialize_tree(documents, workspace_root)),
-        embedding=_FakeEmbedding(),
         messages=messages,
         run_options=RunOptions(),
     )

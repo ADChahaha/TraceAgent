@@ -38,20 +38,22 @@ ChatCompletion（resource_refs + messages）
 | service/file_extraction_agent/core/model_invocation.py | 单次模型调用、流式聚合和失败结果 |
 | service/file_extraction_agent/core/executor.py | 工具并行执行、共享超时、逐项结果回调与取消清理 |
 | service/file_extraction_agent/core/graph.py | LangGraph 状态、单次请求/指数退避/工具节点、路由及节点停止检查 |
-| service/file_extraction_agent/core/tools/workspace.py | 资源定位解析、documents.zip 内存摊开、组合 store 浏览与读取 |
-| service/file_extraction_agent/core/tools/embedding.py | 清单配置和索引读取（经 storage 服务）、组装请求并调度检索子进程 |
-| service/file_extraction_agent/core/tools/worker.py | 检索子进程入口：stdin 请求 → 纯 OpenVINO 编码 → stdout top-k |
+| service/file_extraction_agent/core/tools/workspace.py | 资源定位解析、documents.zip 拉取、workspace payload 序列化与还原 |
+| service/file_extraction_agent/core/tools/worker_client.py | 父进程侧工具子进程客户端：组装请求、等待响应、finally kill |
+| service/file_extraction_agent/core/tools/embedding.py | 清单配置和索引读取校验、payload 序列化与检索工具工厂 |
+| service/file_extraction_agent/core/tools/worker.py | 统一工具子进程入口：operation 分发 prepare/ls/grep/read/search_embedding |
 | service/file_extraction_agent/core/tools/ov_embedder.py | 纯 OpenVINO 查询编码器（tokenizer + IR + mean pooling + L2） |
 | service/object_store.py | ObjectStore 接口 + S3ObjectStore（boto3）+ Archive/Composite store + s3:// URL 解析 |
 
-两个业务包通过 storage 服务交接，互不导入。`document_resources` 只生成并发布资源；问答读取由工具层经 S3ObjectStore 负责。
+两个业务包通过 storage 服务交接，互不导入。`document_resources` 只生成并发布资源；问答在 prepare 与工具子进程内经 S3ObjectStore 读取。
 
 ## 传输与部署
 
 ```text
 main.py 读取监听地址、阻塞工作线程数和消息上限
   → asyncio.run 创建事件循环，启动 grpc.aio.Server 与异步标准 Health
-  → PrepareResources 的解析/资源构建、ChatCompletion 的初始化通过 asyncio.to_thread 执行
+  → PrepareResources 的解析/资源构建通过 asyncio.to_thread 执行
+  → ChatCompletion 的资源预检和每个工具调用通过一次性 worker 子进程执行
   → 取消和探活直接在事件循环处理
   → routes 转换 protobuf 与业务对象，保留参数缺省值及显式零值
   → producer 将事件放入 asyncio.Queue，队列自动唤醒消费者
@@ -59,11 +61,11 @@ main.py 读取监听地址、阻塞工作线程数和消息上限
   → SIGINT/SIGTERM 唤醒 asyncio.Event，await server.stop(5) 停服
 ```
 
-默认 16 个阻塞工作线程、单条请求/响应上限 64 MiB。活动 RPC 流不受线程数限制，等待事件不占执行器；模型请求、重试退避、图执行和工具调度均为原生异步；文件 I/O 与本地计算才使用阻塞工作线程。文件整包 bytes 上传，客户端须相应配置收发上限。固定事件字段使用 protobuf，动态参数/结果用 JSON 字符串保留大整数和 null。共享协议位于与 agent 同级的 agent_proto，agent wheel 依赖 traceagent-protocol，不内置协议副本。协议生成器版本固定，从仓库根目录生成；测试比对绑定，并验证共享 wheel 可脱离 agent 业务包导入。
+默认 16 个阻塞工作线程、单条请求/响应上限 64 MiB。活动 RPC 流不受线程数限制，等待事件不占执行器；模型请求、重试退避、图执行和工具调度均为原生异步；文档解析使用阻塞工作线程，工具计算在可 kill 的子进程中执行。文件整包 bytes 上传，客户端须相应配置收发上限。固定事件字段使用 protobuf，动态参数/结果用 JSON 字符串保留大整数和 null。共享协议位于与 agent 同级的 agent_proto，agent wheel 依赖 traceagent-protocol，不内置协议副本。协议生成器版本固定，从仓库根目录生成；测试比对绑定，并验证共享 wheel 可脱离 agent 业务包导入。
 
-传输层断连与业务取消分开：CancelCompletion 立即确认并取消 producer 和未完成工具 Task；RPC 取消/断连/deadline 回调绑定本轮 CompletionRuntime 的 close，设置取消信号并取消 producer，finally 仅 await runtime.aclose，由 runtime 关闭所持事件生成器、等待 producer 清理并通知 manager 移除注册项。旧回调不会按 ID 误取消后来的新流；从未迭代的流关闭也会清理。断连后不保证交付终态，取消生产协程并关闭模型流，工具内已运行的同步线程不能强杀。
+传输层断连与业务取消分开：CancelCompletion 立即确认并取消 producer 和未完成工具 Task；RPC 取消/断连/deadline 回调绑定本轮 CompletionRuntime 的 close，设置取消信号并取消 producer，finally 仅 await runtime.aclose，由 runtime 关闭所持事件生成器、等待 producer 清理并通知 manager 移除注册项。旧回调不会按 ID 误取消后来的新流；从未迭代的流关闭也会清理。断连后不保证交付终态，取消生产协程并关闭模型流，工具子进程会被 kill。
 
-同步初始化与协程取消通过锁交接流：取消先发生时，初始化线程关闭迟到的流；初始化先完成时，由取消分支关闭已交接流。清理不依赖已关闭事件循环的回调。停服后 asyncio.run 会等待默认执行器中已运行的同步工作结束，5 秒 RPC 宽限期不是进程退出时间的硬上限。
+问答初始化不再有需要跨线程交接的同步工作：prepare 子进程在取消时被 kill，之后才注册运行时；初始化失败或取消不会留下注册项。
 
 ## 资源生命周期
 
@@ -79,7 +81,7 @@ main.py 读取监听地址、阻塞工作线程数和消息上限
 
 ## 问答运行时
 
-`CompletionManager` 只在进程内保存 active completion；管理 ID 不进入 graph。图使用继承 MessagesState 的 QaState，保存完整消息和重试控制状态；resource_refs 用于创建工具上下文（经 S3ObjectStore 读取资源），RunOptions 在构图时绑定工具执行器。工具闭包持有 ToolWorkspace；其中的 EmbeddingResources 管理本轮索引与查询模型引用。
+`CompletionManager` 只在进程内保存 active completion；管理 ID 不进入 graph。图使用继承 MessagesState 的 QaState，保存完整消息和重试控制状态；路由层先经 prepare 子进程取得 workspace payload（归档 bytes + 已解析索引），RunOptions 在构图时绑定工具执行器。父进程不持有 ToolWorkspace 或索引；四个工具只经 worker_client 把 payload 下发给一次性子进程。
 
 ```text
 模型节点返回 AIMessage
@@ -89,7 +91,7 @@ main.py 读取监听地址、阻塞工作线程数和消息上限
   → completion_runtime 直接输出 tool_completed / tool_failed，不维护 pending 配对字典
 ```
 
-取消立即唤醒 consumer 并取消 producer，工具 finally 取消并等待未完成 Task；不配齐中断结果、不调用下一轮模型。正常消费按 FIFO 输出，astream 独自生成完成/失败；取消丢弃未消费事件并直接关闭，不发取消终态。资源校验错误在首事件前返回 INVALID_ARGUMENT；执行异常通过 completion.failed 收口。
+取消立即唤醒 consumer 并取消 producer，工具 finally 取消未完成 Task，run_operation finally kill 工具子进程；不配齐中断结果、不调用下一轮模型。正常消费按 FIFO 输出，astream 独自生成完成/失败；取消丢弃未消费事件并直接关闭，不发取消终态。资源校验错误在首事件前返回 INVALID_ARGUMENT；执行异常通过 completion.failed 收口。
 
 ## 对外契约与迁移
 

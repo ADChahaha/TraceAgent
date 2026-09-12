@@ -26,6 +26,13 @@ async def test_qa_stream_yields_only_original_messages(tmp_path, monkeypatch, re
     from unittest.mock import Mock, AsyncMock
     from service.file_extraction_agent.core.model import ConfiguredChatModel, ModelCallAttempt
 
+    class _FakeLs:
+        name = "ls"
+
+        async def ainvoke(self, args):
+            return {"ok": True, "entries": [], "text": ""}
+
+    monkeypatch.setattr(qa_module, "build_tools", lambda workspace: [_FakeLs()])
     provider = Mock(spec=["bind_tools", "ainvoke"])
     provider.bind_tools.return_value = provider
     provider.ainvoke = AsyncMock()
@@ -36,7 +43,7 @@ async def test_qa_stream_yields_only_original_messages(tmp_path, monkeypatch, re
     messages = [
         item
         async for item in qa_module.run_qa_stream(
-            resource_path=resource_path, messages=_state(tmp_path).messages, qa_model=model
+            workspace=resource_path, messages=_state(tmp_path).messages, qa_model=model
         )
     ]
     messages = [m for m in messages if isinstance(m, (AIMessage, ToolMessage))]
@@ -70,53 +77,43 @@ async def test_qa_requires_tool_binding_before_invoking_model(tmp_path, resource
         [
             item
             async for item in qa_module.run_qa_stream(
-                resource_path=resource_path, messages=_state(tmp_path).messages, qa_model=model
+                workspace=resource_path, messages=_state(tmp_path).messages, qa_model=model
             )
         ]
     assert calls == []
 
 
 async def test_tool_timeout_emits_one_matching_result_and_discards_late_success(tmp_path):
-    import threading
-    from service.file_extraction_agent.core.tools.base import run_tool
-
-    state = _state(tmp_path)
-    release = threading.Event()
-    finished = threading.Event()
+    finished = asyncio.Event()
 
     class SlowTool:
         name = "read"
 
-        def invoke(self, args):
+        async def ainvoke(self, args):
             try:
-                return run_tool(lambda: (release.wait(2), {"ok": True})[1])
+                await asyncio.sleep(0.3)
+                return {"ok": True, "text": "late"}
             finally:
                 finished.set()
 
-    try:
-        messages = await executor._execute_tools_parallel(
-            [{"id": "slow", "name": "read", "args": {"path": "x"}}], [SlowTool()], timeout=0.02
-        )
-        result = json.loads(messages[0].content)
-        assert messages[0].artifact == result
-        assert messages[0].tool_call_id == "slow"
-        assert messages[0].status == "error"
-        assert "timeout" in result["errors"][0]["message"]
-        snapshot = messages[0].model_dump()
-    finally:
-        release.set()
-        assert finished.wait(2)
+    messages = await executor._execute_tools_parallel(
+        [{"id": "slow", "name": "read", "args": {"path": "x"}}], [SlowTool()], timeout=0.02
+    )
+    result = json.loads(messages[0].content)
+    assert messages[0].artifact == result
+    assert messages[0].tool_call_id == "slow"
+    assert messages[0].status == "error"
+    assert "timeout" in result["errors"][0]["message"]
+    snapshot = messages[0].model_dump()
+    await asyncio.wait_for(finished.wait(), 1)
     assert messages[0].model_dump() == snapshot
-    assert not hasattr(state, "events")
 
 
 async def test_tool_exception_is_reported_consistently_without_timeout(tmp_path):
-    state = _state(tmp_path)
-
     class BrokenTool:
         name = "read"
 
-        def invoke(self, args):
+        async def ainvoke(self, args):
             raise ValueError("invalid path")
 
     messages = await executor._execute_tools_parallel(
@@ -291,7 +288,7 @@ async def test_qa_graph_preserves_parallel_tool_calls(tmp_path):
     model = MultiToolModel()
     graph = build_qa_graph(
         model,
-        build_tools(state),
+        _async_tools("ls", "read"),
         run_options=state.run_options,
         invoke_model=model_invocation._invoke_model_message,
         execute_tools=executor._execute_tools_parallel,
@@ -404,25 +401,21 @@ async def test_qa_rejects_plan_only_message_without_terminal_stop_signal():
 
 
 async def test_parallel_tool_executor_runs_all_calls_concurrently(tmp_path):
-    import threading
     from service.file_extraction_agent.core.executor import _execute_tools_parallel
 
-    state = _state(tmp_path)
-    gate = threading.Event()
+    gate = asyncio.Event()
 
     class GatedTool:
         name = "read"
 
-        def invoke(self, args):
-            del args
-            gate.wait(timeout=1.0)
+        async def ainvoke(self, args):
+            await gate.wait()
             return {"ok": True, "text": "done"}
 
     class FastTool:
         name = "ls"
 
-        def invoke(self, args):
-            del args
+        async def ainvoke(self, args):
             gate.set()
             return {"ok": True, "text": "root"}
 
@@ -436,17 +429,13 @@ async def test_parallel_tool_executor_runs_all_calls_concurrently(tmp_path):
 
 
 async def test_parallel_tool_executor_times_out_slow_call(tmp_path):
-    import time
     from service.file_extraction_agent.core.executor import _execute_tools_parallel
-
-    state = _state(tmp_path)
 
     class SlowTool:
         name = "read"
 
-        def invoke(self, args):
-            del args
-            time.sleep(2.0)
+        async def ainvoke(self, args):
+            await asyncio.sleep(2.0)
             return {"ok": True, "text": "late"}
 
     calls = [{"id": "call-1", "name": "read", "args": {"path": "/x"}}]
@@ -455,6 +444,17 @@ async def test_parallel_tool_executor_times_out_slow_call(tmp_path):
     message = result[0]
     assert message.tool_call_id == "call-1"
     assert "timeout" in (getattr(message, "content", "") or "").lower()
+
+
+def _async_tools(*names):
+    class _Tool:
+        def __init__(self, name):
+            self.name = name
+
+        async def ainvoke(self, args):
+            return {"ok": True, "entries": [], "text": ""}
+
+    return [_Tool(name) for name in names]
 
 
 def _prepare_test_state(*, documents, messages, workspace_root):

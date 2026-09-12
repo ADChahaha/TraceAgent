@@ -1,4 +1,4 @@
-"""路径初始化工具、配置绑定执行器 → 图内仅消息 → 完整批次及取消边界。"""
+"""workspace payload 绑定工具执行器 → 图内仅消息 → 完整批次及取消边界。"""
 
 from unittest.mock import Mock, AsyncMock
 from langchain_core.messages import AIMessage, ToolMessage
@@ -8,28 +8,22 @@ from service.file_extraction_agent.core.model import ConfiguredChatModel, ModelC
 from service.file_extraction_agent.schemas import DocumentQaMessage, RunOptions
 
 
-async def test_path_graph_streams_tool_results_and_stops_after_cancel(monkeypatch):
+async def test_workspace_graph_streams_tool_results_and_stops_after_cancel(monkeypatch):
     messages = [DocumentQaMessage(role="user", content="问题")]
     options = RunOptions(tool_execution_timeout=0.125)
-    workspace = object()
+    workspace = {"stub": True}
     received = []
-
-    def initialize(path):
-        received.append(path)
-        return workspace
-
-    monkeypatch.setattr(loop, "open_workspace", initialize)
 
     class Tool:
         name = "read"
 
-        def invoke(self, args):
+        async def ainvoke(self, args):
             if args["path"] == "bad":
                 raise ValueError("invalid file")
             return "正文"
 
     def bind_tools(context):
-        assert context is workspace
+        received.append(context)
         return [Tool()]
 
     monkeypatch.setattr(loop, "build_tools", bind_tools)
@@ -53,7 +47,7 @@ async def test_path_graph_streams_tool_results_and_stops_after_cancel(monkeypatc
     )
     cancelled = False
     stream = loop.run_qa_stream(
-        resource_path="R",
+        workspace=workspace,
         messages=messages,
         run_options=options,
         qa_model=ConfiguredChatModel([ModelCallAttempt("test", provider, False)]),
@@ -74,5 +68,5 @@ async def test_path_graph_streams_tool_results_and_stops_after_cancel(monkeypatc
     assert batch[1].additional_kwargs["tool_args"] == {"path": "bad"}
     assert [item async for item in stream] == []
     assert provider.ainvoke.call_count == 1
-    assert received == ["R"]
+    assert received == [workspace]
     assert timeouts == [0.125]

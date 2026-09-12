@@ -10,7 +10,7 @@
 - `test_executor_failure_preserves_published_results`：工具结果先发布、执行器随后异常时，保留已发布成功或失败消息的全部内容；仅为剩余项补失败，对外不重复输出，模型历史仍按原调用顺序排列。
 - `test_closing_event_stream_closes_message_generator`：外层关闭传播到消息生成器，停止后续调用。
 
-事件链路测试使用 conftest 生成的 resource_path；图执行通过工具层读取文件，completion_runtime 只发出启动确认和消息事件，事件包装入口不接收 completion ID。独立图契约测试注入执行器，直接验证节点行为。
+事件链路测试使用 conftest 生成的 resource_path 作为 workspace 传入，并用替身工具替换 `loop.build_tools`，避免为事件映射测试启动真实工具子进程；completion_runtime 只发出启动确认和消息事件，事件包装入口不接收 completion ID。独立图契约测试注入执行器，直接验证节点行为。
 
 测试使用协程与异步迭代器驱动实际 Agent 链路；模型替身提供 astream/ainvoke，取消等待使用事件循环。
 

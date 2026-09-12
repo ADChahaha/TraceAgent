@@ -49,7 +49,8 @@ async def test_graph_keeps_retry_state_with_options_bound_outside():
 
 def test_tools_read_prepared_files_without_builder(resource_path, monkeypatch):
     from service import document_resources
-    from service.file_extraction_agent.core.tools import workspace, _ls, _read
+    from service.file_extraction_agent.core.tools import _ls, _read, worker
+    from service.file_extraction_agent.core.tools.workspace import document_tree_from_payload
 
     def forbidden(*args, **kwargs):
         raise AssertionError("问答工具不能调用资源生成端")
@@ -57,13 +58,21 @@ def test_tools_read_prepared_files_without_builder(resource_path, monkeypatch):
     monkeypatch.setattr(document_resources, "prepare_resources", forbidden)
     if hasattr(document_resources, "load_resource"):
         monkeypatch.setattr(document_resources, "load_resource", forbidden)
-    context = workspace.open_workspace(resource_path)
+    refs = [{"type": ref.type, "location": ref.location} for ref in resource_path]
+    payload = worker.handle({"operation": "prepare", "args": {"resource_path": refs}})["workspace"]
+    context = workspace_from_payload(document_tree_from_payload(payload))
     listing = _ls(context)
     assert listing["ok"]
     assert [entry["name"] for entry in listing["entries"]] == ["001-contract-合同"]
     md_key = next(e.path for e in _all_md(context))
     assert "terminate" in _read(context, md_key)["text"]
     assert not _read(context, "manifest.json")["ok"]
+
+
+def workspace_from_payload(tree):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(document=tree)
 
 
 def _all_md(context):
@@ -87,7 +96,7 @@ def test_tool_preflight_rejects_damaged_resource(resource_path, s3_store, damage
     import json
 
     from tests.conftest import resource_bucket
-    from service.file_extraction_agent.core.tools.workspace import validate_resource
+    from service.file_extraction_agent.core.tools import worker
 
     bucket = resource_bucket(resource_path)
     if damage == "version":
@@ -100,5 +109,7 @@ def test_tool_preflight_rejects_damaged_resource(resource_path, s3_store, damage
         index = json.loads(s3_store.get_object(bucket, "index/index.json").decode("utf-8"))
         index["chunks"][0]["covered_files"] = ["../../outside.md"]
         s3_store.put_object(bucket, "index/index.json", json.dumps(index).encode("utf-8"))
-    with pytest.raises(ValueError):
-        validate_resource(resource_path)
+    refs = [{"type": ref.type, "location": ref.location} for ref in resource_path]
+    response = worker.handle({"operation": "prepare", "args": {"resource_path": refs}})
+    assert response["ok"] is False
+    assert response["kind"] == "invalid"

@@ -57,7 +57,7 @@ async def test_stream_numbers_messages_and_terminal_once(tmp_path, monkeypatch, 
         async for item in manager.create(
             completion_id="cmp_seq",
             run_options=RunOptions(),
-            resource_path=resource_path,
+            workspace=resource_path,
             messages=[DocumentQaMessage(role="user", content="问题")],
         ).stream()
     ]
@@ -111,7 +111,7 @@ async def test_manager_keeps_id_outside_runtime_and_cleans_only_matching_entry(r
     streams = {
         cid: manager.create(
             completion_id=cid,
-            resource_path=resource_path,
+            workspace=resource_path,
             messages=[DocumentQaMessage(role="user", content="问题")],
         )
         for cid in ("first", "second")
@@ -139,7 +139,7 @@ async def test_startup_events_only_acknowledge_without_reading_documents(resourc
     monkeypatch.setattr(DocumentFileTree, "entries", forbidden)
     monkeypatch.setattr(DocumentFileTree, "read", forbidden)
     stream = runtime_module.stream_completion_events(
-        resource_path=resource_path,
+        workspace=resource_path,
         messages=[DocumentQaMessage(role="user", content="问题")],
         qa_model=object(),
     )
@@ -190,7 +190,7 @@ async def test_runtime_cancel_interrupts_real_tools_and_skips_next_model(
     stream = manager.create(
         completion_id="cmp_real_cancel",
         run_options=RunOptions(),
-        resource_path=resource_path,
+        workspace=resource_path,
         messages=[DocumentQaMessage(role="user", content="问题")],
     ).stream()
     frames = []
@@ -262,7 +262,7 @@ async def test_manager_wraps_messages_and_pairs_same_name_calls(tmp_path, monkey
     events = [
         item
         async for item in runtime_module.stream_completion_events(
-            resource_path=resource_path,
+            workspace=resource_path,
             messages=[DocumentQaMessage(role="user", content="问题")],
             qa_model=object(),
         )
@@ -292,7 +292,7 @@ async def test_graph_keeps_events_as_objects_until_stream_boundary(tmp_path, mon
     events = [
         item
         async for item in runtime_module.stream_completion_events(
-            resource_path=resource_path,
+            workspace=resource_path,
             messages=[DocumentQaMessage(role="user", content="问题")],
             qa_model=object(),
         )
@@ -318,7 +318,7 @@ async def test_stream_preserves_runtime_failure_with_special_characters(tmp_path
         CompletionManager().create(
             completion_id="cmp_error",
             run_options=RunOptions(),
-            resource_path=resource_path,
+            workspace=resource_path,
             messages=[DocumentQaMessage(role="user", content="问题")],
         ).stream()
     )
@@ -341,7 +341,7 @@ async def test_stream_preserves_terminal_words_in_data(tmp_path, monkeypatch, ma
         CompletionManager().create(
             completion_id="cmp_words",
             run_options=RunOptions(),
-            resource_path=resource_path,
+            workspace=resource_path,
             messages=[DocumentQaMessage(role="user", content="问题")],
         ).stream()
     )
@@ -357,7 +357,7 @@ async def test_create_completion_stream_builds_completion_input_and_runs_graph(m
 
     async def fake_stream_completion_events(*, qa_model, **kwargs):
         captured["has_completion_id"] = "completion_id" in kwargs
-        captured["document_root"] = kwargs["resource_path"]
+        captured["document_root"] = kwargs["workspace"]
         captured["messages"] = kwargs["messages"]
         captured["model"] = qa_model
         if False:
@@ -372,7 +372,7 @@ async def test_create_completion_stream_builds_completion_input_and_runs_graph(m
     events = await _frames(
         manager.create(
             completion_id="cmp_123",
-            resource_path=resource_path,
+            workspace=resource_path,
             messages=[DocumentQaMessage(role="user", content="问题")],
             model_config=ModelConfig(model_name="qa"),
         ).stream()
@@ -394,10 +394,10 @@ def test_create_completion_stream_validates_input_before_iteration(monkeypatch, 
 
     monkeypatch.setattr("service.file_extraction_agent.manager.build_qa_model", fake_build_qa_model)
     manager = CompletionManager()
-    with pytest.raises(ValueError, match="resource_path"):
+    with pytest.raises(ValueError, match="workspace"):
         manager.create(
             completion_id="cmp_123",
-            resource_path="",
+            workspace="",
             messages=[DocumentQaMessage(role="user", content="问题")],
             model_config=ModelConfig(model_name="qa"),
         )
@@ -426,7 +426,7 @@ async def test_create_completion_stream_registers_completion_runtime_before_iter
     manager = CompletionManager()
     stream = manager.create(
         completion_id="cmp_early_cancel",
-        resource_path=resource_path,
+        workspace=resource_path,
         messages=[DocumentQaMessage(role="user", content="问题")],
         model_config=ModelConfig(model_name="qa"),
     ).stream()
@@ -459,7 +459,7 @@ async def test_create_completion_stream_cancel_does_not_wait_for_blocked_graph(m
     manager = CompletionManager()
     stream = manager.create(
         completion_id="cmp_blocked",
-        resource_path=resource_path,
+        workspace=resource_path,
         messages=[DocumentQaMessage(role="user", content="问题")],
         model_config=ModelConfig(model_name="qa"),
     ).stream()
@@ -510,7 +510,7 @@ async def test_create_completion_stream_discards_queued_events_after_cancel(monk
     stream = aiter(
         manager.create(
             completion_id="cmp_flush",
-            resource_path=resource_path,
+            workspace=resource_path,
             messages=[DocumentQaMessage(role="user", content="问题")],
             model_config=ModelConfig(model_name="qa"),
         ).stream()
@@ -554,7 +554,7 @@ async def test_should_stop_is_wired_to_cancel_requested(monkeypatch, resource_pa
     manager = CompletionManager()
     stream = manager.create(
         completion_id="cmp_ws",
-        resource_path=resource_path,
+        workspace=resource_path,
         messages=[DocumentQaMessage(role="user", content="问题")],
         model_config=ModelConfig(model_name="qa"),
     ).stream()
@@ -605,7 +605,7 @@ async def test_terminate_interrupts_active_tool_batch(monkeypatch, resource_path
     manager = CompletionManager()
     stream = manager.create(
         completion_id="cmp_deferred",
-        resource_path=resource_path,
+        workspace=resource_path,
         messages=[DocumentQaMessage(role="user", content="问题")],
         model_config=ModelConfig(model_name="qa"),
     ).stream()
@@ -653,7 +653,7 @@ async def test_create_completion_stream_emits_only_one_terminal_event_when_cance
     manager = CompletionManager()
     stream = manager.create(
         completion_id="cmp_race",
-        resource_path=resource_path,
+        workspace=resource_path,
         messages=[DocumentQaMessage(role="user", content="问题")],
         model_config=ModelConfig(model_name="qa"),
     ).stream()
@@ -791,7 +791,7 @@ async def test_completion_manager_create_runs_graph_and_returns_events(monkeypat
     events = await _frames(
         CompletionManager().create(
             completion_id="cmp_mgr",
-            resource_path=resource_path,
+            workspace=resource_path,
             messages=[DocumentQaMessage(role="user", content="问题")],
             model_config=ModelConfig(model_name="qa"),
         ).stream()
@@ -826,7 +826,7 @@ async def test_completion_manager_create_registers_before_iteration_and_terminat
     )
     stream = manager.create(
         completion_id="cmp_mgr_cancel",
-        resource_path=resource_path,
+        workspace=resource_path,
         messages=[DocumentQaMessage(role="user", content="问题")],
         model_config=ModelConfig(model_name="qa"),
     ).stream()
@@ -899,7 +899,7 @@ async def test_unstarted_stream_close_removes_registration(resource_path, monkey
     manager = CompletionManager()
     stream = manager.create(
         completion_id="early_close",
-        resource_path=resource_path,
+        workspace=resource_path,
         messages=[DocumentQaMessage(role="user", content="问题")],
     )
     stream.close()
@@ -928,7 +928,7 @@ async def test_disconnect_wakes_consumer_and_stops_producer(resource_path, monke
     manager = CompletionManager()
     stream = manager.create(
         completion_id="disconnect",
-        resource_path=resource_path,
+        workspace=resource_path,
         messages=[DocumentQaMessage(role="user", content="问题")],
     )
     events = []
@@ -945,7 +945,7 @@ async def test_disconnect_wakes_consumer_and_stops_producer(resource_path, monke
         assert manager.get_status("disconnect") is None
         replacement = manager.create(
             completion_id="disconnect",
-            resource_path=resource_path,
+            workspace=resource_path,
             messages=[DocumentQaMessage(role="user", content="新问题")],
         )
         try:
@@ -968,7 +968,7 @@ async def test_disconnect_before_iteration_does_not_start_producer(resource_path
     manager = CompletionManager()
     stream = manager.create(
         completion_id="disconnect_early",
-        resource_path=resource_path,
+        workspace=resource_path,
         messages=[DocumentQaMessage(role="user", content="问题")],
     )
 

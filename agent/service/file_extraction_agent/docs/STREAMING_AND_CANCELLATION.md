@@ -1,7 +1,7 @@
 # 流式输出与取消
 
 模型增量和单个工具结果到达后立即输出；图只在节点完成后保存完整历史。
-取消通过 Task.cancel 传播到模型或工具 await，等待协程 finally 清理后结束；线程中的计算自行结束，迟到结果不输出。
+取消通过 Task.cancel 传播到模型或工具 await，等待协程 finally 清理后结束；工具子进程会被 kill，迟到结果不输出。
 
 ```text
 ChatCompletion(resource_path, messages)
@@ -30,37 +30,40 @@ graph 在同一配置下最多请求五次，失败经 updates 通知后进入 r
 
 ```text
 executor 接收 tool_calls、tools、共享 timeout 和 on_result
-  → 为每项 create_task，优先 ainvoke，同步工具使用 to_thread
-  → asyncio.wait(FIRST_COMPLETED) 等待下一项完成或共享 deadline
-  → 完成项归一化成 ToolMessage，立即调用 on_result
-  → graph writer 写 custom → loop → tool_completed / tool_failed
-  → 全部完成后按原调用顺序返回完整历史，tools 节点更新 messages
-  → graph 再调用下一轮模型
+  -> 为每项 create_task，await tool.ainvoke
+  -> 工具经 worker_client.run_operation 启动一次性子进程并等待 stdout
+  -> asyncio.wait(FIRST_COMPLETED) 等待下一项完成或共享 deadline
+  -> 完成项归一化成 ToolMessage，立即调用 on_result
+  -> graph writer 写 custom → loop → tool_completed / tool_failed
+  -> 全部完成后按原调用顺序返回完整历史，tools 节点更新 messages
+  -> graph 再调用下一轮模型
 ```
 
-普通异常和超时转换为失败结果；超时取消未完成 Task 并等待清理。
-loop 不再次输出 tools updates，避免重复事件。结果通过 tool_call_id 配对，交付顺序可以不同于调用顺序。
+普通异常和超时转换为失败结果；超时或取消会停止 run_operation 并 kill 未完成的工具子进程，
+不等待其自然结束。loop 不再次输出 tools updates，避免重复事件。结果通过 tool_call_id 配对，
+交付顺序可以不同于调用顺序。
 
 ## 取消
 
 ```text
 CancelCompletion(id)
-  → runtime 锁内设置 cancel_requested，拒收后续结果；manager 返回 cancelling
-  → call_soon_threadsafe 安排 producer.cancel；Task 完成回调写内部结束通知
-  → 图中断模型等待或工具节点等待
-  → executor finally 取消未完成工具 Task，gather 等待协程清理
-  → 工具 await 抛 CancelledError，执行 finally 后退出
-  → consumer 不再交付队列内容，等待 producer 清理后直接退出，不发取消终态
-  → 关闭流并按对象身份移除注册项
+  -> runtime 锁内设置 cancel_requested，拒收后续结果；manager 返回 cancelling
+  -> call_soon_threadsafe 安排 producer.cancel；Task 完成回调写内部结束通知
+  -> 图中断模型等待或工具节点等待
+  -> executor finally 取消未完成工具 Task，gather 等待协程清理
+  -> run_operation 的 finally kill 尚未退出的工具子进程
+  -> consumer 不再交付队列内容，等待 producer 清理后直接退出，不发取消终态
+  -> 关闭流并按对象身份移除注册项
 ```
 
 不等待工具正常计算结束，不补造 TOOL_ABORTED 或其他工具结果。已发送结果不能撤回，取消后未消费的队列结果及迟到结果不再输出。
 重复取消不再次中断正在进行的清理。正常终态交付前移除注册项，之后取消返回 not_found。
-断连/deadline 同样取消生产协程，但连接不可用时不保证交付终态。
+断连/deadline 同样取消生产协程；prepare 阶段的取消直接 kill prepare 子进程，不会注册运行时。
+连接不可用时不保证交付终态。
 
-Task.cancel 是协作式取消；工具必须传播 CancelledError，finally 的异步清理仍可能等待。
-to_thread 中的函数无法安全强杀，继续执行后其返回值不再进入工具协程；写文件等副作用不会撤销。
-本实现不引入独立进程、强制线程终止或固定清理宽限期。
+Task.cancel 是协作式取消；清理协程必须传播 CancelledError，finally 的异步清理仍可能等待。
+工具计算在子进程中执行，父进程取消后子进程会被 kill；已经产生的副作用不会撤销。
+本实现不引入独立进程池、常驻 worker 或固定清理宽限期。
 
 ## 消费端与历史
 

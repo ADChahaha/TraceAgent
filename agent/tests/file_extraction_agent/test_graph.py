@@ -13,6 +13,21 @@ from service.file_extraction_agent.completion_runtime import stream_completion_e
 from service.file_extraction_agent.schemas import DocumentQaMessage
 
 
+@pytest.fixture(autouse=True)
+def fake_build_tools(monkeypatch):
+    class _Tool:
+        def __init__(self, name):
+            self.name = name
+
+        async def ainvoke(self, args):
+            return {"ok": True, "text": "结果"}
+
+    monkeypatch.setattr(
+        "service.file_extraction_agent.core.loop.build_tools",
+        lambda workspace: [_Tool(name) for name in ("ls", "grep", "read", "search_embedding")],
+    )
+
+
 def _scripted_model():
     provider = Mock(spec=["bind_tools", "ainvoke"])
     provider.bind_tools.return_value = provider
@@ -34,7 +49,7 @@ def _scripted_model():
 
 def _input(resource_path):
     return dict(
-        resource_path=resource_path,
+        workspace=resource_path,
         messages=[DocumentQaMessage(role="user", content="Can this contract be terminated early?")],
     )
 

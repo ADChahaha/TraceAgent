@@ -1,35 +1,16 @@
-"""search_embedding 子进程路径：取消 kill、失败映射、真实 worker 端到端。"""
+"""worker_client 子进程路径：取消/超时 kill、失败映射、真实 worker 端到端。"""
 
 from __future__ import annotations
 
 import asyncio
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-pytest.importorskip("openvino")
-
-from service.file_extraction_agent.core.tools import embedding
-from service.file_extraction_agent.core.tools.embedding import (
-    Chunk,
-    EmbeddingIndex,
-    _search_embedding,
-)
-
-
-class _FakeEmbedding:
-    def __init__(self):
-        self._slot = asyncio.Semaphore(1)
-
-    def search_slot(self):
-        return self._slot
-
-
-def _state() -> SimpleNamespace:
-    return SimpleNamespace(document=None, embedding=_FakeEmbedding())
+from service.file_extraction_agent.core.tools import worker_client
+from service.file_extraction_agent.core.tools.embedding import Chunk, EmbeddingIndex, index_to_payload
 
 
 def _index(dimension: int = 2, model_id: str = "m") -> EmbeddingIndex:
@@ -48,7 +29,7 @@ def _index(dimension: int = 2, model_id: str = "m") -> EmbeddingIndex:
     return EmbeddingIndex(model_id=model_id, chunks=chunks, vectors=vectors, dimension=dimension)
 
 
-async def test_search_cancellation_kills_worker(tmp_path, monkeypatch):
+def _write_slow_worker(tmp_path: Path) -> tuple[Path, Path]:
     pid_file = tmp_path / "pid.txt"
     script = tmp_path / "slow_worker.py"
     script.write_text(
@@ -58,17 +39,26 @@ async def test_search_cancellation_kills_worker(tmp_path, monkeypatch):
         "time.sleep(30)\n",
         encoding="utf-8",
     )
-    monkeypatch.setenv("WORKER_PID_FILE", str(pid_file))
-    monkeypatch.setattr(embedding, "_worker_command", lambda: [sys.executable, str(script)])
-    monkeypatch.setattr(embedding, "_get_index", lambda state: _index())
+    return script, pid_file
 
-    task = asyncio.create_task(_search_embedding(_state(), query="x"))
+
+async def _wait_for_file(path: Path) -> int:
     for _ in range(250):
-        if pid_file.exists():
-            break
+        if path.exists():
+            return int(path.read_text())
         await asyncio.sleep(0.02)
-    assert pid_file.exists(), "worker did not start"
-    pid = int(pid_file.read_text())
+    raise AssertionError(f"{path} was not created")
+
+
+async def test_run_operation_cancellation_kills_worker(tmp_path, monkeypatch):
+    script, pid_file = _write_slow_worker(tmp_path)
+    monkeypatch.setenv("WORKER_PID_FILE", str(pid_file))
+    monkeypatch.setattr(worker_client, "_worker_command", lambda: [sys.executable, str(script)])
+
+    task = asyncio.create_task(
+        worker_client.run_operation(operation="read", args={"path": "a.md"}, workspace={"bucket": "b"})
+    )
+    pid = await _wait_for_file(pid_file)
 
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -83,22 +73,63 @@ async def test_search_cancellation_kills_worker(tmp_path, monkeypatch):
     assert not psutil.pid_exists(pid), "worker process was not killed"
 
 
-async def test_search_worker_failure_returns_error(tmp_path, monkeypatch):
+async def test_prepare_workspace_cancellation_kills_worker(tmp_path, monkeypatch):
+    script, pid_file = _write_slow_worker(tmp_path)
+    monkeypatch.setenv("WORKER_PID_FILE", str(pid_file))
+    monkeypatch.setattr(worker_client, "_worker_command", lambda: [sys.executable, str(script)])
+
+    task = asyncio.create_task(
+        worker_client.prepare_workspace([{"type": "documents", "location": "s3://b/documents"}])
+    )
+    pid = await _wait_for_file(pid_file)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    import psutil
+
+    for _ in range(100):
+        if not psutil.pid_exists(pid):
+            break
+        await asyncio.sleep(0.02)
+    assert not psutil.pid_exists(pid), "prepare worker was not killed"
+
+
+async def test_run_operation_failure_returns_error(tmp_path, monkeypatch):
     script = tmp_path / "fail_worker.py"
     script.write_text(
         "import sys\nsys.stdin.buffer.read()\nsys.stderr.write('boom')\nsys.exit(3)\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(embedding, "_worker_command", lambda: [sys.executable, str(script)])
-    monkeypatch.setattr(embedding, "_get_index", lambda state: _index())
+    monkeypatch.setattr(worker_client, "_worker_command", lambda: [sys.executable, str(script)])
 
-    result = await _search_embedding(_state(), query="x")
+    result = await worker_client.run_operation(operation="read", args={}, workspace={"bucket": "b"})
 
     assert result["ok"] is False
     assert "boom" in result["errors"][0]["message"]
 
 
-async def test_search_with_real_worker_returns_results(monkeypatch):
+async def test_prepare_workspace_maps_invalid_resource_to_value_error(tmp_path, monkeypatch):
+    script = tmp_path / "invalid_worker.py"
+    script.write_text(
+        "import json, sys\nsys.stdin.buffer.read()\n"
+        "sys.stdout.write(json.dumps({'ok': False, 'kind': 'invalid', 'message': 'bad refs'}))\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(worker_client, "_worker_command", lambda: [sys.executable, str(script)])
+
+    with pytest.raises(ValueError, match="bad refs"):
+        await worker_client.prepare_workspace([{"type": "documents", "location": "s3://b/documents"}])
+
+
+async def test_prepare_workspace_empty_refs_rejects_without_worker():
+    with pytest.raises(ValueError, match="resource_path"):
+        await worker_client.prepare_workspace([])
+
+
+async def test_real_worker_search_returns_results(monkeypatch):
+    pytest.importorskip("openvino")
     from huggingface_hub import snapshot_download
 
     from service.document_resources.model import DEFAULT_EMBEDDING_MODEL
@@ -107,14 +138,14 @@ async def test_search_with_real_worker_returns_results(monkeypatch):
         snapshot_download(DEFAULT_EMBEDDING_MODEL, local_files_only=True)
     except Exception:
         pytest.skip("embedding model is not cached locally")
-    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
-    monkeypatch.setattr(
-        embedding,
-        "_get_index",
-        lambda state: _index(dimension=384, model_id=DEFAULT_EMBEDDING_MODEL),
-    )
 
-    result = await _search_embedding(_state(), query="付款期限", top_k=2)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    workspace = {"index": index_to_payload(_index(dimension=384, model_id=DEFAULT_EMBEDDING_MODEL))}
+    result = await worker_client.run_operation(
+        operation="search_embedding",
+        args={"query": "付款期限", "top_k": 2},
+        workspace=workspace,
+    )
 
     assert result["ok"] is True
     assert len(result["results"]) == 2

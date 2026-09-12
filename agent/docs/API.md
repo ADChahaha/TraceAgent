@@ -103,7 +103,7 @@ CancelCompletion → manager 找到 runtime → 设置 cancel_requested → 返�
 正常消费按 FIFO 连续编号；取消后丢弃未消费队列内容，但已发给传输层的内容不能撤回。
 backend 必须自己记录取消状态，并拒收迟到内容；不依赖取消终态判断取消成功。未主动取消时意外断流仍须由消费端识别，不能一律视为成功。
 
-每个工具完成立即输出 tool_completed/tool_failed。Task 取消会清理模型流和工具协程；to_thread 的文件操作或 embedding 计算不能强杀，迟到结果不输出。RPC 断连/deadline 同样触发清理。
+每个工具完成立即输出 tool_completed/tool_failed。Task 取消会清理模型流和工具协程，并 kill 尚未结束的工具子进程；迟到结果不输出。RPC 断连/deadline 同样触发清理。
 
 ## 探活和错误
 

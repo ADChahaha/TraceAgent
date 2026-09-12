@@ -1,4 +1,4 @@
-"""检索 worker：请求校验、top-k 输出，以及真实子进程入口。"""
+"""统一 worker：operation 分发、请求校验、prepare/ls/read 及真实子进程入口。"""
 
 from __future__ import annotations
 
@@ -12,10 +12,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-pytest.importorskip("openvino")
-
 from service.document_resources.model import DEFAULT_EMBEDDING_MODEL
 from service.file_extraction_agent.core.tools import worker
+from service.file_extraction_agent.core.tools.workspace import (
+    document_tree_from_payload,
+    load_workspace_payload,
+)
 
 AGENT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -39,26 +41,39 @@ def _chunk(index: int) -> dict:
     }
 
 
-def _request(**overrides) -> dict:
+def _index(dimension: int = 2, model_id: str = "m") -> dict:
     vectors = np.asarray(
         [[1.0, 0.0], [0.0, 1.0], [0.70710678, 0.70710678]], dtype=np.float32
     )
-    request = {
-        "query": "付款期限",
-        "top_k": 2,
-        "model_id": "m",
-        "dimension": 2,
+    return {
+        "model_id": model_id,
+        "dimension": dimension,
         "chunks": [_chunk(1), _chunk(2), _chunk(3)],
         "vectors_b64": base64.b64encode(vectors.tobytes()).decode(),
+    }
+
+
+def _search_request(**overrides) -> dict:
+    request = {
+        "operation": "search_embedding",
+        "args": {"query": "付款期限", "top_k": 2},
+        "workspace": {"index": _index()},
     }
     request.update(overrides)
     return request
 
 
-def test_search_returns_top_k_with_fields(monkeypatch):
-    monkeypatch.setattr(worker, "OpenVinoQueryEmbedder", _FakeEmbedder)
+def test_handle_rejects_unknown_operation():
+    response = worker.handle({"operation": "nope", "args": {}})
 
-    response = worker.search(_request())
+    assert response["ok"] is False
+    assert "unknown operation" in response["errors"][0]["message"]
+
+
+def test_search_returns_top_k_with_fields(monkeypatch):
+    monkeypatch.setattr(worker, "_embedder_class", lambda: _FakeEmbedder)
+
+    response = worker.handle(_search_request())
 
     assert response["ok"] is True
     assert [item["chunk_id"] for item in response["results"]] == ["c1", "c3"]
@@ -68,23 +83,80 @@ def test_search_returns_top_k_with_fields(monkeypatch):
 
 
 def test_search_rejects_bad_vectors(monkeypatch):
-    monkeypatch.setattr(worker, "OpenVinoQueryEmbedder", _FakeEmbedder)
+    monkeypatch.setattr(worker, "_embedder_class", lambda: _FakeEmbedder)
+    bad = _index()
+    bad["vectors_b64"] = base64.b64encode(b"x").decode()
 
-    response = worker.search(_request(vectors_b64=base64.b64encode(b"x").decode()))
+    response = worker.handle(_search_request(workspace={"index": bad}))
 
     assert response["ok"] is False
     assert "vectors" in response["errors"][0]["message"]
 
 
 def test_search_rejects_empty_query(monkeypatch):
-    monkeypatch.setattr(worker, "OpenVinoQueryEmbedder", _FakeEmbedder)
+    monkeypatch.setattr(worker, "_embedder_class", lambda: _FakeEmbedder)
 
-    response = worker.search(_request(query="   "))
+    response = worker.handle(_search_request(args={"query": "   ", "top_k": 2}))
 
     assert response["ok"] is False
 
 
-def test_worker_subprocess_entry_with_real_model():
+def test_prepare_returns_workspace_payload(resource_path):
+    refs = [{"type": ref.type, "location": ref.location} for ref in resource_path]
+
+    response = worker.handle({"operation": "prepare", "args": {"resource_path": refs}})
+
+    assert response["ok"] is True
+    assert response["workspace"]["bucket"]
+    assert response["workspace"]["documents_archive_b64"]
+    assert response["workspace"]["index"]["dimension"] > 0
+    assert all(
+        path.startswith("documents/")
+        for chunk in response["workspace"]["index"]["chunks"]
+        for path in chunk["covered_files"]
+    )
+
+
+def test_prepare_rejects_missing_locations():
+    response = worker.handle({"operation": "prepare", "args": {"resource_path": []}})
+
+    assert response["ok"] is False
+    assert response["kind"] == "invalid"
+
+
+def test_handle_reads_from_workspace_payload(resource_path):
+    payload = load_workspace_payload(resource_path)
+    tree = document_tree_from_payload(payload)
+
+    listing = worker.handle({"operation": "ls", "args": {"path": ""}, "workspace": payload})
+    assert listing["ok"] is True
+    md_key = _first_md_key(tree)
+    read = worker.handle({"operation": "read", "args": {"path": md_key}, "workspace": payload})
+    assert read["ok"] is True
+    assert "terminate" in read["text"]
+
+
+def _first_md_key(tree) -> str:
+    for entry in tree.entries():
+        if entry.kind == "dir":
+            nested = _first_md_key_in(tree, entry.path)
+            if nested:
+                return nested
+    raise AssertionError("missing markdown entry")
+
+
+def _first_md_key_in(tree, prefix: str) -> str | None:
+    for entry in tree.entries(prefix):
+        if entry.kind == "dir":
+            nested = _first_md_key_in(tree, entry.path)
+            if nested:
+                return nested
+        elif entry.kind == "md":
+            return entry.path
+    return None
+
+
+def test_worker_subprocess_entry_with_real_model(monkeypatch):
     from huggingface_hub import snapshot_download
 
     try:
@@ -94,12 +166,16 @@ def test_worker_subprocess_entry_with_real_model():
 
     vectors = np.eye(384, dtype=np.float32)[:3]
     request = {
-        "query": "付款期限",
-        "top_k": 3,
-        "model_id": DEFAULT_EMBEDDING_MODEL,
-        "dimension": 384,
-        "chunks": [_chunk(1), _chunk(2), _chunk(3)],
-        "vectors_b64": base64.b64encode(vectors.tobytes()).decode(),
+        "operation": "search_embedding",
+        "args": {"query": "付款期限", "top_k": 3},
+        "workspace": {
+            "index": {
+                "model_id": DEFAULT_EMBEDDING_MODEL,
+                "dimension": 384,
+                "chunks": [_chunk(1), _chunk(2), _chunk(3)],
+                "vectors_b64": base64.b64encode(vectors.tobytes()).decode(),
+            }
+        },
     }
     env = {**os.environ, "HF_HUB_OFFLINE": "1"}
 

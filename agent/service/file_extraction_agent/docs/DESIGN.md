@@ -4,9 +4,13 @@
 
 ```text
 resource_refs([{type, location}]) + messages + 模型/运行配置
-  -> CompletionManager 调 tools/workspace.validate_resource 预检并注册 CompletionRuntime
+  -> route 调 tools/worker_client.prepare_workspace 启动 prepare 子进程
+       -> worker 按 resource_refs 拉取 documents.zip、加载并校验索引
+       -> 返回 workspace payload（归档 bytes + 已解析索引），父进程只保存这份数据
+  -> CompletionManager 装配模型并注册 CompletionRuntime（不读资源、不持 ObjectStore）
   -> completion_runtime.stream_completion_events 包装业务事件
-  -> run_qa_stream 用 resource_refs 调 open_workspace，build_tools 绑定 ToolWorkspace
+  -> run_qa_stream 用 workspace 调 build_tools；四个工具只经 worker_client.run_operation
+     把 operation、参数和全量 workspace 下发给一次性工具子进程
   -> messages.build_qa_messages 转换历史消息
   -> loop.stream_qa_graph 调 graph.build_qa_graph，绑定 RunOptions、执行函数和停止信号
   -> QaState 保存完整 messages 与请求次数、失败信息、退避时长
@@ -18,19 +22,22 @@ resource_refs([{type, location}]) + messages + 模型/运行配置
 
 ## 存储访问
 
-- 工具层通过 `service/object_store`（boto3，endpoint 指向 storage 服务，
+- prepare 子进程通过 `service/object_store`（boto3，endpoint 指向 storage 服务，
   `S3_ENDPOINT_URL` 配置，默认 `http://localhost:9000`）读取资源。
-- `open_workspace(resource_refs)` 解析资源定位数组：按 type 找到 documents 与 index 的
-  `s3://<bucket>[/<key>]` 位置，GET `documents.zip` 后经 `ArchiveObjectStore` 在内存摊开
-  文档树，再用 `CompositeObjectStore` 按 key 前缀把 `documents/*` 路由到归档、其余键路由到
-  S3 store，最后构造 `DocumentFileTree` 与 `EmbeddingResources`。
-- `DocumentFileTree` 按 key 前缀浏览/读取归档内的 `.md` 成员，越界校验仍是「key 前缀 + 拒绝
-  `..`/绝对路径」；索引的 `covered_files` 校验也走同一个组合 store，因此能命中归档。
-- `grep` 用纯 Python 遍历 .md 对象并做忽略大小写的字面匹配，不再依赖 ripgrep 子进程。
+- `load_workspace_payload(resource_refs)` 解析资源定位数组：按 type 找到 documents 与 index 的
+  `s3://<bucket>[/<key>]` 位置，GET `documents.zip` 后校验 zip，加载并校验
+  `manifest.json` / `index.json` / `vectors.npy`，再把归档 bytes 与已解析索引序列化成
+  JSON payload（`documents_archive_b64` + `index`）。
+- 父进程从不访问对象存储，也不持有 `ObjectStore` / `DocumentFileTree` / `EmbeddingResources`；
+  它只保存 payload，并在每次工具调用时全量下发给新的工具子进程。
+- 只读工具子进程用 `document_tree_from_payload(payload)` 从归档 bytes 重建
+  `ArchiveObjectStore` 与 `DocumentFileTree`，不访问 storage 服务；索引的 `covered_files`
+  在 prepare 阶段已解析成 `documents/...` key。
+- `grep` 在工具子进程里用纯 Python 遍历 .md 对象并做忽略大小写的字面匹配，不依赖 ripgrep。
 
 ## 运行时与注册表
 
-`manager.py` 只管理 CompletionManager：校验请求与资源 → 创建模型和 CompletionRuntime → 注册到 ID 映射 → 转发 stream/terminate/get_status → 运行时收尾时通过注入的 on_close 移除注册项（包括从未迭代的流）。completion_id 只保存在 manager 的注册表键和注入闭包中；清理时同时核对 ID 与运行时对象身份，避免误删其他注册项。CompletionRuntime 不接收或保存 completion_id，也不导入 manager。
+`manager.py` 只管理 CompletionManager：校验请求 → 创建模型和 CompletionRuntime（workspace payload 由路由层的 prepare 子进程提供）→ 注册到 ID 映射 → 转发 stream/terminate/get_status → 运行时收尾时通过注入的 on_close 移除注册项（包括从未迭代的流）。completion_id 只保存在 manager 的注册表键和注入闭包中；清理时同时核对 ID 与运行时对象身份，避免误删其他注册项。CompletionRuntime 不接收或保存 completion_id，也不导入 manager。
 
 `completion_runtime.py` 的内层 stream_completion_events 仅转换模型、工具和重试通知；ModelFailed 转 RuntimeError，取消异常继续传播。completion 生命周期只由外层 astream 生成。
 
@@ -55,9 +62,9 @@ manager 的 get_status 仅从取消标志推导活动请求的 in_progress/cance
 
 ## 执行输入与状态
 
-QaState 继承 MessagesState，增加 model_attempt、model_failure、retry_delay_seconds。只有校验通过的完整消息进入 messages；失败尝试的部分文本不进入历史。资源路径、运行参数、工具访问器和 embedding 缓存均在图状态之外。
+QaState 继承 MessagesState，增加 model_attempt、model_failure、retry_delay_seconds。只有校验通过的完整消息进入 messages；失败尝试的部分文本不进入历史。workspace payload、运行参数和工具运行参数均在图状态之外。
 
-`run_qa_stream` 是 Agent 接口：校验非空消息和资源定位数组 → open_workspace 创建 ToolWorkspace → build_tools 绑定四个共享工具 → build_qa_messages 转换完整历史 → 调用同模块 stream_qa_graph 执行图并转换输出。loop 解析图更新，但不决定节点路由；关闭接口流时通过 aclosing 关闭内层生成器，并等待原生图流 aclose。
+`run_qa_stream` 是 Agent 接口：校验非空消息和 workspace → build_tools 给四个工具绑定同一份 payload → build_qa_messages 转换完整历史 → 调用同模块 stream_qa_graph 执行图并转换输出。loop 解析图更新，但不决定节点路由；关闭接口流时通过 aclosing 关闭内层生成器，并等待原生图流 aclose。
 
 graph.py 绑定固定模型并编译 agent、retry_wait、tools 三个节点。agent 每次只调用一次 model_invocation；ModelCallFailure 通过 Command 更新状态，未达上限路由至 retry_wait，否则结束。retry_wait 按以 0.5 秒起步、8 秒封顶并乘 0.75–1 随机系数的指数间隔等待后回到 agent；同一逻辑模型调用总共最多五次请求。成功后计数归零，工具完成后的下一次模型调用重新计数。无效工具 ID 抛 ValueError，不发完整消息、不执行工具。
 
@@ -69,7 +76,7 @@ loop.stream_qa_graph 使用 graph.astream(stream_mode=["messages", "updates", "c
 
 RunOptions 只保留 tool_execution_timeout，默认 60 秒；删除从未参与执行的 max_tool_calls。LangGraph 的递归保护仍为 10000，由 graph 内部配置。
 
-manager 负责输入合法性、问答模型装配和 completion 注册；资源预检委托工具层；source_indexed 只返回 result={"ok":true}，启动通知不遍历或读取文档。manager 不读取磁盘，也不持有 embedding 对象。初始化失败不注册运行时；同一活动 completion_id 不可重复。异步 gRPC 适配层通过 asyncio.to_thread 完成预检和初始化；首事件前的参数错误通过 await context.abort 映射 INVALID_ARGUMENT，其他初始化错误映射 INTERNAL。初始化与取消在锁内交接流，取消后的迟到结果在线程内关闭，停服时也不留下注册项。
+manager 负责输入合法性、问答模型装配和 completion 注册；资源预检由路由层在创建前交给 `prepare_workspace` 子进程完成；source_indexed 只返回 result={"ok":true}，启动通知不遍历或读取文档。manager 不读取磁盘，也不持有 embedding 对象。初始化失败不注册运行时；同一活动 completion_id 不可重复。首事件前的参数错误通过 await context.abort 映射 INVALID_ARGUMENT，其他初始化错误映射 INTERNAL。prepare 子进程被取消或失败时在 finally kill；父进程侧不再有初始化线程需要交接。
 
 route 在模块顶部直接导入 completion_manager；标准库与内部工具依赖也在顶部声明。生成端 model.py 与工具 embedding.py 分别保留 SentenceTransformer 的延迟导入，避免未使用 embedding 时加载其重依赖。
 
@@ -110,56 +117,57 @@ route 在模块顶部直接导入 completion_manager；标准库与内部工具�
 
 消息仅提取可见文本，不输出隐藏推理。合法 terminal stop signal 且无 tool_calls 时标记 is_final=true。图更新不重复输出历史消息或最后一条回答。
 
-## 取消与线程边界
+## 取消与进程边界
 
 ```text
 terminate / close
   → 设置 cancel_requested，拒收新事件
   → 在所属事件循环取消 producer
-  → 模型或工具 await 收到 CancelledError
-  → executor finally 取消并等待未完成工具 Task
+  → 模型 await 收到 CancelledError；工具 await 取消 run_operation
+  → run_operation finally kill 工具子进程，executor 等待未完成工具 Task 清理
   → Task 完成回调唤醒 consumer
   → consumer 直接退出，不发 completion.cancelled
 ```
 
 已经交给传输层的事件无法撤回；取消后 runtime 不再输出尚未消费的队列内容。
 取消前先完成并交付的终态不会再发第二次。backend 应以自己的取消状态禁止后续写库，不依赖 agent 取消事件。
-重复取消不再次中断清理。同步 to_thread 计算可能继续，迟到结果不再输出，副作用不能撤销。
-模型、工具和清理协程必须协作传播取消；不保证固定清理时间。
+重复取消不再次中断清理。工具计算在子进程中执行，父进程取消会 kill 子进程，不等待其自然结束；已经产生的副作用不能撤销。
+prepare 阶段取消同样 kill 子进程。模型、工具和清理协程必须协作传播取消；不保证固定清理时间。
 
-RPC 断连回调绑定具体 runtime，避免旧 ID 误取消新请求。初始化期间取消沿用路由线程交接：迟到 runtime 调 close，未启动 producer 也可移除注册项。
+RPC 断连回调绑定具体 runtime，避免旧 ID 误取消新请求。prepare 完成前不会注册运行时；取消发生在 prepare 阶段时只 kill 子进程，不会留下注册项；未启动 producer 的已注册 runtime 调 close 也能移除注册项。
 
 ## 工具与引用
 
-工具对模型暴露 async coroutine；executor 优先 await ainvoke。文件浏览、纯 Python 搜索与本地 embedding 使用 asyncio.to_thread 执行同步叶子操作，事件循环不承担磁盘等待或推理计算。
+工具对模型暴露 async coroutine；executor 只 await `ainvoke`。每个工具调用都会经 `worker_client.run_operation` 启动一次性工具子进程，把 operation、参数和全量 workspace payload 经 stdin 下发；父进程不执行任何对象读取或推理计算。
 
-工具各自使用单文件：`tools/ls.py`、`grep.py`、`read.py`、`embedding.py`；语义检索的子进程入口是 `tools/worker.py`，纯 OpenVINO 查询编码器在 `tools/ov_embedder.py`。共享文件访问在 `workspace.py`，异常结果归一化在 `base.py`。
+工具各自使用单文件：`tools/ls.py`、`grep.py`、`read.py`、`embedding.py`；统一子进程入口是 `tools/worker.py`（operation 分发），父进程客户端在 `tools/worker_client.py`，纯 OpenVINO 查询编码器在 `tools/ov_embedder.py`。归档与 payload 序列化在 `workspace.py`，异常结果归一化在 `base.py`。
 
-run_tool 只接收 execute 操作，正常返回结果，普通异常转为 ok:false。工具工厂直接使用必需的 LangChain @tool，返回 BaseTool；不保留缺依赖时退化为普通函数的分支。索引加载、工作区与文档树使用具体类型。
+run_tool 只接收 execute 操作，正常返回结果，普通异常转为 ok:false。工具工厂直接使用必需的 LangChain @tool，返回 BaseTool；不保留缺依赖时退化为普通函数的分支。
 
 ```text
-workspace.validate_resource(resource_refs)
-  -> 校验 documents/index 定位都存在且同 bucket
-  -> embedding.load_index 校验清单版本、模型配置、向量维度/有限值和引用路径
-  -> 无效资源抛 ValueError，gRPC 在首事件前返回 INVALID_ARGUMENT
-
-search_embedding(query)
-  -> 校验 query；load_index 读取 manifest.json/index.json/vectors.npy（阻塞读走 to_thread）
-  -> 组装子进程请求：query/top_k/model_id/dimension/chunks/vectors_b64
-  -> 每轮 completion 一个信号量，串行启动 python -m ...tools.worker
-  -> worker 用纯 OpenVINO 编码 query、计算 top-k，经 stdout 返回 JSON
+prepare_workspace(resource_refs)
+  -> 空数组直接抛 ValueError；否则启动 python -m ...tools.worker 执行 prepare
+  -> worker: load_workspace_payload 拉取归档、校验清单版本/模型/向量/引用
+  -> 返回 {ok, workspace:{bucket, documents_archive_b64, index}}
+  -> kind=invalid 映射 ValueError（INVALID_ARGUMENT）；其他失败映射 RuntimeError（INTERNAL）
   -> 取消/超时/失败都在 finally kill 子进程
-  -> 返回文本、分数与文档 key 引用；工具异常转换为 ok:false
+
+ls / grep / read / search_embedding
+  -> 父进程 run_operation 组装 {operation, args, workspace}
+  -> worker 分发：只读工具用 document_tree_from_payload 重建文档树；
+     search_embedding 从 workspace.index 解码 chunks/vectors 后加载 OpenVINO 编码器
+  -> worker stdout 返回工具 JSON；进程级失败转为 ok:false 与 errors
+  -> 取消/超时/失败都在 finally kill 子进程
 ```
 
-RPC 预检加载索引但不在本进程加载查询模型。`EmbeddingResources` 的锁保证并行查询只初始化一次索引，并提供本轮查询信号量，避免并发 worker 进程造成内存尖峰。查询编码只依赖 openvino + tokenizers，不 import torch/transformers；生成端索引构建仍用 sentence-transformers。问答不重建文档向量。
+查询模型不在父进程加载；prepare 子进程只加载并校验索引，检索子进程按需加载 OpenVINO 编码器。查询编码只依赖 openvino + tokenizers，不 import torch/transformers；生成端索引构建仍用 sentence-transformers。问答不重建文档向量。
 
-基准（本机、OpenVINO CPU、默认模型，实测）：检索子进程每次启动约 2.3s、峰值内存约 420MB，稳态编码约 3ms/条；对比 sentence-transformers 包装启动约 21s。当前按“每调用一个进程”换取可 kill 的取消语义与实现简单，不引入常驻 worker。
+基准（本机、OpenVINO CPU、默认模型，实测）：检索子进程每次启动约 2.3s、峰值内存约 420MB，稳态编码约 3ms/条；对比 sentence-transformers 包装启动约 21s。当前按“每次工具调用一个进程”换取可 kill 的取消语义与实现简单，不引入常驻 worker，也不限制并发。
 
-- `ls(path="")`：逐层浏览资源的 documents 目录。
-- `grep(query, scope="", max_results=20)`：纯 Python 遍历 .md 对象并做忽略大小写的字面匹配候选行。
-- `read(path)`：读取真实 Markdown 文件，拒绝文档目录之外的路径。
-- `search_embedding(query, top_k=5)`：沿用资源记录的模型，在一次性子进程里用纯 OpenVINO 编码 query，从已加载索引召回文本及 covered_files；子进程可被取消 kill，删除从未参与过滤的 scope 参数。
+- `ls(path="")`：在工具子进程里逐层浏览归档的 documents 目录。
+- `grep(query, scope="", max_results=20)`：在工具子进程里纯 Python 遍历 .md 对象并做忽略大小写的字面匹配候选行。
+- `read(path)`：在工具子进程里读取真实 Markdown 文件，拒绝文档目录之外的路径。
+- `search_embedding(query, top_k=5)`：沿用资源记录的模型，在一次性子进程里用纯 OpenVINO 编码 query，从 payload 索引召回文本及 covered_files；子进程可被取消 kill，删除从未参与过滤的 scope 参数。
 
 Markdown 文件树由资源模块创建：文档标题作为顶层目录后缀，h1–h6 按层级建目录；paragraph、list、table 分别作为文件。排序使用数字前缀；合并表格单元格展开为 Markdown。内部 index/manifest 不暴露给浏览工具。
 

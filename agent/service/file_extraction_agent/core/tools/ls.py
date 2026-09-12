@@ -1,10 +1,11 @@
-"""`ls` tool: list one level of the document workspace tree."""
+"""`ls` tool: list one level of the document workspace tree.
+
+同步叶子逻辑在工具子进程中执行；父进程工具只通过 run_operation 下发参数和 workspace。
+"""
 
 from __future__ import annotations
 
-import asyncio
-
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.tools import BaseTool, tool
 from service.file_extraction_agent.core.contracts import JsonObject
@@ -13,6 +14,7 @@ if TYPE_CHECKING:
     from service.file_extraction_agent.core.tools.workspace import ToolWorkspace
 
 from service.file_extraction_agent.core.tools.base import expose_entries, run_tool
+from service.file_extraction_agent.core.tools.worker_client import run_operation
 
 
 def _ls(state: ToolWorkspace, path: str = "") -> JsonObject:
@@ -32,7 +34,7 @@ def _ls_result(state: ToolWorkspace, path: str) -> JsonObject:
     }
 
 
-def build_ls(state: ToolWorkspace) -> BaseTool:
+def build_ls(workspace: dict[str, Any], *, run_operation=run_operation) -> BaseTool:
     @tool
     async def ls(path: str = "") -> JsonObject:
         """List one level of the document workspace at a directory path.
@@ -46,7 +48,7 @@ def build_ls(state: ToolWorkspace) -> BaseTool:
         Start every investigation here to understand document layout before reading.
         """
 
-        return await asyncio.to_thread(_ls, state, path)
+        return await run_operation(operation="ls", args={"path": path}, workspace=workspace)
 
     return ls
 

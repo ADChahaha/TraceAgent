@@ -1,7 +1,7 @@
 """工具调用批次 → create_task 并发 ainvoke → 共享 deadline 下逐项发布 → 按序返回历史 ToolMessage。
 
 未知工具、普通异常和超时转成失败结果；每项保留调用 ID、名称、参数与 artifact。
-超时或断连取消未完成协程；同步工具通过 to_thread 执行，迟到结果不改写已返回消息。
+超时或断连取消未完成协程；真实工具在子进程中执行，父进程取消即 kill，迟到结果不改写已返回消息。
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ async def _execute_tools_parallel(
 ) -> list[ToolMessage]:
     """并行调用工具 → 完成一项立即回调 → 按原始 ID 返回完整历史。
 
-    普通异常与超时转失败消息；不等待迟到线程，不写共享事件或 action。
+    普通异常与超时转失败消息；不等待迟到结果，不写共享事件或 action。
     """
     tool_map = {tool.name: tool for tool in tools}
 
@@ -33,9 +33,9 @@ async def _execute_tools_parallel(
         selected = tool_map.get(call["name"])
         if selected is None:
             raise ValueError(f"unknown tool: {call['name']}")
-        if isinstance(selected, AsyncTool):
-            return await selected.ainvoke(call["args"])
-        return await asyncio.to_thread(selected.invoke, call["args"])
+        if not isinstance(selected, AsyncTool):
+            raise TypeError(f"tool must be async: {call['name']}")
+        return await selected.ainvoke(call["args"])
 
     async def run_one(call: ToolCall) -> ToolMessage:
         try:

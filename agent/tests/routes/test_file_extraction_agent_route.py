@@ -21,7 +21,11 @@ from service.file_extraction_agent.schemas import RunOptions
 def manager(monkeypatch):
     instance = CompletionManager()
     monkeypatch.setattr(qa_routes, "completion_manager", instance)
-    monkeypatch.setattr(manager_module, "validate_resource", lambda path: None)
+
+    async def fake_prepare(resource_path):
+        return {"stub": True}
+
+    monkeypatch.setattr(qa_routes, "prepare_workspace", fake_prepare)
     monkeypatch.setattr(manager_module, "build_qa_model", lambda config: object())
     return instance
 
@@ -45,7 +49,6 @@ def test_real_graph_streams_native_chunks_and_retry_over_rpc(rpc, manager, monke
     if not cancel:
         model._release.set()
     monkeypatch.setattr(manager_module, "build_qa_model", lambda config: model)
-    monkeypatch.setattr(loop, "open_workspace", lambda refs: object())
     monkeypatch.setattr(loop, "build_tools", lambda workspace: [])
     stream = rpc.ChatCompletion(request(), timeout=5)
     events = []
@@ -117,8 +120,8 @@ async def test_disconnect_before_first_iteration_removes_registration(manager, m
     output = [event async for event in qa_routes.create_chat_completion(request(), DisconnectedContext())]
     assert output == []
     assert manager.get_status("cmp_rpc") is None
-    replacement = await qa_routes._create_runtime(
-        completion_id="cmp_rpc", resource_path=request().resource_path,
+    replacement = qa_routes.completion_manager.create(
+        completion_id="cmp_rpc", workspace={"stub": True},
         messages=qa_routes._messages(request()),
     )
     try:
@@ -126,36 +129,6 @@ async def test_disconnect_before_first_iteration_removes_registration(manager, m
         assert manager.get_status("cmp_rpc")["status"] == "in_progress"
     finally:
         replacement.close()
-
-
-def test_initialization_cleanup_survives_event_loop_shutdown(manager, monkeypatch):
-    """初始化期间断连并关闭事件循环，迟到的初始化结果也必须释放。"""
-    started = threading.Event()
-    release = threading.Event()
-
-    def build(config):
-        started.set()
-        assert release.wait(5)
-        return object()
-
-    monkeypatch.setattr(manager_module, "build_qa_model", build)
-
-    async def run():
-        stream = qa_routes.create_chat_completion(request(), None)
-        task = asyncio.create_task(anext(stream))
-        try:
-            assert await asyncio.to_thread(started.wait, 2)
-            task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await task
-        finally:
-            asyncio.get_running_loop().call_later(0.1, release.set)
-
-    try:
-        asyncio.run(run())
-        assert manager.get_status("cmp_rpc") is None
-    finally:
-        release.set()
 
 
 def test_chat_streams_typed_events_and_preserves_json(rpc, manager, monkeypatch):
