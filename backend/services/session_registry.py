@@ -46,9 +46,8 @@ class SessionRegistry:
                     now = utc_now()
                     turns = crud.list_unfinished_turns(db, session["id"])
                     for turn in turns:
-                        crud.update_turn(db, turn_id=turn["id"], now=now, status="failed", completed_at=now, commit=False)
-                        crud.create_event(db, event_id=uuid.uuid4().hex, session_id=session["id"], turn_id=turn["id"],
-                                          event_type="turn.failed", payload={"error": "backend_restarted"}, now=now, commit=False)
+                        crud.update_turn(db, turn_id=turn["id"], now=now, status="failed", error="backend_restarted",
+                                         completed_at=now, commit=False)
                     crud.update_session(db, session_id=session["id"], now=now, clear_active_turn=True,
                                         status="failed" if session["status"] == "processing" else "ready", commit=False)
         await asyncio.to_thread(recover)
@@ -119,9 +118,9 @@ class SessionRegistry:
             session = crud.get_session(db, session_id)
             if session is None:
                 raise NotFoundError("会话不存在")
-            return session, crud.list_resources(db, session_id), crud.get_last_event_sequence(db, session_id)
-        session, resources, seq = await asyncio.to_thread(read)
-        return SessionManager(session=session, resources=resources, last_event_seq=seq,
+            return session, crud.list_resources(db, session_id)
+        session, resources = await asyncio.to_thread(read)
+        return SessionManager(session=session, resources=resources,
                               database=self.database, agent_client=self.agent_client, settings=self.settings)
 
     def _create_session(self, session_id):

@@ -8,7 +8,7 @@
 FastAPI lifespan → SessionRegistry.start → 扫描遗留运行状态
 HTTP handler → SessionRegistry → SessionManager 的命令队列
 SessionManager → TurnRuntime → AgentClient → 独立 agent gRPC 服务
-TurnRuntime → manager.agent_event → 数据库事务 → TurnView → Subscription
+TurnRuntime → manager.agent_event → 消息事务 → TurnView → Subscription
 HTTP handler → session_history.build_snapshot → 首帧 → Subscription.receive → SSE
 FastAPI shutdown → registry.close → manager.close → runtime.cancel/wait_closed
 ```
@@ -19,7 +19,7 @@ Registry 持有 manager；manager 持有执行句柄与订阅；runtime 持有�
 | --- | --- |
 | routes/chat.py | JSON/multipart 校验，调用 complete/attach/cancel，生成 SSE 或 JSON |
 | session_registry.py | Manager 状态机（CREATING/READY/CLOSING）与加载权；回收与启动恢复 |
-| session_manager.py | 命令按 FIFO 执行；校验轮次身份，事务提交后更新内存及广播 |
+| session_manager.py | Command 按 FIFO 执行（_run 唯一消费者）；校验轮次身份，事务提交后更新内存及广播 |
 | turn_runtime.py | 文件准备、读取模型输入、消费事件，最终汇报 WorkerEnded |
 | turn_view.py | 过程事件折叠成当前轮 items，输出深拷贝快照 |
 | subscription.py | 独立有界队列，发布不阻塞，等待者取消不丢事件 |
@@ -60,9 +60,9 @@ gRPC 只使用现有 PrepareResources 与 ChatCompletion；取消使用原 call.
 
 ## 4. 串行与事务边界
 
-同一 manager 的创建、取消、Attach、事件、收尾通过一个有界 FIFO 队列。网络读取不占命令循环；runtime 每发一个事件等待确认，限制待处理事件积压。取消等待当前命令完成，不依赖独立优先队列。
+同一 manager 的创建、取消、Attach、事件、收尾都编码为 Command(name, args, reply) 进入有界 FIFO 队列，_run 是唯一消费者，严格按入队顺序执行。需要结果的命令用 _ask 创建 reply Future；resources/ended 这类 runtime 通知用 _tell 只入队。网络读取不占命令循环；runtime 每发一个事件等待确认，限制待处理事件积压。外部命令队列满直接拒绝，内部命令等待空位；调用方协程取消不撤销已入队命令，handler 产生但无人接收的订阅由 _run 统一回收，reply 已 set_result 的窗口由 _ask 同步守卫处理。
 
-service 的数据查询和写入统一调用 CRUD，不直接执行 SQL。每个写命令把完整 SQLite 事务放入一次 asyncio.to_thread，使用线程内连接、crud.transaction 和 commit=False CRUD；CRUD 内部负责 BEGIN IMMEDIATE、提交及异常回滚。成功提交后才能推进 last_event_seq、更新 TurnView、广播；SQL 异常回滚并标记 manager 损坏，取消执行、关闭订阅。
+service 的数据查询和写入统一调用 CRUD，不直接执行 SQL。每个写命令把完整 SQLite 事务放入一次 asyncio.to_thread，使用线程内连接、crud.transaction 和 commit=False CRUD；CRUD 内部负责 BEGIN IMMEDIATE、提交及异常回滚。成功提交后才能更新 TurnView、广播；SQL 异常回滚并标记 manager 损坏，取消执行、关闭订阅。
 
 损坏 manager 当前不会在线自动重建；backend 重启扫描持久化状态收口遗留轮次。投影更新异常同样停止该 manager，避免数据库与内存分歧后继续服务。
 
@@ -79,7 +79,7 @@ model_message.done → 以完整正文为准
 tool_completed/failed → 按原 call_id 配对实际结果
   → 未配齐：仅保存过程
   → 配齐：同一事务提交 assistant + 按原调用顺序排列的全部 tool
-下一轮 start_turn → 只读取 chat_messages，不拼接 chat_events
+下一轮 start_turn → 只读取 chat_messages，不拼接过程事件
 ```
 
 同名工具也按 ID 独立匹配；结果乱序到达不改变稳定消息顺序。未知、重复调用或没有实际结果的工具终态不能补造数据。组提交与该事件入库同一事务，失败时没有半组或提前广播。
@@ -98,17 +98,19 @@ TurnView 缓存一个当前 turn 的用户消息、模型尝试、工具和重�
 
 ```text
 GET /resume → manager.attach 在串行命令中：
-  1. 捕获 session 状态、资源、内部事件水位 N
-  2. 深拷贝当前轮展示（若存在）
+  1. 读取已存在的 turn id 列表（冻结快照范围）
+  2. 捕获 session 状态、资源、当前轮展示副本（若存在）
   3. 注册独立订阅，后续新事件进入队列
 请求侧 build_snapshot：
-  4. 调用 crud.iter_events_through 逐条查询 sequence <= N 的事件，排除已捕获的当前轮
-  5. 按 turn 重放 TurnView，附加当前轮副本
-  6. 检查快照预算并发送 session.snapshot
-  7. 消费队列中的 N 之后增量
+  4. 读取 chat_messages（按 sequence）与 chat_turns（状态和 error）
+  5. 只渲染冻结列表内的轮次，按 turn 分组生成 items；排除当前轮
+  6. 附加当前轮内存副本，检查快照预算并发送 session.snapshot
+  7. 消费订阅队列增量
 ```
 
-内部 N 仅用于划分数据库前缀与内存增量，不暴露客户端游标。历史查询期间旧轮完成甚至新轮开始，都不会改动已捕获副本；后续变化位于订阅队列中。
+过程事件不落库，历史轮由 chat_messages 与 chat_turns 渲染：user/assistant 消息直接成项，assistant 的 tool_calls_json 还原工具调用列表，tool 消息按内容区分成功与失败。取消或失败轮次中未配齐的工具组没有消息行，对应展示项不再出现；turn 的终态错误来自 chat_turns.error。
+
+冻结 turn id 列表划分数据库前缀与订阅增量：attach 之后新建的轮不进入首帧，只经订阅送达；查询期间旧轮完成会反映为数据库中的终态，当前轮始终以捕获副本为准。历史查询期间的变化不会造成重复或遗漏。
 
 历史读取在命令循环外，避免大查询阻塞 cancel。查询出错、30 秒超时或构造期间订阅溢出时释放订阅，不发送不完整快照。历史仅在响应构造时加载；首帧编码后释放历史对象与当前轮副本。
 
@@ -136,13 +138,13 @@ detach 只关闭该订阅。manager 只有在无活跃轮、执行句柄、订�
 | sse_heartbeat_seconds | 15 秒 |
 | upload_max_bytes / upload_max_files | 32 MiB / 20 |
 
-这些新增参数通过 BackendSettings 构造配置，目前没有对应环境变量映射。快照预算同时检查历史事件读取量与最终序列化大小；当前无分页或历史压缩。
+这些新增参数通过 BackendSettings 构造配置，目前没有对应环境变量映射。快照预算检查最终序列化大小；当前无分页或历史压缩。
 
 当前单进程、单用户使用，未接入租户鉴权。前端仍需迁移旧 /qa/tasks 协议。agent 与 agent_proto 保持独立，Agent 合并计划已取消。
 
 ## 10. 验证与参考
 
-行为测试覆盖创建独占与中断回滚、CLOSING 冲突、单例加载、取消后迟到事件、快照边界、真实 SQLite 事务回滚、工具乱序配对、慢订阅、提前取消收尾、冷恢复和启动收口。gRPC 测试使用本地真实服务、protobuf 序列化与有效 DOCX 样本；ASGI 测试验证断开后继续执行。各测试文件说明位于 backend/tests/docs/，与开发文档分离。
+行为测试覆盖创建独占与中断回滚、CLOSING 冲突、单例加载、取消后迟到事件、快照渲染与边界、真实 SQLite 事务回滚、工具乱序配对、慢订阅、提前取消收尾、冷恢复和启动收口。gRPC 测试使用本地真实服务、protobuf 序列化与有效 DOCX 样本；ASGI 测试验证断开后继续执行。各测试文件说明位于 backend/tests/docs/，与开发文档分离。
 
 设计参考公开 Codex 固定版本 53c542d944c705f3a66780a19223223bee57cbb6：
 - [thread_state.rs](https://github.com/openai/codex/blob/53c542d944c705f3a66780a19223223bee57cbb6/codex-rs/app-server/src/thread_state.rs)

@@ -188,11 +188,12 @@ def test_create_turn_writes_only_schema_columns(db):
     turn = create_turn(db)
     assert set(turn) == {
         "id", "session_id", "status", "agent_completion_id",
-        "created_at", "updated_at", "completed_at",
+        "created_at", "updated_at", "completed_at", "error",
     }
     assert turn["status"] == "queued"
     assert turn["agent_completion_id"] is None
     assert turn["completed_at"] is None
+    assert turn["error"] is None
     assert chat_crud.get_turn(db, "turn-1") == turn
 
 
@@ -243,6 +244,19 @@ def test_update_turn_status_if_current_conditional(db):
     assert chat_crud.get_turn(db, "turn-1")["status"] == "completed"
 
 
+def test_create_turn_persists_error_column(db):
+    create_session(db)
+    turn = chat_crud.create_turn(db, turn_id="turn-err", session_id="session-1",
+                                 status="failed", now="t1", error="backend_restarted")
+    assert turn["error"] == "backend_restarted"
+    updated = chat_crud.update_turn_status_if_current(
+        db, turn_id="turn-err", current_statuses={"failed"},
+        status="cancelled", now="t2", error="user_cancelled",
+    )
+    assert updated["error"] == "user_cancelled"
+    assert chat_crud.get_turn(db, "turn-err")["error"] == "user_cancelled"
+
+
 def test_get_active_turn_finds_non_terminal_turn(db):
     create_session(db)
     create_turn(db, turn_id="turn-done", status="completed")
@@ -250,54 +264,3 @@ def test_get_active_turn_finds_non_terminal_turn(db):
     active = chat_crud.get_active_turn(db, "session-1")
     assert active is not None
     assert active["id"] == "turn-active"
-
-
-def test_create_event_assigns_sequence_and_columns(db):
-    create_session(db)
-    first = chat_crud.create_event(
-        db,
-        event_id="event-1",
-        session_id="session-1",
-        turn_id=None,
-        event_type="session.created",
-        payload={"metadata": {}},
-        now="2026-01-01T00:00:00Z",
-    )
-    second = chat_crud.create_event(
-        db,
-        event_id="event-2",
-        session_id="session-1",
-        turn_id="turn-1",
-        event_type="turn.created",
-        payload={"turn_id": "turn-1"},
-        now="2026-01-02T00:00:00Z",
-    )
-    assert set(first) == {"id", "session_id", "turn_id", "sequence",
-                          "event_type", "payload_json", "created_at"}
-    assert first["sequence"] == 1
-    assert second["sequence"] == 2
-    assert second["payload_json"] == '{"turn_id": "turn-1"}' or second["payload_json"] == '{"turn_id":"turn-1"}'
-
-
-def test_list_events_after_sequence(db):
-    create_session(db)
-    for index in range(3):
-        chat_crud.create_event(
-            db,
-            event_id=f"event-{index + 1}",
-            session_id="session-1",
-            turn_id=None,
-            event_type="agent.event",
-            payload={"index": index},
-            now=f"2026-01-0{index + 1}T00:00:00Z",
-        )
-    events = chat_crud.list_events(db, "session-1", after_sequence=1)
-    assert [event["sequence"] for event in events] == [2, 3]
-
-
-def test_get_last_event_sequence(db):
-    create_session(db)
-    assert chat_crud.get_last_event_sequence(db, "session-1") == 0
-    chat_crud.create_event(db, event_id="event-1", session_id="session-1", turn_id=None,
-                         event_type="session.created", payload={}, now="t1")
-    assert chat_crud.get_last_event_sequence(db, "session-1") == 1

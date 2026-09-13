@@ -123,7 +123,7 @@ def test_database_initialization_creates_chat_schema_without_migrating_legacy_ta
     }
     chat_session_columns = {row["name"] for row in connection.execute("PRAGMA table_info(chat_sessions)").fetchall()}
 
-    assert {"chat_sessions", "chat_resources", "chat_messages", "chat_turns", "chat_events"} <= table_names
+    assert {"chat_sessions", "chat_resources", "chat_messages", "chat_turns"} <= table_names
     assert chat_session_columns == {"id", "status", "active_turn_id", "created_at", "updated_at"}
     # 初始化只负责建当前 schema，不再清理或迁移旧表；旧库按“重建新库”处理。
     assert "tasks" in table_names

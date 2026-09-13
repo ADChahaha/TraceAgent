@@ -5,7 +5,6 @@ from contextlib import contextmanager
 from typing import Any
 
 from backend.core.db import row_to_dict
-from backend.crud.json_utils import dumps_json
 
 
 @contextmanager
@@ -197,16 +196,17 @@ def create_turn(
     session_id: str,
     status: str,
     now: str,
+    error: str | None = None,
     commit: bool = True,
 ) -> dict[str, Any]:
     connection.execute(
         """
         INSERT INTO chat_turns (
-            id, session_id, status, created_at, updated_at
+            id, session_id, status, error, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (turn_id, session_id, status, now, now),
+        (turn_id, session_id, status, error, now, now),
     )
     if commit:
         connection.commit()
@@ -241,6 +241,7 @@ def update_turn(
     now: str,
     status: str | None = None,
     agent_completion_id: str | None = None,
+    error: str | None = None,
     completed_at: str | None = None,
     commit: bool = True,
 ) -> dict[str, Any]:
@@ -249,6 +250,8 @@ def update_turn(
         updates["status"] = status
     if agent_completion_id is not None:
         updates["agent_completion_id"] = agent_completion_id
+    if error is not None:
+        updates["error"] = error
     if completed_at is not None:
         updates["completed_at"] = completed_at
     assignments = ", ".join(f"{name} = ?" for name in updates)
@@ -267,10 +270,13 @@ def update_turn_status_if_current(
     current_statuses: set[str],
     status: str,
     now: str,
+    error: str | None = None,
     completed_at: str | None = None,
     commit: bool = True,
 ) -> dict[str, Any] | None:
     updates: dict[str, Any] = {"status": status, "updated_at": now}
+    if error is not None:
+        updates["error"] = error
     if completed_at is not None:
         updates["completed_at"] = completed_at
     placeholders = ", ".join("?" for _ in current_statuses)
@@ -290,56 +296,14 @@ def update_turn_status_if_current(
     return get_turn(connection, turn_id)
 
 
-def create_event(
-    connection: sqlite3.Connection,
-    *,
-    event_id: str,
-    session_id: str,
-    turn_id: str | None,
-    event_type: str,
-    payload: dict[str, Any],
-    now: str,
-    commit: bool = True,
-) -> dict[str, Any]:
-    sequence = get_last_event_sequence(connection, session_id) + 1
-    connection.execute(
-        """
-        INSERT INTO chat_events (
-            id, session_id, turn_id, sequence, event_type, payload_json, created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (event_id, session_id, turn_id, sequence, event_type, dumps_json(payload), now),
-    )
-    if commit:
-        connection.commit()
-    row = connection.execute("SELECT * FROM chat_events WHERE id = ?", (event_id,)).fetchone()
-    event = row_to_dict(row)
-    assert event is not None
-    return event
-
-
-def list_events(connection: sqlite3.Connection, session_id: str, *, after_sequence: int = 0) -> list[dict[str, Any]]:
+def list_turns(connection: sqlite3.Connection, session_id: str) -> list[dict[str, Any]]:
+    """按创建顺序返回会话全部轮次，供恢复快照渲染历史。"""
     rows = connection.execute(
-        """
-        SELECT *
-        FROM chat_events
-        WHERE session_id = ? AND sequence > ?
-        ORDER BY sequence ASC
-        """,
-        (session_id, after_sequence),
+        "SELECT * FROM chat_turns WHERE session_id = ? ORDER BY created_at, rowid",
+        (session_id,),
     ).fetchall()
     return [dict(row) for row in rows]
 
-
-def get_last_event_sequence(connection: sqlite3.Connection, session_id: str) -> int:
-    row = connection.execute(
-        "SELECT COALESCE(MAX(sequence), 0) AS last_sequence FROM chat_events WHERE session_id = ?",
-        (session_id,),
-    ).fetchone()
-    if row is None:
-        return 0
-    return int(row["last_sequence"] or 0)
 
 def list_sessions_needing_recovery(connection: sqlite3.Connection) -> list[dict[str, Any]]:
     """查询持有活跃轮或仍处于处理、运行状态的会话。"""
@@ -372,17 +336,3 @@ def delete_resources(connection: sqlite3.Connection, session_id: str, *, commit:
     connection.execute("DELETE FROM chat_resources WHERE session_id=?", (session_id,))
     if commit:
         connection.commit()
-
-
-def iter_events_through(connection: sqlite3.Connection, session_id: str, *, sequence: int):
-    """按序逐条读取内部边界之前的事件，避免预先加载全部恢复历史。"""
-    cursor = connection.execute(
-        "SELECT turn_id, event_type, payload_json FROM chat_events "
-        "WHERE session_id=? AND sequence<=? ORDER BY sequence",
-        (session_id, sequence),
-    )
-    try:
-        for row in cursor:
-            yield dict(row)
-    finally:
-        cursor.close()

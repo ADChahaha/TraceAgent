@@ -1,6 +1,48 @@
 # Backend Devlog
 
-last updated: 2026-09-13 15:38:02
+last updated: 2026-09-13 18:30:00
+
+## 2026-09-13 18:30:00
+
+### 已完成工作
+
+- 删除事件持久化路线：chat_events 表、crud 的 create_event/list_events/get_last_event_sequence/iter_events_through、manager 的 last_event_seq 与事件落库全部移除；过程事件只更新内存 TurnView 并广播订阅。
+- chat_turns 新增 error 列：_finish 与启动收口在同一事务写入终态错误（如 backend_restarted），恢复快照直接读列，不再依赖事件 payload。
+- 重写 session_history.build_snapshot：读取 chat_messages（按 sequence）与 chat_turns，按 turn 分组渲染历史轮 items（user/assistant/tool，tool 按内容区分成功与失败），附加当前轮内存副本；ResumeContext 删除 boundary、新增冻结的 turn_ids 列表。
+- attach 时冻结已存在轮次 ID 列表：attach 之后新建的轮不进首帧、只经订阅送达，保持首帧与增量不重复、不遗漏；已知取舍是取消/失败轮中未配齐工具组不再展示（无消息行）。
+- 广播事件字典瘦身为 {type, turn_id, payload}，routes 不再剥离 seq 字段。
+- TDD：先写“纯 CRUD 构造历史即可恢复”与“error 落库”两个失败测试，实现后全量 71 项测试通过；同步 DESIGN.md、SESSION_MANAGER.md、table.md、API.md 与 tests/docs 三个测试说明。
+
+### 当前边界
+
+- 页面恢复不再重放事件：历史展示保真度以 chat_messages 为准，取消/失败轮的半截 assistant 文本、interrupted 工具与 retry 过程项不再出现在恢复快照中。
+- 快照预算只检查最终序列化大小；历史读取改为一次加载会话全部消息，不再逐条流式读取。
+- 前端尚未迁移，快照与增量字段格式（增量无 session_id/seq）可随后续前端工作调整。
+
+## 2026-09-13 17:14:14
+
+### 已完成工作
+
+- 为 SessionManager 引入 Command(name, args, reply) 数据结构，commands 队列不再传三元组；reply 只承载命令回执，允许为 None。
+- 新增 _tell：resources/ended 这类不需要返回值的 runtime 通知只入队不建 Future；_ask 保留 reply 语义、同步守卫和内部命令背压，外部命令 put_nowait 满队列报繁忙。
+- _run 改为消费 Command 对象，异常仍通过 reply 回传；调用方已取消时统一回收 handler 产生的 ResumeContext 订阅。create/attach 继续返回 ResumeContext，Runtime producer 生命周期不变。
+- TDD：全量 backend 72 项测试通过；同步 SESSION_MANAGER.md。
+
+### 当前边界
+
+- 对外 ResumeContext/SSE 语义与上一版一致；仅内部命令表示从三元组改为 Command，resources/ended 改走 _tell。
+
+## 2026-09-13 17:08:05
+
+### 已完成工作
+
+- 简化 SessionManager._ask：删除 asyncio.shield、CancelledError 清理回调和 done_callback，改为裸 await 命令回执；调用方取消不撤销已入队命令，handler 产生的无人接收订阅由唯一消费者 _run 统一回收。
+- 新增 _ask 同步守卫：handler 已 set_result 但调用方恢复前被取消时，同步关闭并摘除 ResumeContext 的订阅，避免该窄窗口泄漏。保留内部命令 await put 的背压等待，外部命令 put_nowait 满队列报繁忙。
+- TDD：先补 5 项并发测试（排队中取消、handler 执行中取消、create 失败、cancel/event FIFO、set_result 后取消），重构后 backend 全量 72 项测试通过；同步 SESSION_MANAGER.md 与对应测试说明。
+
+### 当前边界
+
+- 对外 ResumeContext/SSE 语义不变；取消清理只发生在 _run 与 _ask 守卫，不依赖跨任务回调。
 
 ## 2026-09-13 15:38:02
 

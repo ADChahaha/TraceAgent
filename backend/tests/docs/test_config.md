@@ -14,7 +14,7 @@ create_app(settings=...)
 
 initialize_database(connection)
   -> PRAGMA journal_mode = WAL
-  -> 逐条执行 SCHEMA_SQL，创建 chat_sessions / chat_resources / chat_messages / chat_turns / chat_events
+  -> 逐条执行 SCHEMA_SQL，创建 chat_sessions / chat_resources / chat_messages / chat_turns
   -> 不删旧表、不做 memory_json 迁移；旧库按“直接重建新库”处理
 ```
 
@@ -26,4 +26,4 @@ initialize_database(connection)
 - `test_backend_settings_loads_agent_cancel_timeout_from_env`：验证 `AGENT_SERVICE_CANCEL_TIMEOUT_SECONDS` 会覆盖后台 best-effort agent cancel 的短超时。
 - `test_backend_registers_chat_completion_resume_cancel`：验证挂载三个会话执行接口，旧 `/tasks` 与 `/qa/tasks` 下线。因为 FastAPI 0.141 的 `include_router` 会生成 `_IncludedRouter`，测试用 `_route_paths` 递归展开 `path`、`routes` 和 `original_router.routes` 收集路径。
 - `test_backend_healthz_reports_ok`：验证 `/healthz` 返回 200 和 `{"status": "ok"}`。
-- `test_database_initialization_creates_chat_schema_without_migrating_legacy_tables`：先在内存库建旧 `tasks`/`extracted_fields` 表，再初始化；断言五张 Chat 表建出、`chat_sessions` 恰为新 schema 五列，且旧表仍保留（确认初始化不再清理或迁移旧库）。
+- `test_database_initialization_creates_chat_schema_without_migrating_legacy_tables`：先在内存库建旧 `tasks`/`extracted_fields` 表，再初始化；断言四张 Chat 表建出、`chat_sessions` 恰为新 schema 五列，且旧表仍保留（确认初始化不再清理或迁移旧库）。

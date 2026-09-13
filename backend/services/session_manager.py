@@ -5,6 +5,7 @@ import copy
 import json
 import sqlite3
 import uuid
+from dataclasses import dataclass
 
 from backend.crud import crud
 from backend.services.errors import BackendServiceError, ConflictError, NotFoundError
@@ -14,29 +15,32 @@ from backend.services.time_utils import utc_now
 from backend.services.turn_runtime import TurnRuntime
 from backend.services.turn_view import TurnView
 
-
 TERMINAL = {"completed", "cancelled", "failed"}
+INTERNAL = {"start", "event", "stop"}
+CLOSING_ALLOWED = {"cancel", "detach", "ended", "stop"}
+BROKEN_ALLOWED = {"detach", "ended", "stop"}
+
+
+@dataclass
+class Command:
+    name: str
+    args: tuple
+    reply: asyncio.Future | None = None
 
 
 class SessionManager:
-    def __init__(self, *, session, resources, last_event_seq, database, agent_client, settings):
+    def __init__(self, *, session, resources, database, agent_client, settings):
         self.session_id = session["id"]
         self.session = session
         self.resources = resources
-        self.last_event_seq = last_event_seq
         self.database = database
         self.agent_client = agent_client
         self.settings = settings
         self.current_turn_state = None
-        self.runtimes = {}
-        self.subscribers = {}
-        self.pending_groups = {}
-        self.completed_groups = {}
-        self.last_agent_seq = {}
+        self.runtimes, self.subscribers = {}, {}
+        self.pending_groups, self.completed_groups, self.last_agent_seq = {}, {}, {}
         self.commands = asyncio.Queue(maxsize=settings.session_command_limit)
-        self.closed = False
-        self.closing = False
-        self.broken = False
+        self.closed = self.closing = self.broken = False
         self.last_activity = asyncio.get_running_loop().time()
         self.task = asyncio.create_task(self._run(), name=f"session:{self.session_id}")
 
@@ -44,96 +48,94 @@ class SessionManager:
     def active_turn_id(self):
         return self.session["active_turn_id"]
 
+    def _fail(self):
+        self.broken = True
+        for runtime in self.runtimes.values():
+            runtime.cancel()
+        for subscription in self.subscribers.values():
+            subscription.close()
+
+    def _recycle_subscription(self, result):
+        if isinstance(result, ResumeContext):
+            result.subscription.close()
+            self.subscribers.pop(result.subscription.id, None)
+
     async def _ask(self, name, *args):
-        if self.closed or (self.closing and name not in {"cancel", "detach", "ended", "stop"}):
+        if self.closed or (self.closing and name not in CLOSING_ALLOWED):
             raise BackendServiceError("会话管理器已关闭")
-        internal = name in {"start", "event", "resources", "ended", "stop"}
-        if self.commands.full() and not internal:
-            raise BackendServiceError("会话命令队列繁忙")
-        future = asyncio.get_running_loop().create_future()
-        if internal:
-            await self.commands.put((name, args, future))
+        reply = asyncio.get_running_loop().create_future()
+        command = Command(name, args, reply)
+        if name in INTERNAL:
+            await self.commands.put(command)
         else:
-            self.commands.put_nowait((name, args, future))
+            try:
+                self.commands.put_nowait(command)
+            except asyncio.QueueFull:
+                raise BackendServiceError("会话命令队列繁忙") from None
         try:
-            return await asyncio.shield(future)
+            return await reply
         except asyncio.CancelledError:
-            # 请求退出不撤销已经接管的业务；如果稍后产生订阅，则回收它。
-            def discard(done):
-                if done.cancelled():
-                    return
-                exc = done.exception()
-                if exc is None and isinstance(done.result(), ResumeContext):
-                    context = done.result()
-                    context.subscription.close()
-                    self.subscribers.pop(context.subscription.id, None)
-            future.add_done_callback(discard)
+            # 命令已入队仍会执行；同步守卫覆盖 handler 已 set_result 但调用方不再接收的窗口。
+            if reply.done() and not reply.cancelled() and reply.exception() is None:
+                self._recycle_subscription(reply.result())
             raise
+
+    async def _tell(self, name, *args):
+        if not self.closed:
+            await self.commands.put(Command(name, args))
 
     async def _run(self):
         while True:
-            name, args, future = await self.commands.get()
+            command = await self.commands.get()
             self.last_activity = asyncio.get_running_loop().time()
             try:
-                if self.broken and name not in {"detach", "ended", "stop"}:
+                if self.broken and command.name not in BROKEN_ALLOWED:
                     raise BackendServiceError("会话存储异常，请恢复服务后重试")
-                result = await getattr(self, "_handle_" + name)(*args)
+                result = await getattr(self, "_handle_" + command.name)(*command.args)
             except Exception as exc:
                 if isinstance(exc, sqlite3.Error):
-                    self.broken = True
-                    for runtime in self.runtimes.values():
-                        runtime.cancel()
-                    for subscription in self.subscribers.values():
-                        subscription.close()
-                if not future.done():
-                    future.set_exception(exc)
+                    self._fail()
+                if command.reply is not None and not command.reply.done():
+                    command.reply.set_exception(exc)
             else:
-                if not future.done():
-                    future.set_result(result)
+                if command.reply is not None:
+                    if command.reply.cancelled():
+                        self._recycle_subscription(result)  # 调用方已取消，回收 handler 产生的订阅
+                    elif not command.reply.done():
+                        command.reply.set_result(result)
             finally:
                 self.commands.task_done()
-            if name == "stop":
+            if command.name == "stop":
                 return
 
     async def _write(self, operation):
         events = []
+
         def execute():
             db = self.database.connect()
             with crud.transaction(db):
                 result = operation(db, events)
-                session = crud.get_session(db, self.session_id)
-                resources = crud.list_resources(db, self.session_id)
-            return result, session, resources
+                return result, crud.get_session(db, self.session_id), crud.list_resources(db, self.session_id)
+
         result, self.session, self.resources = await asyncio.to_thread(execute)
         try:
             for event in events:
-                self.last_event_seq = event["seq"]
                 if event["type"] == "turn.created":
                     self.current_turn_state = TurnView(event["turn_id"])
                 if self.current_turn_state and event["turn_id"] == self.current_turn_state.id:
                     self.current_turn_state.apply(event)
-                self._broadcast(event)
+                for key, subscription in list(self.subscribers.items()):
+                    if not subscription.publish(event):
+                        self.subscribers.pop(key, None)
                 if event["type"] in {"turn.completed", "turn.failed", "turn.cancelled"}:
                     self.current_turn_state = None
         except Exception:
-            self.broken = True
-            for runtime in self.runtimes.values():
-                runtime.cancel()
-            for subscription in self.subscribers.values():
-                subscription.close()
+            self._fail()
             raise
         return result
 
-    def _emit(self, db, events, kind, turn_id=None, payload=None):
-        row = crud.create_event(db, event_id=uuid.uuid4().hex, session_id=self.session_id,
-                                turn_id=turn_id, event_type=kind, payload=payload or {}, now=utc_now(), commit=False)
-        events.append({"session_id": self.session_id, "turn_id": turn_id,
-                       "seq": row["sequence"], "type": kind, "payload": payload or {}})
-
-    def _broadcast(self, event):
-        for key, subscription in list(self.subscribers.items()):
-            if not subscription.publish(event):
-                self.subscribers.pop(key, None)
+    def _emit(self, events, kind, turn_id=None, payload=None):
+        events.append({"type": kind, "turn_id": turn_id, "payload": payload or {}})
 
     async def create_completion(self, *, content, files, run_options):
         return await self._ask("create", content, files, run_options)
@@ -144,17 +146,17 @@ class SessionManager:
         if self.session["status"] == "failed" and not files:
             raise ConflictError("资源准备失败，需要重新上传文件")
         turn_id = uuid.uuid4().hex
+
         def create(db, events):
             now = utc_now()
             crud.create_turn(db, turn_id=turn_id, session_id=self.session_id, status="queued", now=now, commit=False)
-            sequence = crud.get_next_message_sequence(db, self.session_id)
             message_id = uuid.uuid4().hex
-            crud.create_message(db, message_id=message_id, session_id=self.session_id,
-                                turn_id=turn_id, role="user", content=content, now=now,
-                                sequence=sequence, group_id=message_id, group_index=0, commit=False)
+            crud.create_message(db, message_id=message_id, session_id=self.session_id, turn_id=turn_id, role="user", content=content,
+                                now=now, sequence=crud.get_next_message_sequence(db, self.session_id), group_id=message_id, group_index=0, commit=False)
             crud.update_session(db, session_id=self.session_id, now=now, status="processing" if files else "running", active_turn_id=turn_id, commit=False)
-            self._emit(db, events, "turn.created", turn_id)
-            self._emit(db, events, "message.created", turn_id, {"message_id": message_id, "role": "user", "content": content})
+            self._emit(events, "turn.created", turn_id)
+            self._emit(events, "message.created", turn_id, {"message_id": message_id, "role": "user", "content": content})
+
         await self._write(create)
         runtime = TurnRuntime(self, turn_id, files, run_options)
         self.runtimes[turn_id] = runtime
@@ -164,15 +166,13 @@ class SessionManager:
         except Exception as exc:
             self.runtimes.pop(turn_id, None)
             await self._finish(turn_id, "failed", str(exc))
-            context.subscription.close()
-            self.subscribers.pop(context.subscription.id, None)
+            self._recycle_subscription(context)
             raise
         return context
 
     def _valid(self, turn_id, generation):
         runtime = self.runtimes.get(turn_id)
-        return (runtime is not None and runtime.generation == generation
-                and self.active_turn_id == turn_id and not runtime.cancel_requested)
+        return runtime is not None and runtime.generation == generation and self.active_turn_id == turn_id and not runtime.cancel_requested
 
     async def start_turn(self, turn_id, generation):
         return await self._ask("start", turn_id, generation)
@@ -180,33 +180,34 @@ class SessionManager:
     async def _handle_start(self, turn_id, generation):
         if not self._valid(turn_id, generation):
             return None
+
         def start(db, events):
-            crud.update_turn(db, turn_id=turn_id, now=utc_now(), status="in_progress", agent_completion_id=turn_id, commit=False)
-            crud.update_session(db, session_id=self.session_id, now=utc_now(), status="running", commit=False)
-            self._emit(db, events, "turn.started", turn_id)
-            messages = []
-            for row in crud.list_messages(db, self.session_id):
-                item = {"role": row["role"], "content": row["content"], "tool_calls_json": row["tool_calls_json"]}
-                for key in ("tool_call_id", "name"):
-                    if row[key] is not None:
-                        item[key] = row[key]
-                messages.append(item)
+            now = utc_now()
+            crud.update_turn(db, turn_id=turn_id, now=now, status="in_progress", agent_completion_id=turn_id, commit=False)
+            crud.update_session(db, session_id=self.session_id, now=now, status="running", commit=False)
+            self._emit(events, "turn.started", turn_id)
+            messages = [{"role": row["role"], "content": row["content"], "tool_calls_json": row["tool_calls_json"],
+                         **{key: row[key] for key in ("tool_call_id", "name") if row[key] is not None}}
+                        for row in crud.list_messages(db, self.session_id)]
             refs = [{"type": row["type"], "location": row["location"]} for row in crud.list_resources(db, self.session_id)]
             return {"completion_id": turn_id, "resource_path": refs, "messages": messages}
+
         return await self._write(start)
 
     async def resources_prepared(self, turn_id, generation, refs):
-        return await self._ask("resources", turn_id, generation, refs)
+        await self._tell("resources", turn_id, generation, refs)
 
     async def _handle_resources(self, turn_id, generation, refs):
         if not self._valid(turn_id, generation):
             return
+
         def save(db, events):
             crud.delete_resources(db, self.session_id, commit=False)
             for ref in refs:
-                crud.create_resource(db, resource_id=uuid.uuid4().hex, session_id=self.session_id,
-                                     resource_type=ref["type"], location=ref["location"], now=utc_now(), commit=False)
-            self._emit(db, events, "resources.prepared", turn_id, {"resources": refs})
+                crud.create_resource(db, resource_id=uuid.uuid4().hex, session_id=self.session_id, resource_type=ref["type"],
+                                     location=ref["location"], now=utc_now(), commit=False)
+            self._emit(events, "resources.prepared", turn_id, {"resources": refs})
+
         await self._write(save)
 
     async def agent_event(self, turn_id, generation, event):
@@ -215,8 +216,7 @@ class SessionManager:
     async def _handle_event(self, turn_id, generation, event):
         if not self._valid(turn_id, generation) or self.current_turn_state.status != "in_progress":
             return False
-        kind = event["type"]
-        seq = event.get("seq")
+        kind, seq = event["type"], event.get("seq")
         if seq and seq <= self.last_agent_seq.get(turn_id, 0):
             raise ValueError("agent 事件序号重复或倒退")
         if kind.startswith("model_message.") and not event.get("message_id"):
@@ -231,14 +231,12 @@ class SessionManager:
         if kind in {"completion.failed", "completion.cancelled"}:
             await self._finish(turn_id, "failed" if kind.endswith("failed") else "cancelled", event.get("error_message") or event.get("error"))
             return False
-        pending = copy.deepcopy(self.pending_groups)
-        completed = copy.deepcopy(self.completed_groups)
+        pending, completed = copy.deepcopy(self.pending_groups), copy.deepcopy(self.completed_groups)
         ready = None
         if kind == "model_message.done":
-            mid = event["message_id"]
+            mid, calls = event["message_id"], event.get("tool_calls", [])
             if mid in completed or mid in pending:
                 raise ValueError("重复的模型完整消息")
-            calls = event.get("tool_calls", [])
             ids = [call["id"] for call in calls]
             if any(not item for item in ids) or len(set(ids)) != len(ids):
                 raise ValueError("工具调用 ID 必须非空且唯一")
@@ -255,8 +253,7 @@ class SessionManager:
             if "result_json" not in event and not (kind == "tool_failed" and (event.get("error") or event.get("error_message"))):
                 raise ValueError("工具结果缺少实际返回内容")
             call_id = event["tool_call_id"]
-            matches = [(mid, group) for mid, group in pending.items()
-                       if any(call["id"] == call_id for call in group["assistant"]["tool_calls"])]
+            matches = [(mid, group) for mid, group in pending.items() if any(call["id"] == call_id for call in group["assistant"]["tool_calls"])]
             if len(matches) != 1:
                 raise ValueError("工具结果无法唯一匹配待提交组")
             mid, group = matches[0]
@@ -266,15 +263,16 @@ class SessionManager:
             if len(group["results"]) == len(group["assistant"]["tool_calls"]):
                 ready = (mid, group)
                 pending.pop(mid)
+
         def save(db, events):
-            self._emit(db, events, kind, turn_id, event)
+            self._emit(events, kind, turn_id, event)
             if ready:
                 self._save_group(db, turn_id, *ready)
+
         await self._write(save)
         if ready:
             completed[ready[0]] = True
-        self.pending_groups = pending
-        self.completed_groups = completed
+        self.pending_groups, self.completed_groups = pending, completed
         if seq:
             self.last_agent_seq[turn_id] = seq
         return True
@@ -282,7 +280,7 @@ class SessionManager:
     def _save_group(self, db, turn_id, mid, group):
         assistant = group["assistant"]
         calls = assistant.get("tool_calls", [])
-        tool_calls = [{"id": call["id"], "type": "function", "function": {"name": call["name"], "arguments": call.get("args_json", "{}")}} for call in calls]
+        tool_calls = [{"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": c.get("args_json", "{}")}} for c in calls]
         messages = [{"role": "assistant", "content": assistant.get("content", ""), "tool_calls_json": json.dumps(tool_calls, ensure_ascii=False)}]
         for call in calls:
             result = group["results"][call["id"]]
@@ -293,23 +291,23 @@ class SessionManager:
             messages.append({"role": "tool", "content": content, "tool_call_id": call["id"], "name": call["name"]})
         sequence = crud.get_next_message_sequence(db, self.session_id)
         for index, message in enumerate(messages):
-            crud.create_message(db, message_id=uuid.uuid4().hex, session_id=self.session_id, turn_id=turn_id,
-                                now=utc_now(), sequence=sequence + index, group_id=f"{turn_id}:{mid}",
-                                group_index=index, commit=False, **message)
+            crud.create_message(db, message_id=uuid.uuid4().hex, session_id=self.session_id, turn_id=turn_id, now=utc_now(),
+                                sequence=sequence + index, group_id=f"{turn_id}:{mid}", group_index=index, commit=False, **message)
 
     async def _finish(self, turn_id, status, error=None):
         def finish(db, events):
             now = utc_now()
-            row = crud.update_turn_status_if_current(db, turn_id=turn_id, current_statuses={"queued", "in_progress", "cancelling"}, status=status, now=now, completed_at=now, commit=False)
+            row = crud.update_turn_status_if_current(db, turn_id=turn_id, current_statuses={"queued", "in_progress", "cancelling"},
+                                                     status=status, now=now, error=error, completed_at=now, commit=False)
             if row is None:
                 return crud.get_turn(db, turn_id)
             if status == "cancelled":
-                self._emit(db, events, "turn.cancel_requested", turn_id)
-            failed_preparation = self.session["status"] == "processing"
+                self._emit(events, "turn.cancel_requested", turn_id)
             crud.update_session(db, session_id=self.session_id, now=now, clear_active_turn=True,
-                                status="failed" if failed_preparation else "ready", commit=False)
-            self._emit(db, events, "turn." + status, turn_id, {"error": error})
+                                status="failed" if self.session["status"] == "processing" else "ready", commit=False)
+            self._emit(events, "turn." + status, turn_id, {"error": error})
             return row
+
         result = await self._write(finish)
         self.pending_groups.clear()
         self.completed_groups.clear()
@@ -333,8 +331,7 @@ class SessionManager:
         return result
 
     async def worker_ended(self, turn_id, generation, error):
-        if not self.closed:
-            await self._ask("ended", turn_id, generation, error)
+        await self._tell("ended", turn_id, generation, error)
 
     async def _handle_ended(self, turn_id, generation, error):
         runtime = self.runtimes.get(turn_id)
@@ -348,9 +345,11 @@ class SessionManager:
         return await self._ask("attach")
 
     async def _handle_attach(self):
+        turn_ids = await asyncio.to_thread(
+            lambda: [turn["id"] for turn in crud.list_turns(self.database.connect(), self.session_id)])
         subscription = Subscription(max_events=self.settings.subscription_max_events, max_bytes=self.settings.subscription_max_bytes)
         self.subscribers[subscription.id] = subscription
-        return ResumeContext(self.session_id, self.active_turn_id, self.last_event_seq, copy.deepcopy(self.session),
+        return ResumeContext(self.session_id, self.active_turn_id, turn_ids, copy.deepcopy(self.session),
                              copy.deepcopy(self.resources), self.current_turn_state.snapshot() if self.current_turn_state else None,
                              subscription, self.settings.snapshot_max_bytes)
 
@@ -375,8 +374,7 @@ class SessionManager:
         runtimes = list(self.runtimes.values())
         for runtime in runtimes:
             runtime.cancel()
-        if runtimes:
-            await asyncio.gather(*(runtime.wait_closed() for runtime in runtimes), return_exceptions=True)
+        await asyncio.gather(*(runtime.wait_closed() for runtime in runtimes), return_exceptions=True)
         await self._ask("stop")
         await self.task
 

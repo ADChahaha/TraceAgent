@@ -1,6 +1,6 @@
 # Backend 数据表
 
-`chat_events` 保存过程事件，供展示和 SSE 续传；`chat_messages` 设计为只保存可完整回传模型的稳定历史。普通完整消息单条提交；带工具调用的 assistant 与全部对应 tool 结果配齐后，在同一事务中一起提交。中断只丢弃尚未提交的组，不删除此前完整历史。
+持久化只有四张表：`chat_sessions`、`chat_resources`、`chat_turns`、`chat_messages`。过程事件（delta、tool_started 等）只存在于内存和订阅队列，不落库；页面恢复由 `chat_messages` 加 `chat_turns` 渲染历史轮，再加当前轮内存副本。`chat_messages` 设计为只保存可完整回传模型的稳定历史。普通完整消息单条提交；带工具调用的 assistant 与全部对应 tool 结果配齐后，在同一事务中一起提交。中断只丢弃尚未提交的组，不删除此前完整历史。
 
 schema、CRUD 与 SessionManager 已接通，统一使用 `chat_*` 和 `session_id`。初始化只创建当前表，不迁移或删除旧 `qa_*` 表及数据。CRUD 默认自行提交；manager 使用 `commit=False` 将相关写入放在同一个事务中。
 
@@ -35,7 +35,7 @@ schema、CRUD 与 SessionManager 已接通，统一使用 `chat_*` 和 `session_
 | `id` | `TEXT PRIMARY KEY` | backend 消息 id，不与 agent 的 message_id 混用。 |
 | `session_id` | `TEXT NOT NULL` | 所属 session，外键指向 `chat_sessions(id)`。 |
 | `turn_id` | `TEXT` | 所属 turn，通过 `(session_id, turn_id)` 复合外键关联 chat_turns；仅 system 角色可为空。 |
-| `sequence` | `INTEGER NOT NULL` | session 内稳定消息顺序，与 chat_events.sequence 独立；整组提交时分配。 |
+| `sequence` | `INTEGER NOT NULL` | session 内稳定消息顺序，整组提交时分配。 |
 | `group_id` | `TEXT NOT NULL` | 原子提交组标识；agent 组按 turn_id + message_id 稳定生成，重放不重复写入。 |
 | `group_index` | `INTEGER NOT NULL` | 组内顺序，从 0 开始；assistant 在前，tool 按原 tool_calls 顺序排列。 |
 | `role` | `TEXT NOT NULL` | user、system、assistant 或 tool。 |
@@ -70,7 +70,7 @@ tool_failed 是真实的完整工具结果，可以参与配对；tool_started �
 
 取消与组提交共用同一 session manager 的串行命令循环。当前事件若已进入临界区且使整组配齐，可先完成整组事务；取消先提交本地状态后，后续事件不能再写入。事务失败则整组回滚，不留下单独 assistant 或部分 tool 行。
 
-例如 assistant 调用 A、B，只收到 A 就取消：assistant、A、B 这一组均不进入 chat_messages，不补造 B 的中断结果；此前已提交的用户消息和完整组保留。过程事件可仍存在 chat_events 中用于展示，但下一轮不能从 chat_events 补回这组不完整消息。暂存配对数据在取消、失败或流关闭时丢弃；进程退出前未提交的组也不属于稳定历史。
+例如 assistant 调用 A、B，只收到 A 就取消：assistant、A、B 这一组均不进入 chat_messages，不补造 B 的中断结果；此前已提交的用户消息和完整组保留。过程事件只在内存与订阅队列中，不落库，取消后自然消失。暂存配对数据在取消、失败或流关闭时丢弃；进程退出前未提交的组也不属于稳定历史。
 
 该表是中断后重建模型上下文的唯一持久化来源，不是取消后继续接受 agent 内容的通道；完成收尾不得把已经提交过的 assistant 再写一次。
 
@@ -89,21 +89,8 @@ sequence 在同一命令的写事务中为整组分配并插入；唯一约束�
 | `session_id` | `TEXT NOT NULL` | 所属 session，外键指向 `chat_sessions(id)`。 |
 | `status` | `TEXT NOT NULL` | turn 状态，例如 `queued`、`in_progress`、`completed`、`cancelled`、`failed`。 |
 | `agent_completion_id` | `TEXT` | agent completion 关联 ID；取消依靠内存中的原 gRPC call，不能凭此 ID 重新接入执行。 |
+| `error` | `TEXT` | 终态错误说明，例如 `backend_restarted`；同一事务随终态写入，供恢复快照直接展示。 |
 | `created_at` | `TEXT NOT NULL` | 创建时间。 |
 | `updated_at` | `TEXT NOT NULL` | 最近更新时间。 |
 | `completed_at` | `TEXT` | 进入终态的时间。 |
 
-## chat_events
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `id` | `TEXT PRIMARY KEY` | event id。 |
-| `session_id` | `TEXT NOT NULL` | 所属 session，外键指向 `chat_sessions(id)`。 |
-| `turn_id` | `TEXT` | 归属的 turn。session 级事件可以为空。 |
-| `sequence` | `INTEGER NOT NULL` | session 内递增序号，供内部恢复边界使用；不暴露为客户端游标。 |
-| `event_type` | `TEXT NOT NULL` | 事件类型，例如 `turn.created`、`model_message.delta`、`turn.completed`。 |
-| `payload_json` | `TEXT NOT NULL` | 事件 payload JSON。 |
-| `created_at` | `TEXT NOT NULL` | 创建时间。 |
-
-
-`turn.created.payload_json` 当前为空对象，不保存请求去重元数据。

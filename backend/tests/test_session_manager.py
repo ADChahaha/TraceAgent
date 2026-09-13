@@ -66,6 +66,14 @@ async def next_type(subscription, expected):
             return event
 
 
+async def wait_for_condition(predicate, timeout=2):
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not predicate():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("等待条件超时")
+        await asyncio.sleep(0.01)
+
+
 async def finish(call, manager, turn_id, text="回答"):
     context = await manager.attach()
     await call.events.put({"type": "model_message.done", "seq": 1, "message_id": "m1", "content": text})
@@ -105,21 +113,72 @@ def test_detach_keeps_execution_and_resume_merges_history(tmp_path):
     asyncio.run(scenario())
 
 
-def test_attach_boundary_survives_completion_and_next_turn(tmp_path):
+def test_snapshot_renders_history_from_messages_without_events(tmp_path):
+    async def scenario():
+        registry, db, agent = await setup(tmp_path)
+        try:
+            conn = db.connect()
+            crud.create_session(conn, session_id="hist", status="ready", now="t0")
+            crud.create_turn(conn, session_id="hist", turn_id="t1", status="completed", now="t1")
+            crud.create_message(conn, message_id="u1", session_id="hist", turn_id="t1", role="user",
+                                content="第一问", now="t1", sequence=1, group_id="g1", group_index=0)
+            crud.create_message(conn, message_id="a1", session_id="hist", turn_id="t1", role="assistant",
+                                content="查询", now="t1", sequence=2, group_id="g2", group_index=0,
+                                tool_calls_json='[{"id":"call-a","type":"function","function":{"name":"read","arguments":"{}"}},'
+                                                '{"id":"call-b","type":"function","function":{"name":"read","arguments":"{}"}}]')
+            crud.create_message(conn, message_id="r1", session_id="hist", turn_id="t1", role="tool",
+                                content='{"value":1}', now="t1", sequence=3, group_id="g2", group_index=1,
+                                tool_call_id="call-a", name="read")
+            crud.create_message(conn, message_id="r2", session_id="hist", turn_id="t1", role="tool",
+                                content='{"error":"missing"}', now="t1", sequence=4, group_id="g2", group_index=2,
+                                tool_call_id="call-b", name="read")
+            crud.create_message(conn, message_id="a2", session_id="hist", turn_id="t1", role="assistant",
+                                content="回答", now="t1", sequence=5, group_id="g3", group_index=0)
+            crud.create_turn(conn, session_id="hist", turn_id="t2", status="failed", now="t2", error="backend_restarted")
+            crud.create_message(conn, message_id="u2", session_id="hist", turn_id="t2", role="user",
+                                content="第二问", now="t2", sequence=6, group_id="g4", group_index=0)
+            manager = await registry.get_or_create("hist")
+            snapshot = await build_snapshot(db, await manager.attach())
+            turns = snapshot["state"]["turns"]
+            assert turns[0] == {
+                "id": "t1", "status": "completed", "error": None,
+                "items": [
+                    {"id": "u1", "kind": "user", "text": "第一问", "status": "completed"},
+                    {"id": "message:a1", "kind": "assistant", "text": "查询", "status": "completed",
+                     "tool_calls": [{"id": "call-a", "name": "read", "args_json": "{}"},
+                                    {"id": "call-b", "name": "read", "args_json": "{}"}]},
+                    {"id": "tool:call-a", "kind": "tool", "name": "read", "status": "completed",
+                     "detail": {"tool_call_id": "call-a", "tool": "read", "result_json": '{"value":1}'}},
+                    {"id": "tool:call-b", "kind": "tool", "name": "read", "status": "failed",
+                     "detail": {"tool_call_id": "call-b", "tool": "read", "error": "missing"}},
+                    {"id": "message:a2", "kind": "assistant", "text": "回答", "status": "completed"},
+                ],
+            }
+            assert turns[1] == {
+                "id": "t2", "status": "failed", "error": "backend_restarted",
+                "items": [{"id": "u2", "kind": "user", "text": "第二问", "status": "completed"}],
+            }
+        finally:
+            await registry.close()
+            db.close()
+    asyncio.run(scenario())
+
+
+def test_attach_snapshot_survives_completion_and_next_turn(tmp_path):
     async def scenario():
         registry, db, agent = await setup(tmp_path)
         try:
             manager, first = await registry.complete(content="问题")
             call = await agent.created.get()
-            boundary = await manager.attach()
+            context = await manager.attach()
             await finish(call, manager, first.turn_id)
             _, second = await registry.complete(session_id=manager.session_id, content="新问题")
-            snapshot = await build_snapshot(db, boundary)
+            snapshot = await build_snapshot(db, context)
             assert len(snapshot["state"]["turns"]) == 1
             assert snapshot["state"]["turns"][0]["status"] != "completed"
             assert snapshot["state"]["active_turn_id"] == first.turn_id
-            await next_type(boundary.subscription, "turn.completed")
-            event = await next_type(boundary.subscription, "turn.created")
+            await next_type(context.subscription, "turn.completed")
+            event = await next_type(context.subscription, "turn.created")
             assert event["turn_id"] == second.turn_id
         finally:
             await registry.close()
@@ -179,11 +238,7 @@ def test_completion_has_no_request_deduplication(tmp_path):
             first, _ = await registry.complete(content="问题")
             second, _ = await registry.complete(content="问题")
             assert first.session_id != second.session_id
-            rows = db.connect().execute(
-                "SELECT payload_json FROM chat_events WHERE event_type='turn.created'"
-            ).fetchall()
-            assert len(rows) == 2
-            assert all(row["payload_json"] == "{}" for row in rows)
+            assert db.connect().execute("SELECT COUNT(*) FROM chat_turns").fetchone()[0] == 2
         finally:
             await registry.close()
             db.close()
@@ -228,6 +283,168 @@ def test_cancelled_creation_aborts_ownership_and_retry(tmp_path, monkeypatch):
 
 
 
+def test_cancelled_queued_create_recycles_subscription(tmp_path, monkeypatch):
+    async def scenario():
+        registry, db, agent = await setup(tmp_path)
+        try:
+            crud.create_session(db.connect(), session_id="cold", status="ready", now="now")
+            manager = await registry.get_or_create("cold")
+            entered, release = asyncio.Event(), asyncio.Event()
+            original_detach = manager._handle_detach
+
+            async def gated_detach(subscription_id):
+                entered.set()
+                await release.wait()
+                return await original_detach(subscription_id)
+
+            attached = []
+            original_attach = manager._handle_attach
+
+            async def recording_attach():
+                context = await original_attach()
+                attached.append(context)
+                return context
+
+            monkeypatch.setattr(manager, "_handle_detach", gated_detach)
+            monkeypatch.setattr(manager, "_handle_attach", recording_attach)
+
+            blocker = asyncio.create_task(manager.detach("nonexistent"))
+            await entered.wait()
+            request = asyncio.create_task(manager.create_completion(content="问题", files=[], run_options={}))
+            await asyncio.sleep(0)
+            request.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await request
+            release.set()
+            await blocker
+            await wait_for_condition(lambda: attached and attached[0].subscription.closed.is_set())
+            assert manager.active_turn_id == attached[0].turn_id
+            assert attached[0].subscription.id not in manager.subscribers
+        finally:
+            release.set()
+            await registry.close()
+            db.close()
+    asyncio.run(scenario())
+
+
+def test_cancelled_create_during_handler_recycles_subscription(tmp_path, monkeypatch):
+    async def scenario():
+        registry, db, agent = await setup(tmp_path)
+        try:
+            crud.create_session(db.connect(), session_id="cold", status="ready", now="now")
+            manager = await registry.get_or_create("cold")
+            entered, release = asyncio.Event(), asyncio.Event()
+            original_write = manager._write
+
+            async def gated_write(operation):
+                entered.set()
+                await release.wait()
+                return await original_write(operation)
+
+            attached = []
+            original_attach = manager._handle_attach
+
+            async def recording_attach():
+                context = await original_attach()
+                attached.append(context)
+                return context
+
+            monkeypatch.setattr(manager, "_write", gated_write)
+            monkeypatch.setattr(manager, "_handle_attach", recording_attach)
+
+            request = asyncio.create_task(manager.create_completion(content="问题", files=[], run_options={}))
+            await entered.wait()
+            request.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await request
+            release.set()
+            await wait_for_condition(lambda: attached and attached[0].subscription.closed.is_set())
+            assert manager.active_turn_id == attached[0].turn_id
+            assert attached[0].subscription.id not in manager.subscribers
+        finally:
+            release.set()
+            await registry.close()
+            db.close()
+    asyncio.run(scenario())
+
+
+def test_create_failure_returns_error_without_runtime_or_subscription(tmp_path, monkeypatch):
+    async def scenario():
+        registry, db, agent = await setup(tmp_path)
+        try:
+            crud.create_session(db.connect(), session_id="cold", status="ready", now="now")
+            manager = await registry.get_or_create("cold")
+
+            async def failing_write(operation):
+                raise RuntimeError("写入失败")
+
+            monkeypatch.setattr(manager, "_write", failing_write)
+            with pytest.raises(RuntimeError, match="写入失败"):
+                await manager.create_completion(content="问题", files=[], run_options={})
+            assert manager.runtimes == {}
+            assert manager.subscribers == {}
+            assert manager.active_turn_id is None
+            assert db.connect().execute("SELECT COUNT(*) FROM chat_turns").fetchone()[0] == 0
+        finally:
+            await registry.close()
+            db.close()
+    asyncio.run(scenario())
+
+
+def test_cancel_and_event_follow_fifo_order(tmp_path):
+    async def scenario():
+        registry, db, agent = await setup(tmp_path)
+        try:
+            manager, context = await registry.complete(content="问题")
+            call = await agent.created.get()
+            runtime = manager.runtimes[context.turn_id]
+            cancel_task = asyncio.create_task(manager.cancel(context.turn_id))
+            event_task = asyncio.create_task(manager.agent_event(
+                context.turn_id, runtime.generation,
+                {"type": "model_message.done", "seq": 1, "message_id": "late", "content": "迟到"},
+            ))
+            cancelled, accepted = await asyncio.gather(cancel_task, event_task)
+            assert cancelled["status"] == "cancelled"
+            assert accepted is False
+            rows = db.connect().execute("SELECT role, content FROM chat_messages ORDER BY sequence").fetchall()
+            assert [tuple(row) for row in rows] == [("user", "问题")]
+            assert call.cancelled
+        finally:
+            await registry.close()
+            db.close()
+    asyncio.run(scenario())
+
+
+def test_cancelled_caller_after_result_recycles_subscription(tmp_path, monkeypatch):
+    async def scenario():
+        registry, db, agent = await setup(tmp_path)
+        try:
+            crud.create_session(db.connect(), session_id="cold", status="ready", now="now")
+            manager = await registry.get_or_create("cold")
+            loop = asyncio.get_running_loop()
+            holder = {}
+            attached = []
+            original_attach = manager._handle_attach
+
+            async def hijack():
+                context = await original_attach()
+                attached.append(context)
+                loop.call_soon(holder["task"].cancel)
+                return context
+
+            monkeypatch.setattr(manager, "_handle_attach", hijack)
+            task = asyncio.create_task(manager.attach())
+            holder["task"] = task
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert attached[0].subscription.closed.is_set()
+            assert manager.subscribers == {}
+        finally:
+            await registry.close()
+            db.close()
+    asyncio.run(scenario())
+
+
 def test_tool_group_is_atomic_and_next_history_uses_original_ids(tmp_path):
     async def scenario():
         registry, db, agent = await setup(tmp_path)
@@ -252,7 +469,7 @@ def test_tool_group_is_atomic_and_next_history_uses_original_ids(tmp_path):
     asyncio.run(scenario())
 
 
-def test_tool_write_failure_rolls_back_group_and_process_event(tmp_path):
+def test_tool_write_failure_rolls_back_group(tmp_path):
     async def scenario():
         from backend.services.subscription import SubscriptionClosed
         registry, db, agent = await setup(tmp_path)
@@ -268,7 +485,6 @@ def test_tool_write_failure_rolls_back_group_and_process_event(tmp_path):
             with pytest.raises(SubscriptionClosed):
                 await next_type(context.subscription, "tool_completed")
             assert db.connect().execute("SELECT COUNT(*) FROM chat_messages").fetchone()[0] == 1
-            assert db.connect().execute("SELECT COUNT(*) FROM chat_events WHERE event_type='tool_completed'").fetchone()[0] == 0
             assert manager.broken
         finally:
             await registry.close()

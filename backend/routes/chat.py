@@ -87,8 +87,7 @@ async def _response(request, manager, context):
                     continue
                 except SubscriptionClosed:
                     return
-                payload = {key: value for key, value in event.items() if key != "seq"}
-                yield "event: session.event\ndata: " + json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n\n"
+                yield "event: session.event\ndata: " + json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n\n"
                 if event["turn_id"] == target_turn and event["type"] in {"turn.completed", "turn.failed", "turn.cancelled"}:
                     return
         finally:

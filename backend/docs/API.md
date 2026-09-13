@@ -18,7 +18,7 @@ run_options 当前只支持正的有限数 tool_execution_timeout。上传使用
 
 ## GET /resume?session_id=...
 
-manager 捕获当前轮副本并登记订阅，请求侧读取数据库历史；查询期间的新事件排队。先合并发送快照，再消费增量。不会创建新 turn 或重新调用 agent。
+manager 捕获当前轮副本和已存在轮次列表并登记订阅，请求侧读取 chat_messages 与 chat_turns 渲染历史轮；查询期间的新事件排队。先合并发送快照，再消费增量。不会创建新 turn 或重新调用 agent。
 
 无 after_seq、Last-Event-ID 或 SSE id 协议。前端保存 session_id；收到快照时替换已有会话展示。
 
@@ -29,13 +29,13 @@ event: session.snapshot
 data: {"session_id":"s1","state":{"status":"running","active_turn_id":"t1","resources":[],"turns":[{"id":"t1","status":"in_progress","items":[],"error":null}]}}
 
 event: session.event
-data: {"session_id":"s1","turn_id":"t1","type":"model_message.delta","payload":{"message_id":"m1","delta":"你好"}}
+data: {"turn_id":"t1","type":"model_message.delta","payload":{"message_id":"m1","delta":"你好"}}
 
 ```
 
 items 包含用户消息、模型尝试、工具和重试状态。按消息或调用 ID 更新，model_message.done 的完整正文替换累计 delta。不同模型尝试不可拼接。
 
-增量字段为 session_id、turn_id、type、payload，不暴露内部 sequence。常见类型为 turn.started、model_message.started/delta/done、tool_started/completed/failed、turn.completed/failed/cancelled。默认 15 秒无事件时发送注释心跳。
+增量字段为 turn_id、type、payload，不暴露内部序号。常见类型为 turn.started、model_message.started/delta/done、tool_started/completed/failed、turn.completed/failed/cancelled。默认 15 秒无事件时发送注释心跳。
 
 流在首帧捕获的活跃轮终结后关闭；没有活跃轮时仅发送快照。正常终态不需重连，意外断开后重新 GET /resume。多页面订阅独立，慢页面溢出只断开自身。
 

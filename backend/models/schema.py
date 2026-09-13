@@ -28,23 +28,11 @@ SCHEMA_SQL = [
         session_id TEXT NOT NULL,
         status TEXT NOT NULL,
         agent_completion_id TEXT,
+        error TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         completed_at TEXT,
         FOREIGN KEY(session_id) REFERENCES chat_sessions(id)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS chat_events (
-        id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        turn_id TEXT,
-        sequence INTEGER NOT NULL,
-        event_type TEXT NOT NULL,
-        payload_json TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY(session_id) REFERENCES chat_sessions(id),
-        UNIQUE(session_id, sequence)
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_chat_resources_session_id ON chat_resources(session_id)",
@@ -85,5 +73,4 @@ SCHEMA_SQL = [
     ON chat_messages(session_id, group_id, tool_call_id) WHERE tool_call_id IS NOT NULL
     """,
     "CREATE INDEX IF NOT EXISTS idx_chat_turns_session_id ON chat_turns(session_id)",
-    "CREATE INDEX IF NOT EXISTS idx_chat_events_session_sequence ON chat_events(session_id, sequence)",
 ]
