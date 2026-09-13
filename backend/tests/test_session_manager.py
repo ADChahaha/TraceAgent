@@ -7,9 +7,10 @@ import pytest
 
 from backend.core.config import BackendSettings
 from backend.core.db import ThreadLocalDatabase, initialize_database
-from backend.services.session_registry import SessionRegistry
+from backend.crud import crud
+from backend.services.session_registry import ManagerState, SessionRegistry
 from backend.services.session_history import build_snapshot
-from backend.services.errors import ConflictError
+from backend.services.errors import ConflictError, NotFoundError
 
 
 class FakeCall:
@@ -155,7 +156,7 @@ def test_concurrent_create_has_one_active_turn_and_one_manager(tmp_path):
         registry, db, agent = await setup(tmp_path)
         try:
             manager, first = await registry.complete(content="问题")
-            managers = await asyncio.gather(*(registry.get_or_load(manager.session_id) for _ in range(8)))
+            managers = await asyncio.gather(*(registry.get_or_create(manager.session_id) for _ in range(8)))
             assert all(item is manager for item in managers)
             with pytest.raises(ConflictError):
                 await registry.complete(session_id=manager.session_id, content="并发问题")
@@ -190,34 +191,37 @@ def test_completion_has_no_request_deduplication(tmp_path):
 
 
 
-def test_cancelled_request_stops_acceptance(tmp_path, monkeypatch):
+def test_cancelled_creation_aborts_ownership_and_retry(tmp_path, monkeypatch):
     async def scenario():
         registry, db, agent = await setup(tmp_path)
-        entered, cancelled = asyncio.Event(), asyncio.Event()
+        entered, release = asyncio.Event(), asyncio.Event()
+        original = registry._load_manager
 
-        class BlockedCreationLock:
-            async def __aenter__(self):
-                entered.set()
-                try:
-                    await asyncio.Event().wait()
-                finally:
-                    cancelled.set()
+        async def delayed(session_id):
+            entered.set()
+            await release.wait()
+            return await original(session_id)
 
-            async def __aexit__(self, *args):
-                pass
-
-        original_lock = registry.creation_lock
-        monkeypatch.setattr(registry, "creation_lock", BlockedCreationLock())
-        request = asyncio.create_task(registry.complete(content="问题"))
+        monkeypatch.setattr(registry, "_load_manager", delayed)
         try:
+            crud.create_session(db.connect(), session_id="cold", status="ready", now="now")
+            request = asyncio.create_task(registry.complete(session_id="cold", content="问题"))
             await entered.wait()
+            assert registry.entries["cold"].state is ManagerState.CREATING
+            with pytest.raises(ConflictError):
+                await registry.get("cold")
+            with pytest.raises(ConflictError):
+                await registry.complete(session_id="cold", content="另一问")
             request.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await request
-            assert cancelled.is_set()
+            assert "cold" not in registry.entries
             assert db.connect().execute("SELECT COUNT(*) FROM chat_turns").fetchone()[0] == 0
+            release.set()
+            manager, context = await registry.complete(session_id="cold", content="重试")
+            assert manager.active_turn_id == context.turn_id
         finally:
-            registry.creation_lock = original_lock
+            release.set()
             await registry.close()
             db.close()
     asyncio.run(scenario())
@@ -281,14 +285,14 @@ def test_idle_unload_and_cold_resume_do_not_keep_history_in_manager(tmp_path):
             await manager.detach(first.subscription.id)
             manager.last_activity = 0
             await registry.evict_idle()
-            assert registry.managers[manager.session_id] is manager
+            assert registry.entries[manager.session_id].manager is manager
             await finish(call, manager, first.turn_id)
             tasks = [runtime.task for runtime in manager.runtimes.values()]
             await asyncio.gather(*tasks)
             manager.last_activity = 0
             await registry.evict_idle()
-            assert manager.session_id not in registry.managers
-            loaded = await registry.get_or_load(manager.session_id)
+            assert manager.session_id not in registry.entries
+            loaded = await registry.get_or_create(manager.session_id)
             assert loaded is not manager and loaded.current_turn_state is None
             snapshot = await build_snapshot(db, await loaded.attach())
             assert snapshot["state"]["turns"][0]["status"] == "completed"
@@ -309,7 +313,7 @@ def test_startup_marks_orphan_execution_failed_without_restarting_agent(tmp_path
         registry = SessionRegistry(database=db, agent_client=agent, settings=registry.settings)
         await registry.start()
         try:
-            manager = await registry.get_or_load("orphan")
+            manager = await registry.get_or_create("orphan")
             snapshot = await build_snapshot(db, await manager.attach())
             assert snapshot["state"]["active_turn_id"] is None
             assert snapshot["state"]["turns"][0]["status"] == "failed"
@@ -341,32 +345,51 @@ def test_retry_marks_failed_attempt_and_terminal_clears_retry_state(tmp_path):
     asyncio.run(scenario())
 
 
-def test_cancelled_cold_load_still_registers_owned_manager(tmp_path, monkeypatch):
+def test_closing_entry_rejects_get_until_removed(tmp_path, monkeypatch):
     async def scenario():
-        from backend.crud import crud
         registry, db, agent = await setup(tmp_path)
-        entered, release, loaded = asyncio.Event(), asyncio.Event(), asyncio.Event()
-        original = registry._load
-        async def delayed(session_id):
-            entered.set()
-            await release.wait()
-            result = await original(session_id)
-            loaded.set()
-            return result
-        monkeypatch.setattr(registry, "_load", delayed)
         try:
-            crud.create_session(db.connect(), session_id="cold", status="ready", now="now")
-            request = asyncio.create_task(registry.get_or_load("cold"))
+            manager, context = await registry.complete(content="问题")
+            call = await agent.created.get()
+            await manager.detach(context.subscription.id)
+            await finish(call, manager, context.turn_id)
+            await asyncio.gather(*(runtime.task for runtime in manager.runtimes.values()))
+            manager.last_activity = 0
+            entered, release = asyncio.Event(), asyncio.Event()
+            original_close = manager.close
+
+            async def blocked_close():
+                entered.set()
+                await release.wait()
+                await original_close()
+
+            monkeypatch.setattr(manager, "close", blocked_close)
+            evict = asyncio.create_task(registry.evict_idle())
             await entered.wait()
-            request.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await request
+            assert registry.entries[manager.session_id].state is ManagerState.CLOSING
+            with pytest.raises(ConflictError):
+                await registry.get(manager.session_id)
+            with pytest.raises(ConflictError):
+                await registry.complete(session_id=manager.session_id, content="新问题")
             release.set()
-            await loaded.wait()
-            assert "cold" in registry.managers
-            assert "cold" not in registry.loading
+            await evict
+            assert manager.session_id not in registry.entries
+            restored = await registry.get_or_create(manager.session_id)
+            assert restored is not manager
         finally:
             release.set()
+            await registry.close()
+            db.close()
+    asyncio.run(scenario())
+
+
+def test_get_unknown_session_raises_not_found(tmp_path):
+    async def scenario():
+        registry, db, agent = await setup(tmp_path)
+        try:
+            with pytest.raises(NotFoundError):
+                await registry.get("missing")
+        finally:
             await registry.close()
             db.close()
     asyncio.run(scenario())
@@ -399,7 +422,7 @@ def test_registry_can_load_after_cleanup(tmp_path):
             manager, context = await registry.complete(content="问题")
             session_id = manager.session_id
             await registry.close()
-            restored = await registry.get_or_load(session_id)
+            restored = await registry.get_or_create(session_id)
             assert restored is not manager
             assert restored.session_id == session_id
             assert restored.active_turn_id is None

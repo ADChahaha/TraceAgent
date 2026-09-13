@@ -114,7 +114,7 @@ async def completion(request: Request):
 @router.get("/resume")
 async def resume(request: Request, session_id: str):
     try:
-        manager = await request.app.state.session_registry.get_or_load(session_id)
+        manager = await request.app.state.session_registry.get_or_create(session_id)
         context = await manager.attach()
         return await _response(request, manager, context)
     except BackendServiceError as exc:
@@ -124,7 +124,7 @@ async def resume(request: Request, session_id: str):
 @router.post("/cancel")
 async def cancel(request: Request, body: CancelInput):
     try:
-        manager = await request.app.state.session_registry.get_or_load(body.session_id)
+        manager = await request.app.state.session_registry.get(body.session_id)
         row = await manager.cancel(body.turn_id)
         return {"session_id": body.session_id, "turn_id": body.turn_id, "status": row["status"]}
     except BackendServiceError as exc:

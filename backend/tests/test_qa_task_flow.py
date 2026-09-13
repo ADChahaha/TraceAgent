@@ -77,7 +77,7 @@ def test_http_disconnect_does_not_cancel_background_turn(tmp_path):
             await request_events.put({"type": "http.disconnect"})
             await asyncio.wait_for(task, 2)
             assert not call.cancelled
-            manager = await app.state.session_registry.get_or_load(snapshot["session_id"])
+            manager = await app.state.session_registry.get_or_create(snapshot["session_id"])
             context = await manager.attach()
             await call.events.put({"type": "model_message.done", "seq": 1, "message_id": "m", "content": "离线完成"})
             await call.events.put({"type": "completion.completed", "seq": 2})

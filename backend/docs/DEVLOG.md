@@ -1,6 +1,19 @@
 # Backend Devlog
 
-last updated: 2026-09-12 23:34:55
+last updated: 2026-09-13 15:38:02
+
+## 2026-09-13 15:38:02
+
+### 已完成工作
+
+- 重构 SessionRegistry：删除 loading 共享 Task、get_or_load 和 creation_lock，改为每 session 的 Entry 状态机（CREATING/READY/CLOSING）；全局锁只保护 entries 查询与状态转换，加载、关闭、create_completion 全部在锁外执行。
+- complete 与 cold resume 共用 get_or_create：不存在时当前请求取得创建权，CREATING 期间其他请求立即 409，不等待不共享；创建失败或被取消时 abort 创建权并关闭未注册 manager。cancel 改用纯获取的 get，空闲已回收会话返回 404。
+- evict_idle 与 close 改为锁内 READY→CLOSING、锁外关闭后移除 entry；Route 的 resume/cancel 接入新 API。
+- TDD：先更新测试为红（管理权中断回滚、CLOSING 冲突、Registry.get NotFound），实现后 backend 全量 67 项测试通过；同步 DESIGN.md、SESSION_MANAGER.md、API.md 与对应测试说明。
+
+### 当前边界
+
+- 提交仍不做去重；cancel 不再冷加载已被回收的空闲会话。单 backend worker 仍是 Manager 唯一所有权的部署前提。
 
 ## 2026-09-12 23:34:55
 

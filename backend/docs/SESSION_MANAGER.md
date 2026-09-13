@@ -13,12 +13,12 @@ HTTP handler → session_history.build_snapshot → 首帧 → Subscription.rece
 FastAPI shutdown → registry.close → manager.close → runtime.cancel/wait_closed
 ```
 
-Registry 持有 manager；manager 持有执行句柄与订阅；runtime 持有原始 gRPC call。complete 直接执行校验和会话创建，不另建受理任务；已启动的 runtime 独立于页面连接。
+Registry 持有 manager；manager 持有执行句柄与订阅；runtime 持有原始 gRPC call。不存在时由当前请求取得创建权并在锁外完成加载，不另建共享 Task；已启动的 runtime 独立于页面连接。
 
 | 文件 | 输入、处理与输出 |
 | --- | --- |
 | routes/chat.py | JSON/multipart 校验，调用 complete/attach/cancel，生成 SSE 或 JSON |
-| session_registry.py | session_id 查找或单次加载；回收与启动恢复 |
+| session_registry.py | Manager 状态机（CREATING/READY/CLOSING）与加载权；回收与启动恢复 |
 | session_manager.py | 命令按 FIFO 执行；校验轮次身份，事务提交后更新内存及广播 |
 | turn_runtime.py | 文件准备、读取模型输入、消费事件，最终汇报 WorkerEnded |
 | turn_view.py | 过程事件折叠成当前轮 items，输出深拷贝快照 |
@@ -31,16 +31,16 @@ Registry 持有 manager；manager 持有执行句柄与订阅；runtime 持有�
 ```text
 POST /chat/completion 输入 content、可选 session_id/files/run_options
   → Registry 校验内容、文件格式和容量、有限正数执行超时
-  → 请求协程执行受理逻辑，并持有创建锁
+  → 请求协程取得创建权：不存在时锁内写入 CREATING，锁外创建/恢复 Manager
   → 无 session_id：创建 session；有则加载对应唯一 manager
   → manager 检查无活跃轮；failed 会话要求新文件
   → 同一事务创建 turn、用户消息、turn.created/message.created，设置 active_turn_id
   → 登记本次请求的订阅并启动 runtime
 ```
 
-每次 POST 都创建新轮次；同一 session 有活跃轮时拒绝新提交。断线后使用 session_id 调用 resume。首帧前丢失连接且尚未拿到 session_id 时，重新提交可能产生独立会话，当前不提供提交去重。创建锁仍用于协调创建、空闲回收与服务关闭。
+每次 POST 都创建新轮次；同一 session 有活跃轮时拒绝新提交。断线后使用 session_id 调用 resume。首帧前丢失连接且尚未拿到 session_id 时，重新提交可能产生独立会话，当前不提供提交去重。创建权是 exclusive-create：Manager 处于 CREATING 时其他请求立即冲突，不等待也不共享创建过程。
 
-显式取消请求协程会传播到受理逻辑；已经入队的 manager 命令仍按其生命周期收尾。浏览器断开本身不等同于请求协程被取消。冷加载由独立 loading task 持有，调用者取消后仍会把 manager 注册到 Registry，避免无 owner 的执行对象。
+显式取消创建中的请求协程会 abort 创建权，由创建方关闭尚未注册的 manager；下一次请求可重新创建/恢复。浏览器断开本身不等同于请求协程被取消。GET /resume 对已回收或重启后的 session 与 complete 共用同一创建入口。
 
 ## 3. 资源与执行
 
@@ -116,11 +116,11 @@ GET /resume → manager.attach 在串行命令中：
 
 ## 8. 取消、卸载与重启
 
-cancel 必须同时携带 session_id 和 turn_id。manager 先提交 cancelled、清空 active_turn_id、清理未配齐组并广播，再取消对应 runtime。已经终结的轮次返回原终态。
+cancel 必须同时携带 session_id 和 turn_id。Registry.get 只获取现有 READY manager，不触发加载：会话空闲已被回收时直接返回 404。manager 先提交 cancelled、清空 active_turn_id、清理未配齐组并广播，再取消对应 runtime。已经终结的轮次返回原终态。
 
 runtime 事件携带 turn_id 和 generation，manager 同时检查活跃轮和本地状态。旧 call 取消后仍到达的事件不能污染新轮。即使 runtime 尚未执行第一行就取消，完成回调仍汇报收尾并释放句柄。
 
-detach 只关闭该订阅。manager 只有在无活跃轮、执行句柄、订阅和待处理命令时才能按空闲期限回收。冷加载只读取会话摘要、资源和水位，历史仍由 resume 按需查询。
+detach 只关闭该订阅。manager 只有在无活跃轮、执行句柄、订阅和待处理命令时才能按空闲期限回收；回收先把 entry 置为 CLOSING，锁外关闭后移除，此间该 session 的操作收到冲突。冷加载只读取会话摘要、资源和水位，历史仍由 resume 按需查询。
 
 启动时将遗留活跃轮标为 failed，错误 backend_restarted；processing 会话标为 failed，其余遗留运行会话回到 ready。不会自动重新调用 agent 或重做工具。页面恢复不等于进程级执行断点恢复。
 
@@ -142,7 +142,7 @@ detach 只关闭该订阅。manager 只有在无活跃轮、执行句柄、订�
 
 ## 10. 验证与参考
 
-行为测试覆盖单例加载、请求取消、独立提交、取消后迟到事件、快照边界、真实 SQLite 事务回滚、工具乱序配对、慢订阅、提前取消收尾、冷恢复和启动收口。gRPC 测试使用本地真实服务、protobuf 序列化与有效 DOCX 样本；ASGI 测试验证断开后继续执行。各测试文件说明位于 backend/tests/docs/，与开发文档分离。
+行为测试覆盖创建独占与中断回滚、CLOSING 冲突、单例加载、取消后迟到事件、快照边界、真实 SQLite 事务回滚、工具乱序配对、慢订阅、提前取消收尾、冷恢复和启动收口。gRPC 测试使用本地真实服务、protobuf 序列化与有效 DOCX 样本；ASGI 测试验证断开后继续执行。各测试文件说明位于 backend/tests/docs/，与开发文档分离。
 
 设计参考公开 Codex 固定版本 53c542d944c705f3a66780a19223223bee57cbb6：
 - [thread_state.rs](https://github.com/openai/codex/blob/53c542d944c705f3a66780a19223223bee57cbb6/codex-rs/app-server/src/thread_state.rs)
