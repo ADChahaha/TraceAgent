@@ -51,6 +51,7 @@ def test_message_table_survives_reinitialization_and_orders_history(db):
     {"tool_calls_json": "not json"}, {"tool_calls_json": "{}"},
     {"role": "user", "tool_calls_json": '[{"id":"call-a"}]'},
     {"turn_id": None}, {"session_id": "missing"}, {"turn_id": "turn-b"},
+    {"role": "system"},
 ])
 def test_message_table_rejects_invalid_rows(db, changes):
     with pytest.raises(sqlite3.IntegrityError):
@@ -65,6 +66,16 @@ def test_message_table_rejects_duplicate_position(db, changes):
     insert_message(db)
     with pytest.raises(sqlite3.IntegrityError):
         insert_message(db, id="m2", **changes)
+
+
+def test_message_sequence_unique_within_turn_not_across_turns(db):
+    insert_message(db)
+    # 同轮重复序号拒绝；不同轮可以复用同一序号（per-turn seq）。
+    with pytest.raises(sqlite3.IntegrityError):
+        insert_message(db, id="m2")
+    insert_message(db, id="other-turn", session_id="b", turn_id="turn-b", group_id="g-other")
+    db.commit()
+    assert db.execute("SELECT COUNT(*) FROM chat_messages").fetchone()[0] == 2
 
 
 def test_message_table_tool_ids_are_unique_within_group(db):
@@ -83,8 +94,3 @@ def test_message_group_transaction_rolls_back_on_write_failure(db):
             insert_message(db, id="result", sequence=2, group_index=1,
                            role="tool", tool_call_id=None, name="read")
     assert db.execute("SELECT COUNT(*) FROM chat_messages").fetchone()[0] == 0
-
-
-def test_system_message_can_exist_without_turn(db):
-    insert_message(db, role="system", turn_id=None)
-    assert db.execute("SELECT turn_id FROM chat_messages").fetchone()[0] is None

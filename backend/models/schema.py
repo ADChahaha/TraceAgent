@@ -42,7 +42,7 @@ SCHEMA_SQL = [
     CREATE TABLE IF NOT EXISTS chat_messages (
         id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
-        turn_id TEXT,
+        turn_id TEXT NOT NULL,
         sequence INTEGER NOT NULL CHECK(sequence > 0),
         group_id TEXT NOT NULL CHECK(length(group_id) > 0),
         group_index INTEGER NOT NULL CHECK(group_index >= 0),
@@ -54,9 +54,9 @@ SCHEMA_SQL = [
         created_at TEXT NOT NULL,
         FOREIGN KEY(session_id) REFERENCES chat_sessions(id),
         FOREIGN KEY(session_id, turn_id) REFERENCES chat_turns(session_id, id),
-        UNIQUE(session_id, sequence),
-        UNIQUE(session_id, group_id, group_index),
-        CHECK(turn_id IS NOT NULL OR role = 'system'),
+        UNIQUE(turn_id, sequence),
+        UNIQUE(turn_id, group_id, group_index),
+        CHECK(role <> 'system'),
         CHECK(
             (role = 'tool' AND tool_call_id IS NOT NULL AND length(tool_call_id) > 0
              AND name IS NOT NULL AND length(name) > 0)
@@ -70,7 +70,7 @@ SCHEMA_SQL = [
     """,
     """
     CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_messages_group_tool_call
-    ON chat_messages(session_id, group_id, tool_call_id) WHERE tool_call_id IS NOT NULL
+    ON chat_messages(turn_id, group_id, tool_call_id) WHERE tool_call_id IS NOT NULL
     """,
     "CREATE INDEX IF NOT EXISTS idx_chat_turns_session_id ON chat_turns(session_id)",
 ]

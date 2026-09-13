@@ -91,7 +91,7 @@ def test_detach_keeps_execution_and_resume_merges_history(tmp_path):
             await manager.detach(first.subscription.id)
             assert not call.cancelled
             await finish(call, manager, first.turn_id)
-            assert manager.current_turn_state is None
+            assert manager.runtime is None
             manager2, second = await registry.complete(session_id=manager.session_id, content="第二问")
             assert manager2 is manager
             call2 = await asyncio.wait_for(agent.created.get(), 2)
@@ -192,13 +192,13 @@ def test_cancel_rejects_late_event_and_does_not_cancel_new_turn(tmp_path):
         try:
             manager, first = await registry.complete(content="旧问题")
             call = await agent.created.get()
-            old_runtime = manager.runtimes[first.turn_id]
+            old_runtime = manager.runtime
             assert (await manager.cancel(first.turn_id))["status"] == "cancelled"
             assert call.cancelled
             _, second = await registry.complete(session_id=manager.session_id, content="新问题")
             new_call = await agent.created.get()
-            await manager.agent_event(first.turn_id, old_runtime.generation,
-                                      {"type": "model_message.done", "message_id": "late", "content": "迟到"})
+            # 取消后旧 runtime 的事件被 runtime 自身丢弃：直接对旧 runtime 投递验证。
+            await old_runtime._on_event({"type": "model_message.done", "message_id": "late", "content": "迟到"})
             assert (await manager.cancel(first.turn_id))["status"] == "cancelled"
             assert not new_call.cancelled
             assert manager.active_turn_id == second.turn_id
@@ -297,16 +297,7 @@ def test_cancelled_queued_create_recycles_subscription(tmp_path, monkeypatch):
                 await release.wait()
                 return await original_detach(subscription_id)
 
-            attached = []
-            original_attach = manager._handle_attach
-
-            async def recording_attach():
-                context = await original_attach()
-                attached.append(context)
-                return context
-
             monkeypatch.setattr(manager, "_handle_detach", gated_detach)
-            monkeypatch.setattr(manager, "_handle_attach", recording_attach)
 
             blocker = asyncio.create_task(manager.detach("nonexistent"))
             await entered.wait()
@@ -317,9 +308,8 @@ def test_cancelled_queued_create_recycles_subscription(tmp_path, monkeypatch):
                 await request
             release.set()
             await blocker
-            await wait_for_condition(lambda: attached and attached[0].subscription.closed.is_set())
-            assert manager.active_turn_id == attached[0].turn_id
-            assert attached[0].subscription.id not in manager.subscribers
+            # 命令仍执行并创建轮次；无人接收的订阅由 _run 回收。
+            await wait_for_condition(lambda: not manager.subscribers and manager.runtime is not None)
         finally:
             release.set()
             await registry.close()
@@ -334,23 +324,14 @@ def test_cancelled_create_during_handler_recycles_subscription(tmp_path, monkeyp
             crud.create_session(db.connect(), session_id="cold", status="ready", now="now")
             manager = await registry.get_or_create("cold")
             entered, release = asyncio.Event(), asyncio.Event()
-            original_write = manager._write
+            original_transaction = manager._transaction
 
-            async def gated_write(operation):
+            async def gated_transaction(operation, events):
                 entered.set()
                 await release.wait()
-                return await original_write(operation)
+                return await original_transaction(operation, events)
 
-            attached = []
-            original_attach = manager._handle_attach
-
-            async def recording_attach():
-                context = await original_attach()
-                attached.append(context)
-                return context
-
-            monkeypatch.setattr(manager, "_write", gated_write)
-            monkeypatch.setattr(manager, "_handle_attach", recording_attach)
+            monkeypatch.setattr(manager, "_transaction", gated_transaction)
 
             request = asyncio.create_task(manager.create_completion(content="问题", files=[], run_options={}))
             await entered.wait()
@@ -358,9 +339,8 @@ def test_cancelled_create_during_handler_recycles_subscription(tmp_path, monkeyp
             with pytest.raises(asyncio.CancelledError):
                 await request
             release.set()
-            await wait_for_condition(lambda: attached and attached[0].subscription.closed.is_set())
-            assert manager.active_turn_id == attached[0].turn_id
-            assert attached[0].subscription.id not in manager.subscribers
+            # 命令仍执行并创建轮次；无人接收的订阅由 _run 回收。
+            await wait_for_condition(lambda: not manager.subscribers and manager.runtime is not None)
         finally:
             release.set()
             await registry.close()
@@ -375,13 +355,13 @@ def test_create_failure_returns_error_without_runtime_or_subscription(tmp_path, 
             crud.create_session(db.connect(), session_id="cold", status="ready", now="now")
             manager = await registry.get_or_create("cold")
 
-            async def failing_write(operation):
+            async def failing_transaction(operation, events):
                 raise RuntimeError("写入失败")
 
-            monkeypatch.setattr(manager, "_write", failing_write)
+            monkeypatch.setattr(manager, "_transaction", failing_transaction)
             with pytest.raises(RuntimeError, match="写入失败"):
                 await manager.create_completion(content="问题", files=[], run_options={})
-            assert manager.runtimes == {}
+            assert manager.runtime is None
             assert manager.subscribers == {}
             assert manager.active_turn_id is None
             assert db.connect().execute("SELECT COUNT(*) FROM chat_turns").fetchone()[0] == 0
@@ -391,24 +371,21 @@ def test_create_failure_returns_error_without_runtime_or_subscription(tmp_path, 
     asyncio.run(scenario())
 
 
-def test_cancel_and_event_follow_fifo_order(tmp_path):
+def test_cancel_rejects_events_after_signal(tmp_path):
     async def scenario():
         registry, db, agent = await setup(tmp_path)
         try:
             manager, context = await registry.complete(content="问题")
             call = await agent.created.get()
-            runtime = manager.runtimes[context.turn_id]
-            cancel_task = asyncio.create_task(manager.cancel(context.turn_id))
-            event_task = asyncio.create_task(manager.agent_event(
-                context.turn_id, runtime.generation,
-                {"type": "model_message.done", "seq": 1, "message_id": "late", "content": "迟到"},
-            ))
-            cancelled, accepted = await asyncio.gather(cancel_task, event_task)
-            assert cancelled["status"] == "cancelled"
+            runtime = manager.runtime
+            assert (await manager.cancel(context.turn_id))["status"] == "cancelled"
+            assert call.cancelled
+            # 取消信号后 runtime 丢弃后续事件，不写库。
+            accepted = await runtime._on_event(
+                {"type": "model_message.done", "seq": 1, "message_id": "late", "content": "迟到"})
             assert accepted is False
             rows = db.connect().execute("SELECT role, content FROM chat_messages ORDER BY sequence").fetchall()
             assert [tuple(row) for row in rows] == [("user", "问题")]
-            assert call.cancelled
         finally:
             await registry.close()
             db.close()
@@ -486,6 +463,9 @@ def test_tool_write_failure_rolls_back_group(tmp_path):
                 await next_type(context.subscription, "tool_completed")
             assert db.connect().execute("SELECT COUNT(*) FROM chat_messages").fetchone()[0] == 1
             assert manager.broken
+            # manager.fail 已取消 runtime；等它收尾后再关库，避免跨线程关闭在途连接。
+            if manager.runtime is not None:
+                await manager.runtime.wait_closed()
         finally:
             await registry.close()
             db.close()
@@ -503,13 +483,13 @@ def test_idle_unload_and_cold_resume_do_not_keep_history_in_manager(tmp_path):
             await registry.evict_idle()
             assert registry.entries[manager.session_id].manager is manager
             await finish(call, manager, first.turn_id)
-            tasks = [runtime.task for runtime in manager.runtimes.values()]
-            await asyncio.gather(*tasks)
+            if manager.runtime is not None:
+                await manager.runtime.wait_closed()
             manager.last_activity = 0
             await registry.evict_idle()
             assert manager.session_id not in registry.entries
             loaded = await registry.get_or_create(manager.session_id)
-            assert loaded is not manager and loaded.current_turn_state is None
+            assert loaded is not manager and loaded.runtime is None
             snapshot = await build_snapshot(db, await loaded.attach())
             assert snapshot["state"]["turns"][0]["status"] == "completed"
         finally:
@@ -550,7 +530,7 @@ def test_retry_marks_failed_attempt_and_terminal_clears_retry_state(tmp_path):
             await call.events.put({"type": "model_message.delta", "seq": 1, "message_id": "old", "delta": "不完整"})
             await call.events.put({"type": "model_request.retrying", "seq": 2, "message_id": "old", "attempt": 1})
             await next_type(context.subscription, "model_request.retrying")
-            items = manager.current_turn_state.snapshot()["items"]
+            items = manager.runtime.snapshot()["items"]
             assert next(item for item in items if item["id"] == "message:old")["status"] == "failed"
             await manager.cancel(context.turn_id)
             snapshot = await build_snapshot(db, await manager.attach())
@@ -569,7 +549,8 @@ def test_closing_entry_rejects_get_until_removed(tmp_path, monkeypatch):
             call = await agent.created.get()
             await manager.detach(context.subscription.id)
             await finish(call, manager, context.turn_id)
-            await asyncio.gather(*(runtime.task for runtime in manager.runtimes.values()))
+            if manager.runtime is not None:
+                await manager.runtime.wait_closed()
             manager.last_activity = 0
             entered, release = asyncio.Event(), asyncio.Event()
             original_close = manager.close
@@ -620,10 +601,9 @@ def test_missing_tool_result_does_not_fabricate_history(tmp_path):
             await call.events.put({"type": "model_message.done", "seq": 1, "message_id": "tools", "content": "查询",
                                    "tool_calls": [{"id": "a", "name": "read", "args_json": "{}"}]})
             await next_type(context.subscription, "model_message.done")
-            runtime = manager.runtimes[context.turn_id]
+            runtime = manager.runtime
             with pytest.raises(ValueError, match="工具结果"):
-                await manager.agent_event(context.turn_id, runtime.generation,
-                                          {"type": "tool_completed", "seq": 2, "tool_call_id": "a", "tool": "read"})
+                await runtime._on_event({"type": "tool_completed", "seq": 2, "tool_call_id": "a", "tool": "read"})
             assert db.connect().execute("SELECT COUNT(*) FROM chat_messages").fetchone()[0] == 1
         finally:
             await registry.close()

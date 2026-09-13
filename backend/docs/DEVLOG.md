@@ -1,6 +1,36 @@
 # Backend Devlog
 
-last updated: 2026-09-13 18:30:00
+last updated: 2026-09-13 20:10:00
+
+## 2026-09-13 20:10:00
+
+### 已完成工作
+
+- 按 Codex（53c542d9）core/app-server 分层重构执行边界：TurnRuntime 成为自治执行体，拥有轮内全部状态（per-turn seq、工具组配对、TurnView、gRPC call），自己写 chat_messages、写轮终态、广播事件；SessionManager 收缩为 create/cancel/attach 三个命令 + detach/close 生命周期管道，只管 session 级状态和订阅。
+- chat_messages 唯一键从 (session_id, sequence) 改为 (turn_id, sequence)，turn_id 变为 NOT NULL、禁止 system 角色；get_next_message_sequence 按 turn 分配；list_messages 按轮创建顺序+轮内 seq 拼接。活跃轮唯一保证同一 turn 只有一个写者，消息写入不再需要 manager 串行化。
+- manager 对 runtime 的唯一反向通道是 runtime.cancel()（设标志+call.cancel()，不进队列、不打断在途写事务）；runtime 到 manager 只有 broadcast（asyncio 单线程原子）和 fail()（事务失败标记损坏）。
+- cancel 语义对齐 Codex interrupt：_handle_cancel 登记 pending_cancel 等待者即返回，runtime 自己写 cancelled 终态并广播，manager 在 broadcast 终态时补发响应。
+- runtime 写路径加 write_lock：cancel 可在 begin 事务在途时到达，终态事务必须等它提交，避免同一连接事务重叠；_finish 写失败标记 manager 损坏后放弃，不再让异常逃逸。
+- run() 收口统一：无论 begin 前取消、流中断、异常，最终都走 _finish 写终态；不再有"启动前取消不收尾"的窗口。
+- TDD：先更新测试为新结构语义（runtime 自治、per-turn seq 唯一性、取消后事件丢弃），全量 72 项通过；同步 SESSION_MANAGER.md（分层所有权表、串行边界、取消语义）与 table.md（消息唯一键）。
+
+### 当前边界
+
+- 消息 sequence 为轮内序号；跨轮顺序依赖 chat_turns.created_at/rowid，模型上下文按该顺序拼接。
+- runtime 广播在 runtime 任务上下文执行，manager.broadcast 不再加命令队列；close 时若轮在途，先 cancel 并等 runtime 收口，再由终态广播触发关闭。
+- 未配齐工具组在取消/失败时随 runtime 消亡，不落库（与上版一致的展示取舍）。
+
+## 2026-09-13 19:05:00
+
+### 已完成工作
+
+- SessionManager 公开面收缩为三个业务入口：create_completion、cancel、attach；detach/close 保留为生命周期管道。start_turn/resources_prepared/agent_event/worker_ended 四个转发方法删除，TurnRuntime 作为内部调用方直接经 _ask/_tell 发送 begin/event/ended 命令。
+- resources 与 start 合并为单个 begin 命令：同一事务内替换资源引用（refs 非空时）、设置 in_progress 并读取 chat_messages，少一次事务往返；resources.prepared 与 turn.started 事件在同一事务提交后按序广播。
+- 纯重构，行为不变：71 项测试通过；同步 SESSION_MANAGER.md 与 table.md 中的调用链描述。
+
+### 当前边界
+
+- begin/event 仍走 _ask（event 需回执驱动背压，begin 需返回模型输入）；ended 走 _tell。命令总数从 8 降到 6（create/cancel/attach/detach + begin/event/ended/stop 的内部命令）。
 
 ## 2026-09-13 18:30:00
 

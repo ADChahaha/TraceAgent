@@ -35,7 +35,7 @@ schema、CRUD 与 SessionManager 已接通，统一使用 `chat_*` 和 `session_
 | `id` | `TEXT PRIMARY KEY` | backend 消息 id，不与 agent 的 message_id 混用。 |
 | `session_id` | `TEXT NOT NULL` | 所属 session，外键指向 `chat_sessions(id)`。 |
 | `turn_id` | `TEXT` | 所属 turn，通过 `(session_id, turn_id)` 复合外键关联 chat_turns；仅 system 角色可为空。 |
-| `sequence` | `INTEGER NOT NULL` | session 内稳定消息顺序，整组提交时分配。 |
+| `sequence` | `INTEGER NOT NULL` | 轮内消息顺序（per-turn seq），整组提交时分配；跨轮顺序由 chat_turns 创建顺序给出。 |
 | `group_id` | `TEXT NOT NULL` | 原子提交组标识；agent 组按 turn_id + message_id 稳定生成，重放不重复写入。 |
 | `group_index` | `INTEGER NOT NULL` | 组内顺序，从 0 开始；assistant 在前，tool 按原 tool_calls 顺序排列。 |
 | `role` | `TEXT NOT NULL` | user、system、assistant 或 tool。 |
@@ -45,7 +45,7 @@ schema、CRUD 与 SessionManager 已接通，统一使用 `chat_*` 和 `session_
 | `name` | `TEXT` | tool 名称，非 tool 消息为空。 |
 | `created_at` | `TEXT NOT NULL` | 创建时间。 |
 
-已实现的数据库约束：`UNIQUE(session_id, sequence)`、`UNIQUE(session_id, group_id, group_index)`，以及同组非空 tool_call_id 的唯一索引；sequence 大于 0，group_index 非负，group_id 非空。role 限定为表中四类；tool 必须有非空调用 ID 和名称，其他角色的这两个字段必须为空。tool_calls_json 必须是合法 JSON 数组，非 assistant 只能为空数组。复合外键依赖 chat_turns(session_id, id) 唯一索引，防止消息关联其他 session 的 turn。
+已实现的数据库约束：`UNIQUE(turn_id, sequence)`、`UNIQUE(turn_id, group_id, group_index)`，以及同组非空 tool_call_id 的唯一索引；sequence 大于 0，group_index 非负，group_id 非空。role 限定为表中四类；system 角色不允许（turn_id 非空）；tool 必须有非空调用 ID 和名称，其他角色的这两个字段必须为空。tool_calls_json 必须是合法 JSON 数组，非 assistant 只能为空数组。复合外键依赖 chat_turns(session_id, id) 唯一索引，防止消息关联其他 session 的 turn。消息唯一键在 turn 维度：活跃轮唯一保证同一 turn 只有一个写者（runtime），无需 session 级串行化消息写入。
 
 业务已接入：tool_calls_json 使用模型输入格式 `[{"id":"call-a","type":"function","function":{"name":"read","arguments":"{}"}}]`，从 agent 的 id/name/args_json 转换并保留原始 ID。manager 校验配对完整性，在同一事务写完整组；同轮重复消息或未知、重复工具结果按协议错误处理。数据库只校验数组结构及行级约束，不能替代业务校验。
 
@@ -61,7 +61,7 @@ backend 接收 agent event，并在 session manager 串行命令内检查本地�
   → tool_completed / tool_failed：按原始 tool_call_id 精确归入待提交组
   → 校验调用 ID 非空且唯一、每个调用恰好有一个结果、没有未知 ID
   → 全部配齐：同一短事务写 assistant + 全部 tool，分配稳定 sequence
-  → 下一轮 start_turn 只按 sequence 读取 chat_messages
+  → 下一轮 begin 命令只按 sequence 读取 chat_messages
 ```
 
 tool_failed 是真实的完整工具结果，可以参与配对；tool_started 不算结果。不得按工具名或到达顺序猜测配对，不得生成替代 call ID。无效或冲突结果不提交该组；不能通过省略缺失工具调用让一组看起来完整。用户输入在请求受理时以独立完整消息提交，不要求与回答配对。

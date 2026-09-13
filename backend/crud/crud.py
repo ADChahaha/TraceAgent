@@ -182,8 +182,14 @@ def create_message(
 
 
 def list_messages(connection: sqlite3.Connection, session_id: str) -> list[dict[str, Any]]:
+    """按轮创建顺序、轮内 sequence 拼接返回会话全部消息，供模型上下文使用。"""
     rows = connection.execute(
-        "SELECT * FROM chat_messages WHERE session_id = ? ORDER BY sequence ASC, rowid ASC",
+        """
+        SELECT m.* FROM chat_messages m
+        JOIN chat_turns t ON t.id = m.turn_id
+        WHERE m.session_id = ?
+        ORDER BY t.created_at, t.rowid, m.sequence ASC, m.rowid ASC
+        """,
         (session_id,),
     ).fetchall()
     return [dict(row) for row in rows]
@@ -323,11 +329,11 @@ def list_unfinished_turns(connection: sqlite3.Connection, session_id: str) -> li
     return [dict(row) for row in rows]
 
 
-def get_next_message_sequence(connection: sqlite3.Connection, session_id: str) -> int:
-    """读取下一消息序号；调用方须在同一写事务中分配并插入消息。"""
+def get_next_message_sequence(connection: sqlite3.Connection, turn_id: str) -> int:
+    """读取轮内下一消息序号；调用方须在同一写事务中分配并插入消息。"""
     return int(connection.execute(
-        "SELECT COALESCE(MAX(sequence),0)+1 FROM chat_messages WHERE session_id=?",
-        (session_id,),
+        "SELECT COALESCE(MAX(sequence),0)+1 FROM chat_messages WHERE turn_id=?",
+        (turn_id,),
     ).fetchone()[0])
 
 

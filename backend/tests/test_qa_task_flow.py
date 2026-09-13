@@ -82,5 +82,5 @@ def test_http_disconnect_does_not_cancel_background_turn(tmp_path):
             await call.events.put({"type": "model_message.done", "seq": 1, "message_id": "m", "content": "离线完成"})
             await call.events.put({"type": "completion.completed", "seq": 2})
             await next_type(context.subscription, "turn.completed")
-            assert manager.current_turn_state is None
+            assert manager.runtime is None
     asyncio.run(scenario())
