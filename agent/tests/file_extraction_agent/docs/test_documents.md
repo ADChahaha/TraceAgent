@@ -46,4 +46,4 @@ list[InputDocument](filename + html)
 - `test_tree_entries_reject_paths_outside_workspace`：确认 `entries` 拒绝绝对路径或 `..` 逃逸。
 - `test_materialize_tree_rejects_document_without_filename_or_html`：确认缺 filename 或空 html 会抛 ValueError。
 
-资源基础实现导入已迁移到 `service.document_resources`；原测试行为保持不变。
+资源基础实现导入已迁移到 `document_service.document_resources`；原测试行为保持不变。

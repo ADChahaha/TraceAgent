@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "traceagent-document-service"
+version = "0.1.0"
+description = "Document parsing, indexing, and resource publication service."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "traceagent-protocol==0.1.0",
+    "traceagent-shared==0.1.0",
+    "grpcio>=1.83.1,<2",
+    "grpcio-health-checking>=1.83.1,<1.84",
+    "protobuf>=7.35.1,<8",
+    "boto3>=1.35,<2",
+    "mineru[core]==3.1.6",
+    "numpy>=2.0,<3",
+    "pydantic>=2,<3",
+    "python-docx>=1.1,<2",
+    "sentence-transformers>=3.0,<4",
+    "torch>=2.0",
+    "transformers>=4.57,<5",
+    "huggingface-hub>=0.36,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "grpcio-tools==1.83.1",
+    "pytest>=8.0",
+    "pytest-asyncio>=1.0,<2",
+    "Pillow>=10.0",
+    "reportlab>=4.0",
+]
+embeddings = [
+    "optimum-intel[openvino]>=1.24,<2",
+    "openvino>=2024.4",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["document_service*"]
+namespaces = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+addopts = ["--import-mode=importlib"]

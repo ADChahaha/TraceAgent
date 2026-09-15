@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from service.document_resources.documents import materialize_tree
+from document_service.document_resources.documents import materialize_tree
 from service.file_extraction_agent.core.tools.workspace import DocumentFileTree
-from service.document_resources.schemas import InputDocument
+from document_service.document_resources.schemas import InputDocument
 
 
 @pytest.mark.parametrize("html, expected", [

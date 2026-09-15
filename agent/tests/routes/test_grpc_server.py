@@ -22,10 +22,48 @@ def test_entrypoint_provides_grpc_server():
     assert not hasattr(main, "app"), "迁移后不再启动 FastAPI 应用"
 
 
+def test_protocol_separates_document_resource_service():
+    """文档准备 RPC 属于独立服务，AgentService 只保留问答流。"""
+    assert "PrepareResources" not in pb.DESCRIPTOR.services_by_name["AgentService"].methods_by_name
+    assert "ChatCompletion" in pb.DESCRIPTOR.services_by_name["AgentService"].methods_by_name
+    assert "DocumentResourceService" in pb.DESCRIPTOR.services_by_name
+    assert "PrepareResources" in pb.DESCRIPTOR.services_by_name["DocumentResourceService"].methods_by_name
+
+
+def test_document_entrypoint_provides_separate_grpc_server():
+    from document_service import main as document_main
+
+    assert callable(getattr(document_main, "create_server", None))
+    assert inspect.iscoroutinefunction(document_main.create_server)
+
+
+def test_document_entrypoint_does_not_import_agent_route():
+    source = Path(__file__).resolve().parents[3]
+    result = subprocess.run([
+        sys.executable,
+        "-c",
+        "import sys; import document_service.main; assert 'service.file_extraction_agent' not in sys.modules",
+    ], cwd=source, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_health(rpc_channel):
     """标准 Health 可通过真实 RPC 读取。"""
     probe = health_pb2_grpc.HealthStub(rpc_channel)
     for service in ("", "traceagent.v1.AgentService"):
+        assert probe.Check(health_pb2.HealthCheckRequest(service=service), timeout=2).status == health_pb2.HealthCheckResponse.SERVING
+
+
+def test_agent_server_does_not_expose_document_rpc(rpc_channel):
+    query = rpc_channel.unary_unary("/traceagent.v1.AgentService/PrepareResources")
+    with pytest.raises(grpc.RpcError) as error:
+        query(pb.PrepareResourcesRequest().SerializeToString(), timeout=2)
+    assert error.value.code() == grpc.StatusCode.UNIMPLEMENTED
+
+
+def test_document_health(document_rpc_channel):
+    probe = health_pb2_grpc.HealthStub(document_rpc_channel)
+    for service in ("", "traceagent.v1.DocumentResourceService"):
         assert probe.Check(health_pb2.HealthCheckRequest(service=service), timeout=2).status == health_pb2.HealthCheckResponse.SERVING
 
 
@@ -41,14 +79,14 @@ def test_capabilities_is_not_exposed(rpc, rpc_channel):
     assert error.value.code() == grpc.StatusCode.UNIMPLEMENTED
 
 
-def test_blocking_preparation_keeps_control_rpcs_responsive(monkeypatch, rpc_server_factory):
+def test_blocking_preparation_keeps_control_rpcs_responsive(monkeypatch, document_rpc_server_factory):
     """单线程执行器忙于文档解析时，事件循环仍可探活。"""
-    from service.document_resources import application as document_resources
+    from document_service.document_resources import application as document_resources
     started = threading.Event()
     release = threading.Event()
 
     def blocked(documents, raw_files=None):
-        from service.object_store import ResourceRef
+        from traceagent_shared.object_store import ResourceRef
         started.set()
         release.wait(5)
         return [ResourceRef(type="documents", location="s3://res_blocked/documents")]
@@ -56,8 +94,8 @@ def test_blocking_preparation_keeps_control_rpcs_responsive(monkeypatch, rpc_ser
     monkeypatch.setattr(document_resources, "prepare_resources", blocked)
     monkeypatch.setattr(document_resources.processor, "process",
                         lambda file: type("Document", (), {"filename": "a.docx", "html": "<p>a</p>"})())
-    with rpc_server_factory(workers=1) as channel:
-        stub = agent_pb2_grpc.AgentServiceStub(channel)
+    with document_rpc_server_factory(workers=1) as channel:
+        stub = agent_pb2_grpc.DocumentResourceServiceStub(channel)
         pending = stub.PrepareResources.future(pb.PrepareResourcesRequest(
             files=[pb.UploadedFile(filename="a.docx", content=b"test")]), timeout=5)
         try:
@@ -69,11 +107,11 @@ def test_blocking_preparation_keeps_control_rpcs_responsive(monkeypatch, rpc_ser
             pending.result(timeout=2)
 
 
-def test_oversized_request_returns_resource_exhausted(rpc_server_factory):
+def test_oversized_request_returns_resource_exhausted(document_rpc_server_factory):
     """超过配置的消息上限时由 gRPC 拒绝，不进入文档解析。"""
-    with rpc_server_factory(max_message_bytes=1024) as channel:
+    with document_rpc_server_factory(max_message_bytes=1024) as channel:
         with pytest.raises(grpc.RpcError) as error:
-            agent_pb2_grpc.AgentServiceStub(channel).PrepareResources(pb.PrepareResourcesRequest(
+            agent_pb2_grpc.DocumentResourceServiceStub(channel).PrepareResources(pb.PrepareResourcesRequest(
                 files=[pb.UploadedFile(filename="large.pdf", content=b"x" * 2048)]), timeout=2)
         assert error.value.code() == grpc.StatusCode.RESOURCE_EXHAUSTED
 
@@ -92,6 +130,26 @@ def test_cli_starts_server_and_health_command():
             grpc.channel_ready_future(channel).result(timeout=10)
         result = subprocess.run([sys.executable, str(entrypoint), "--check-health", target, "--timeout", "3"],
                                 capture_output=True, text=True, timeout=15)
+        assert result.returncode == 0, result.stderr
+        assert "SERVING" in result.stdout
+    finally:
+        process.terminate()
+        process.communicate(timeout=10)
+
+
+def test_document_cli_starts_server_and_health_command():
+    repository = Path(__file__).resolve().parents[3]
+    with socket.socket() as available:
+        available.bind(("127.0.0.1", 0))
+        port = available.getsockname()[1]
+    target = f"127.0.0.1:{port}"
+    process = subprocess.Popen([sys.executable, "-m", "document_service.main", "--host", "127.0.0.1", "--port", str(port)],
+                               cwd=repository, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        with grpc.insecure_channel(target) as channel:
+            grpc.channel_ready_future(channel).result(timeout=10)
+        result = subprocess.run([sys.executable, "-m", "document_service.main", "--check-health", target, "--timeout", "3"],
+                                cwd=repository, capture_output=True, text=True, timeout=15)
         assert result.returncode == 0, result.stderr
         assert "SERVING" in result.stdout
     finally:

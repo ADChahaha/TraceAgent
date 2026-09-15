@@ -1,7 +1,7 @@
-"""会话级命令串行化：create / cancel / attach 三个命令 + 订阅管理。
+"""会话级命令串行化：create / cancel / attach / get_file / replace_resources + 订阅管理。
 
 对应 codex app-server 的 ThreadState：只拥有 session 级状态（session 行、
-active_turn_id、订阅者），turn 执行态全部在 TurnRuntime。manager 对 runtime
+active_turn_id、订阅者、资源引用），turn 执行态全部在 TurnRuntime。manager 对 runtime
 只有一个反向通道 cancel()；轮终态由 runtime 广播回来，cancel 的响应延迟补发。
 """
 
@@ -12,7 +12,7 @@ import uuid
 from dataclasses import dataclass
 
 from backend.crud import crud
-from backend.services.errors import BackendServiceError, ConflictError, NotFoundError
+from backend.services.errors import BackendServiceError, ConflictError, NotFoundError, ValidationError
 from backend.services.session_history import ResumeContext
 from backend.services.subscription import Subscription
 from backend.services.time_utils import utc_now
@@ -133,14 +133,12 @@ class SessionManager:
                 if not subscription.publish(event):
                     self.subscribers.pop(key, None)
 
-    async def create_completion(self, *, content, files, run_options):
-        return await self._ask("create", content, files, run_options)
+    async def create_completion(self, *, content, run_options):
+        return await self._ask("create", content, run_options)
 
-    async def _handle_create(self, content, files, run_options):
+    async def _handle_create(self, content, run_options):
         if self.active_turn_id:
             raise ConflictError("会话已有活跃轮次")
-        if self.session["status"] == "failed" and not files:
-            raise ConflictError("资源准备失败，需要重新上传文件")
         turn_id = uuid.uuid4().hex
 
         def create(db, events):
@@ -149,14 +147,14 @@ class SessionManager:
             message_id = uuid.uuid4().hex
             crud.create_message(db, message_id=message_id, session_id=self.session_id, turn_id=turn_id, role="user", content=content,
                                 now=now, sequence=crud.get_next_message_sequence(db, turn_id), group_id=message_id, group_index=0, commit=False)
-            crud.update_session(db, session_id=self.session_id, now=now, status="processing" if files else "running", active_turn_id=turn_id, commit=False)
+            crud.update_session(db, session_id=self.session_id, now=now, status="running", active_turn_id=turn_id, commit=False)
             events.append({"type": "turn.created", "turn_id": turn_id, "payload": {}})
             events.append({"type": "message.created", "turn_id": turn_id,
                            "payload": {"message_id": message_id, "role": "user", "content": content}})
 
         events = []
         await self._transaction(create, events)
-        runtime = TurnRuntime(manager=self, turn_id=turn_id, files=files, run_options=run_options)
+        runtime = TurnRuntime(manager=self, turn_id=turn_id, run_options=run_options)
         self.runtime = runtime
         subscription = Subscription(max_events=self.settings.subscription_max_events, max_bytes=self.settings.subscription_max_bytes)
         self.subscribers[subscription.id] = subscription
@@ -216,6 +214,38 @@ class SessionManager:
     async def detach(self, subscription_id):
         if not self.closed:
             await self._ask("detach", subscription_id)
+
+    async def get_file(self, resource_id):
+        return await self._ask("get_file", resource_id)
+
+    async def _handle_get_file(self, resource_id):
+        row = crud.get_resource(self.database.connect(), resource_id)
+        if row is None or row["session_id"] != self.session_id:
+            raise NotFoundError("资源不存在")
+        if row["type"] != "raw":
+            raise ValidationError("只能删除原始文件")
+        return row
+
+    async def replace_resources(self, refs, sizes):
+        return await self._ask("replace_resources", refs, sizes)
+
+    async def _handle_replace_resources(self, refs, sizes):
+        """以 agent 返回的全量 refs 替换会话资源；raw 尺寸优先取本次上传，未变的沿用旧值。"""
+        old_sizes = {row["location"]: row["size_bytes"] for row in self.resources if row["type"] == "raw"}
+
+        def replace(db, events):
+            now = utc_now()
+            crud.delete_resources(db, self.session_id, commit=False)
+            for ref in refs:
+                crud.create_resource(db, resource_id=uuid.uuid4().hex, session_id=self.session_id,
+                                     resource_type=ref["type"], location=ref["location"], now=now,
+                                     size_bytes=int(sizes.get(ref["location"], old_sizes.get(ref["location"], 0))),
+                                     commit=False)
+            events.append({"type": "resources.prepared", "turn_id": None,
+                           "payload": {"resources": [{"type": ref["type"], "location": ref["location"]} for ref in refs]}})
+
+        await self._transaction(replace, [])
+        return self.resources
 
     async def _handle_detach(self, subscription_id):
         subscription = self.subscribers.pop(subscription_id, None)

@@ -1,6 +1,6 @@
 # 文档问答执行设计
 
-问答模块消费已准备的资源定位数组，执行一次模型/工具循环。资源生成由同级 `document_resources` 负责；两包互不导入，通过 storage 服务交接。资源读取归工具层，Agent 的 embedding 能力集中在 `tools/embedding.py`。
+问答模块消费 document service 已准备的资源定位数组，执行一次模型/工具循环。资源生成由独立 document service 负责；问答包不导入 document_resources，通过 storage 服务交接。资源读取归工具层，Agent 的 embedding 能力集中在 `tools/embedding.py`。
 
 ```text
 resource_refs([{type, location}]) + messages + 模型/运行配置

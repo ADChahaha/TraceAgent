@@ -1,4 +1,15 @@
-last updated: 2026-09-12 21:15:59
+last updated: 2026-09-15
+
+## 2026-09-15
+
+### 已完成工作
+
+- 将 document processor、document resources 和 document service 测试迁移到独立顶层 `document_service/`；agent wheel 不再包含文档处理模块。
+- 将 S3-compatible ObjectStore 抽为共享 `traceagent_shared` 包，agent 与 document service 只通过共享包访问 storage。
+- 将 `PrepareResources` 从 `AgentService` 拆到独立的 `DocumentResourceService`；agent 默认监听 8001，document service 默认监听 8002。
+- 新增 `document_service/main.py` 独立启动入口和 document service Health；agent 进程只注册 `ChatCompletion`。
+- backend 增加独立 `DocumentResourceClient`，上传/删除资源走 document service，问答走 `AgentClient`；补充双 target、超时和消息上限配置。
+- TDD：先增加协议、入口、client 和配置失败测试，再完成服务拆分；agent 路由/资源链路和 backend client/config 定向测试通过。
 
 ## 2026-09-12 21:15:59
 
@@ -640,7 +651,7 @@ last updated: 2026-09-12 21:15:59
 
 - 按 review 修正 `file_extraction_agent` 抽取端结构化输出策略：`auto` 只在 `json_schema` 明确不支持时切到 `tool_call`，已经进入 invoke 阶段的超时、鉴权、服务端错误或输出校验失败不再换协议重试。
 - 收紧 resolution 证据绑定：模型返回 `status=resolved` 时必须声明非空 `used_block_ids`，避免最终 trace 沿用未被模型声明使用的 broad evidence。
-- 清理 document processor route 边界：HTTP 层改为从公开 `service.document_processor.processor` 导入 `InvalidFileObjectError`，不再依赖 `impl.base`。
+- 清理 document processor route 边界：HTTP 层改为从公开 `document_service.document_processor.processor` 导入 `InvalidFileObjectError`，不再依赖 `impl.base`。
 - 同步更新相关设计/API 和测试说明文档。
 
 ### 当前进展

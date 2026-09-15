@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from service.document_resources.model import DEFAULT_EMBEDDING_MODEL
+from document_service.document_resources.model import DEFAULT_EMBEDDING_MODEL
 from service.file_extraction_agent.core.tools import worker
 from service.file_extraction_agent.core.tools.workspace import (
     document_tree_from_payload,

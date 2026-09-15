@@ -29,9 +29,11 @@ class Entry:
 
 
 class SessionRegistry:
-    def __init__(self, *, database, agent_client, settings):
+    def __init__(self, *, database, agent_client, settings, document_client=None):
         self.database = database
         self.agent_client = agent_client
+        # 测试替身和旧调用方可暂时复用同一对象；生产入口始终注入独立 client。
+        self.document_client = document_client or agent_client
         self.settings = settings
         self.entries = {}
         self.lock = asyncio.Lock()
@@ -49,7 +51,7 @@ class SessionRegistry:
                         crud.update_turn(db, turn_id=turn["id"], now=now, status="failed", error="backend_restarted",
                                          completed_at=now, commit=False)
                     crud.update_session(db, session_id=session["id"], now=now, clear_active_turn=True,
-                                        status="failed" if session["status"] == "processing" else "ready", commit=False)
+                                        status="ready", commit=False)
         await asyncio.to_thread(recover)
         self.reaper = asyncio.create_task(self._reap_loop(), name="session-reaper")
 
@@ -126,27 +128,70 @@ class SessionRegistry:
     def _create_session(self, session_id):
         crud.create_session(self.database.connect(), session_id=session_id, status="ready", now=utc_now())
 
-    async def complete(self, *, content, session_id=None, files=None, run_options=None):
+    async def create_session(self):
+        """创建会话行并返回 session_id；文件随后经 upload_files 绑定。"""
+        session_id = uuid.uuid4().hex
+        await asyncio.to_thread(self._create_session, session_id)
+        return session_id
+
+    async def upload_files(self, *, session_id, files):
+        """会话级上传：校验 -> document service 物化重建 -> 原子替换资源引用。"""
+        if not files:
+            raise ValidationError("files 不能为空")
+        filenames = set()
+        for file in files:
+            filename = file.get("filename") if isinstance(file, dict) else None
+            content = file.get("content") if isinstance(file, dict) else None
+            if not isinstance(filename, str) or not filename.strip() or "/" in filename or "\\" in filename:
+                raise ValidationError("文件名不能为空且不能包含路径分隔符")
+            if filename in filenames:
+                raise ValidationError("同一批上传文件名重复")
+            filenames.add(filename)
+            if Path(filename).suffix.lower().lstrip(".") not in self.settings.supported_file_types:
+                raise ValidationError("只支持 PDF/DOCX 文件")
+            if not isinstance(content, bytes) or not content:
+                raise ValidationError("文件内容不能为空")
+        manager = await self.get_or_create(session_id)
+        raw_rows = [row for row in manager.resources if row["type"] == "raw"]
+        if len(raw_rows) + len(files) > self.settings.upload_max_files:
+            raise ValidationError("会话文件数超过限制")
+        total = sum(row["size_bytes"] for row in raw_rows) + sum(len(file["content"]) for file in files)
+        if total > self.settings.upload_max_bytes:
+            raise ValidationError("会话资源总量超过限制")
+        refs = await self.document_client.prepare_resources(session_id=session_id, files=files)
+        sizes = self._raw_sizes(refs, files)
+        return await manager.replace_resources(refs, sizes)
+
+    async def remove_file(self, *, session_id, resource_id):
+        """删除会话里的原始文件：document service 排除 raw 并重建 bundle，再替换资源引用。"""
+        manager = await self.get_or_create(session_id)
+        resource = await manager.get_file(resource_id)
+        refs = await self.document_client.prepare_resources(
+            session_id=session_id, files=[],
+            remove_raw=[{"type": resource["type"], "location": resource["location"]}])
+        return await manager.replace_resources(refs, {})
+
+    @staticmethod
+    def _raw_sizes(refs, files):
+        """把上传文件大小按 raw/<filename> 后缀对齐到 agent 返回的 raw 引用。"""
+        sizes = {}
+        for file in files:
+            for ref in refs:
+                if ref["type"] == "raw" and ref["location"].endswith(f"/raw/{file['filename']}"):
+                    sizes[ref["location"]] = len(file["content"])
+        return sizes
+
+    async def complete(self, *, content, session_id, run_options=None):
         if not isinstance(content, str) or not content.strip():
             raise ValidationError("content 不能为空")
-        files = files or []
         run_options = run_options or {}
         if set(run_options) - {"tool_execution_timeout"}:
             raise ValidationError("未知的 run_options 字段")
         timeout = run_options.get("tool_execution_timeout")
         if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0):
             raise ValidationError("工具超时必须为有限正数")
-        if len(files) > self.settings.upload_max_files or sum(len(f["content"]) for f in files) > self.settings.upload_max_bytes:
-            raise ValidationError("上传文件超过限制")
-        for file in files:
-            if Path(file["filename"]).suffix.lower().lstrip(".") not in self.settings.supported_file_types:
-                raise ValidationError("只支持 PDF/DOCX 文件")
-        content = content.strip()
-        if session_id is None:
-            session_id = uuid.uuid4().hex
-            await asyncio.to_thread(self._create_session, session_id)
         manager = await self.get_or_create(session_id)
-        context = await manager.create_completion(content=content, files=files, run_options=run_options)
+        context = await manager.create_completion(content=content.strip(), run_options=run_options)
         return manager, context
 
     async def evict_idle(self):

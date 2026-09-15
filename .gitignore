@@ -33,3 +33,5 @@ venv/
 # Large local OCR/model artifacts
 agent/service/document_processor/models/
 agent/service/document_processor/impl/pdf/models/
+document_service/document_processor/models/
+document_service/document_processor/impl/pdf/models/

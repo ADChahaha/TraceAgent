@@ -34,6 +34,9 @@ def test_backend_settings_keeps_agent_service_configuration(tmp_path: Path):
     assert settings.agent_request_timeout_seconds == 1200.0
     assert settings.agent_cancel_timeout_seconds == 2.0
     assert settings.agent_grpc_max_message_bytes == 64 * 1024 * 1024
+    assert settings.document_service_target == "127.0.0.1:8002"
+    assert settings.document_request_timeout_seconds == 1200.0
+    assert settings.document_grpc_max_message_bytes == 64 * 1024 * 1024
     assert settings.supported_file_types == ("pdf", "docx")
 
 
@@ -53,6 +56,19 @@ def test_backend_settings_loads_agent_target_from_env(monkeypatch, tmp_path: Pat
     settings = BackendSettings.from_env()
 
     assert settings.agent_service_target == "agent.internal:50051"
+
+
+def test_backend_settings_loads_document_service_configuration(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("BACKEND_DATABASE_PATH", str(tmp_path / "backend.sqlite3"))
+    monkeypatch.setenv("DOCUMENT_SERVICE_TARGET", "document.internal:50052")
+    monkeypatch.setenv("DOCUMENT_SERVICE_TIMEOUT_SECONDS", "900")
+    monkeypatch.setenv("DOCUMENT_GRPC_MAX_MESSAGE_BYTES", "2097152")
+
+    settings = BackendSettings.from_env()
+
+    assert settings.document_service_target == "document.internal:50052"
+    assert settings.document_request_timeout_seconds == 900.0
+    assert settings.document_grpc_max_message_bytes == 2097152
 
 
 def test_backend_settings_loads_agent_cancel_timeout_from_env(monkeypatch, tmp_path: Path):

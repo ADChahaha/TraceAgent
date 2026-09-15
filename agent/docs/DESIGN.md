@@ -1,18 +1,18 @@
 # Agent Service Design
 
-> 迁移中：本服务计划整体并入 backend，见 [backend/docs/AGENT_MERGE.md](../../backend/docs/AGENT_MERGE.md)（待实施）。
+> backend 负责会话和事件持久化；document service 与 agent service 保持独立部署，通过 storage 交接资源。
 
-agent 在同一个进程中提供两个阶段：准备可复用的本机文档资源，以及基于资源路径执行一次问答。多轮会话、任务与事件持久化由 backend 管理。
+文档资源准备和问答执行是两个可独立部署的 gRPC 服务。document service 负责把上传文件转换为可复用资源并发布到 storage；agent service 只读取资源并执行一次问答。多轮会话、任务与事件持久化由 backend 管理。
 
 ```text
-PrepareResources（files: filename + bytes）
+DocumentResourceService.PrepareResources（files: filename + bytes）
   → document_processor.process：PDF / DOCX → filename + html
   → document_resources.prepare_resources：HTML → Markdown 文件树 → 文档 embedding 索引
   → 发布到独立的 storage 服务（S3 兼容），返回资源定位数组 [{type, location}]
      documents 文件树打成单个 documents.zip，index/raw 各自独立对象
      type ∈ {documents, index, raw}，location 为 s3://<bucket>[/<key>]
 
-ChatCompletion（resource_refs + messages）
+AgentService.ChatCompletion（resource_refs + messages）
   → application.stream_completion 校验请求、调用 prepare_workspace 预检资源并装配模型
   → 经 S3ObjectStore（boto3）从 storage 服务读取资源
   → 路径创建工具上下文，运行配置绑定执行器，图内保存完整 messages 和重试状态
@@ -26,12 +26,13 @@ ChatCompletion（resource_refs + messages）
 | 模块 | 职责 |
 | --- | --- |
 | ../agent_proto/agent.proto | 仓库根目录的共享契约；独立发布 traceagent-protocol，agent/backend 均可依赖 |
-| main.py | grpc.aio 启停、阻塞工作执行器、消息大小配置、异步 Health 与 CLI 探活 |
+| main.py | agent service 的 grpc.aio 启停、阻塞工作执行器、消息大小配置、异步 Health 与 CLI 探活 |
+| document_service/main.py | document service 的 grpc.aio 启停、文档处理工作执行器、消息大小配置、异步 Health 与 CLI 探活 |
 | routes/__init__.py | 注册异步业务方法，通过 async for 转发问答流 |
-| routes/document_resources.py | protobuf 转 UploadedFile，在线程中调用上传入口，编码响应并映射 RPC 错误 |
-| service/document_resources/application.py | 校验上传批次，调用 processor 解析，再调用 prepare_resources 发布 |
-| service/document_processor | PDF 调 MinerU、DOCX 调 python-docx，输出带 CSS 的 HTML |
-| service/document_resources | HTML 转文件、文档分块和 embedding 索引构建、发布到 storage 服务 |
+| document_service/routes.py | DocumentResourceService protobuf 转 UploadedFile，在线程中调用上传入口，编码响应并映射 RPC 错误 |
+| ../document_service/document_resources/application.py | 校验上传批次，调用 processor 解析，再调用 prepare_resources 发布 |
+| ../document_service/document_processor | PDF 调 MinerU、DOCX 调 python-docx，输出带 CSS 的 HTML |
+| ../document_service/document_resources | HTML 转文件、文档分块和 embedding 索引构建、发布到 storage 服务 |
 | routes/file_extraction_agent.py | protobuf 转普通参数，调用 application，编码输出并映射 RPC 错误、传播取消 |
 | service/file_extraction_agent/application.py | 校验与资源预检、模型装配、core 输出归一化、事件编号与唯一终态 |
 | service/file_extraction_agent/core/loop.py | Agent 接口：校验输入、组装工作区/工具/历史消息、执行图并转换原生流输出、关闭图流 |
@@ -47,15 +48,17 @@ ChatCompletion（resource_refs + messages）
 | service/file_extraction_agent/core/tools/ov_embedder.py | 纯 OpenVINO 查询编码器（tokenizer + IR + mean pooling + L2） |
 | service/object_store.py | ObjectStore 接口 + S3ObjectStore（boto3）+ Archive/Composite store + s3:// URL 解析 |
 
-两个业务包通过 storage 服务交接，互不导入。`document_resources` 只生成并发布资源；问答在 prepare 与工具子进程内经 S3ObjectStore 读取。
+两个业务服务通过 storage 服务交接，互不通过 Python import 交接。document service 只生成并发布资源；agent service 在 prepare 与工具子进程内经 S3ObjectStore 读取。
 
 ## 传输与部署
 
 ```text
-main.py 读取监听地址、阻塞工作线程数和消息上限
-  → asyncio.run 创建事件循环，启动 grpc.aio.Server 与异步标准 Health
-  → PrepareResources 的解析/资源构建通过 asyncio.to_thread 执行
-  → ChatCompletion 的资源预检和每个工具调用通过一次性 worker 子进程执行
+document_service/main.py（默认 8002）读取监听地址、阻塞工作线程数和消息上限
+  → asyncio.run 创建 document service 事件循环，启动 grpc.aio.Server 与异步标准 Health
+  → DocumentResourceService.PrepareResources 的解析/资源构建通过 asyncio.to_thread 执行
+main.py（默认 8001）读取监听地址、阻塞工作线程数和消息上限
+  → asyncio.run 创建 agent service 事件循环，启动 grpc.aio.Server 与异步标准 Health
+  → AgentService.ChatCompletion 的资源预检和每个工具调用通过一次性 worker 子进程执行
   → 取消和探活直接在事件循环处理
   → routes 转换 protobuf 与业务对象，保留参数缺省值及显式零值
   → handler 消费 application.stream_completion，保留业务层分配的 seq 并编码 CompletionEvent
@@ -97,13 +100,13 @@ prepare 子进程同样在取消时清理；已创建但未消费的生成器不
 
 ## 对外契约与迁移
 
-- 准备接口：`PrepareResources`，一次发送多个 filename/bytes，返回资源定位数组（文档树为 `documents.zip` 归档，不再内联返回 HTML）。
-- 问答接口：`ChatCompletion`，resource_refs（[{type, location}]）+ messages 输入，CompletionEvent 服务端流输出。
-- 采用标准 gRPC Health 探活；业务 RPC 仅提供 PrepareResources、ChatCompletion。问答进展与终态由事件流交付，不提供问答查询或能力查询 RPC。
+- 文档服务接口：`DocumentResourceService.PrepareResources`，一次发送多个 filename/bytes，返回资源定位数组（文档树为 `documents.zip` 归档，不再内联返回 HTML）。默认监听 `127.0.0.1:8002`。
+- agent 服务接口：`AgentService.ChatCompletion`，resource_refs（[{type, location}]）+ messages 输入，CompletionEvent 服务端流输出。默认监听 `127.0.0.1:8001`。
+- 采用标准 gRPC Health 探活；两个服务分别注册各自的 Health 名称。问答进展与终态由事件流交付，不提供问答查询或能力查询 RPC。
 - 不再提供 FastAPI、HTTP 路由和 SSE；旧问答 documents 输入不保留。
-- 本次迁移 agent 及其启动脚本/CI 配套；backend 代码未改，旧 HTTP 客户端需后续适配。
+- backend 分别通过两个 gRPC client 连接 document service 和 agent service；两个服务通过 S3-compatible storage 共享资源。
 - 取消通过原 gRPC call 定位执行，不需要跨实例按 completion ID 路由。
 
-接口示例见 [API.md](API.md)，资源细节见 [资源设计](../service/document_resources/docs/DESIGN.md)，问答细节见 [问答设计](../service/file_extraction_agent/docs/DESIGN.md)。
+接口示例见 [API.md](API.md)，资源细节见 [资源设计](../../document_service/document_resources/docs/DESIGN.md)，问答细节见 [问答设计](../service/file_extraction_agent/docs/DESIGN.md)。
 
 模型装配仅保存一个 provider 和调用方式，工具契约仅支持异步调用。取消沿 Task 传播，不再额外传递停止标志；可见文本统一由 messages.visible_text 提取。已移除 DeepSeek 专用模型适配，所有模型使用标准 ChatOpenAI。

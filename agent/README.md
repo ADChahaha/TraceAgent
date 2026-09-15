@@ -1,26 +1,28 @@
 # Agent Service
 
-agent 在单个进程中提供 gRPC 文档准备与路径问答。文档准备把 PDF/DOCX 转为 HTML、Markdown 文件树和 embedding 索引，并发布到独立的 storage 服务（S3 兼容）；问答复用 storage 中的资源，通过服务端流逐条返回 protobuf 事件。
+agent 仓库提供两个可独立部署的 gRPC 进程：document service 负责文档准备，agent service 负责路径问答。文档准备把 PDF/DOCX 转为 HTML、Markdown 文件树和 embedding 索引，并发布到独立的 storage 服务（S3 兼容）；问答复用 storage 中的资源，通过服务端流逐条返回 protobuf 事件。
 
 ```text
-PrepareResources(files: filename + bytes)
+DocumentResourceService.PrepareResources(files: filename + bytes)
   → document_processor.process → document_resources.prepare_resources
   → 发布到 storage 服务 → resource_path([{type, location}])（文档树为 documents.zip 归档，不再内联返回 HTML）
 
-ChatCompletion(completion_id + resource_path + messages)
+AgentService.ChatCompletion(completion_id + resource_path + messages)
   → 路由适配输入 → application 预检资源、执行问答并生成带 seq 的业务事件 → 路由编码函数编码 protobuf
   → gRPC CompletionEvent 流 → 关闭本轮执行流，保留文档资源
 ```
 
-本次只迁移 agent；backend 仍使用旧 HTTP 客户端，尚不能调用新服务。
+backend 已通过两个独立 gRPC client 分别连接 document service 和 agent service。
 
 ## 启动与探活
 
-从 agent 目录运行：
+从 agent 目录分别运行：
 
 ```bash
 conda activate agent-gate
-pip install -e ../agent_proto -e ".[dev,embeddings]"
+pip install -e ../agent_proto -e ../shared -e ".[dev,embeddings]" -e "../document_service[dev,embeddings]"
+python -m document_service.main --host 127.0.0.1 --port 8002
+
 python main.py --host 127.0.0.1 --port 8001
 ```
 
@@ -28,25 +30,31 @@ python main.py --host 127.0.0.1 --port 8001
 
 ```bash
 conda activate agent-gate
+python -m document_service.main --check-health 127.0.0.1:8002 --timeout 5
 python main.py --check-health 127.0.0.1:8001 --timeout 5
 ```
 
-探活使用标准 `grpc.health.v1.Health/Check`，成功输出 SERVING、退出码为 0，失败为 1。不再提供 HTTP 路由或 OpenAPI 页面。仓库根目录的 `scripts/start.sh` 已改用 gRPC 入口；它仍会启动未迁移的 backend。
+探活使用标准 `grpc.health.v1.Health/Check`，成功输出 SERVING、退出码为 0，失败为 1。不再提供 HTTP 路由或 OpenAPI 页面。仓库根目录的 `scripts/start.sh` 会分别启动两个 gRPC 进程和 backend。
 
 | 参数 / 环境变量 | 默认值 | 用途 |
 | --- | --- | --- |
 | `--host` / `AGENT_HOST` | 127.0.0.1 | 监听地址 |
-| `--port` / `AGENT_PORT` | 8001 | gRPC 端口 |
+| `--port` / `AGENT_PORT` | 8001 | agent service gRPC 端口 |
 | `--workers` / `AGENT_GRPC_WORKERS` | 16 | 文档处理、初始化及同步 I/O/计算的线程数，至少 1；不限制活动 RPC 流数 |
 | `--max-message-bytes` / `AGENT_GRPC_MAX_MESSAGE_BYTES` | 67108864 | 单条请求和响应的 64 MiB 上限 |
 
+document service 使用 `DOCUMENT_HOST`、`DOCUMENT_PORT`（默认 8002）、`DOCUMENT_GRPC_WORKERS` 和
+`DOCUMENT_GRPC_MAX_MESSAGE_BYTES`，参数语义与 agent service 相同。
+
 服务使用 `grpc.aio`：RPC 方法与事件等待运行在事件循环中，文档处理通过 `asyncio.to_thread` 执行；问答资源预检和每个问答工具调用由 `python -m service.file_extraction_agent.core.tools.worker` 一次性子进程执行。问答流等待事件不占工作线程，也没有 workers−2 的活动流限制；模型 astream/ainvoke、图执行、工具调度和事件生产都运行在协程中。工具子进程会在调用结束、超时或取消时被 kill。客户端也须配置足够的消息收发上限，尤其是多文件 bytes 上传。当前使用明文 gRPC，与原本机服务部署边界一致。
 
-准备阶段需要 embedding 依赖；PDF 使用 MinerU，DOCX 使用 python-docx。默认 embedding 后端为 OpenVINO。问答模型配置 `BASE_URL`、`OPENAI_API_KEY`、`MODEL`；可选 `MODEL_API_TRANSPORT=responses` 或 `chat_completions`。PDF 语言由 `DOCUMENT_PROCESSOR_MINERU_LANG` 指定，默认 japan。
+document service 的准备阶段需要 embedding 依赖；PDF 使用 MinerU，DOCX 使用 python-docx。默认 embedding 后端为 OpenVINO。问答模型配置 `BASE_URL`、`OPENAI_API_KEY`、`MODEL`；可选 `MODEL_API_TRANSPORT=responses` 或 `chat_completions`。PDF 语言由 `DOCUMENT_PROCESSOR_MINERU_LANG` 指定，默认 japan。
 
 资源发布到独立的 storage 服务（仓库顶层 `storage/`，S3 兼容 HTTP）。agent 通过 boto3
 （`S3_ENDPOINT_URL`，默认 `http://localhost:9000`）访问；先启动 storage 服务再启动 agent。
-资源不会随问答完成、失败或取消而删除。注册表仍在单进程内，多进程和跨机器资源调度不在本次迁移范围。
+资源不会随问答完成、失败或取消而删除。backend 使用 `AGENT_SERVICE_TARGET`（默认
+`127.0.0.1:8001`）连接 agent，使用 `DOCUMENT_SERVICE_TARGET`（默认
+`127.0.0.1:8002`）连接 document service；两个服务通过 storage 共享资源。
 
 ## 协议与验证
 
@@ -56,14 +64,14 @@ python main.py --check-health 127.0.0.1:8001 --timeout 5
 conda activate agent-gate
 python -m grpc_tools.protoc -I. --python_out=. --pyi_out=. --grpc_python_out=. agent_proto/agent.proto
 cd agent
-python -m pytest tests -q
+NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost python -m pytest agent/tests document_service/tests shared/tests -q
 ```
 
 dev 依赖固定代码生成器版本，测试会重新生成并比对绑定；不要手工修改生成文件。
 
 - [gRPC API](docs/API.md)：客户端示例、事件和错误。
 - [服务设计](docs/DESIGN.md)：通信、线程与生命周期边界。
-- [资源设计](service/document_resources/docs/DESIGN.md)：资源构建和发布。
+- [资源设计](../document_service/document_resources/docs/DESIGN.md)：资源构建和发布。
 - [问答设计](service/file_extraction_agent/docs/DESIGN.md)：模型、工具批次与取消。
 
 测试使用真实 RPC 和 DOCX，模型与 embedding 使用替身；不要求下载模型或访问真实 provider。

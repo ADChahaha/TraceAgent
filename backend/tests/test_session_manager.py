@@ -37,9 +37,20 @@ class FakeAgent:
         self.calls = []
         self.requests = []
         self.created = asyncio.Queue()
+        # 记录会话级资源调用：(session_id, files, remove_raw)；轮次执行不得触达。
+        self.prepared = []
 
-    async def prepare_resources(self, files):
-        return [{"type": "documents", "location": "s3://test/documents.zip"}]
+    async def prepare_resources(self, *, session_id, files, remove_raw=None):
+        self.prepared.append((session_id, files, list(remove_raw or [])))
+        bucket = f"res_{session_id}"
+        refs = [{"type": "documents", "location": f"s3://{bucket}/documents.zip"},
+                {"type": "index", "location": f"s3://{bucket}/index"}]
+        removed = {ref["location"] for ref in (remove_raw or [])}
+        for file in files:
+            location = f"s3://{bucket}/raw/{file['filename']}"
+            if location not in removed:
+                refs.append({"type": "raw", "location": location})
+        return refs
 
     def chat_completion(self, **request):
         call = FakeCall()
@@ -57,6 +68,14 @@ async def setup(tmp_path, **overrides):
     registry = SessionRegistry(database=database, agent_client=agent, settings=settings)
     await registry.start()
     return registry, database, agent
+
+
+
+
+async def new_session_complete(registry, content, **kwargs):
+    """新契约：先独立建会话，再在该会话上发起轮次。"""
+    session_id = await registry.create_session()
+    return await registry.complete(content=content, session_id=session_id, **kwargs)
 
 
 async def next_type(subscription, expected):
@@ -86,7 +105,7 @@ def test_detach_keeps_execution_and_resume_merges_history(tmp_path):
     async def scenario():
         registry, db, agent = await setup(tmp_path)
         try:
-            manager, first = await registry.complete(content="第一问")
+            manager, first = await new_session_complete(registry, "第一问")
             call = await asyncio.wait_for(agent.created.get(), 2)
             await manager.detach(first.subscription.id)
             assert not call.cancelled
@@ -168,7 +187,7 @@ def test_attach_snapshot_survives_completion_and_next_turn(tmp_path):
     async def scenario():
         registry, db, agent = await setup(tmp_path)
         try:
-            manager, first = await registry.complete(content="问题")
+            manager, first = await new_session_complete(registry, "问题")
             call = await agent.created.get()
             context = await manager.attach()
             await finish(call, manager, first.turn_id)
@@ -190,7 +209,7 @@ def test_cancel_rejects_late_event_and_does_not_cancel_new_turn(tmp_path):
     async def scenario():
         registry, db, agent = await setup(tmp_path)
         try:
-            manager, first = await registry.complete(content="旧问题")
+            manager, first = await new_session_complete(registry, "旧问题")
             call = await agent.created.get()
             old_runtime = manager.runtime
             assert (await manager.cancel(first.turn_id))["status"] == "cancelled"
@@ -214,7 +233,7 @@ def test_concurrent_create_has_one_active_turn_and_one_manager(tmp_path):
     async def scenario():
         registry, db, agent = await setup(tmp_path)
         try:
-            manager, first = await registry.complete(content="问题")
+            manager, first = await new_session_complete(registry, "问题")
             managers = await asyncio.gather(*(registry.get_or_create(manager.session_id) for _ in range(8)))
             assert all(item is manager for item in managers)
             with pytest.raises(ConflictError):
@@ -235,8 +254,8 @@ def test_completion_has_no_request_deduplication(tmp_path):
     async def scenario():
         registry, db, agent = await setup(tmp_path)
         try:
-            first, _ = await registry.complete(content="问题")
-            second, _ = await registry.complete(content="问题")
+            first, _ = await new_session_complete(registry, "问题")
+            second, _ = await new_session_complete(registry, "问题")
             assert first.session_id != second.session_id
             assert db.connect().execute("SELECT COUNT(*) FROM chat_turns").fetchone()[0] == 2
         finally:
@@ -301,7 +320,7 @@ def test_cancelled_queued_create_recycles_subscription(tmp_path, monkeypatch):
 
             blocker = asyncio.create_task(manager.detach("nonexistent"))
             await entered.wait()
-            request = asyncio.create_task(manager.create_completion(content="问题", files=[], run_options={}))
+            request = asyncio.create_task(manager.create_completion(content="问题", run_options={}))
             await asyncio.sleep(0)
             request.cancel()
             with pytest.raises(asyncio.CancelledError):
@@ -333,7 +352,7 @@ def test_cancelled_create_during_handler_recycles_subscription(tmp_path, monkeyp
 
             monkeypatch.setattr(manager, "_transaction", gated_transaction)
 
-            request = asyncio.create_task(manager.create_completion(content="问题", files=[], run_options={}))
+            request = asyncio.create_task(manager.create_completion(content="问题", run_options={}))
             await entered.wait()
             request.cancel()
             with pytest.raises(asyncio.CancelledError):
@@ -360,7 +379,7 @@ def test_create_failure_returns_error_without_runtime_or_subscription(tmp_path, 
 
             monkeypatch.setattr(manager, "_transaction", failing_transaction)
             with pytest.raises(RuntimeError, match="写入失败"):
-                await manager.create_completion(content="问题", files=[], run_options={})
+                await manager.create_completion(content="问题", run_options={})
             assert manager.runtime is None
             assert manager.subscribers == {}
             assert manager.active_turn_id is None
@@ -375,7 +394,7 @@ def test_cancel_rejects_events_after_signal(tmp_path):
     async def scenario():
         registry, db, agent = await setup(tmp_path)
         try:
-            manager, context = await registry.complete(content="问题")
+            manager, context = await new_session_complete(registry, "问题")
             call = await agent.created.get()
             runtime = manager.runtime
             assert (await manager.cancel(context.turn_id))["status"] == "cancelled"
@@ -426,7 +445,7 @@ def test_tool_group_is_atomic_and_next_history_uses_original_ids(tmp_path):
     async def scenario():
         registry, db, agent = await setup(tmp_path)
         try:
-            manager, context = await registry.complete(content="读两个位置")
+            manager, context = await new_session_complete(registry, "读两个位置")
             call = await agent.created.get()
             await call.events.put({"type": "model_message.done", "seq": 1, "message_id": "tools", "content": "查询",
                 "tool_calls": [{"id": "a", "name": "read", "args_json": "{}"}, {"id": "b", "name": "read", "args_json": "{}"}]})
@@ -451,7 +470,7 @@ def test_tool_write_failure_rolls_back_group(tmp_path):
         from backend.services.subscription import SubscriptionClosed
         registry, db, agent = await setup(tmp_path)
         try:
-            manager, context = await registry.complete(content="问题")
+            manager, context = await new_session_complete(registry, "问题")
             call = await agent.created.get()
             await call.events.put({"type": "model_message.done", "seq": 1, "message_id": "tools", "content": "查询",
                                    "tool_calls": [{"id": "a", "name": "read", "args_json": "{}"}]})
@@ -476,7 +495,7 @@ def test_idle_unload_and_cold_resume_do_not_keep_history_in_manager(tmp_path):
     async def scenario():
         registry, db, agent = await setup(tmp_path)
         try:
-            manager, first = await registry.complete(content="问题")
+            manager, first = await new_session_complete(registry, "问题")
             call = await agent.created.get()
             await manager.detach(first.subscription.id)
             manager.last_activity = 0
@@ -525,7 +544,7 @@ def test_retry_marks_failed_attempt_and_terminal_clears_retry_state(tmp_path):
     async def scenario():
         registry, db, agent = await setup(tmp_path)
         try:
-            manager, context = await registry.complete(content="问题")
+            manager, context = await new_session_complete(registry, "问题")
             call = await agent.created.get()
             await call.events.put({"type": "model_message.delta", "seq": 1, "message_id": "old", "delta": "不完整"})
             await call.events.put({"type": "model_request.retrying", "seq": 2, "message_id": "old", "attempt": 1})
@@ -545,7 +564,7 @@ def test_closing_entry_rejects_get_until_removed(tmp_path, monkeypatch):
     async def scenario():
         registry, db, agent = await setup(tmp_path)
         try:
-            manager, context = await registry.complete(content="问题")
+            manager, context = await new_session_complete(registry, "问题")
             call = await agent.created.get()
             await manager.detach(context.subscription.id)
             await finish(call, manager, context.turn_id)
@@ -596,7 +615,7 @@ def test_missing_tool_result_does_not_fabricate_history(tmp_path):
     async def scenario():
         registry, db, agent = await setup(tmp_path)
         try:
-            manager, context = await registry.complete(content="问题")
+            manager, context = await new_session_complete(registry, "问题")
             call = await agent.created.get()
             await call.events.put({"type": "model_message.done", "seq": 1, "message_id": "tools", "content": "查询",
                                    "tool_calls": [{"id": "a", "name": "read", "args_json": "{}"}]})
@@ -615,7 +634,7 @@ def test_registry_can_load_after_cleanup(tmp_path):
     async def scenario():
         registry, db, agent = await setup(tmp_path)
         try:
-            manager, context = await registry.complete(content="问题")
+            manager, context = await new_session_complete(registry, "问题")
             session_id = manager.session_id
             await registry.close()
             restored = await registry.get_or_create(session_id)

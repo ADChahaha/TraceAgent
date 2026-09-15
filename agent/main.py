@@ -1,4 +1,4 @@
-"""创建 gRPC Server → 注册 agent 与标准探活服务 → 监听并等待退出。"""
+"""创建 gRPC Server → 注册问答 agent 与标准探活服务 → 监听并等待退出。"""
 
 from concurrent.futures import ThreadPoolExecutor
 import argparse

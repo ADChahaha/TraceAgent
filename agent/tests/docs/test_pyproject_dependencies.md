@@ -14,5 +14,5 @@ agent/pyproject.toml
 
 ## 测试函数
 
-- `test_agent_pyproject_declares_direct_runtime_dependencies`：显式声明 grpcio、protobuf、标准探活及原业务依赖，移除 agent 的 HTTP 服务直接依赖。
+- `test_agent_pyproject_declares_direct_runtime_dependencies`：显式声明 grpcio、protobuf、标准探活、共享 object storage 包及问答依赖，移除 agent 的文档解析依赖和 HTTP 服务直接依赖。
 - `test_agent_pyproject_declares_direct_test_dependencies`：声明 grpcio-tools 与 pytest，确保协议生成校验和 RPC 测试可在开发环境运行。

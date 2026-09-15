@@ -10,10 +10,10 @@ agent_proto/agent.proto
   → agent 注册服务；backend 或其他调用方导入生成的客户端
 ```
 
-- Python 导入名为 agent_proto，网络服务名为 traceagent.v1.AgentService。
-- 业务方法为 PrepareResources、ChatCompletion；不提供问答查询或能力查询。旧 CancelCompletion、GetCompletion、GetCapabilities 调用返回 UNIMPLEMENTED；问答进展与终态由原事件流交付，探活使用标准 Health 服务。
+- Python 导入名为 agent_proto；`traceagent.v1.DocumentResourceService` 提供资源准备，`traceagent.v1.AgentService` 提供问答流。
+- 业务方法按服务拆分为 `DocumentResourceService.PrepareResources` 和 `AgentService.ChatCompletion`；两个服务可独立部署并通过共享 storage 交接资源。不提供问答查询或能力查询。旧 CancelCompletion、GetCompletion、GetCapabilities 调用返回 UNIMPLEMENTED；问答进展与终态由原事件流交付，探活使用标准 Health 服务。
 - 运行依赖只有 grpcio 和 protobuf；协议源码和生成绑定一起随独立 wheel 发布，不复制进 agent wheel。
-- agent 声明 traceagent-protocol 依赖；本仓库安装时先提供本地共享包，避免依赖不存在的公共发布版本。backend 业务代码本次不改。
+- agent 声明 traceagent-protocol 依赖；本仓库安装时先提供本地共享包，避免依赖不存在的公共发布版本。backend 分别连接两个服务的 gRPC target。
 - 包含生成代码的目录本身映射为 Python 包 agent_proto；setuptools 仅打包该包，不发现 agent/backend。
 - 协议修改后重新生成并检查兼容性；生成失败由 protoc 非零退出报告，运行版本过旧由生成绑定在导入时拒绝。
 - RunOptions 只保留 tool_execution_timeout（编号 2）；已删除的 max_tool_calls 名称及编号 1 均保留为 reserved，避免后续复用。旧客户端的该字段会作为未知字段忽略。

@@ -12,7 +12,7 @@ content 必填且不可为空白；省略 session_id 创建会话，传入已有
 
 run_options 当前只支持正的有限数 tool_execution_timeout。上传使用 multipart/form-data，文本字段同上，run_options 为 JSON 文本；file 或 files 字段可重复，支持 PDF/DOCX，默认最多 20 个文件、总内容 32 MiB。
 
-有新文件时 queued turn 先调用 PrepareResources，成功后替换会话资源引用并启动 ChatCompletion。失败会话需上传新文件重试。同一 session 已有活跃轮时新提交冲突。
+文件上传或删除走 document service 的 `PrepareResources`，成功后 backend 替换会话资源引用；有新文件的 queued turn 随后调用 agent service 的 `ChatCompletion`。失败会话需上传新文件重试。同一 session 已有活跃轮时新提交冲突。
 
 返回 text/event-stream，从快照取得 session_id、state.active_turn_id 和 state.turns。
 
@@ -61,4 +61,4 @@ SSE 建立前输入错误、会话缺失、活跃轮冲突返回 HTTP 错误；�
 
 backend 重启后遗留轮次为 failed/backend_restarted，resume 不自动重做工具。历史快照默认 32 MiB 预算，尚无分页。
 
-GET /healthz 和 GET /capabilities 保留。旧 /qa/tasks 已移除。当前单进程、单用户使用，尚无租户鉴权。
+GET /healthz 和 GET /capabilities 保留。旧 /qa/tasks 已移除。当前 backend 单进程、单用户使用，尚无租户鉴权；agent service 与 document service 可独立进程或跨主机部署。

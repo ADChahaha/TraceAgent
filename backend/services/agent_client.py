@@ -1,4 +1,4 @@
-"""业务参数转换为 protobuf；资源调用与 completion 流均走独立 agent 的 gRPC。"""
+"""业务参数转换为 protobuf；只负责独立 agent service 的 completion 流。"""
 
 import grpc
 from google.protobuf.json_format import MessageToDict
@@ -39,14 +39,6 @@ class AgentClient:
             ("grpc.max_receive_message_length", max_message_bytes),
         ])
         self.stub = rpc.AgentServiceStub(self.channel)
-
-    async def prepare_resources(self, files):
-        request = pb.PrepareResourcesRequest(files=[pb.UploadedFile(filename=f["filename"], content=f["content"]) for f in files])
-        try:
-            response = await self.stub.PrepareResources(request, timeout=self.timeout_seconds)
-        except grpc.RpcError as exc:
-            raise AgentServiceError(f"agent gRPC: {exc.code().name}: {exc.details()}") from exc
-        return [{"type": ref.type, "location": ref.location} for ref in response.resource_path]
 
     def chat_completion(self, *, completion_id, resource_path, messages, run_options=None):
         request = pb.ChatCompletionRequest(

@@ -26,7 +26,7 @@ if _version_not_supported:
 
 
 class AgentServiceStub:
-    """文件准备和单轮问答共享同一服务进程及本机资源目录。
+    """文件准备与单轮问答共享资源契约，但可由两个独立 gRPC 服务进程部署。
     """
 
     def __init__(self, channel):
@@ -35,11 +35,6 @@ class AgentServiceStub:
         Args:
             channel: A grpc.Channel.
         """
-        self.PrepareResources = channel.unary_unary(
-                '/traceagent.v1.AgentService/PrepareResources',
-                request_serializer=agent__proto_dot_agent__pb2.PrepareResourcesRequest.SerializeToString,
-                response_deserializer=agent__proto_dot_agent__pb2.PrepareResourcesResponse.FromString,
-                _registered_method=True)
         self.ChatCompletion = channel.unary_stream(
                 '/traceagent.v1.AgentService/ChatCompletion',
                 request_serializer=agent__proto_dot_agent__pb2.ChatCompletionRequest.SerializeToString,
@@ -48,14 +43,8 @@ class AgentServiceStub:
 
 
 class AgentServiceServicer:
-    """文件准备和单轮问答共享同一服务进程及本机资源目录。
+    """文件准备与单轮问答共享资源契约，但可由两个独立 gRPC 服务进程部署。
     """
-
-    def PrepareResources(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
 
     def ChatCompletion(self, request, context):
         """Missing associated documentation comment in .proto file."""
@@ -66,11 +55,6 @@ class AgentServiceServicer:
 
 def add_AgentServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'PrepareResources': grpc.unary_unary_rpc_method_handler(
-                    servicer.PrepareResources,
-                    request_deserializer=agent__proto_dot_agent__pb2.PrepareResourcesRequest.FromString,
-                    response_serializer=agent__proto_dot_agent__pb2.PrepareResourcesResponse.SerializeToString,
-            ),
             'ChatCompletion': grpc.unary_stream_rpc_method_handler(
                     servicer.ChatCompletion,
                     request_deserializer=agent__proto_dot_agent__pb2.ChatCompletionRequest.FromString,
@@ -85,35 +69,8 @@ def add_AgentServiceServicer_to_server(servicer, server):
 
  # This class is part of an EXPERIMENTAL API.
 class AgentService:
-    """文件准备和单轮问答共享同一服务进程及本机资源目录。
+    """文件准备与单轮问答共享资源契约，但可由两个独立 gRPC 服务进程部署。
     """
-
-    @staticmethod
-    def PrepareResources(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/traceagent.v1.AgentService/PrepareResources',
-            agent__proto_dot_agent__pb2.PrepareResourcesRequest.SerializeToString,
-            agent__proto_dot_agent__pb2.PrepareResourcesResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
 
     @staticmethod
     def ChatCompletion(request,
@@ -132,6 +89,78 @@ class AgentService:
             '/traceagent.v1.AgentService/ChatCompletion',
             agent__proto_dot_agent__pb2.ChatCompletionRequest.SerializeToString,
             agent__proto_dot_agent__pb2.CompletionEvent.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+
+class DocumentResourceServiceStub:
+    """Missing associated documentation comment in .proto file."""
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.PrepareResources = channel.unary_unary(
+                '/traceagent.v1.DocumentResourceService/PrepareResources',
+                request_serializer=agent__proto_dot_agent__pb2.PrepareResourcesRequest.SerializeToString,
+                response_deserializer=agent__proto_dot_agent__pb2.PrepareResourcesResponse.FromString,
+                _registered_method=True)
+
+
+class DocumentResourceServiceServicer:
+    """Missing associated documentation comment in .proto file."""
+
+    def PrepareResources(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_DocumentResourceServiceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'PrepareResources': grpc.unary_unary_rpc_method_handler(
+                    servicer.PrepareResources,
+                    request_deserializer=agent__proto_dot_agent__pb2.PrepareResourcesRequest.FromString,
+                    response_serializer=agent__proto_dot_agent__pb2.PrepareResourcesResponse.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'traceagent.v1.DocumentResourceService', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('traceagent.v1.DocumentResourceService', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class DocumentResourceService:
+    """Missing associated documentation comment in .proto file."""
+
+    @staticmethod
+    def PrepareResources(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/traceagent.v1.DocumentResourceService/PrepareResources',
+            agent__proto_dot_agent__pb2.PrepareResourcesRequest.SerializeToString,
+            agent__proto_dot_agent__pb2.PrepareResourcesResponse.FromString,
             options,
             channel_credentials,
             insecure,

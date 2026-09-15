@@ -15,10 +15,14 @@ class UploadedFile(_message.Message):
     def __init__(self, filename: _Optional[str] = ..., content: _Optional[bytes] = ...) -> None: ...
 
 class PrepareResourcesRequest(_message.Message):
-    __slots__ = ("files",)
+    __slots__ = ("session_id", "files", "remove_raw")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     FILES_FIELD_NUMBER: _ClassVar[int]
+    REMOVE_RAW_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
     files: _containers.RepeatedCompositeFieldContainer[UploadedFile]
-    def __init__(self, files: _Optional[_Iterable[_Union[UploadedFile, _Mapping]]] = ...) -> None: ...
+    remove_raw: _containers.RepeatedCompositeFieldContainer[ResourceRef]
+    def __init__(self, session_id: _Optional[str] = ..., files: _Optional[_Iterable[_Union[UploadedFile, _Mapping]]] = ..., remove_raw: _Optional[_Iterable[_Union[ResourceRef, _Mapping]]] = ...) -> None: ...
 
 class ResourceRef(_message.Message):
     __slots__ = ("type", "location")

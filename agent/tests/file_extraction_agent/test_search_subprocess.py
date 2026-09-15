@@ -132,7 +132,7 @@ async def test_real_worker_search_returns_results(monkeypatch):
     pytest.importorskip("openvino")
     from huggingface_hub import snapshot_download
 
-    from service.document_resources.model import DEFAULT_EMBEDDING_MODEL
+    from document_service.document_resources.model import DEFAULT_EMBEDDING_MODEL
 
     try:
         snapshot_download(DEFAULT_EMBEDDING_MODEL, local_files_only=True)

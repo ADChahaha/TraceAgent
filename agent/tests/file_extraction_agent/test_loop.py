@@ -7,7 +7,7 @@ import json
 import random
 from types import SimpleNamespace
 import pytest
-from service.document_resources.schemas import InputDocument
+from document_service.document_resources.schemas import InputDocument
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from service.file_extraction_agent.core import loop as qa_module
 from service.file_extraction_agent.core.model_invocation import _invoke_model_message
@@ -16,7 +16,7 @@ from service.file_extraction_agent.core.messages import build_qa_messages
 from service.file_extraction_agent.core import executor
 from service.file_extraction_agent.core.graph import build_qa_graph
 from service.file_extraction_agent.core.tools import build_tools
-from service.document_resources.documents import materialize_tree
+from document_service.document_resources.documents import materialize_tree
 from service.file_extraction_agent.core.tools.workspace import DocumentFileTree
 from service.file_extraction_agent.schemas import RunOptions
 from service.file_extraction_agent.schemas import DocumentQaMessage

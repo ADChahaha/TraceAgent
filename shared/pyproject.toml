@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "traceagent-shared"
+version = "0.1.0"
+description = "Shared storage primitives for TraceAgent services."
+requires-python = ">=3.11"
+dependencies = ["boto3>=1.35,<2"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["traceagent_shared*"]
+namespaces = false

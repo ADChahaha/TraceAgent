@@ -9,9 +9,12 @@ from pathlib import Path
 class BackendSettings:
     database_path: Path = Path("backend/backend.sqlite3")
     agent_service_target: str = "127.0.0.1:8001"
+    document_service_target: str = "127.0.0.1:8002"
     agent_request_timeout_seconds: float = 1200.0
+    document_request_timeout_seconds: float = 1200.0
     agent_cancel_timeout_seconds: float = 2.0
     agent_grpc_max_message_bytes: int = 64 * 1024 * 1024
+    document_grpc_max_message_bytes: int = 64 * 1024 * 1024
     supported_file_types: tuple[str, ...] = ("pdf", "docx")
     session_command_limit: int = 64
     subscription_max_events: int = 256
@@ -41,13 +44,23 @@ class BackendSettings:
                 "AGENT_SERVICE_TARGET",
                 "127.0.0.1:8001",
             ),
+            document_service_target=os.getenv(
+                "DOCUMENT_SERVICE_TARGET",
+                "127.0.0.1:8002",
+            ),
             agent_request_timeout_seconds=float(
                 os.getenv("AGENT_SERVICE_TIMEOUT_SECONDS", "1200")
+            ),
+            document_request_timeout_seconds=float(
+                os.getenv("DOCUMENT_SERVICE_TIMEOUT_SECONDS", "1200")
             ),
             agent_cancel_timeout_seconds=float(
                 os.getenv("AGENT_SERVICE_CANCEL_TIMEOUT_SECONDS", "2")
             ),
             agent_grpc_max_message_bytes=int(
                 os.getenv("AGENT_GRPC_MAX_MESSAGE_BYTES", str(64 * 1024 * 1024))
+            ),
+            document_grpc_max_message_bytes=int(
+                os.getenv("DOCUMENT_GRPC_MAX_MESSAGE_BYTES", str(64 * 1024 * 1024))
             ),
         )

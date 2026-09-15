@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from service.object_store import (
+from traceagent_shared.object_store import (
     ArchiveObjectStore,
     CompositeObjectStore,
     ObjectStore,
@@ -141,10 +141,10 @@ class DocumentFileTree:
     def _scope_prefix(self, path: str | None) -> str:
         if path is None or not str(path or "").strip():
             return self.root_key
+        if Path(path).is_absolute() or ".." in Path(path).parts:
+            raise ValueError(f"path escapes the document workspace: {path}")
         candidate = str(path).lstrip("/")
         root = self.root_key
-        if Path(candidate).is_absolute() or ".." in Path(candidate).parts:
-            raise ValueError(f"path escapes the document workspace: {path}")
         if root and candidate == root:
             return root
         if root and not candidate.startswith(root + "/"):

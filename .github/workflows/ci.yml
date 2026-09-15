@@ -22,7 +22,7 @@ jobs:
       - name: Install agent with OCR dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ./agent_proto -e "agent[dev]"
+          python -m pip install -e ./agent_proto -e ./shared -e "agent[dev]" -e "document_service[dev]"
 
       - name: Verify OCR dependency imports
         env:
@@ -55,7 +55,7 @@ jobs:
         env:
           PYTHONPATH: agent
         run: |
-          python -m pytest agent/tests -q
+          NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost python -m pytest agent/tests document_service/tests shared/tests -q
 
   backend:
     name: Backend tests without real agent calls
@@ -79,7 +79,7 @@ jobs:
         env:
           PYTHONPATH: .
           BACKEND_DATABASE_PATH: ":memory:"
-        run: pytest backend/tests -q
+        run: NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost python -m pytest backend/tests -q
 
   frontend:
     name: Frontend tests without backend service
@@ -146,6 +146,8 @@ jobs:
           BACKEND_DATABASE_PATH=:memory:
           AGENT_HOST=127.0.0.1
           AGENT_PORT=8001
+          DOCUMENT_HOST=127.0.0.1
+          DOCUMENT_PORT=8002
           BACKEND_HOST=127.0.0.1
           BACKEND_PORT=8000
           FRONTEND_HOST=127.0.0.1
@@ -187,6 +189,18 @@ jobs:
           done
           if [[ "$agent_ready" != true ]]; then
             echo "Timed out waiting for agent gRPC health"
+            exit 1
+          fi
+          document_ready=false
+          for _ in {1..30}; do
+            if python -m document_service.main --check-health 127.0.0.1:8002 --timeout 2; then
+              document_ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$document_ready" != true ]]; then
+            echo "Timed out waiting for document service gRPC health"
             exit 1
           fi
           wait_for_url http://127.0.0.1:8000/healthz

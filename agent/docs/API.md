@@ -1,10 +1,10 @@
 # Agent gRPC API
 
-服务名为 `traceagent.v1.AgentService`，协议见 [agent.proto](../../agent_proto/agent.proto)。调用方先准备文档，再保存资源定位数组并用于每轮问答：
+协议见 [agent.proto](../../agent_proto/agent.proto)。文档准备和问答属于两个独立 gRPC 服务：
 
 ```text
-PrepareResources(files) → 解析与索引构建 → resource_path([{type, location}])
-ChatCompletion(resource_path + messages) → 校验资源 → 单轮执行 → CompletionEvent 流
+DocumentResourceService.PrepareResources(files) → 解析与索引构建 → resource_path([{type, location}])
+AgentService.ChatCompletion(resource_path + messages) → 校验资源 → 单轮执行 → CompletionEvent 流
 取消原 ChatCompletion call → RPC 取消传播 → handler 关闭本轮执行流
 ```
 
@@ -12,7 +12,7 @@ ChatCompletion(resource_path + messages) → 校验资源 → 单轮执行 → C
 `s3://<bucket>[/<key>]`。type 取值：`documents`（`documents.zip` 归档，成员为 Markdown 文件树）、
 `index`（embedding 索引）、`raw`（原始上传文件，每个文件一项）。资源发布在独立的 storage 服务上。
 
-agent 的 HTTP 路由已移除。backend 尚未适配 gRPC，以下示例使用生成的 Python 客户端。
+agent 的 HTTP 路由已移除。backend 通过两个独立 target 连接下面的服务。
 
 ## 准备文档和问答
 
@@ -23,15 +23,20 @@ from pathlib import Path
 import grpc
 from agent_proto import agent_pb2 as pb, agent_pb2_grpc
 
+with grpc.insecure_channel("127.0.0.1:8002", options=[
+    ("grpc.max_send_message_length", 64 * 1024 * 1024),
+    ("grpc.max_receive_message_length", 64 * 1024 * 1024),
+]) as channel:
+    client = agent_pb2_grpc.DocumentResourceServiceStub(channel)
+    source = Path("contract.docx")
+    resource = client.PrepareResources(pb.PrepareResourcesRequest(files=[
+        pb.UploadedFile(filename=source.name, content=source.read_bytes()),
+    ]), timeout=1200)
 with grpc.insecure_channel("127.0.0.1:8001", options=[
     ("grpc.max_send_message_length", 64 * 1024 * 1024),
     ("grpc.max_receive_message_length", 64 * 1024 * 1024),
 ]) as channel:
     client = agent_pb2_grpc.AgentServiceStub(channel)
-    source = Path("contract.docx")
-    resource = client.PrepareResources(pb.PrepareResourcesRequest(files=[
-        pb.UploadedFile(filename=source.name, content=source.read_bytes()),
-    ]), timeout=1200)
     stream = client.ChatCompletion(pb.ChatCompletionRequest(
         completion_id="cmp_001",
         resource_path=resource.resource_path,
@@ -44,7 +49,7 @@ with grpc.insecure_channel("127.0.0.1:8001", options=[
             print(event.type)
 ```
 
-PrepareResources 为一元 RPC：一次传入全部文件的 filename/bytes，按后缀选择 PDF 或 DOCX；等待全部解析和资源发布后返回 resource_path（[{type, location}] 数组）。文档树发布为单个 `documents.zip`，HTML 不再内联返回；index/manifest 与 raw 各自独立对象。没有分块上传。请求、响应各受配置消息上限约束。任一文件处理失败则整组失败，不返回可用定位；已发布资源不会随问答结束删除。
+`DocumentResourceService.PrepareResources` 为一元 RPC：一次传入全部文件的 filename/bytes，按后缀选择 PDF 或 DOCX；等待全部解析和资源发布后返回 resource_path（[{type, location}] 数组）。文档树发布为单个 `documents.zip`，HTML 不再内联返回；index/manifest 与 raw 各自独立对象。没有分块上传。请求、响应各受配置消息上限约束。任一文件处理失败则整组失败，不返回可用定位；已发布资源不会随问答结束删除。
 
 ## 问答请求
 
@@ -111,7 +116,7 @@ call.cancel() 同步返回，只表示本地取消请求结果，不确认远端
 ## 探活和错误
 
 - agent 不提供问答查询接口；本轮进展与终态通过 ChatCompletion 事件流返回，历史查询由 backend 管理。
-- 标准 grpc.health.v1.Health/Check：服务名为空或 traceagent.v1.AgentService 时返回 SERVING，仅用于进程探活，不检查模型可用性。
+- 标准 grpc.health.v1.Health/Check：agent 使用 `traceagent.v1.AgentService`，document service 使用 `traceagent.v1.DocumentResourceService`；服务名为空也返回 SERVING，仅用于进程探活，不检查模型可用性。
 
 | 情况 | 响应 |
 | --- | --- |

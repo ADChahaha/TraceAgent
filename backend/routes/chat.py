@@ -1,4 +1,4 @@
-"""completion/resume/cancel → manager 命令；SSE 先发历史快照，再消费独立订阅。"""
+"""completion/resume/cancel → manager 命令；会话与文件独立成 API；SSE 先发历史快照，再消费独立订阅。"""
 
 import asyncio
 import json
@@ -21,7 +21,7 @@ router = APIRouter(tags=["chat"])
 class CompletionInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     content: str = Field(min_length=1)
-    session_id: str | None = Field(default=None, min_length=1)
+    session_id: str = Field(min_length=1)
     run_options: dict | None = None
 
 
@@ -31,31 +31,26 @@ class CancelInput(BaseModel):
     turn_id: str = Field(min_length=1)
 
 
-async def _input(request):
-    files = []
+async def _read_files(request):
+    """multipart -> [{"filename", "content"}]；文件字段、分块读取和大小限制在这里统一处理。"""
     settings = request.app.state.settings
-    if request.headers.get("content-type", "").startswith("multipart/form-data"):
-        async with request.form(max_files=settings.upload_max_files, max_fields=8) as form:
-            values = {}
-            total = 0
-            for key, value in form.multi_items():
-                if isinstance(value, UploadFile):
-                    if key not in {"file", "files"}:
-                        raise ValidationError("未知的文件字段")
-                    content = bytearray()
-                    while chunk := await value.read(64 * 1024):
-                        total += len(chunk)
-                        if total > settings.upload_max_bytes:
-                            raise HTTPException(status_code=413, detail="上传超过大小限制")
-                        content.extend(chunk)
-                    files.append({"filename": value.filename or "", "content": bytes(content)})
-                else:
-                    if key in values:
-                        raise ValidationError("重复的表单字段")
-                    values[key] = json.loads(value) if key == "run_options" else value
-    else:
-        values = await request.json()
-    return CompletionInput.model_validate(values), files
+    if not request.headers.get("content-type", "").startswith("multipart/form-data"):
+        raise HTTPException(status_code=422, detail="上传必须使用 multipart/form-data")
+    files = []
+    async with request.form(max_files=settings.upload_max_files, max_fields=8) as form:
+        for key, value in form.multi_items():
+            if not isinstance(value, UploadFile):
+                raise HTTPException(status_code=422, detail="未知的表单字段")
+            if key not in {"file", "files"}:
+                raise ValidationError("未知的文件字段")
+            content = bytearray()
+            while chunk := await value.read(64 * 1024):
+                content.extend(chunk)
+            files.append({"filename": value.filename or "", "content": bytes(content)})
+    total = sum(len(file["content"]) for file in files)
+    if total > settings.upload_max_bytes:
+        raise HTTPException(status_code=413, detail="上传超过大小限制")
+    return files
 
 
 async def _response(request, manager, context):
@@ -98,11 +93,39 @@ async def _response(request, manager, context):
                              background=BackgroundTask(manager.detach, context.subscription.id))
 
 
+@router.post("/chat/sessions")
+async def create_session(request: Request):
+    try:
+        session_id = await request.app.state.session_registry.create_session()
+        return {"session_id": session_id}
+    except BackendServiceError as exc:
+        raise_http_error(exc)
+
+
+@router.post("/chat/sessions/{session_id}/files")
+async def upload_files(request: Request, session_id: str):
+    try:
+        files = await _read_files(request)
+        resources = await request.app.state.session_registry.upload_files(session_id=session_id, files=files)
+        return {"resources": resources}
+    except BackendServiceError as exc:
+        raise_http_error(exc)
+
+
+@router.delete("/chat/sessions/{session_id}/files/{resource_id}")
+async def remove_file(request: Request, session_id: str, resource_id: str):
+    try:
+        resources = await request.app.state.session_registry.remove_file(session_id=session_id, resource_id=resource_id)
+        return {"resource_id": resource_id, "resources": resources}
+    except BackendServiceError as exc:
+        raise_http_error(exc)
+
+
 @router.post("/chat/completion")
 async def completion(request: Request):
     try:
-        body, files = await _input(request)
-        manager, context = await request.app.state.session_registry.complete(**body.model_dump(), files=files)
+        body = CompletionInput.model_validate(await request.json())
+        manager, context = await request.app.state.session_registry.complete(**body.model_dump())
         return await _response(request, manager, context)
     except (PydanticValidationError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

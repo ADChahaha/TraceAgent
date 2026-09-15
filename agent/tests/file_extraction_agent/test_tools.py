@@ -3,7 +3,7 @@ from __future__ import annotations
 import inspect
 from types import SimpleNamespace
 
-from service.document_resources.schemas import InputDocument
+from document_service.document_resources.schemas import InputDocument
 
 from service.file_extraction_agent.core.tools import (
     __all__ as tools_all,
@@ -12,7 +12,7 @@ from service.file_extraction_agent.core.tools import (
     _read,
     build_tools,
 )
-from service.document_resources.documents import materialize_tree
+from document_service.document_resources.documents import materialize_tree
 from service.file_extraction_agent.core.tools.workspace import DocumentFileTree
 from service.file_extraction_agent.schemas import RunOptions
 from service.file_extraction_agent.schemas import DocumentQaMessage

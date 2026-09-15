@@ -16,10 +16,9 @@ from backend.services.turn_view import TurnView
 
 
 class TurnRuntime:
-    def __init__(self, *, manager, turn_id, files, run_options):
+    def __init__(self, *, manager, turn_id, run_options):
         self.manager = manager
         self.turn_id = turn_id
-        self.files = files
         self.run_options = run_options
         self.call = None
         self.cancel_requested = False
@@ -48,11 +47,7 @@ class TurnRuntime:
 
     async def run(self):
         try:
-            refs = []
-            if self.files:
-                refs = await self.manager.agent_client.prepare_resources(self.files)
-                self.files = []
-            request = await self._begin(refs)
+            request = await self._begin()
             if request is not None and not self.cancel_requested:
                 self.call = self.manager.agent_client.chat_completion(**request, run_options=self.run_options)
                 if not self.cancel_requested:
@@ -69,28 +64,21 @@ class TurnRuntime:
         except Exception as exc:
             await self._finish("failed", str(exc))
         finally:
-            self.files = []
             if self.call is not None:
                 self.call.cancel()
             self.done.set()
 
-    async def _begin(self, refs):
-        """替换资源引用并启动轮次，返回模型请求输入；事务失败标记 manager 损坏。"""
+    async def _begin(self):
+        """启动轮次并返回模型请求输入；事务失败标记 manager 损坏。"""
         try:
-            return await self._write(refs is not None, self._begin_operation(refs))
+            return await self._write(True, self._begin_operation())
         except Exception:
             self.manager.fail()
             raise
 
-    def _begin_operation(self, refs):
+    def _begin_operation(self):
         def begin(db, events):
             now = utc_now()
-            if refs:
-                crud.delete_resources(db, self.manager.session_id, commit=False)
-                for ref in refs:
-                    crud.create_resource(db, resource_id=uuid.uuid4().hex, session_id=self.manager.session_id,
-                                         resource_type=ref["type"], location=ref["location"], now=now, commit=False)
-                self._emit(events, "resources.prepared", {"resources": refs})
             crud.update_turn(db, turn_id=self.turn_id, now=now, status="in_progress", agent_completion_id=self.turn_id, commit=False)
             crud.update_session(db, session_id=self.manager.session_id, now=now, status="running", commit=False)
             self._emit(events, "turn.started")
@@ -224,7 +212,7 @@ class TurnRuntime:
             if status == "cancelled":
                 self._emit(events, "turn.cancel_requested")
             crud.update_session(db, session_id=self.manager.session_id, now=now, clear_active_turn=True,
-                                status="failed" if self.manager.session["status"] == "processing" else "ready", commit=False)
+                                status="ready", commit=False)
             self._emit(events, "turn." + status, {"error": error})
 
         return finish
@@ -232,7 +220,7 @@ class TurnRuntime:
     async def _write(self, update_manager_state, operation):
         """串行执行事务：cancel 可能打断 begin 的事务，写锁保证同一连接上事务不重叠。
         提交后更新视图并广播。update_manager_state 为 False 时不刷新 manager 的
-        session/resources 缓存（终态事务需要 manager 旧状态判断 processing）。"""
+        session/resources 缓存。"""
         events = []
         async with self.write_lock:
 

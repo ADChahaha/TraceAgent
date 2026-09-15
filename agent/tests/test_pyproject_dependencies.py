@@ -12,7 +12,7 @@ def test_agent_pyproject_declares_direct_runtime_dependencies():
     pyproject = _load_pyproject()
     dependency_names = _dependency_names(pyproject["project"]["dependencies"])
 
-    assert {"langchain-core", "pydantic", "grpcio", "protobuf", "grpcio-health-checking"} <= dependency_names
+    assert {"langchain-core", "pydantic", "grpcio", "protobuf", "grpcio-health-checking", "traceagent-shared"} <= dependency_names
     assert not {"fastapi", "starlette", "uvicorn", "python-multipart"} & dependency_names
 
 

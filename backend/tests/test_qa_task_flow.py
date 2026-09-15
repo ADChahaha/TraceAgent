@@ -1,4 +1,4 @@
-"""保留原测试文件路径，业务契约迁移为 completion/resume/cancel。"""
+"""completion/resume/cancel 与会话文件 API 的 HTTP 契约。"""
 
 import asyncio
 import json
@@ -27,11 +27,12 @@ def test_completion_and_resume_return_snapshot_without_cursor(tmp_path):
     agent = AutoAgent()
     app = create_app(settings=BackendSettings(database_path=tmp_path / "api.sqlite3"), agent_client=agent)
     with TestClient(app) as client:
-        response = client.post("/chat/completion", json={"content": "问题"})
+        session_id = client.post("/chat/sessions").json()["session_id"]
+        response = client.post("/chat/completion", json={"content": "问题", "session_id": session_id})
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("text/event-stream")
         first = payloads(response)[0]
-        session_id = first["session_id"]
+        assert first["session_id"] == session_id
         assert "id: " not in response.text
         resumed = client.get("/resume", params={"session_id": session_id})
         snapshot = payloads(resumed)[0]
@@ -42,16 +43,48 @@ def test_completion_and_resume_return_snapshot_without_cursor(tmp_path):
         assert client.post("/cancel", json={"session_id": session_id, "turn_id": turn_id}).json()["status"] == "completed"
         assert client.get("/resume", params={"session_id": "missing"}).status_code == 404
         assert client.post("/chat/completion", json={"content": ""}).status_code == 422
+        assert client.post("/chat/completion", json={"content": "问题"}).status_code == 422
+        assert client.post("/chat/completion", json={"content": "问题", "session_id": session_id, "files": []}).status_code == 422
+        assert client.post("/chat/completion", json={"content": "问题", "session_id": "missing"}).status_code == 404
         assert client.get("/qa/tasks").status_code == 404
 
 
-def test_multipart_prepares_resource_references(tmp_path):
-    app = create_app(settings=BackendSettings(database_path=tmp_path / "upload.sqlite3"), agent_client=AutoAgent())
+def test_session_files_bind_upload_and_delete(tmp_path):
+    agent = AutoAgent()
+    app = create_app(settings=BackendSettings(database_path=tmp_path / "upload.sqlite3"), agent_client=agent)
     with TestClient(app) as client:
-        response = client.post("/chat/completion", data={"content": "读文档"}, files={"files": ("test.pdf", b"%PDF-1.4", "application/pdf")})
-        assert response.status_code == 200
-        assert app.state.agent_client.requests[0]["resource_path"] == [{"type": "documents", "location": "s3://test/documents.zip"}]
-        assert client.post("/chat/completion", data={"content": "问题"}, files={"files": ("bad.txt", b"bad")}).status_code == 422
+        session_id = client.post("/chat/sessions").json()["session_id"]
+        uploaded = client.post(f"/chat/sessions/{session_id}/files",
+                               files=[("files", ("test.pdf", b"%PDF-1.4", "application/pdf"))])
+        assert uploaded.status_code == 200
+        rows = uploaded.json()["resources"]
+        assert agent.prepared == [(session_id, [{"filename": "test.pdf", "content": b"%PDF-1.4"}], [])]
+        assert {row["location"] for row in rows if row["type"] == "raw"} == {f"s3://res_{session_id}/raw/test.pdf"}
+        assert client.post(f"/chat/sessions/{session_id}/files", data={"x": "1"}).status_code == 422
+        assert client.post("/chat/sessions/missing/files",
+                           files=[("files", ("test.pdf", b"%PDF-1.4", "application/pdf"))]).status_code == 404
+        assert client.post(f"/chat/sessions/{session_id}/files",
+                           files=[("files", ("bad.txt", b"bad", "text/plain"))]).status_code == 422
+
+        raw_id = next(row["id"] for row in rows if row["type"] == "raw")
+        removed = client.delete(f"/chat/sessions/{session_id}/files/{raw_id}")
+        assert removed.status_code == 200
+        assert all(not row["location"].endswith("/raw/test.pdf") for row in removed.json()["resources"])
+        assert agent.prepared[-1][2] == [{"type": "raw", "location": f"s3://res_{session_id}/raw/test.pdf"}]
+        assert client.delete(f"/chat/sessions/{session_id}/files/missing").status_code == 404
+
+
+def test_turn_uses_session_resources_after_upload(tmp_path):
+    agent = AutoAgent()
+    app = create_app(settings=BackendSettings(database_path=tmp_path / "turn.sqlite3"), agent_client=agent)
+    with TestClient(app) as client:
+        session_id = client.post("/chat/sessions").json()["session_id"]
+        uploaded = client.post(f"/chat/sessions/{session_id}/files",
+                               files=[("files", ("test.pdf", b"%PDF-1.4", "application/pdf"))]).json()["resources"]
+        client.post("/chat/completion", json={"content": "读文档", "session_id": session_id})
+        assert app.state.agent_client.requests[0]["resource_path"] == [
+            {"type": row["type"], "location": row["location"]} for row in uploaded if row["type"] != "raw"
+        ]
 
 
 def test_http_disconnect_does_not_cancel_background_turn(tmp_path):
@@ -59,8 +92,9 @@ def test_http_disconnect_does_not_cancel_background_turn(tmp_path):
         agent = FakeAgent()
         app = create_app(settings=BackendSettings(database_path=tmp_path / "disconnect.sqlite3"), agent_client=agent)
         async with app.router.lifespan_context(app):
+            session_id = app.state.session_registry.create_session().__await__()
             request_events = asyncio.Queue()
-            body = json.dumps({"content": "问题"}).encode()
+            body = json.dumps({"content": "问题", "session_id": session_id}).encode()
             await request_events.put({"type": "http.request", "body": body, "more_body": False})
             sent = asyncio.Queue()
             scope = {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.0"}, "http_version": "1.1",

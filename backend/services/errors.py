@@ -20,3 +20,6 @@ class ConflictError(BackendServiceError):
 class AgentServiceError(BackendServiceError):
     status_code = 502
 
+
+class DocumentServiceError(BackendServiceError):
+    status_code = 502

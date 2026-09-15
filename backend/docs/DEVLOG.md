@@ -1,6 +1,16 @@
 # Backend Devlog
 
-last updated: 2026-09-13 20:10:00
+last updated: 2026-09-15
+
+## 2026-09-15
+
+### 已完成工作
+
+- document service 代码从 agent 目录迁移到独立顶层服务包；backend 的 document client 继续只依赖共享协议，不导入任一业务包。
+- 将 backend 到 agent 的 gRPC 调用拆为两条连接：`DocumentResourceClient` 负责资源准备，`AgentClient` 只负责 ChatCompletion。
+- 新增 `DOCUMENT_SERVICE_TARGET`、独立请求超时和消息上限；默认 document service 地址为 `127.0.0.1:8002`，agent 保持 `127.0.0.1:8001`。
+- SessionRegistry 在上传/删除文件时调用 document client，TurnRuntime 只调用 agent client；资源服务故障统一映射为 `DocumentServiceError`。
+- TDD：新增独立 document client 与双服务配置测试；协议、document service 入口和 backend client/config 定向测试通过。
 
 ## 2026-09-13 20:10:00
 

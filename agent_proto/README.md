@@ -27,6 +27,6 @@ python -m pip install -e "./agent_proto[dev]"
 python -m grpc_tools.protoc -I. --python_out=. --pyi_out=. --grpc_python_out=. agent_proto/agent.proto
 ```
 
-生成代码不手工编辑。协议文件与 Python 绑定一起打包，版本须与 grpcio/protobuf 运行依赖匹配。agent 安装时需要同时提供该本地包；后端接入时也只需安装此包，无需安装 agent-service。
+生成代码不手工编辑。协议文件与 Python 绑定一起打包，版本须与 grpcio/protobuf 运行依赖匹配。`DocumentResourceService` 与 `AgentService` 共用资源消息但可独立部署；agent 安装时需要同时提供该本地包；后端接入时也只需安装此包，无需安装 agent-service。
 
 接口内容见 [agent API](../agent/docs/API.md)，包边界见 [设计](docs/DESIGN.md)。

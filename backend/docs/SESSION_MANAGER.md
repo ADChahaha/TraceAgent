@@ -6,7 +6,8 @@
 
 ```text
 FastAPI lifespan → SessionRegistry.start → 扫描遗留运行状态
-HTTP handler → SessionRegistry → SessionManager 命令队列（create/cancel/attach/detach）
+HTTP handler → SessionRegistry → DocumentResourceClient（上传/删除文件时）
+HTTP handler → SessionManager 命令队列（create/cancel/attach/detach）
 SessionManager._handle_create → 建 turn+用户消息事务 → 创建 TurnRuntime → runtime.start()
 TurnRuntime（自治）→ AgentClient → 独立 agent gRPC 服务
 TurnRuntime → 工具组配对 → 事务写 chat_messages → 更新 TurnView → manager.broadcast → Subscription
@@ -31,7 +32,7 @@ manager 对 runtime 的唯一反向通道是 `runtime.cancel()`：只设标志�
 | routes/chat.py | JSON/multipart 校验，调用 complete/attach/cancel，生成 SSE 或 JSON |
 | session_registry.py | Manager 状态机（CREATING/READY/CLOSING）与加载权；回收与启动恢复 |
 | session_manager.py | create/cancel/attach 三命令 FIFO 串行；订阅管理；终态广播的 pending_cancel 补发 |
-| turn_runtime.py | 自治执行体：资源准备、begin 事务、事件配组落库、终态收口、广播 |
+| turn_runtime.py | 自治执行体：begin 事务、agent 事件配组落库、终态收口、广播 |
 | turn_view.py | 过程事件折叠成当前轮 items，输出深拷贝快照 |
 | subscription.py | 独立有界队列，发布不阻塞，等待者取消不丢事件 |
 | session_history.py | 读取 chat_messages 与 chat_turns 渲染历史轮，不常驻 manager |
@@ -40,8 +41,8 @@ manager 对 runtime 的唯一反向通道是 `runtime.cancel()`：只设标志�
 ## 2. 创建轮次
 
 ```text
-POST /chat/completion 输入 content、可选 session_id/files/run_options
-  → Registry 校验内容、文件格式和容量、有限正数执行超时
+POST /chat/completion 输入 content、session_id、run_options
+  → Registry 校验内容和有限正数执行超时
   → 请求协程取得创建权：不存在时锁内写入 CREATING，锁外创建/恢复 Manager
   → 无 session_id：创建 session；有则加载对应唯一 manager
   → manager 检查无活跃轮；failed 会话要求新文件
@@ -56,18 +57,22 @@ POST /chat/completion 输入 content、可选 session_id/files/run_options
 ## 3. 资源与执行
 
 ```text
+SessionRegistry.upload_files/remove_file（会话资源变更）
+  → await DocumentResourceClient.prepare_resources
+  → SessionManager 事务替换资源引用
+  → 资源变更完成后才允许下一轮使用新引用
+
 TurnRuntime.run（自治）
-  → 有新文件：await AgentClient.prepare_resources
-  → _begin 事务：同一事务替换资源引用（若有）、设置 in_progress、按轮序读取 chat_messages
+  → _begin 事务：设置 in_progress、按轮序读取 chat_messages
   → AgentClient.chat_completion(resources, messages, run_options)
   → 每个事件 _on_event：校验 → 配组 → 配齐则事务写 chat_messages → TurnView → broadcast
   → completion.completed/failed/cancelled → _finish 写终态事务并清 active_turn_id
   → 异常/提前流结束/取消 → _finish 收口（cancelled 或 failed）
 ```
 
-有新文件时会话为 processing，轮次为 queued。准备成功后才启动模型；准备失败或期间取消会将 session 标为 failed，下一次需提供新文件。资源准备属于本轮任务，不另建长期资源 worker。
+文件上传和删除在独立的 document service 中完成，成功后 backend 原子替换 session 资源引用；轮次执行只调用 agent service，不重复准备资源。资源准备失败不会启动轮次，调用方可重试上传或删除。
 
-gRPC 只使用现有 PrepareResources 与 ChatCompletion；取消使用原 call.cancel()。没有 CancelCompletion、GetCompletion 或 agent 端 resume RPC。agent_completion_id 用于关联，本身不能重新接入远端运行。
+gRPC 分别使用 document service 的 PrepareResources 与 agent service 的 ChatCompletion；取消使用原 call.cancel()。没有 CancelCompletion、GetCompletion 或 agent 端 resume RPC。agent_completion_id 用于关联，本身不能重新接入远端运行。
 
 ## 4. 串行与事务边界
 

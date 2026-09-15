@@ -1,16 +1,25 @@
 syntax = "proto3";
 package traceagent.v1;
 
-// 文件准备和单轮问答共享同一服务进程及本机资源目录。
+// 文件准备与单轮问答共享资源契约，但可由两个独立 gRPC 服务进程部署。
 service AgentService {
-  rpc PrepareResources(PrepareResourcesRequest) returns (PrepareResourcesResponse);
   rpc ChatCompletion(ChatCompletionRequest) returns (stream CompletionEvent);
+}
+
+service DocumentResourceService {
+  rpc PrepareResources(PrepareResourcesRequest) returns (PrepareResourcesResponse);
 }
 message UploadedFile {
   string filename = 1;
   bytes content = 2;
 }
-message PrepareResourcesRequest { repeated UploadedFile files = 1; }
+// 会话级资源准备：bucket 固定为 res_<session_id>，document service 在桶内应用增删并全量重建。
+message PrepareResourcesRequest {
+  string session_id = 2;
+  repeated UploadedFile files = 1;
+  // 要从会话桶中移除的 raw 引用（type 必须为 raw）；移除后以剩余文件重建 bundle。
+  repeated ResourceRef remove_raw = 3;
+}
 // 资源定位：type 表示组成部分（raw=原始文件 / documents=文件树归档 / index=embedding 索引），
 // location 是 s3://<bucket>[/<key>] 形式的定位串。
 message ResourceRef {

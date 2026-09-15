@@ -53,9 +53,11 @@
 ```mermaid
 flowchart LR
     Upload["📄 上传 PDF / DOCX"]
-    Upload --> Processor["🔧 document_processor"]
-    Processor --> |"html · display_html · blocks"| Backend["🗃️ backend<br/>SQLite 持久化"]
-    Backend --> |"documents + messages"| Agent["🤖 file_extraction_agent"]
+    Upload --> Backend["🗃️ backend<br/>SQLite 持久化"]
+    Backend --> |"files"| Document["📚 document_service"]
+    Document --> |"raw · documents.zip · index"| Storage["🪣 S3-compatible storage"]
+    Backend --> |"resource_refs + messages"| Agent["🤖 file_extraction_agent"]
+    Agent --> |"read resource_refs"| Storage
     Agent --> |"ls · grep · read · inspect"| Agent
     Agent --> |"SSE events"| Frontend["🖥️ frontend"]
     Frontend --> |"evidence://"| Review["📖 原文高亮"]
@@ -109,8 +111,10 @@ FRONTEND_PORT=3000
 ## 🗺️ 项目结构
 
 ```
-agent/        AI 能力层 — 文档标准化 + QA Agent（LangGraph 驱动）
-backend/      持久化与编排 — tasks / documents / messages / events（SQLite）
+document_service/ 文档服务 — PDF/DOCX 解析、文档树、embedding 和资源发布
+shared/       共享基础设施 — storage object store 客户端
+agent/        AI 能力层 — QA Agent（LangGraph 驱动）
+backend/      持久化与编排 — sessions / resources / messages / events（SQLite）
 frontend/     浏览器工作台 — 上传、QA stream、过程流、evidence review（Next.js）
 ```
 

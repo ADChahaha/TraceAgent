@@ -27,12 +27,15 @@ set +a
 
 AGENT_HOST="${AGENT_HOST:-127.0.0.1}"
 AGENT_PORT="${AGENT_PORT:-8001}"
+DOCUMENT_HOST="${DOCUMENT_HOST:-127.0.0.1}"
+DOCUMENT_PORT="${DOCUMENT_PORT:-8002}"
 BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
 FRONTEND_HOST="${FRONTEND_HOST:-127.0.0.1}"
 FRONTEND_PORT="${FRONTEND_PORT:-3000}"
 
 AGENT_SERVICE_TARGET="${AGENT_SERVICE_TARGET:-${AGENT_HOST}:${AGENT_PORT}}"
+DOCUMENT_SERVICE_TARGET="${DOCUMENT_SERVICE_TARGET:-${DOCUMENT_HOST}:${DOCUMENT_PORT}}"
 BACKEND_BASE_URL="${BACKEND_BASE_URL:-http://${BACKEND_HOST}:${BACKEND_PORT}}"
 
 if [[ ! -f "$ROOT_DIR/frontend/.next/BUILD_ID" ]]; then
@@ -82,8 +85,12 @@ start_service() {
 start_service "agent    gRPC ${AGENT_HOST}:${AGENT_PORT}" \
   python agent/main.py --host "$AGENT_HOST" --port "$AGENT_PORT"
 
+start_service "document gRPC ${DOCUMENT_HOST}:${DOCUMENT_PORT}" \
+  python -m document_service.main --host "$DOCUMENT_HOST" --port "$DOCUMENT_PORT"
+
 start_service "backend  http://${BACKEND_HOST}:${BACKEND_PORT}" \
   env AGENT_SERVICE_TARGET="$AGENT_SERVICE_TARGET" \
+  DOCUMENT_SERVICE_TARGET="$DOCUMENT_SERVICE_TARGET" \
   python -m uvicorn backend.main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT"
 
 start_service "frontend http://${FRONTEND_HOST}:${FRONTEND_PORT}" \
@@ -93,6 +100,7 @@ start_service "frontend http://${FRONTEND_HOST}:${FRONTEND_PORT}" \
 echo
 echo "TraceAgent is running:"
 echo "  agent:    gRPC ${AGENT_HOST}:${AGENT_PORT}"
+echo "  document: gRPC ${DOCUMENT_HOST}:${DOCUMENT_PORT}"
 echo "  backend:  http://${BACKEND_HOST}:${BACKEND_PORT}"
 echo "  frontend: http://${FRONTEND_HOST}:${FRONTEND_PORT}"
 echo

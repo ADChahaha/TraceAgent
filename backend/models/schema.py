@@ -17,6 +17,7 @@ SCHEMA_SQL = [
         session_id TEXT NOT NULL,
         type TEXT NOT NULL,
         location TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         FOREIGN KEY(session_id) REFERENCES chat_sessions(id),
         UNIQUE(session_id, type, location)

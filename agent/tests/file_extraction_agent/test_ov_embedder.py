@@ -14,7 +14,7 @@ import pytest
 pytest.importorskip("openvino")
 pytest.importorskip("huggingface_hub")
 
-from service.document_resources.model import DEFAULT_EMBEDDING_MODEL
+from document_service.document_resources.model import DEFAULT_EMBEDDING_MODEL
 from service.file_extraction_agent.core.tools.ov_embedder import OpenVinoQueryEmbedder
 
 AGENT_ROOT = Path(__file__).resolve().parents[2]

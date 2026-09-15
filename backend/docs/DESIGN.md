@@ -1,6 +1,6 @@
 # Backend 设计
 
-backend 管理多轮 session、稳定模型消息和页面恢复，独立 agent 通过 gRPC 执行单次 turn。每个已加载 session 有唯一 SessionManager，串行处理创建、取消、事件和订阅；网络等待位于独立 TurnRuntime。浏览器断开只释放订阅。
+backend 管理多轮 session、稳定模型消息和页面恢复，通过独立 document service 准备资源、通过独立 agent service 执行单次 turn。每个已加载 session 有唯一 SessionManager，串行处理创建、取消、事件和订阅；网络等待位于独立 TurnRuntime。浏览器断开只释放订阅。
 
 ## 调用关系
 
@@ -8,7 +8,9 @@ backend 管理多轮 session、稳定模型消息和页面恢复，独立 agent 
 POST /chat/completion → routes/chat.py 校验输入
   → SessionRegistry.complete 复用或取得创建权，返回唯一 manager
   → SessionManager 事务创建 turn、用户消息、事件
-  → TurnRuntime 准备资源 → AgentClient.chat_completion → gRPC
+  → SessionRegistry.document_client.prepare_resources → DocumentResourceService gRPC
+  → SessionManager 替换资源引用
+  → TurnRuntime → AgentClient.chat_completion → AgentService gRPC
   → agent 事件交回 manager → 校验身份和状态 → 事务落库
   → TurnView 更新当前轮 → Subscription 广播 → SSE
 
@@ -29,11 +31,12 @@ POST /cancel → Registry.get 取得现有 manager，只操作已加载会话
 | routes/chat.py | 三个 API、输入校验、快照和 SSE、断开时 detach |
 | session_registry.py | Manager 的 CREATING/READY/CLOSING 状态机、加载权归属、回收和关闭 |
 | session_manager.py | 串行命令、事务、稳定消息配对和状态转换 |
-| turn_runtime.py | 资源准备和 gRPC 消费，向 manager 汇报事件及收尾 |
+| turn_runtime.py | AgentService gRPC 消费，向 manager 汇报事件及收尾 |
 | turn_view.py | 当前轮展示投影，历史恢复复用同一逻辑 |
 | subscription.py | 每连接独立有界队列，溢出只关闭慢连接 |
 | session_history.py | 读取 chat_messages 与 chat_turns 渲染历史轮，不常驻 manager |
-| agent_client.py | agent_proto 与 grpc.aio 转换 |
+| agent_client.py | AgentService protobuf 与 grpc.aio 转换，只负责 ChatCompletion |
+| document_client.py | DocumentResourceService protobuf 与 grpc.aio 转换，只负责 PrepareResources |
 | core/db.py、crud/crud.py | 线程内连接、事务和参数化 SQL |
 
 Registry 用每 session 的 Entry 状态协调 Manager 生命周期：不存在时由当前请求取得创建权（CREATING），锁外完成加载后转 READY；complete 和 cold resume 共用该入口，cancel 只取现有 READY manager。真正的后台执行由 TurnRuntime.start 创建；创建请求被显式取消时 abort 创建权，由创建方关闭未注册 manager。

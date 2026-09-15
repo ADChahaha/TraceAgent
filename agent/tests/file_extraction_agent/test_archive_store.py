@@ -6,7 +6,7 @@ import io
 import threading
 import zipfile
 
-from service.object_store import ArchiveObjectStore, CompositeObjectStore
+from traceagent_shared.object_store import ArchiveObjectStore, CompositeObjectStore
 
 
 def _zip_bytes(files: dict[str, str]) -> bytes:

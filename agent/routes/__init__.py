@@ -1,16 +1,15 @@
-"""将生成的 AgentService 方法连接到资源与问答适配函数。"""
+"""将 AgentService 的问答 RPC 连接到问答适配函数。"""
 
 from contextlib import aclosing
 
 from agent_proto import agent_pb2_grpc
-from routes import document_resources, file_extraction_agent
 
 
 class AgentService(agent_pb2_grpc.AgentServiceServicer):
-    async def PrepareResources(self, request, context):
-        return await document_resources.create_document_resource(request, context)
-
     async def ChatCompletion(self, request, context):
+        # 延迟导入让 document service 加载资源 route 时不引入问答模型依赖。
+        from routes import file_extraction_agent
+
         async with aclosing(
             file_extraction_agent.create_chat_completion(request, context)
         ) as stream:

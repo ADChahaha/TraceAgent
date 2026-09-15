@@ -95,16 +95,17 @@ def create_resource(
     resource_type: str,
     location: str,
     now: str,
+    size_bytes: int = 0,
     commit: bool = True,
 ) -> dict[str, Any]:
     connection.execute(
         """
         INSERT INTO chat_resources (
-            id, session_id, type, location, created_at
+            id, session_id, type, location, size_bytes, created_at
         )
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (resource_id, session_id, resource_type, location, now),
+        (resource_id, session_id, resource_type, location, size_bytes, now),
     )
     if commit:
         connection.commit()
@@ -112,6 +113,18 @@ def create_resource(
     resource = row_to_dict(row)
     assert resource is not None
     return resource
+
+
+def get_resource(connection: sqlite3.Connection, resource_id: str) -> dict[str, Any] | None:
+    row = connection.execute("SELECT * FROM chat_resources WHERE id = ?", (resource_id,)).fetchone()
+    return row_to_dict(row)
+
+
+def delete_resource(connection: sqlite3.Connection, resource_id: str, *, commit: bool = True) -> None:
+    """按资源 ID 删除一行；由调用方校验资源归属会话。"""
+    connection.execute("DELETE FROM chat_resources WHERE id=?", (resource_id,))
+    if commit:
+        connection.commit()
 
 
 def list_resources(
@@ -312,10 +325,9 @@ def list_turns(connection: sqlite3.Connection, session_id: str) -> list[dict[str
 
 
 def list_sessions_needing_recovery(connection: sqlite3.Connection) -> list[dict[str, Any]]:
-    """查询持有活跃轮或仍处于处理、运行状态的会话。"""
+    """查询持有活跃轮或仍在运行的会话。"""
     rows = connection.execute(
-        "SELECT * FROM chat_sessions WHERE active_turn_id IS NOT NULL "
-        "OR status IN ('processing','running')"
+        "SELECT * FROM chat_sessions WHERE active_turn_id IS NOT NULL OR status = 'running'"
     ).fetchall()
     return [dict(row) for row in rows]
 

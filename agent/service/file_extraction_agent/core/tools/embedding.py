@@ -35,7 +35,7 @@ from botocore.exceptions import ClientError
 from langchain_core.tools import BaseTool, tool
 from service.file_extraction_agent.core.contracts import JsonObject, JsonValue
 from service.file_extraction_agent.core.tools.worker_client import run_operation
-from service.object_store import ObjectStore
+from traceagent_shared.object_store import ObjectStore
 
 
 @dataclass

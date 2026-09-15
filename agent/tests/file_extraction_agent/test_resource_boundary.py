@@ -20,7 +20,7 @@ def test_qa_package_does_not_import_resource_builder():
             else:
                 continue
             dependencies.extend((str(path.relative_to(root)), name) for name in names
-                                if name.startswith("service.document_resources"))
+                                if name.startswith("document_service.document_resources"))
     assert dependencies == []
 
 
@@ -48,7 +48,7 @@ async def test_graph_keeps_retry_state_with_options_bound_outside():
 
 
 def test_tools_read_prepared_files_without_builder(resource_path, monkeypatch):
-    from service import document_resources
+    from document_service import document_resources
     from service.file_extraction_agent.core.tools import _ls, _read, worker
     from service.file_extraction_agent.core.tools.workspace import document_tree_from_payload
 

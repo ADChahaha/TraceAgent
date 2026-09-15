@@ -1,9 +1,6 @@
-"""本机真实 gRPC 服务验证 protobuf 映射、资源传输和原 call 取消。"""
+"""本机真实 gRPC 服务验证 agent completion protobuf 映射和原 call 取消。"""
 
 import asyncio
-import io
-import zipfile
-
 import grpc
 import pytest
 
@@ -17,10 +14,6 @@ def test_grpc_resources_messages_and_original_call_cancellation():
         seen = {}
         stopped = asyncio.Event()
         class Service(rpc.AgentServiceServicer):
-            async def PrepareResources(self, request, context):
-                seen["file"] = request.files[0]
-                return pb.PrepareResourcesResponse(resource_path=[pb.ResourceRef(type="documents", location="s3://test/documents.zip")])
-
             async def ChatCompletion(self, request, context):
                 seen["request"] = request
                 try:
@@ -35,16 +28,8 @@ def test_grpc_resources_messages_and_original_call_cancellation():
         await server.start()
         client = AgentClient(target=f"127.0.0.1:{port}")
         try:
-            # 有实际正文的最小 DOCX 归档，验证传输不会改写文件 bytes。
-            buffer = io.BytesIO()
-            with zipfile.ZipFile(buffer, "w") as archive:
-                archive.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
-                archive.writestr("_rels/.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')
-                archive.writestr("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>合同样本</w:t></w:r></w:p></w:body></w:document>')
-            refs = await client.prepare_resources([{"filename": "sample.docx", "content": buffer.getvalue()}])
-            assert refs == [{"type": "documents", "location": "s3://test/documents.zip"}]
-            assert seen["file"].content == buffer.getvalue()
-            call = client.chat_completion(completion_id="cmp_1", resource_path=refs,
+            call = client.chat_completion(completion_id="cmp_1", resource_path=[
+                    {"type": "documents", "location": "s3://test/documents.zip"}],
                 messages=[{"role": "tool", "content": "{}", "tool_call_id": "c", "name": "read"}],
                 run_options={"tool_execution_timeout": 12})
             event = await anext(call)
@@ -62,7 +47,7 @@ def test_grpc_resources_messages_and_original_call_cancellation():
 def test_grpc_failure_maps_to_agent_service_error():
     async def scenario():
         class Service(rpc.AgentServiceServicer):
-            async def PrepareResources(self, request, context):
+            async def ChatCompletion(self, request, context):
                 await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "bad resource")
         server = grpc.aio.server()
         rpc.add_AgentServiceServicer_to_server(Service(), server)
@@ -71,7 +56,9 @@ def test_grpc_failure_maps_to_agent_service_error():
         client = AgentClient(target=f"127.0.0.1:{port}")
         try:
             with pytest.raises(AgentServiceError, match="bad resource"):
-                await client.prepare_resources([])
+                await anext(client.chat_completion(
+                    completion_id="cmp", resource_path=[], messages=[{"role": "user", "content": "问题"}]
+                ))
         finally:
             await client.close()
             await server.stop(0)

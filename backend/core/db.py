@@ -51,7 +51,15 @@ def initialize_database(connection: sqlite3.Connection) -> None:
     connection.execute("PRAGMA journal_mode = WAL")
     for statement in SCHEMA_SQL:
         connection.execute(statement)
+    _ensure_column(connection, "chat_resources", "size_bytes", "INTEGER NOT NULL DEFAULT 0")
     connection.commit()
+
+
+def _ensure_column(connection: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    """给存量库补列：CREATE TABLE IF NOT EXISTS 不会更新旧表结构。"""
+    columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+    if column not in columns:
+        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
 def row_to_dict(row: sqlite3.Row | None) -> dict | None:

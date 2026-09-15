@@ -46,14 +46,14 @@ def storage_server(tmp_path_factory):
 @pytest.fixture
 def s3_store():
     """返回指向测试 storage 服务的 S3ObjectStore。"""
-    from service.object_store import build_s3_object_store
+    from traceagent_shared.object_store import build_s3_object_store
 
     return build_s3_object_store()
 
 
 def resource_bucket(resource_refs) -> str:
     """从资源定位数组中取 documents 的 bucket。"""
-    from service.object_store import parse_resource_path
+    from traceagent_shared.object_store import parse_resource_path
 
     documents_location = next(ref.location for ref in resource_refs if ref.type == "documents")
     bucket, _ = parse_resource_path(documents_location)

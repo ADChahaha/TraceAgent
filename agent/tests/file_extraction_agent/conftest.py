@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from service.document_resources import model, prepare_resources
-from service.document_resources.schemas import InputDocument
+from document_service.document_resources import model, prepare_resources
+from document_service.document_resources.schemas import InputDocument
 
 
 @pytest.fixture
