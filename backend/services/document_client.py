@@ -33,5 +33,16 @@ class DocumentResourceClient:
             ) from exc
         return [{"type": ref.type, "location": ref.location} for ref in response.resource_path]
 
+    async def read_blocks(self, *, bucket, keys):
+        """按会话桶读取归档内段落文本；缺失 key 以 found=false 表示。"""
+        request = pb.ReadBlocksRequest(bucket=bucket, keys=keys)
+        try:
+            response = await self.stub.ReadBlocks(request, timeout=self.timeout_seconds)
+        except grpc.RpcError as exc:
+            raise DocumentServiceError(
+                f"document service gRPC: {exc.code().name}: {exc.details()}"
+            ) from exc
+        return [{"key": block.key, "text": block.text, "found": block.found} for block in response.blocks]
+
     async def close(self):
         await self.channel.close()

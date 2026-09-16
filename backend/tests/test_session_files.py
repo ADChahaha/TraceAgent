@@ -161,6 +161,30 @@ def test_delete_removes_raw_and_rebuilds_bundle(tmp_path):
     asyncio.run(scenario())
 
 
+def test_read_block_returns_block_text_from_session_bundle(tmp_path):
+    async def scenario():
+        registry, db, agent = await setup(tmp_path)
+        try:
+            session_id = await registry.create_session()
+            manager = await registry.get_or_create(session_id)
+            await manager.upload_files(files=[file("a.pdf")])
+            key = "documents/0001-合同/0001-付款期限为三十天.md"
+            agent.block_texts[key] = "付款期限为三十天。"
+            block = await manager.read_block(key)
+            assert block == {"key": key, "text": "付款期限为三十天。", "found": True}
+            # bucket 从本会话的 documents 引用解析，读不到别人的会话。
+            assert agent.block_reads == [(f"res_{session_id}", [key])]
+            with pytest.raises(NotFoundError):
+                await manager.read_block("documents/missing.md")
+            empty = await registry.get_or_create(await registry.create_session())
+            with pytest.raises(NotFoundError):
+                await empty.read_block(key)
+        finally:
+            await registry.close()
+            db.close()
+    asyncio.run(scenario())
+
+
 def test_upload_broadcasts_resources_prepared_to_subscribers(tmp_path):
     async def scenario():
         registry, db, agent = await setup(tmp_path)

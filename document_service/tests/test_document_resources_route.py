@@ -70,6 +70,41 @@ def test_protocol_prepare_response_drops_documents_payload():
     assert "Document" not in pb.DESCRIPTOR.message_types_by_name
 
 
+def test_read_blocks_returns_block_text_from_archive(resources, document_rpc, s3_store):
+    """归档内 key 返回原文；不存在的 key 返回 found=false。"""
+    root, calls = resources
+    refs = list(upload(document_rpc).resource_path)
+    bucket = _bucket(refs)
+    archive = s3_store.get_object(bucket, "documents.zip")
+    import zipfile
+    import io
+    members = zipfile.ZipFile(io.BytesIO(archive)).namelist()
+    key = next(name for name in members if name.endswith(".md"))
+    result = document_rpc.ReadBlocks(pb.ReadBlocksRequest(bucket=bucket, keys=[key, "documents/missing.md"]), timeout=5)
+    blocks = list(result.blocks)
+    assert [block.key for block in blocks] == [key, "documents/missing.md"]
+    assert "付款期限为三十天。" in blocks[0].text
+    assert blocks[0].found
+    assert not blocks[1].found
+    assert blocks[1].text == ""
+
+
+def test_read_blocks_requires_bucket_and_keys(resources, document_rpc):
+    """空 bucket 或空 keys 返回 INVALID_ARGUMENT。"""
+    for request in (pb.ReadBlocksRequest(bucket="", keys=["documents/a.md"]),
+                    pb.ReadBlocksRequest(bucket="res_x", keys=[])):
+        with pytest.raises(grpc.RpcError) as error:
+            document_rpc.ReadBlocks(request, timeout=5)
+        assert error.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+
+
+def test_read_blocks_missing_archive_is_not_found(resources, document_rpc):
+    """归档缺失（未上传会话）返回 NOT_FOUND。"""
+    with pytest.raises(grpc.RpcError) as error:
+        document_rpc.ReadBlocks(pb.ReadBlocksRequest(bucket="res_missing", keys=["documents/a.md"]), timeout=5)
+    assert error.value.code() == grpc.StatusCode.NOT_FOUND
+
+
 def test_prepare_failure_does_not_publish_resource(resources, document_rpc, monkeypatch):
     """embedding 失败映射 INTERNAL，不发布半成品。"""
     def fail(**kwargs):

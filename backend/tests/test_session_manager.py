@@ -39,6 +39,8 @@ class FakeAgent:
         self.created = asyncio.Queue()
         # 记录会话级资源调用：(session_id, files, remove_raw)；轮次执行不得触达。
         self.prepared = []
+        self.block_reads = []
+        self.block_texts = {}
 
     async def prepare_resources(self, *, session_id, files, remove_raw=None):
         self.prepared.append((session_id, files, list(remove_raw or [])))
@@ -51,6 +53,11 @@ class FakeAgent:
             if location not in removed:
                 refs.append({"type": "raw", "location": location})
         return refs
+
+    async def read_blocks(self, *, bucket, keys):
+        self.block_reads.append((bucket, list(keys)))
+        return [{"key": key, "text": self.block_texts.get(key, ""), "found": key in self.block_texts}
+                for key in keys]
 
     def chat_completion(self, **request):
         call = FakeCall()

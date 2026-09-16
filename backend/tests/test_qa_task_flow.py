@@ -74,6 +74,25 @@ def test_session_files_bind_upload_and_delete(tmp_path):
         assert client.delete(f"/chat/sessions/{session_id}/files/missing").status_code == 404
 
 
+def test_read_block_returns_cited_paragraph(tmp_path):
+    agent = AutoAgent()
+    app = create_app(settings=BackendSettings(database_path=tmp_path / "blocks.sqlite3"), agent_client=agent)
+    with TestClient(app) as client:
+        session_id = client.post("/chat/sessions").json()["session_id"]
+        client.post(f"/chat/sessions/{session_id}/files",
+                    files=[("files", ("test.pdf", b"%PDF-1.4", "application/pdf"))])
+        key = "documents/0001-合同/0001-付款期限为三十天.md"
+        agent.block_texts[key] = "付款期限为三十天。"
+        response = client.get(f"/chat/sessions/{session_id}/blocks", params={"key": key})
+        assert response.status_code == 200
+        assert response.json() == {"key": key, "text": "付款期限为三十天。", "found": True}
+        assert agent.block_reads == [(f"res_{session_id}", [key])]
+        assert client.get(f"/chat/sessions/{session_id}/blocks",
+                          params={"key": "documents/missing.md"}).status_code == 404
+        assert client.get("/chat/sessions/missing/blocks",
+                          params={"key": key}).status_code == 404
+
+
 def test_turn_uses_session_resources_after_upload(tmp_path):
     agent = AutoAgent()
     app = create_app(settings=BackendSettings(database_path=tmp_path / "turn.sqlite3"), agent_client=agent)

@@ -62,3 +62,34 @@ def test_document_client_maps_grpc_errors():
             await server.stop(0)
 
     asyncio.run(scenario())
+
+
+def test_document_client_read_blocks_round_trip():
+    async def scenario():
+        seen = {}
+
+        class Service(rpc.DocumentResourceServiceServicer):
+            async def ReadBlocks(self, request, context):
+                seen["request"] = request
+                return pb.ReadBlocksResponse(
+                    blocks=[pb.BlockContent(key="documents/a/1.md", text="付款期限为三十天。", found=True),
+                            pb.BlockContent(key="documents/a/2.md", text="", found=False)]
+                )
+
+        server = grpc.aio.server()
+        rpc.add_DocumentResourceServiceServicer_to_server(Service(), server)
+        port = server.add_insecure_port("127.0.0.1:0")
+        await server.start()
+        client = DocumentResourceClient(target=f"127.0.0.1:{port}")
+        try:
+            blocks = await client.read_blocks(bucket="res_s1", keys=["documents/a/1.md", "documents/a/2.md"])
+            assert blocks == [
+                {"key": "documents/a/1.md", "text": "付款期限为三十天。", "found": True},
+                {"key": "documents/a/2.md", "text": "", "found": False},
+            ]
+            assert seen["request"].bucket == "res_s1"
+        finally:
+            await client.close()
+            await server.stop(0)
+
+    asyncio.run(scenario())

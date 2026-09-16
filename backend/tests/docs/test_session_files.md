@@ -8,4 +8,5 @@
 - `test_upload_rejects_bad_type_limits_and_unknown_session`：类型限制、累计文件数、累计字节数和未知会话各自返回对应错误；未知会话在 get_or_create 即拒绝。
 - `test_resources_persist_across_turns_without_replacement`：连续两轮的 resource_path 完全一致，轮次不替换、不准备资源，资源行数不变。
 - `test_delete_removes_raw_and_rebuilds_bundle`：删除调用 document service 时 files 为空、remove_raw 指向被删文件；删除后 bundle 引用不含该 raw；对缺失资源和不支持删除的 bundle 引用分别返回 NotFound 与 ValidationError。resource_path 只含 bundle 引用。
+- `test_read_block_returns_block_text_from_session_bundle`：manager.read_block 从本会话 documents 引用解析 bucket 转发 document client；归档内 key 返回原文，缺失 key 或没有归档的会话返回 NotFound。
 - `test_upload_broadcasts_resources_prepared_to_subscribers`：资源替换后向已注册订阅者广播 resources.prepared，payload 携带非 raw 的 bundle 引用。

@@ -269,6 +269,18 @@ class SessionManager:
                     sizes[ref["location"]] = len(file["content"])
         return sizes
 
+    async def read_block(self, key):
+        """读取会话文档归档内段落原文，供前端回溯引用；bucket 取自本会话的
+        documents 引用，跨会话读不到对方的桶。"""
+        documents = next((row for row in self.resources if row["type"] == "documents"), None)
+        if documents is None:
+            raise NotFoundError("会话没有文档归档")
+        bucket = documents["location"].removeprefix("s3://").partition("/")[0]
+        blocks = await self.document_client.read_blocks(bucket=bucket, keys=[key])
+        if not blocks or not blocks[0]["found"]:
+            raise NotFoundError("段落不存在")
+        return blocks[0]
+
     async def replace_resources(self, refs, sizes):
         return await self._ask("replace_resources", refs, sizes)
 

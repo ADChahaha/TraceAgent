@@ -114,12 +114,23 @@ class DocumentResourceServiceStub:
                 request_serializer=agent__proto_dot_agent__pb2.PrepareResourcesRequest.SerializeToString,
                 response_deserializer=agent__proto_dot_agent__pb2.PrepareResourcesResponse.FromString,
                 _registered_method=True)
+        self.ReadBlocks = channel.unary_unary(
+                '/traceagent.v1.DocumentResourceService/ReadBlocks',
+                request_serializer=agent__proto_dot_agent__pb2.ReadBlocksRequest.SerializeToString,
+                response_deserializer=agent__proto_dot_agent__pb2.ReadBlocksResponse.FromString,
+                _registered_method=True)
 
 
 class DocumentResourceServiceServicer:
     """Missing associated documentation comment in .proto file."""
 
     def PrepareResources(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ReadBlocks(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -132,6 +143,11 @@ def add_DocumentResourceServiceServicer_to_server(servicer, server):
                     servicer.PrepareResources,
                     request_deserializer=agent__proto_dot_agent__pb2.PrepareResourcesRequest.FromString,
                     response_serializer=agent__proto_dot_agent__pb2.PrepareResourcesResponse.SerializeToString,
+            ),
+            'ReadBlocks': grpc.unary_unary_rpc_method_handler(
+                    servicer.ReadBlocks,
+                    request_deserializer=agent__proto_dot_agent__pb2.ReadBlocksRequest.FromString,
+                    response_serializer=agent__proto_dot_agent__pb2.ReadBlocksResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -161,6 +177,33 @@ class DocumentResourceService:
             '/traceagent.v1.DocumentResourceService/PrepareResources',
             agent__proto_dot_agent__pb2.PrepareResourcesRequest.SerializeToString,
             agent__proto_dot_agent__pb2.PrepareResourcesResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ReadBlocks(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/traceagent.v1.DocumentResourceService/ReadBlocks',
+            agent__proto_dot_agent__pb2.ReadBlocksRequest.SerializeToString,
+            agent__proto_dot_agent__pb2.ReadBlocksResponse.FromString,
             options,
             channel_credentials,
             insecure,

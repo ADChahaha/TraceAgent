@@ -14,6 +14,16 @@ run_options 当前只支持正的有限数 tool_execution_timeout。上传使用
 
 文件上传或删除走 document service 的 `PrepareResources`，成功后 backend 替换会话资源引用；有新文件的 queued turn 随后调用 agent service 的 `ChatCompletion`。失败会话需上传新文件重试。同一 session 已有活跃轮时新提交冲突。
 
+## GET /chat/sessions/{session_id}/blocks?key=...
+
+按引用 key 返回段落原文，供前端回溯答案中的证据链接（如 `[1](documents/0001-contract/0001-section/0001-block.md)`）：
+
+```json
+{"key":"documents/0001-contract/0001-section/0001-block.md","text":"付款期限为三十天。","found":true}
+```
+
+key 是 document service 发布的文档归档内的 `documents/...` 路径。bucket 取自本会话的 documents 引用，key 跨会话不可达；key 不在归档内或会话没有归档时返回 404。会话缺失或空闲已回收同样 404。
+
 返回 text/event-stream，从快照取得 session_id、state.active_turn_id 和 state.turns。
 
 ## GET /resume?session_id=...

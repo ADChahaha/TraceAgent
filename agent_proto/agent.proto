@@ -8,6 +8,21 @@ service AgentService {
 
 service DocumentResourceService {
   rpc PrepareResources(PrepareResourcesRequest) returns (PrepareResourcesResponse);
+  rpc ReadBlocks(ReadBlocksRequest) returns (ReadBlocksResponse);
+}
+// 读取会话文档归档内的段落块文本：bucket 为会话桶（res_<session_id>），
+// keys 为归档内 documents/... 形式的 key；不在归档内的 key 返回 found=false。
+message ReadBlocksRequest {
+  string bucket = 1;
+  repeated string keys = 2;
+}
+message BlockContent {
+  string key = 1;
+  string text = 2;
+  bool found = 3;
+}
+message ReadBlocksResponse {
+  repeated BlockContent blocks = 1;
 }
 message UploadedFile {
   string filename = 1;

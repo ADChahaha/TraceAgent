@@ -6,6 +6,30 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
+class ReadBlocksRequest(_message.Message):
+    __slots__ = ("bucket", "keys")
+    BUCKET_FIELD_NUMBER: _ClassVar[int]
+    KEYS_FIELD_NUMBER: _ClassVar[int]
+    bucket: str
+    keys: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, bucket: _Optional[str] = ..., keys: _Optional[_Iterable[str]] = ...) -> None: ...
+
+class BlockContent(_message.Message):
+    __slots__ = ("key", "text", "found")
+    KEY_FIELD_NUMBER: _ClassVar[int]
+    TEXT_FIELD_NUMBER: _ClassVar[int]
+    FOUND_FIELD_NUMBER: _ClassVar[int]
+    key: str
+    text: str
+    found: bool
+    def __init__(self, key: _Optional[str] = ..., text: _Optional[str] = ..., found: _Optional[bool] = ...) -> None: ...
+
+class ReadBlocksResponse(_message.Message):
+    __slots__ = ("blocks",)
+    BLOCKS_FIELD_NUMBER: _ClassVar[int]
+    blocks: _containers.RepeatedCompositeFieldContainer[BlockContent]
+    def __init__(self, blocks: _Optional[_Iterable[_Union[BlockContent, _Mapping]]] = ...) -> None: ...
+
 class UploadedFile(_message.Message):
     __slots__ = ("filename", "content")
     FILENAME_FIELD_NUMBER: _ClassVar[int]

@@ -6,6 +6,8 @@ last updated: 2026-09-16
 
 ### 已完成工作
 
+- 打通引用回溯读链路：document service 新增 ReadBlocks RPC（按会话桶拉取 documents.zip 归档，按 key 精确提取段落文本，缺失 key 返回 found=false，缺桶/无归档映射 NOT_FOUND）；backend 的 DocumentResourceClient 增加 read_blocks 映射；manager.read_block 从本会话 documents 引用解析 bucket 并转发（桶按会话隔离，跨会话不可达）；新增 HTTP 端点 GET /chat/sessions/{id}/blocks?key=... 供前端回溯答案中的段落引用。proto 用 canonical 方式重新生成（-I. 输出到仓库根，agent/tests 的 packaging 测试提供生成方式权威），修复此前错误的生成方式。TDD：document service RPC 测试 3 个、client 往返测试、manager 归属测试、ASGI 端点测试先行。全仓 349 项通过（agent 203+3 skip / backend 88 / document_service+shared+storage 58）。
+
 - 修复 8 个从未绿过的存量测试并定案资源下发契约。诊断：这 8 个测试自 26527f0（document service 拆分）提交起就是红的，从未通过，混杂三类问题：(1) resource_path 契约矛盾——4 个测试期望 bundle-only、test_delete 期望含 raw；查 agent 侧 load_workspace_payload 后定案 bundle-only（agent 只消费 documents/index），turn_runtime begin 和 resources.prepared payload 过滤 raw，test_delete 断言重写为对齐契约；(2) 测试自身陈旧——qa_crud 列集缺后来迁移的 size_bytes，upload_rejects 字节用例算术错误（2 字节永远超不了 8 的限额，改用默认 8 字节 content）；(3) 测试 bug——http_disconnect 用 create_session().__await__() 拿 coroutine wrapper 去 json 序列化，改为正常 await。另外补上此前迁移遗漏的 2 处 registry.upload_files 调用点。全量 85 项通过，首次全绿。
 
 - SessionManager 清理：删除无调用者的 _complete_pending_cancel（旧 cancel 命令设计的残留，pending_cancel 补发实际在 broadcast 终态分支完成）；broadcast 的订阅循环从 terminal/else 两份重复合并为一份；_transaction 的广播循环改用 broadcast 复用同一发布路径。纯重构，行为不变，328 行收敛到 314 行。

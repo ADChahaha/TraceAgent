@@ -123,6 +123,16 @@ async def remove_file(request: Request, session_id: str, resource_id: str):
         raise_http_error(exc)
 
 
+@router.get("/chat/sessions/{session_id}/blocks")
+async def read_block(request: Request, session_id: str, key: str):
+    """按引用 key 返回段落原文，供前端回溯引用；key 归属由会话桶隔离。"""
+    try:
+        manager = await request.app.state.session_registry.get_or_create(session_id)
+        return await manager.read_block(key)
+    except BackendServiceError as exc:
+        raise_http_error(exc)
+
+
 @router.post("/chat/completion")
 async def completion(request: Request):
     try:
