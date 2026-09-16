@@ -47,9 +47,9 @@ class SessionRegistry:
                     turns = crud.list_unfinished_turns(db, session["id"])
                     for turn in turns:
                         crud.update_turn(db, turn_id=turn["id"], now=now, status="failed", error="backend_restarted",
-                                         completed_at=now, commit=False)
+                                         completed_at=now)
                     crud.update_session(db, session_id=session["id"], now=now, clear_active_turn=True,
-                                        status="ready", commit=False)
+                                        status="ready")
         await asyncio.to_thread(recover)
         self.reaper = asyncio.create_task(self._reap_loop(), name="session-reaper")
 
@@ -125,7 +125,10 @@ class SessionRegistry:
                               settings=self.settings)
 
     def _create_session(self, session_id):
-        crud.create_session(self.database.connect(), session_id=session_id, status="ready", now=utc_now())
+        """单条写入也走统一事务边界。"""
+        db = self.database.connect()
+        with crud.transaction(db):
+            crud.create_session(db, session_id=session_id, status="ready", now=utc_now())
 
     async def create_session(self):
         """创建会话行并返回 session_id；文件随后经 manager 上传绑定。"""

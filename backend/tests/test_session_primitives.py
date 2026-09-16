@@ -16,8 +16,8 @@ def test_transaction_rolls_back_all_crud_writes(tmp_path):
     initialize_database(db)
     with pytest.raises(sqlite3.IntegrityError):
         with crud.transaction(db):
-            crud.create_session(db, session_id="s", status="ready", now="now", commit=False)
-            crud.create_turn(db, session_id="missing", turn_id="t", status="queued", now="now", commit=False)
+            crud.create_session(db, session_id="s", status="ready", now="now")
+            crud.create_turn(db, session_id="missing", turn_id="t", status="queued", now="now")
     assert crud.get_session(db, "s") is None
     db.close()
 

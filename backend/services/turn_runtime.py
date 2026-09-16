@@ -91,13 +91,13 @@ class TurnRuntime:
     def _begin_operation(self):
         def begin(db, events):
             now = utc_now()
-            crud.create_turn(db, turn_id=self.turn_id, session_id=self.session_id, status="queued", now=now, commit=False)
+            crud.create_turn(db, turn_id=self.turn_id, session_id=self.session_id, status="queued", now=now)
             message_id = uuid.uuid4().hex
             crud.create_message(db, message_id=message_id, session_id=self.session_id, turn_id=self.turn_id, role="user",
                                 content=self.content, now=now, sequence=crud.get_next_message_sequence(db, self.turn_id),
-                                group_id=message_id, group_index=0, commit=False)
-            crud.update_turn(db, turn_id=self.turn_id, now=now, status="in_progress", agent_completion_id=self.turn_id, commit=False)
-            crud.update_session(db, session_id=self.session_id, now=now, status="running", active_turn_id=self.turn_id, commit=False)
+                                group_id=message_id, group_index=0)
+            crud.update_turn(db, turn_id=self.turn_id, now=now, status="in_progress", agent_completion_id=self.turn_id)
+            crud.update_session(db, session_id=self.session_id, now=now, status="running", active_turn_id=self.turn_id)
             self._emit(events, "turn.created")
             self._emit(events, "message.created", {"message_id": message_id, "role": "user", "content": self.content})
             self._emit(events, "turn.started")
@@ -200,7 +200,7 @@ class TurnRuntime:
         sequence = crud.get_next_message_sequence(db, self.turn_id)
         for index, message in enumerate(messages):
             crud.create_message(db, message_id=uuid.uuid4().hex, session_id=self.session_id, turn_id=self.turn_id,
-                                now=utc_now(), sequence=sequence + index, group_id=mid, group_index=index, commit=False, **message)
+                                now=utc_now(), sequence=sequence + index, group_id=mid, group_index=index, **message)
 
     async def _finish(self, status, error=None):
         """写轮终态并清空 session 活跃标记；写失败时不无限重试。"""
@@ -220,13 +220,13 @@ class TurnRuntime:
             now = utc_now()
             row = crud.update_turn_status_if_current(db, turn_id=self.turn_id,
                                                      current_statuses={"queued", "in_progress", "cancelling"},
-                                                     status=status, now=now, error=error, completed_at=now, commit=False)
+                                                     status=status, now=now, error=error, completed_at=now)
             if row is None:
                 return
             if status == "cancelled":
                 self._emit(events, "turn.cancel_requested")
             crud.update_session(db, session_id=self.session_id, now=now, clear_active_turn=True,
-                                status="ready", commit=False)
+                                status="ready")
             self._emit(events, "turn." + status, {"error": error})
 
         return finish

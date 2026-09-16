@@ -156,25 +156,26 @@ def test_snapshot_renders_history_from_messages_without_events(tmp_path):
         registry, db, agent = await setup(tmp_path)
         try:
             conn = db.connect()
-            crud.create_session(conn, session_id="hist", status="ready", now="t0")
-            crud.create_turn(conn, session_id="hist", turn_id="t1", status="completed", now="t1")
-            crud.create_message(conn, message_id="u1", session_id="hist", turn_id="t1", role="user",
-                                content="第一问", now="t1", sequence=1, group_id="g1", group_index=0)
-            crud.create_message(conn, message_id="a1", session_id="hist", turn_id="t1", role="assistant",
-                                content="查询", now="t1", sequence=2, group_id="g2", group_index=0,
-                                tool_calls_json='[{"id":"call-a","type":"function","function":{"name":"read","arguments":"{}"}},'
-                                                '{"id":"call-b","type":"function","function":{"name":"read","arguments":"{}"}}]')
-            crud.create_message(conn, message_id="r1", session_id="hist", turn_id="t1", role="tool",
-                                content='{"value":1}', now="t1", sequence=3, group_id="g2", group_index=1,
-                                tool_call_id="call-a", name="read")
-            crud.create_message(conn, message_id="r2", session_id="hist", turn_id="t1", role="tool",
-                                content='{"error":"missing"}', now="t1", sequence=4, group_id="g2", group_index=2,
-                                tool_call_id="call-b", name="read")
-            crud.create_message(conn, message_id="a2", session_id="hist", turn_id="t1", role="assistant",
-                                content="回答", now="t1", sequence=5, group_id="g3", group_index=0)
-            crud.create_turn(conn, session_id="hist", turn_id="t2", status="failed", now="t2", error="backend_restarted")
-            crud.create_message(conn, message_id="u2", session_id="hist", turn_id="t2", role="user",
-                                content="第二问", now="t2", sequence=6, group_id="g4", group_index=0)
+            with crud.transaction(conn):
+                crud.create_session(conn, session_id="hist", status="ready", now="t0")
+                crud.create_turn(conn, session_id="hist", turn_id="t1", status="completed", now="t1")
+                crud.create_message(conn, message_id="u1", session_id="hist", turn_id="t1", role="user",
+                                    content="第一问", now="t1", sequence=1, group_id="g1", group_index=0)
+                crud.create_message(conn, message_id="a1", session_id="hist", turn_id="t1", role="assistant",
+                                    content="查询", now="t1", sequence=2, group_id="g2", group_index=0,
+                                    tool_calls_json='[{"id":"call-a","type":"function","function":{"name":"read","arguments":"{}"}},'
+                                                    '{"id":"call-b","type":"function","function":{"name":"read","arguments":"{}"}}]')
+                crud.create_message(conn, message_id="r1", session_id="hist", turn_id="t1", role="tool",
+                                    content='{"value":1}', now="t1", sequence=3, group_id="g2", group_index=1,
+                                    tool_call_id="call-a", name="read")
+                crud.create_message(conn, message_id="r2", session_id="hist", turn_id="t1", role="tool",
+                                    content='{"error":"missing"}', now="t1", sequence=4, group_id="g2", group_index=2,
+                                    tool_call_id="call-b", name="read")
+                crud.create_message(conn, message_id="a2", session_id="hist", turn_id="t1", role="assistant",
+                                    content="回答", now="t1", sequence=5, group_id="g3", group_index=0)
+                crud.create_turn(conn, session_id="hist", turn_id="t2", status="failed", now="t2", error="backend_restarted")
+                crud.create_message(conn, message_id="u2", session_id="hist", turn_id="t2", role="user",
+                                    content="第二问", now="t2", sequence=6, group_id="g4", group_index=0)
             manager = await registry.get_or_create("hist")
             snapshot = await build_snapshot(db, await manager.attach())
             turns = snapshot["state"]["turns"]
@@ -314,7 +315,8 @@ def test_cancelled_creation_aborts_ownership_and_retry(tmp_path, monkeypatch):
 
         monkeypatch.setattr(registry, "_load_manager", delayed)
         try:
-            crud.create_session(db.connect(), session_id="cold", status="ready", now="now")
+            with crud.transaction(db.connect()):
+                crud.create_session(db.connect(), session_id="cold", status="ready", now="now")
 
             async def submit_cold():
                 manager = await registry.get_or_create("cold")
@@ -348,7 +350,8 @@ def test_cancelled_queued_create_recycles_subscription(tmp_path, monkeypatch):
     async def scenario():
         registry, db, agent = await setup(tmp_path)
         try:
-            crud.create_session(db.connect(), session_id="cold", status="ready", now="now")
+            with crud.transaction(db.connect()):
+                crud.create_session(db.connect(), session_id="cold", status="ready", now="now")
             manager = await registry.get_or_create("cold")
             entered, release = asyncio.Event(), asyncio.Event()
             original_detach = manager._handle_detach
@@ -382,7 +385,8 @@ def test_cancelled_create_during_handler_recycles_subscription(tmp_path, monkeyp
     async def scenario():
         registry, db, agent = await setup(tmp_path)
         try:
-            crud.create_session(db.connect(), session_id="cold", status="ready", now="now")
+            with crud.transaction(db.connect()):
+                crud.create_session(db.connect(), session_id="cold", status="ready", now="now")
             manager = await registry.get_or_create("cold")
             entered, release = asyncio.Event(), asyncio.Event()
             original_publish = manager._runtime_publish
@@ -414,7 +418,8 @@ def test_failed_begin_returns_error_without_runtime_or_subscription(tmp_path, mo
     async def scenario():
         registry, db, agent = await setup(tmp_path)
         try:
-            crud.create_session(db.connect(), session_id="cold", status="ready", now="now")
+            with crud.transaction(db.connect()):
+                crud.create_session(db.connect(), session_id="cold", status="ready", now="now")
             manager = await registry.get_or_create("cold")
 
             class BrokenDatabase:
@@ -459,7 +464,8 @@ def test_cancelled_caller_after_result_recycles_subscription(tmp_path, monkeypat
     async def scenario():
         registry, db, agent = await setup(tmp_path)
         try:
-            crud.create_session(db.connect(), session_id="cold", status="ready", now="now")
+            with crud.transaction(db.connect()):
+                crud.create_session(db.connect(), session_id="cold", status="ready", now="now")
             manager = await registry.get_or_create("cold")
             loop = asyncio.get_running_loop()
             holder = {}
@@ -566,9 +572,10 @@ def test_startup_marks_orphan_execution_failed_without_restarting_agent(tmp_path
         from backend.crud import crud
         registry, db, agent = await setup(tmp_path)
         await registry.close()
-        crud.create_session(db.connect(), session_id="orphan", status="running", now="now")
-        crud.create_turn(db.connect(), session_id="orphan", turn_id="lost", status="in_progress", now="now")
-        crud.update_session(db.connect(), session_id="orphan", now="now", active_turn_id="lost")
+        with crud.transaction(db.connect()):
+            crud.create_session(db.connect(), session_id="orphan", status="running", now="now")
+            crud.create_turn(db.connect(), session_id="orphan", turn_id="lost", status="in_progress", now="now")
+            crud.update_session(db.connect(), session_id="orphan", now="now", active_turn_id="lost")
         registry = SessionRegistry(database=db, agent_client=agent, settings=registry.settings)
         await registry.start()
         try:

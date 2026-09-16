@@ -48,7 +48,7 @@ Registry 用每 session 的 Entry 状态协调 Manager 生命周期：不存在�
 ```text
 Registry.start → list_sessions_needing_recovery / list_unfinished_turns → 遗留轮次收口（error 写入 chat_turns）
 Manager 创建或提交消息组 → get_next_message_sequence → 同事务插入完整消息
-Manager 替换资源 → delete_resources(commit=False) → 同事务插入新资源
+Manager 替换资源 → delete_resources → 同事务插入新资源
 History.build_snapshot → list_turns + list_messages → 按 turn 分组渲染展示
 ```
 
@@ -56,7 +56,7 @@ History.build_snapshot → list_turns + list_messages → 按 turn 分组渲染�
 
 ## 事务和生命周期
 
-四张表为 chat_sessions、chat_resources、chat_turns、chat_messages，初始化不迁移旧 qa_* 数据。一个命令的写入在同一工作线程、同一事务完成；CRUD 的 commit=False 由外层提交，提交后才更新投影和广播。
+四张表为 chat_sessions、chat_resources、chat_turns、chat_messages，初始化不迁移旧 qa_* 数据。一个命令的写入在同一工作线程、同一事务完成；CRUD 只执行语句、永不自行提交，提交权在 transaction() 边界持有者，提交后才更新投影和广播。
 
 chat_messages 只保存完整模型历史。工具组按原始 call_id 配齐实际结果后原子提交；取消丢弃未配齐组。过程事件不持久化，页面恢复由消息与轮次状态渲染。
 

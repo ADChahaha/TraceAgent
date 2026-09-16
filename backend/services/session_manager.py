@@ -292,12 +292,11 @@ class SessionManager:
 
         def replace(db, events):
             now = utc_now()
-            crud.delete_resources(db, self.session_id, commit=False)
+            crud.delete_resources(db, self.session_id)
             for ref in refs:
                 crud.create_resource(db, resource_id=uuid.uuid4().hex, session_id=self.session_id,
                                      resource_type=ref["type"], location=ref["location"], now=now,
-                                     size_bytes=int(sizes.get(ref["location"], old_sizes.get(ref["location"], 0))),
-                                     commit=False)
+                                     size_bytes=int(sizes.get(ref["location"], old_sizes.get(ref["location"], 0))))
             events.append({"type": "resources.prepared", "turn_id": None,
                            "payload": {"resources": [{"type": ref["type"], "location": ref["location"]} for ref in refs]}})
 

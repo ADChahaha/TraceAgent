@@ -6,6 +6,8 @@ last updated: 2026-09-16
 
 ### 已完成工作
 
+- 删除 CRUD 的 commit 参数：9 个写函数只执行语句、永不自行提交，提交权统一收进 crud.transaction() 边界（单条和多条写入共用同一提交点）。services 里 11 处 commit=False 全部消失，registry 的单条 create_session 包进事务；测试种子写入按跨连接可见性包进事务块，回滚测试同步适配。原子性从约定变成结构：业务代码不再能中途提交。全量 77 项通过，失败集合与基线一致。
+
 - 上传/删除文件业务从 registry 迁入 manager：upload_files（校验含累计限制、document service 物化、_raw_sizes、replace_resources）和 remove_file（get_file 校验、remove_raw、替换）成为 manager 方法，manager 构造参数新增 document_client；registry 删除两个业务方法和 Path/ValidationError 导入，只剩生命周期协调。routes 改为 get_or_create 后直调 manager。TDD：新增 manager 层上传校验测试（旧实现下红），调用点适配 14 处，补齐 tests/docs/test_session_files.md；全量 77 项通过，失败集合与基线一致。
 
 - 事务壳归还 runtime：TurnRuntime 构造参数从 write 回调改为直接持有 database，_write 自带连接、BEGIN、提交与 to_thread；manager 侧 _runtime_commit 删除，换成 _refresh_state（缓存同步点）。refresh/publish/fail 三个注入回调保持纯职责，事务失败标损坏的语义并入 runtime 的 _write。写所有权与写执行权对齐：runtime 写库就自己开事务。纯重构，76 项通过，失败集合与基线一致；测试注入点适配（假 database 替代假 write，取消测试改闸 _runtime_publish）。

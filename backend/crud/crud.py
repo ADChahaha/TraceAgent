@@ -9,7 +9,8 @@ from backend.core.db import row_to_dict
 
 @contextmanager
 def transaction(connection: sqlite3.Connection):
-    """同一线程内开启写事务；失败全部回滚，成功统一提交。"""
+    """同一线程内开启写事务；失败全部回滚，成功统一提交。提交权只在边界持有者
+    手里：本模块的写函数只执行语句，永不自行提交。"""
     connection.execute("BEGIN IMMEDIATE")
     try:
         yield connection
@@ -25,7 +26,6 @@ def create_session(
     session_id: str,
     status: str,
     now: str,
-    commit: bool = True,
 ) -> dict[str, Any]:
     connection.execute(
         """
@@ -36,8 +36,6 @@ def create_session(
         """,
         (session_id, status, now, now),
     )
-    if commit:
-        connection.commit()
     session = get_session(connection, session_id)
     assert session is not None
     return session
@@ -69,7 +67,6 @@ def update_session(
     status: str | None = None,
     active_turn_id: str | None = None,
     clear_active_turn: bool = False,
-    commit: bool = True,
 ) -> dict[str, Any]:
     updates: dict[str, Any] = {"updated_at": now}
     if status is not None:
@@ -80,8 +77,6 @@ def update_session(
         updates["active_turn_id"] = None
     assignments = ", ".join(f"{name} = ?" for name in updates)
     connection.execute(f"UPDATE chat_sessions SET {assignments} WHERE id = ?", [*updates.values(), session_id])
-    if commit:
-        connection.commit()
     session = get_session(connection, session_id)
     assert session is not None
     return session
@@ -96,7 +91,6 @@ def create_resource(
     location: str,
     now: str,
     size_bytes: int = 0,
-    commit: bool = True,
 ) -> dict[str, Any]:
     connection.execute(
         """
@@ -107,8 +101,6 @@ def create_resource(
         """,
         (resource_id, session_id, resource_type, location, size_bytes, now),
     )
-    if commit:
-        connection.commit()
     row = connection.execute("SELECT * FROM chat_resources WHERE id = ?", (resource_id,)).fetchone()
     resource = row_to_dict(row)
     assert resource is not None
@@ -120,11 +112,9 @@ def get_resource(connection: sqlite3.Connection, resource_id: str) -> dict[str, 
     return row_to_dict(row)
 
 
-def delete_resource(connection: sqlite3.Connection, resource_id: str, *, commit: bool = True) -> None:
+def delete_resource(connection: sqlite3.Connection, resource_id: str) -> None:
     """按资源 ID 删除一行；由调用方校验资源归属会话。"""
     connection.execute("DELETE FROM chat_resources WHERE id=?", (resource_id,))
-    if commit:
-        connection.commit()
 
 
 def list_resources(
@@ -161,7 +151,6 @@ def create_message(
     tool_calls_json: str = "[]",
     tool_call_id: str | None = None,
     name: str | None = None,
-    commit: bool = True,
 ) -> dict[str, Any]:
     connection.execute(
         """
@@ -186,8 +175,6 @@ def create_message(
             now,
         ),
     )
-    if commit:
-        connection.commit()
     row = connection.execute("SELECT * FROM chat_messages WHERE id = ?", (message_id,)).fetchone()
     message = row_to_dict(row)
     assert message is not None
@@ -216,7 +203,6 @@ def create_turn(
     status: str,
     now: str,
     error: str | None = None,
-    commit: bool = True,
 ) -> dict[str, Any]:
     connection.execute(
         """
@@ -227,8 +213,6 @@ def create_turn(
         """,
         (turn_id, session_id, status, error, now, now),
     )
-    if commit:
-        connection.commit()
     turn = get_turn(connection, turn_id)
     assert turn is not None
     return turn
@@ -262,7 +246,6 @@ def update_turn(
     agent_completion_id: str | None = None,
     error: str | None = None,
     completed_at: str | None = None,
-    commit: bool = True,
 ) -> dict[str, Any]:
     updates: dict[str, Any] = {"updated_at": now}
     if status is not None:
@@ -275,8 +258,6 @@ def update_turn(
         updates["completed_at"] = completed_at
     assignments = ", ".join(f"{name} = ?" for name in updates)
     connection.execute(f"UPDATE chat_turns SET {assignments} WHERE id = ?", [*updates.values(), turn_id])
-    if commit:
-        connection.commit()
     turn = get_turn(connection, turn_id)
     assert turn is not None
     return turn
@@ -291,7 +272,6 @@ def update_turn_status_if_current(
     now: str,
     error: str | None = None,
     completed_at: str | None = None,
-    commit: bool = True,
 ) -> dict[str, Any] | None:
     updates: dict[str, Any] = {"status": status, "updated_at": now}
     if error is not None:
@@ -308,8 +288,6 @@ def update_turn_status_if_current(
         """,
         [*updates.values(), turn_id, *sorted(current_statuses)],
     )
-    if commit:
-        connection.commit()
     if cursor.rowcount == 0:
         return None
     return get_turn(connection, turn_id)
@@ -349,8 +327,6 @@ def get_next_message_sequence(connection: sqlite3.Connection, turn_id: str) -> i
     ).fetchone()[0])
 
 
-def delete_resources(connection: sqlite3.Connection, session_id: str, *, commit: bool = True) -> None:
-    """删除会话资源引用；commit=False 时由调用方提交或回滚。"""
+def delete_resources(connection: sqlite3.Connection, session_id: str) -> None:
+    """删除会话资源引用。"""
     connection.execute("DELETE FROM chat_resources WHERE session_id=?", (session_id,))
-    if commit:
-        connection.commit()

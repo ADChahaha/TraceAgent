@@ -84,7 +84,7 @@ gRPC 分别使用 document service 的 PrepareResources 与 agent service 的 Ch
 
 cancel 语义对齐 Codex 的 interrupt：`_handle_cancel` 校验轮次身份后登记 `pending_cancel` 等待者并调 `runtime.cancel()`，命令即返回等待；runtime 观察标志后自己写 cancelled 终态并广播，manager 在 broadcast 终态时补发 cancel 响应。已终结的轮次返回原终态。
 
-service 的数据查询和写入统一调用 CRUD，不直接执行 SQL。每个写事务放入一次 asyncio.to_thread，使用线程内连接、crud.transaction 和 commit=False CRUD；CRUD 内部负责 BEGIN IMMEDIATE、提交及异常回滚。成功提交后才更新 TurnView、广播。
+service 的数据查询和写入统一调用 CRUD，不直接执行 SQL。每个写事务放入一次 asyncio.to_thread，使用线程内连接和 crud.transaction；CRUD 写函数只执行语句、永不自行提交，transaction() 负责单条和多条写入统一的 BEGIN IMMEDIATE、提交及异常回滚。成功提交后才更新 TurnView、广播。
 
 损坏 manager 当前不会在线自动重建；backend 重启扫描持久化状态收口遗留轮次。投影更新异常同样停止该 manager，避免数据库与内存分歧后继续服务。
 

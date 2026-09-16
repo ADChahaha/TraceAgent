@@ -2,7 +2,7 @@
 
 持久化只有四张表：`chat_sessions`、`chat_resources`、`chat_turns`、`chat_messages`。过程事件（delta、tool_started 等）只存在于内存和订阅队列，不落库；页面恢复由 `chat_messages` 加 `chat_turns` 渲染历史轮，再加当前轮内存副本。`chat_messages` 设计为只保存可完整回传模型的稳定历史。普通完整消息单条提交；带工具调用的 assistant 与全部对应 tool 结果配齐后，在同一事务中一起提交。中断只丢弃尚未提交的组，不删除此前完整历史。
 
-schema、CRUD 与 SessionManager 已接通，统一使用 `chat_*` 和 `session_id`。初始化只创建当前表，不迁移或删除旧 `qa_*` 表及数据。CRUD 默认自行提交；manager 使用 `commit=False` 将相关写入放在同一个事务中。
+schema、CRUD 与 SessionManager 已接通，统一使用 `chat_*` 和 `session_id`。初始化只创建当前表，不迁移或删除旧 `qa_*` 表及数据。CRUD 写函数只执行语句、永不自行提交；事务边界统一在 `crud.transaction()`，单条和多条写入共用同一提交点。
 
 ## chat_sessions
 
