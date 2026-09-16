@@ -55,7 +55,8 @@ def test_tools_read_prepared_files_without_builder(resource_path, monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("问答工具不能调用资源生成端")
 
-    monkeypatch.setattr(document_resources, "prepare_resources", forbidden)
+    monkeypatch.setattr(document_resources, "publish_resources", forbidden)
+    monkeypatch.setattr(document_resources, "prepare_session_resources", forbidden)
     if hasattr(document_resources, "load_resource"):
         monkeypatch.setattr(document_resources, "load_resource", forbidden)
     refs = [{"type": ref.type, "location": ref.location} for ref in resource_path]

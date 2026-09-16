@@ -2,6 +2,7 @@
 
 import io
 import json
+import uuid
 
 import grpc
 import numpy as np
@@ -11,6 +12,12 @@ from docx import Document
 from agent_proto import agent_pb2 as pb
 from document_service.document_resources import model as embedding_model
 from traceagent_shared.object_store import parse_resource_path
+
+
+@pytest.fixture
+def session_id():
+    """每个测试用独立会话 id，资源发布进各自的 res_<session_id> 桶。"""
+    return uuid.uuid4().hex[:12]
 
 
 @pytest.fixture
@@ -30,13 +37,13 @@ def resources(tmp_path, monkeypatch):
     return tmp_path, calls
 
 
-def upload(document_rpc):
+def upload(document_rpc, session_id):
     document = Document()
     document.add_heading("合同", 1)
     document.add_paragraph("付款期限为三十天。")
     data = io.BytesIO()
     document.save(data)
-    return document_rpc.PrepareResources(pb.PrepareResourcesRequest(files=[
+    return document_rpc.PrepareResources(pb.PrepareResourcesRequest(session_id=session_id, files=[
         pb.UploadedFile(filename="合同.docx", content=data.getvalue()),
         pb.UploadedFile(filename="附件.docx", content=data.getvalue()),
     ]), timeout=10)
@@ -56,7 +63,7 @@ def _bucket(refs):
     return bucket
 
 
-def test_qa_uses_prepared_path_without_rebuilding_or_deleting(resources, document_rpc, rpc, monkeypatch, s3_store):
+def test_qa_uses_prepared_path_without_rebuilding_or_deleting(resources, document_rpc, rpc, monkeypatch, s3_store, session_id):
     """document service 生成的资源可被 agent 两轮复用，问答不会重建或删除对象。"""
     from tests.file_extraction_agent.test_streaming_retry import StreamingModel
     from service.file_extraction_agent import application as qa_route
@@ -64,7 +71,7 @@ def test_qa_uses_prepared_path_without_rebuilding_or_deleting(resources, documen
     model = StreamingModel()
     model._release.set()
     monkeypatch.setattr(qa_route, "build_qa_model", lambda config: model)
-    refs = list(upload(document_rpc).resource_path)
+    refs = list(upload(document_rpc, session_id).resource_path)
     bucket = _bucket(refs)
     before = sorted(s3_store.list_objects(bucket))
     for cid in ("cmp_first", "cmp_second"):
@@ -87,9 +94,9 @@ def test_qa_rejects_unmanaged_resource_path(resources, rpc):
 
 
 @pytest.mark.parametrize("damage", ["missing_index", "bad_version", "outside_reference"])
-def test_qa_rejects_damaged_resource_without_rebuilding(resources, document_rpc, rpc, s3_store, damage):
+def test_qa_rejects_damaged_resource_without_rebuilding(resources, document_rpc, rpc, s3_store, damage, session_id):
     """索引缺失、清单版本错误、引用越界均由 agent 拒绝且不重建。"""
-    refs = list(upload(document_rpc).resource_path)
+    refs = list(upload(document_rpc, session_id).resource_path)
     bucket = _bucket(refs)
     if damage == "missing_index":
         s3_store.delete_object(bucket, "index/vectors.npy")

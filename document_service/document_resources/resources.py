@@ -1,8 +1,9 @@
-"""HTML → 临时文档树与 embedding 索引 → 校验产物 → 逐对象上传到对象存储。
+"""HTML → 临时文档树与 embedding 索引 → 校验产物 → 逐对象上传到指定桶。
 
-prepare_resources 调用 materialize_tree、build_index，先在本机临时目录构建并校验，
-然后把 documents 文件树打成单个 documents.zip，index/manifest 与原始文件 bytes
-各自独立写入 ObjectStore（bucket = res_*），最后返回资源定位数组 [{type, location}]。
+publish_resources 调用 materialize_tree、build_index，先在本机临时目录构建并校验，
+然后把 documents 文件树打成单个 documents.zip，index/manifest 独立写入调用方指定的
+ObjectStore 桶，最后返回 documents/index 资源定位数组 [{type, location}]。桶内
+raw/ 对象的写入与删除由会话层（application）负责，本模块只覆盖构建产物。
 读取端把 documents.zip 解到内存虚拟文件系统，索引仍从独立对象读取。
 
 已发布资源由 Agent 工具从 ObjectStore 读取，本模块不提供消费端加载接口。
@@ -20,11 +21,10 @@ import uuid
 import zipfile
 from dataclasses import asdict
 from pathlib import Path
-from typing import Iterable
 
 import numpy as np
 
-from traceagent_shared.object_store import ObjectStore, ResourceRef, build_s3_object_store
+from traceagent_shared.object_store import ObjectStore, ResourceRef
 from document_service.document_resources import model
 from document_service.document_resources.documents import materialize_tree, order_key
 from document_service.document_resources.schemas import InputDocument
@@ -35,17 +35,17 @@ def resources_root() -> Path:
     return Path(os.getenv("DOCUMENT_RESOURCES_ROOT", str(Path(__file__).resolve().parents[2] / "data" / "resources"))).resolve()
 
 
-def prepare_resources(
+def publish_resources(
+    store: ObjectStore,
+    bucket: str,
     documents: list[InputDocument],
-    raw_files: Iterable[tuple[str, bytes]] | None = None,
 ) -> list[ResourceRef]:
-    """构建资源并发布到对象存储，返回资源定位数组。"""
+    """在给定桶内构建并发布文档树归档与索引，返回 documents/index 资源定位数组。"""
     if not documents or any(not doc.filename.strip() or not doc.html.strip() for doc in documents):
         raise ValueError("documents require non-empty filename and html")
     parent = resources_root()
     parent.mkdir(parents=True, exist_ok=True)
-    resource_id = f"res_{uuid.uuid4().hex}"
-    temporary = parent / f".building-{resource_id}"
+    temporary = parent / f".building-{uuid.uuid4().hex}"
     temporary.mkdir()
     try:
         document = materialize_tree(documents, temporary / "documents")
@@ -72,8 +72,7 @@ def prepare_resources(
             "documents": [doc.filename for doc in documents],
         })
         _validate_prepared(temporary)
-        store = build_s3_object_store()
-        _publish_to_store(store, resource_id, temporary, raw_files or [])
+        _publish_to_store(store, bucket, temporary)
     except BaseException:
         if temporary.resolve().parent == parent and not temporary.is_symlink():
             shutil.rmtree(temporary, ignore_errors=True)
@@ -81,28 +80,23 @@ def prepare_resources(
     finally:
         if temporary.resolve().parent == parent and not temporary.is_symlink():
             shutil.rmtree(temporary, ignore_errors=True)
-    return _resource_refs(resource_id, [filename for filename, _ in (raw_files or [])])
+    return _resource_refs(bucket)
 
 
 def _publish_to_store(
     store: ObjectStore,
-    resource_id: str,
+    bucket: str,
     temporary: Path,
-    raw_files: Iterable[tuple[str, bytes]],
 ) -> None:
-    """把文档树打成单个 zip，索引/清单与原始文件各自独立上传。"""
-    store.create_bucket(resource_id)
+    """把文档树打成单个 zip，索引与清单独立上传到指定桶；raw 对象由会话层管理。"""
+    store.create_bucket(bucket)
     documents_dir = temporary / "documents"
-    store.put_object(resource_id, "documents.zip", _zip_directory(documents_dir, "documents"))
+    store.put_object(bucket, "documents.zip", _zip_directory(documents_dir, "documents"))
     for path in temporary.rglob("*"):
         if not path.is_file() or path.is_relative_to(documents_dir):
             continue
         key = path.relative_to(temporary).as_posix()
-        store.put_object(resource_id, key, path.read_bytes())
-    for filename, data in raw_files:
-        if not filename or not data:
-            raise ValueError("raw files require non-empty filename and bytes")
-        store.put_object(resource_id, f"raw/{filename}", data)
+        store.put_object(bucket, key, path.read_bytes())
 
 
 def _zip_directory(directory: Path, prefix: str) -> bytes:
@@ -115,14 +109,11 @@ def _zip_directory(directory: Path, prefix: str) -> bytes:
     return buffer.getvalue()
 
 
-def _resource_refs(resource_id: str, raw_filenames: list[str]) -> list[ResourceRef]:
-    refs = [
-        ResourceRef(type="documents", location=f"s3://{resource_id}/documents.zip"),
-        ResourceRef(type="index", location=f"s3://{resource_id}/index"),
+def _resource_refs(bucket: str) -> list[ResourceRef]:
+    return [
+        ResourceRef(type="documents", location=f"s3://{bucket}/documents.zip"),
+        ResourceRef(type="index", location=f"s3://{bucket}/index"),
     ]
-    for filename in raw_filenames:
-        refs.append(ResourceRef(type="raw", location=f"s3://{resource_id}/raw/{filename}"))
-    return refs
 
 
 def _validate_prepared(path: Path) -> None:

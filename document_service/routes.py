@@ -3,7 +3,7 @@ import asyncio
 import grpc
 from agent_proto import agent_pb2 as pb
 from agent_proto import agent_pb2_grpc
-from document_service.document_resources import prepare_uploaded_resources
+from document_service.document_resources import prepare_session_resources
 from document_service.document_resources.reader import ArchiveNotFoundError, read_blocks
 from document_service.document_resources.schemas import UploadedFile
 
@@ -11,7 +11,8 @@ from document_service.document_resources.schemas import UploadedFile
 async def create_document_resource(request, context):
     try:
         files = [UploadedFile(filename=file.filename, content=bytes(file.content)) for file in request.files]
-        refs = await asyncio.to_thread(prepare_uploaded_resources, files)
+        remove_raw = [{"type": ref.type, "location": ref.location} for ref in request.remove_raw]
+        refs = await asyncio.to_thread(prepare_session_resources, request.session_id, files, remove_raw)
         return pb.PrepareResourcesResponse(
             resource_path=[pb.ResourceRef(type=ref.type, location=ref.location) for ref in refs],
         )

@@ -85,19 +85,19 @@ def test_blocking_preparation_keeps_control_rpcs_responsive(monkeypatch, documen
     started = threading.Event()
     release = threading.Event()
 
-    def blocked(documents, raw_files=None):
+    def blocked(*args, **kwargs):
         from traceagent_shared.object_store import ResourceRef
         started.set()
         release.wait(5)
-        return [ResourceRef(type="documents", location="s3://res_blocked/documents")]
+        return [ResourceRef(type="documents", location="s3://res_blocked/documents.zip")]
 
-    monkeypatch.setattr(document_resources, "prepare_resources", blocked)
+    monkeypatch.setattr(document_resources, "publish_resources", blocked)
     monkeypatch.setattr(document_resources.processor, "process",
                         lambda file: type("Document", (), {"filename": "a.docx", "html": "<p>a</p>"})())
     with document_rpc_server_factory(workers=1) as channel:
         stub = agent_pb2_grpc.DocumentResourceServiceStub(channel)
         pending = stub.PrepareResources.future(pb.PrepareResourcesRequest(
-            files=[pb.UploadedFile(filename="a.docx", content=b"test")]), timeout=5)
+            session_id="blocked", files=[pb.UploadedFile(filename="a.docx", content=b"test")]), timeout=5)
         try:
             assert started.wait(2)
             assert health_pb2_grpc.HealthStub(channel).Check(

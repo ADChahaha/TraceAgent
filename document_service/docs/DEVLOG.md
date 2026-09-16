@@ -1,5 +1,21 @@
 # Document Service Devlog
 
+## 2026-09-16
+
+### 已完成工作
+
+- PrepareResources 落实 proto 契约：桶固定为 `res_<session_id>`，服务读取请求中的 `session_id` 与 `remove_raw`，不再忽略。
+- 移除"每次调用新建随机桶"的实现；会话桶内 `raw/` 对象成为事实来源，上传按文件名覆盖合并，移除删除桶内对象并幂等跳过未知目标。
+- 新增会话层入口 `prepare_session_resources`（application.py）：合并桶内 raw 与新批次、校验 remove_raw 的 type 与桶归属、剩余为空时清理已发布产物并返回空引用。
+- `resources.prepare_resources` 改为 `publish_resources(store, bucket, documents)`：只负责在指定桶内构建发布 documents.zip/index/manifest，raw 增删归会话层。
+- 空批次 + remove_raw 不再误报 INVALID_ARGUMENT（此前 backend 的 remove_file 对真实服务必然失败）；同一会话二次上传不再丢弃旧文件。
+- 测试改为真实调用形状：route 测试以 `session_id` 驱动、覆盖空批次删除与跨桶/type 拒绝；agent 侧资源 fixture、边界与集成测试同步迁移到新 API。
+
+### 已知问题（未在本任务处理）
+
+- storage 的桶名校验可被 `"."` 绕过，且错误体非 S3 XML，boto3 客户端 `NoSuchKey` 分支永不触发（`get_object` 缺失对象抛 ClientError 而非返回 None）。
+- backend 会话生命周期在事务写失败后没有恢复出口；`upload_files`/`remove_file` 的 document service 调用在命令队列外执行，存在并发读改写竞争。
+
 ## 2026-09-15
 
 ### 已完成工作
