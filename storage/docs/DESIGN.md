@@ -29,8 +29,14 @@ GET    /healthz                   -> 探活
 
 安全边界：
 
-- bucket 名不允许含 `/`、`\`；key 通过 `DirectoryObjectStore._obj_path` 拒绝绝对路径和
-  `..` 逃逸，防止越界读写。
+- bucket 名走白名单（小写字母/数字/下划线/连字符，1-63 字符，不含点号），由
+  `DirectoryObjectStore._bucket_dir` 统一校验；拼接后还校验解析结果必须是数据根
+  的直接子级，`"."`、`".."`、空名、带分隔符的名字全部拒绝，桶不可能解析到数据根。
+- key 通过 `DirectoryObjectStore._obj_path` 校验：拒绝空串、`.`、绝对路径和
+  `..` 逃逸（空 key 与 `.` 的 `Path.parts` 为空，会指向桶目录本身，同样拒绝）。
+- 错误响应是 S3 XML Error 结构（`<Error><Code>...</Code></Error>`），boto3 按
+  Code 分支：缺失对象抛 `NoSuchKey`，非法桶名抛 `InvalidBucketName`，非法 key
+  抛 `InvalidKey`，读侧 `get_object` 的 None 语义由此成立。
 - 本地开发不做签名鉴权；接入生产时再补 S3 Signature v4。
 
 ## 数据目录

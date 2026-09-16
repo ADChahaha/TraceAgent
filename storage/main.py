@@ -1,8 +1,10 @@
 """S3 兼容对象存储路由与 FastAPI 应用。
 
 提供 create_bucket / put_object / get_object / head_object / delete_object /
-list_objects_v2 端点，响应遵循 S3 wire 协议（XML 列表、ETag、Content-Length），
-使 boto3 等标准客户端可直接访问。底层为本地目录对象存储。本地开发不做签名鉴权。
+list_objects_v2 端点，响应遵循 S3 wire 协议（XML 列表、ETag、Content-Length、
+XML Error 结构），使 boto3 等标准客户端可直接访问并按错误码分支。底层为本地
+目录对象存储，桶名与 key 的合法性由 DirectoryObjectStore 统一校验。
+本地开发不做签名鉴权。
 """
 
 from __future__ import annotations
@@ -14,15 +16,8 @@ from pathlib import Path
 from xml.sax.saxutils import escape
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import PlainTextResponse
 
-from storage.core.object_store import DirectoryObjectStore
-
-
-def _safe_bucket(bucket: str) -> str:
-    if not bucket or "/" in bucket or "\\" in bucket:
-        raise ValueError("invalid bucket")
-    return bucket
+from storage.core.object_store import DirectoryObjectStore, InvalidBucketName, InvalidKey
 
 
 def _etag(data: bytes) -> str:
@@ -31,6 +26,19 @@ def _etag(data: bytes) -> str:
 
 def _iso(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def _error_response(status_code: int, code: str) -> Response:
+    """S3 风格 XML 错误体，客户端按 <Code> 解析错误并分支。"""
+    body = ('<?xml version="1.0" encoding="UTF-8"?>'
+            f'<Error><Code>{escape(code)}</Code><Message>{escape(code)}</Message></Error>')
+    return Response(content=body.encode("utf-8"), status_code=status_code, media_type="application/xml")
+
+
+def _client_error(exc: ValueError) -> Response:
+    code = "InvalidBucketName" if isinstance(exc, InvalidBucketName) else \
+        "InvalidKey" if isinstance(exc, InvalidKey) else "InvalidRequest"
+    return _error_response(400, code)
 
 
 def _list_xml(bucket: str, prefix: str, keys: list[str]) -> bytes:
@@ -71,20 +79,17 @@ def create_app(data_root: str | Path | None = None) -> FastAPI:
     @app.put("/{bucket:path}")
     async def create_or_put(bucket: str, request: Request) -> Response:
         parts = bucket.split("/", 1)
-        name = parts[0]
-        try:
-            _safe_bucket(name)
-        except ValueError:
-            return PlainTextResponse("InvalidBucketName", status_code=400)
-        if len(parts) == 1:
-            store.create_bucket(name)
-            return Response(status_code=200, headers={"Location": f"/{name}"})
-        key = parts[1]
         payload = await request.body()
+        if len(parts) == 1:
+            try:
+                store.create_bucket(parts[0])
+            except ValueError as exc:
+                return _client_error(exc)
+            return Response(status_code=200, headers={"Location": f"/{parts[0]}"})
         try:
-            store.put_object(name, key, payload)
-        except ValueError:
-            return PlainTextResponse("InvalidKey", status_code=400)
+            store.put_object(parts[0], parts[1], payload)
+        except ValueError as exc:
+            return _client_error(exc)
         return Response(status_code=200, headers={"ETag": f'"{_etag(payload)}"'})
 
     @app.get("/{bucket:path}")
@@ -94,22 +99,17 @@ def create_app(data_root: str | Path | None = None) -> FastAPI:
         if request.query_params.get("list-type") == "2":
             try:
                 keys = store.list_objects(name, prefix or "")
-            except ValueError:
-                return PlainTextResponse("InvalidBucketName", status_code=400)
-            return Response(
-                content=_list_xml(name, prefix or "", keys),
-                media_type="application/xml",
-            )
-        try:
-            _safe_bucket(name)
-        except ValueError:
-            return PlainTextResponse("InvalidBucketName", status_code=400)
+            except ValueError as exc:
+                return _client_error(exc)
+            return Response(content=_list_xml(name, prefix or "", keys), media_type="application/xml")
         if len(parts) == 1:
-            return PlainTextResponse("NoSuchKey", status_code=404)
-        key = parts[1]
-        data = store.get_object(name, key)
+            return _error_response(404, "NoSuchKey")
+        try:
+            data = store.get_object(name, parts[1])
+        except ValueError as exc:
+            return _client_error(exc)
         if data is None:
-            return PlainTextResponse("NoSuchKey", status_code=404)
+            return _error_response(404, "NoSuchKey")
         return Response(
             content=data,
             media_type="application/octet-stream",
@@ -120,24 +120,24 @@ def create_app(data_root: str | Path | None = None) -> FastAPI:
     def head_object(bucket: str) -> Response:
         parts = bucket.split("/", 1)
         if len(parts) != 2:
-            return PlainTextResponse("NoSuchKey", status_code=404)
+            return _error_response(404, "NoSuchKey")
         try:
             info = store.head_object(parts[0], parts[1])
-        except ValueError:
-            return PlainTextResponse("InvalidBucketName", status_code=400)
+        except ValueError as exc:
+            return _client_error(exc)
         if info is None:
-            return PlainTextResponse("NoSuchKey", status_code=404)
+            return _error_response(404, "NoSuchKey")
         return Response(status_code=200, headers={"Content-Length": str(info["size"])})
 
     @app.delete("/{bucket:path}")
     def delete_object(bucket: str) -> Response:
         parts = bucket.split("/", 1)
         if len(parts) != 2:
-            return PlainTextResponse("InvalidRequest", status_code=400)
+            return _error_response(400, "InvalidRequest")
         try:
             store.delete_object(parts[0], parts[1])
-        except ValueError:
-            return PlainTextResponse("InvalidBucketName", status_code=400)
+        except ValueError as exc:
+            return _client_error(exc)
         return Response(status_code=204)
 
     return app

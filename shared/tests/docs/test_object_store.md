@@ -26,3 +26,4 @@
 | `test_s3_object_store_interface_shape` | S3ObjectStore 具备接口要求的全部方法。 |
 | `test_s3_object_store_bucket_prefix` | 桶名前缀拼接正确。 |
 | `test_build_s3_object_store_uses_env` | 环境变量正确注入 endpoint 与前缀。 |
+| `test_get_object_returns_none_for_missing_key` | storage 返回可解析的 S3 NoSuchKey，缺失对象经 S3ObjectStore 返回 None 而不是抛异常。 |

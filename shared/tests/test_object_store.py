@@ -45,3 +45,15 @@ def test_build_s3_object_store_uses_env(monkeypatch):
     store = build_s3_object_store()
     assert store._client.meta.endpoint_url == "http://127.0.0.1:9999"
     assert store.bucket_prefix == "pre-"
+
+
+def test_get_object_returns_none_for_missing_key():
+    """缺失对象返回 None 而不是抛异常：storage 返回可解析的 S3 NoSuchKey。"""
+    import uuid
+    store = build_s3_object_store()
+    bucket = f"none-{uuid.uuid4().hex[:8]}"
+    store.create_bucket(bucket)
+    try:
+        assert store.get_object(bucket, "missing.md") is None
+    finally:
+        store.delete_object(bucket, "missing.md")
