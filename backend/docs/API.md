@@ -24,6 +24,37 @@ run_options 当前只支持正的有限数 tool_execution_timeout。上传使用
 
 key 是 document service 发布的文档归档内的 `documents/...` 路径。bucket 取自本会话的 documents 引用，key 跨会话不可达；key 不在归档内或会话没有归档时返回 404。会话缺失或空闲已回收同样 404。
 
+## GET /chat/sessions/{session_id}/files/{resource_id}
+
+下载会话里的原始文件字节（raw），供前端预览或保存原件：
+
+```text
+200: application/octet-stream
+Content-Disposition: attachment; filename*=UTF-8''%E5%90%88%E5%90%8C.pdf
+```
+
+resource_id 来自资源引用列表中的 raw 行；归属由 session_id 隔离，会话缺失、资源不存在或资源不是 raw 时返回 404/422。
+
+## GET /chat/sessions/{session_id}/documents
+
+列出会话文档归档内的处理后 md 文件，供前端浏览文档树：
+
+```json
+{"documents":[{"key":"documents/0001-合同/0001-付款期限为三十天.md","size":27}]}
+```
+
+key 与 GET /blocks 使用同一套 `documents/...` 路径；size 是字节大小。会话没有上传过文件时 404。
+
+## GET /chat/sessions/{session_id}/documents/content?key=...
+
+按归档 key 返回处理后 md 文件全文，供前端渲染文档内容：
+
+```json
+{"key":"documents/0001-合同/0001-付款期限为三十天.md","text":"付款期限为三十天。"}
+```
+
+key 不在归档内返回 404。段落级引用回溯请用 GET /blocks；整文件查看用本接口。
+
 返回 text/event-stream，从快照取得 session_id、state.active_turn_id 和 state.turns。
 
 ## GET /resume?session_id=...

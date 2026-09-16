@@ -202,6 +202,61 @@ def test_upload_broadcasts_resources_prepared_to_subscribers(tmp_path):
     asyncio.run(scenario())
 
 
+def test_download_file_returns_raw_bytes_and_rejects_others(tmp_path):
+    async def scenario():
+        registry, db, agent = await setup(tmp_path)
+        try:
+            session_id = await registry.create_session()
+            manager = await registry.get_or_create(session_id)
+            rows = await manager.upload_files(files=[file("a.pdf", b"raw-bytes")])
+            raw_id = next(row["id"] for row in rows if row["type"] == "raw")
+            resource, data = await manager.download_file(resource_id=raw_id)
+            assert resource["location"] == f"s3://res_{session_id}/raw/a.pdf"
+            assert data == b"raw-bytes"
+            with pytest.raises(NotFoundError):
+                await manager.download_file(resource_id="missing")
+            bundle_id = next(row["id"] for row in rows if row["type"] != "raw")
+            with pytest.raises(ValidationError):
+                await manager.download_file(resource_id=bundle_id)
+        finally:
+            await registry.close()
+            db.close()
+    asyncio.run(scenario())
+
+
+def test_list_and_read_processed_documents_from_archive(tmp_path):
+    async def scenario():
+        import io
+        import zipfile
+        registry, db, agent = await setup(tmp_path)
+        try:
+            session_id = await registry.create_session()
+            manager = await registry.get_or_create(session_id)
+            await manager.upload_files(files=[file("a.pdf")])
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, "w") as archive:
+                archive.writestr("documents/0001-合同/0001-付款期限为三十天.md", "付款期限为三十天。")
+                archive.writestr("documents/0001-合同/0002-违约责任.md", "违约方赔偿。")
+            agent.object_store.put_object(f"res_{session_id}", "documents.zip", buffer.getvalue())
+
+            entries = await manager.list_documents()
+            assert [(entry["key"], entry["size"]) for entry in entries] == [
+                ("documents/0001-合同/0001-付款期限为三十天.md", len("付款期限为三十天。".encode("utf-8"))),
+                ("documents/0001-合同/0002-违约责任.md", len("违约方赔偿。".encode("utf-8"))),
+            ]
+            document = await manager.read_document("documents/0001-合同/0002-违约责任.md")
+            assert document == {"key": "documents/0001-合同/0002-违约责任.md", "text": "违约方赔偿。"}
+            with pytest.raises(NotFoundError):
+                await manager.read_document("documents/missing.md")
+            empty = await registry.get_or_create(await registry.create_session())
+            with pytest.raises(NotFoundError):
+                await empty.list_documents()
+        finally:
+            await registry.close()
+            db.close()
+    asyncio.run(scenario())
+
+
 def test_concurrent_uploads_serialize_and_enforce_quota(tmp_path):
     """上传的配额校验与 document service 调用在命令队列内串行：并发上传各自基于最新状态判定。"""
     async def scenario():

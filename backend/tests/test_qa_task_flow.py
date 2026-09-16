@@ -106,6 +106,43 @@ def test_turn_uses_session_resources_after_upload(tmp_path):
         ]
 
 
+def test_file_download_and_document_read_endpoints(tmp_path):
+    """前端通道：raw 下载返回字节与文件名，documents 列表/内容走会话桶隔离。"""
+    import io
+    import zipfile
+    from backend.tests.test_session_manager import FakeStore
+    store = FakeStore()
+    agent = AutoAgent(object_store=store)
+    app = create_app(settings=BackendSettings(database_path=tmp_path / "files-api.sqlite3"),
+                     agent_client=agent, object_store=store)
+    with TestClient(app) as client:
+        session_id = client.post("/chat/sessions").json()["session_id"]
+        rows = client.post(f"/chat/sessions/{session_id}/files",
+                           files=[("files", ("合同.pdf", b"%PDF-1.4", "application/pdf"))]).json()["resources"]
+        raw_id = next(row["id"] for row in rows if row["type"] == "raw")
+        downloaded = client.get(f"/chat/sessions/{session_id}/files/{raw_id}")
+        assert downloaded.status_code == 200
+        assert downloaded.content == b"%PDF-1.4"
+        assert "attachment" in downloaded.headers["content-disposition"]
+        assert "UTF-8''%E5%90%88%E5%90%8C.pdf" in downloaded.headers["content-disposition"]
+
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("documents/0001-合同/0001-付款期限为三十天.md", "付款期限为三十天。")
+        store.put_object(f"res_{session_id}", "documents.zip", buffer.getvalue())
+
+        listed = client.get(f"/chat/sessions/{session_id}/documents")
+        assert [entry["key"] for entry in listed.json()["documents"]] == [
+            "documents/0001-合同/0001-付款期限为三十天.md"]
+        content = client.get(f"/chat/sessions/{session_id}/documents/content",
+                             params={"key": "documents/0001-合同/0001-付款期限为三十天.md"})
+        assert content.json() == {"key": "documents/0001-合同/0001-付款期限为三十天.md", "text": "付款期限为三十天。"}
+        assert client.get(f"/chat/sessions/{session_id}/documents/content",
+                          params={"key": "documents/missing.md"}).status_code == 404
+        assert client.get("/chat/sessions/missing/documents").status_code == 404
+        assert client.get(f"/chat/sessions/{session_id}/files/missing").status_code == 404
+
+
 def test_http_disconnect_does_not_cancel_background_turn(tmp_path):
     async def scenario():
         agent = FakeAgent()

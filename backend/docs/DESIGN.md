@@ -18,6 +18,10 @@ GET /resume → Registry 复用或恢复 manager；manager.attach 捕获当前�
   → session_history.build_snapshot 读取 chat_messages 与 chat_turns 渲染历史轮
   → 合并当前轮内存副本 → 首帧快照 → 后续增量
 
+GET /chat/sessions/{id}/files/{resource_id}、GET .../documents、GET .../documents/content?key=...、GET .../blocks?key=...
+  → manager 的读取通道：raw 字节经 ObjectStore 按资源行 location 读回；
+    documents 归档成员列表与整文件全文按本会话资源引用解析 bucket/key，跨会话不可达
+
 POST /cancel → Registry.get 取得现有 manager，只操作已加载会话
   → manager 事务提交 cancelled、清空 active_turn_id
   → TurnRuntime.cancel → 原 gRPC call.cancel()

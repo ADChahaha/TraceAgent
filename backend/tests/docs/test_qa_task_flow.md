@@ -5,3 +5,4 @@
 - `test_completion_and_resume_return_snapshot_without_cursor`：completion 发起、resume 恢复完成历史、不重复执行，不暴露 SSE 游标；取消终态幂等，校验错误和旧路由下线。
 - `test_multipart_prepares_resource_references`：上传后资源引用送到 completion，非法文件在调用前拒绝。
 - `test_http_disconnect_does_not_cancel_background_turn`：收到首帧后断开真实 ASGI 请求，后台继续消费并完成。
+- `test_file_download_and_document_read_endpoints`：raw 下载返回原始字节与 UTF-8 文件名的 attachment 头；documents 列表给出归档 md key，documents/content 按整文件 key 返回全文，缺失资源/key/会话返回 404。

@@ -32,8 +32,34 @@ class FakeCall:
         return event
 
 
-class FakeAgent:
+class FakeStore:
+    """内存对象存储替身，镜像 document service 发布 raw/documents.zip 的真实落点。"""
+
     def __init__(self):
+        self.objects = {}
+
+    def create_bucket(self, bucket):
+        self.objects.setdefault(bucket, {})
+
+    def put_object(self, bucket, key, data, content_type=None):
+        self.objects.setdefault(bucket, {})[key] = bytes(data)
+
+    def get_object(self, bucket, key):
+        return self.objects.get(bucket, {}).get(key)
+
+    def head_object(self, bucket, key):
+        data = self.objects.get(bucket, {}).get(key)
+        return None if data is None else {"size": len(data)}
+
+    def delete_object(self, bucket, key):
+        self.objects.get(bucket, {}).pop(key, None)
+
+    def list_objects(self, bucket, prefix=""):
+        return sorted(key for key in self.objects.get(bucket, {}) if key.startswith(prefix))
+
+
+class FakeAgent:
+    def __init__(self, object_store=None):
         self.calls = []
         self.requests = []
         self.created = asyncio.Queue()
@@ -41,21 +67,43 @@ class FakeAgent:
         self.prepared = []
         self.block_reads = []
         self.block_texts = {}
+        # 真实链路里 document service 把 raw 与 documents.zip 发布进会话桶；
+        # 替身注入同一个 store，读取路径测试的组成才与生产一致。
+        self.object_store = object_store
 
     async def prepare_resources(self, *, session_id, files, remove_raw=None):
         self.prepared.append((session_id, files, list(remove_raw or [])))
         bucket = f"res_{session_id}"
+        if self.object_store is not None:
+            self.object_store.create_bucket(bucket)
         refs = [{"type": "documents", "location": f"s3://{bucket}/documents.zip"},
                 {"type": "index", "location": f"s3://{bucket}/index"}]
         removed = {ref["location"] for ref in (remove_raw or [])}
         for file in files:
             location = f"s3://{bucket}/raw/{file['filename']}"
-            if location not in removed:
-                refs.append({"type": "raw", "location": location})
+            if location in removed:
+                continue
+            refs.append({"type": "raw", "location": location})
+            if self.object_store is not None:
+                self.object_store.put_object(bucket, f"raw/{file['filename']}", file["content"])
+        for ref in remove_raw or []:
+            from traceagent_shared.object_store import parse_resource_path
+            bucket_name, key = parse_resource_path(ref["location"])
+            if self.object_store is not None and ref["type"] == "raw":
+                self.object_store.delete_object(bucket_name, key)
         return refs
 
     async def read_blocks(self, *, bucket, keys):
         self.block_reads.append((bucket, list(keys)))
+        if self.object_store is not None:
+            import io
+            import zipfile
+            archive = self.object_store.get_object(bucket, "documents.zip")
+            if archive is not None:
+                with zipfile.ZipFile(io.BytesIO(archive)) as members:
+                    names = set(members.namelist())
+                    return [{"key": key, "text": members.read(key).decode("utf-8") if key in names else "",
+                             "found": key in names} for key in keys]
         return [{"key": key, "text": self.block_texts.get(key, ""), "found": key in self.block_texts}
                 for key in keys]
 
@@ -71,8 +119,9 @@ async def setup(tmp_path, **overrides):
     settings = BackendSettings(database_path=tmp_path / "sessions.sqlite3", **overrides)
     database = ThreadLocalDatabase(settings.database_path)
     initialize_database(database.connect())
-    agent = FakeAgent()
-    registry = SessionRegistry(database=database, agent_client=agent, settings=settings)
+    agent = FakeAgent(object_store=FakeStore())
+    registry = SessionRegistry(database=database, agent_client=agent, settings=settings,
+                               object_store=agent.object_store)
     await registry.start()
     return registry, database, agent
 

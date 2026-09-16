@@ -4,6 +4,11 @@ last updated: 2026-09-16
 
 ## 2026-09-16
 
+### 前端读取通道：原始文件下载与处理后 md 查看缺失
+
+- 补齐三条读取路径（均按会话资源引用解析 bucket/key，跨会话不可达）：manager.download_file（raw-only，经注入的 ObjectStore 读回字节）、manager.list_documents（解析 documents.zip 归档成员，返回 key+size）、manager.read_document（复用 document service ReadBlocks 按整文件 key 取全文，区别于段落级 read_block）。ObjectStore 以 object_store 参数注入 manager/registry/main.create_app，未注入时按环境构造；backend 依赖新增 traceagent-shared。路由新增 GET /chat/sessions/{id}/files/{resource_id}（octet-stream + UTF-8 文件名 Content-Disposition）、GET .../documents（成员列表）、GET .../documents/content?key=...（全文）。
+- TDD：FakeAgent 升级为向注入的 FakeStore 写入 raw/documents.zip 并应用 remove_raw 删除（替身镜像 document service 真实落点，读取路径的测试组成与生产一致）；manager 级 2 个测试与 ASGI 端点测试先行（旧实现 AttributeError 红）。backend 93 项通过（92+1）。
+
 ### 会话生命周期故障出口与文件业务串行化（问题 3 修复）
 
 - fail() 从"只标损坏"改为完整退出语义：置 broken、把 runtime 引用清空并取消执行、清空缓存 active_turn_id、补发挂起 pending_cancel 的响应（{"status": "failed"}）、关闭并清空订阅，最后生成尽力收口任务（把活跃轮条件更新为 failed/storage_failure、清 session 认领；数据库仍不可用时静默交给重启收口）。close() 等待收口任务完成，消除收口写与 db.close() 的连接竞争（曾触发 sqlite 段错误）。效果：一次事务写失败不再"命令循环卡死 + manager 永不回收"，空闲期限后 reaper 可回收，重载的会话直接可用；此前除 detach 外所有命令被拒直到重启。

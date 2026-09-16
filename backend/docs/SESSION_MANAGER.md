@@ -33,7 +33,7 @@ manager 对 runtime 的唯一反向通道是 `runtime.cancel()`：只设标志�
 | routes/chat.py | JSON/multipart 校验，调用 get_or_create + manager 命令（create/attach/cancel），生成 SSE 或 JSON |
 | session_registry.py | Manager 状态机（CREATING/READY/CLOSING）与加载权；回收与启动恢复；不含业务逻辑 |
 | turn_runtime.py | 自治执行体：建轮事务、agent 事件配组落库、终态收口、广播；持有 database 并自带事务壳，依赖经构造参数注入，不引用 manager |
-| session_manager.py | create/cancel/attach/upload/remove/replace_resources 六命令 FIFO 串行；create 与文件形状校验在入口完成；配额校验、document service 调用和资源替换在队列内串行；订阅管理；终态广播的 pending_cancel 补发；fail 损坏出口（清执行态、补发 cancel、尽力收口、close 等待收口任务）；向 runtime 注入 refresh/publish/fail 回调（_refresh_state/_runtime_publish） |
+| session_manager.py | create/cancel/attach/upload/remove/replace_resources 六命令 FIFO 串行；create 与文件形状校验在入口完成；配额校验、document service 调用和资源替换在队列内串行；订阅管理；终态广播的 pending_cancel 补发；fail 损坏出口（清执行态、补发 cancel、尽力收口、close 等待收口任务）；读取通道 download_file/list_documents/read_document/read_block（读路径不入队）；向 runtime 注入 refresh/publish/fail 回调（_refresh_state/_runtime_publish） |
 | turn_view.py | 过程事件折叠成当前轮 items，输出深拷贝快照 |
 | subscription.py | 独立有界队列，发布不阻塞，等待者取消不丢事件 |
 | session_history.py | 读取 chat_messages 与 chat_turns 渲染历史轮，不常驻 manager |
@@ -71,7 +71,7 @@ TurnRuntime.run（自治）
   → 异常/提前流结束/取消 → _finish 收口（cancelled 或 failed）
 ```
 
-文件上传和删除在独立的 document service 中完成，成功后 backend 原子替换 session 资源引用；轮次执行只调用 agent service，不重复准备资源。上传/删除/替换都是队列命令：校验、document service 调用和资源替换对同一会话严格串行，资源准备失败不改变会话资源、不会启动轮次，调用方可重试上传或删除。对 agent 下发的 resource_path 与 resources.prepared 事件 payload 一律只含 bundle 引用（documents/index）；raw 是会话资源清单的一部分，用于删除和限额校验，不下发给 agent。前端回溯引用经 manager.read_block：bucket 取自本会话 documents 引用并透传 document service 的 ReadBlocks，段落文本按归档内 key 提取，key 跨会话不可达。
+文件上传和删除在独立的 document service 中完成，成功后 backend 原子替换 session 资源引用；轮次执行只调用 agent service，不重复准备资源。上传/删除/替换都是队列命令：校验、document service 调用和资源替换对同一会话严格串行，资源准备失败不改变会话资源、不会启动轮次，调用方可重试上传或删除。对 agent 下发的 resource_path 与 resources.prepared 事件 payload 一律只含 bundle 引用（documents/index）；raw 是会话资源清单的一部分，用于删除和限额校验，不下发给 agent。前端读取通道：原始文件经 manager.download_file 按资源行 location 经 ObjectStore 读回字节（raw-only），处理后文档经 manager.list_documents 解析 documents.zip 归档成员列表、manager.read_document 复用 document service 的 ReadBlocks 按整文件 key 取全文；段落级回溯走 manager.read_block。三条读取路径的 bucket/key 都取自本会话资源引用，跨会话不可达。
 
 gRPC 分别使用 document service 的 PrepareResources 与 agent service 的 ChatCompletion；取消使用原 call.cancel()。没有 CancelCompletion、GetCompletion 或 agent 端 resume RPC。agent_completion_id 用于关联，本身不能重新接入远端运行。
 

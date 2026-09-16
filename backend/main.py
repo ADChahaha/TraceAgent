@@ -17,6 +17,7 @@ def create_app(
     settings: BackendSettings | None = None,
     agent_client=None,
     document_client=None,
+    object_store=None,
 ) -> FastAPI:
     settings = settings or BackendSettings.from_env()
 
@@ -40,6 +41,7 @@ def create_app(
             settings=settings,
             agent_client=resolved_agent_client,
             document_client=resolved_document_client,
+            object_store=object_store,
         )
         app.state.database = database
         app.state.agent_client = resolved_agent_client

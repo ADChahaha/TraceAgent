@@ -27,11 +27,12 @@ class Entry:
 
 
 class SessionRegistry:
-    def __init__(self, *, database, agent_client, settings, document_client=None):
+    def __init__(self, *, database, agent_client, settings, document_client=None, object_store=None):
         self.database = database
         self.agent_client = agent_client
         # 测试替身和旧调用方可暂时复用同一对象；生产入口始终注入独立 client。
         self.document_client = document_client or agent_client
+        self.object_store = object_store
         self.settings = settings
         self.entries = {}
         self.lock = asyncio.Lock()
@@ -122,7 +123,7 @@ class SessionRegistry:
         session, resources = await asyncio.to_thread(read)
         return SessionManager(session=session, resources=resources, database=self.database,
                               agent_client=self.agent_client, document_client=self.document_client,
-                              settings=self.settings)
+                              settings=self.settings, object_store=self.object_store)
 
     def _create_session(self, session_id):
         """单条写入也走统一事务边界。"""

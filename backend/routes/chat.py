@@ -2,9 +2,10 @@
 
 import asyncio
 import json
+from urllib.parse import quote
 
 from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError as PydanticValidationError
 from starlette.background import BackgroundTask
 from starlette.datastructures import UploadFile
@@ -129,6 +130,42 @@ async def read_block(request: Request, session_id: str, key: str):
     try:
         manager = await request.app.state.session_registry.get_or_create(session_id)
         return await manager.read_block(key)
+    except BackendServiceError as exc:
+        raise_http_error(exc)
+
+
+@router.get("/chat/sessions/{session_id}/files/{resource_id}")
+async def download_file(request: Request, session_id: str, resource_id: str):
+    """下载会话里的原始文件字节；资源归属由会话隔离。"""
+    try:
+        manager = await request.app.state.session_registry.get_or_create(session_id)
+        resource, data = await manager.download_file(resource_id=resource_id)
+    except BackendServiceError as exc:
+        raise_http_error(exc)
+    filename = resource["location"].rsplit("/", 1)[-1]
+    return Response(
+        content=data,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
+@router.get("/chat/sessions/{session_id}/documents")
+async def list_documents(request: Request, session_id: str):
+    """列出会话归档内的处理后 md 文件（key 与大小），供前端浏览文档树。"""
+    try:
+        manager = await request.app.state.session_registry.get_or_create(session_id)
+        return {"documents": await manager.list_documents()}
+    except BackendServiceError as exc:
+        raise_http_error(exc)
+
+
+@router.get("/chat/sessions/{session_id}/documents/content")
+async def read_document(request: Request, session_id: str, key: str):
+    """按归档 key 返回处理后 md 文件全文，供前端查看文档。"""
+    try:
+        manager = await request.app.state.session_registry.get_or_create(session_id)
+        return await manager.read_document(key)
     except BackendServiceError as exc:
         raise_http_error(exc)
 

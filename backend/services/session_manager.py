@@ -7,9 +7,11 @@ active_turn_id、订阅者、资源引用），turn 执行态全部在 TurnRunti
 
 import asyncio
 import copy
+import io
 import math
 import sqlite3
 import uuid
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,6 +21,7 @@ from backend.services.session_history import ResumeContext
 from backend.services.subscription import Subscription
 from backend.services.time_utils import utc_now
 from backend.services.turn_runtime import TurnRuntime
+from traceagent_shared.object_store import parse_resource_path
 
 TERMINAL = {"completed", "cancelled", "failed"}
 
@@ -31,13 +34,14 @@ class Command:
 
 
 class SessionManager:
-    def __init__(self, *, session, resources, database, agent_client, document_client, settings):
+    def __init__(self, *, session, resources, database, agent_client, document_client, settings, object_store=None):
         self.session_id = session["id"]
         self.session = session
         self.resources = resources
         self.database = database
         self.agent_client = agent_client
         self.document_client = document_client
+        self.object_store = object_store
         self.settings = settings
         self.runtime = None
         self.subscribers = {}
@@ -317,6 +321,49 @@ class SessionManager:
         if not blocks or not blocks[0]["found"]:
             raise NotFoundError("段落不存在")
         return blocks[0]
+
+    def _documents_location(self):
+        """本会话 documents 引用的 s3:// 定位；没有归档的会话直接拒绝。"""
+        documents = next((row for row in self.resources if row["type"] == "documents"), None)
+        if documents is None:
+            raise NotFoundError("会话没有文档归档")
+        return documents["location"]
+
+    def _store(self):
+        """读取通道的对象存储访问；未显式注入时按环境构造。"""
+        from traceagent_shared.object_store import build_s3_object_store
+        return self.object_store if self.object_store is not None else build_s3_object_store()
+
+    async def download_file(self, resource_id):
+        """读取会话原始文件字节，供前端下载；资源行归属与类型在这里校验。"""
+        row = crud.get_resource(self.database.connect(), resource_id)
+        if row is None or row["session_id"] != self.session_id:
+            raise NotFoundError("资源不存在")
+        if row["type"] != "raw":
+            raise ValidationError("只能下载原始文件")
+        bucket, key = parse_resource_path(row["location"])
+        data = await asyncio.to_thread(lambda: self._store().get_object(bucket, key))
+        if data is None:
+            raise NotFoundError("文件不存在")
+        return row, data
+
+    async def list_documents(self):
+        """列出会话归档内的处理后 md 文件（key 与大小），供前端浏览文档树。"""
+        bucket, archive_key = parse_resource_path(self._documents_location())
+        archive = await asyncio.to_thread(lambda: self._store().get_object(bucket, archive_key))
+        if archive is None:
+            raise NotFoundError("会话没有文档归档")
+        with zipfile.ZipFile(io.BytesIO(archive)) as members:
+            return [{"key": info.filename, "size": info.file_size} for info in members.infolist()
+                    if not info.is_dir()]
+
+    async def read_document(self, key):
+        """读取会话归档内单个 md 文件全文，供前端查看处理后文档。"""
+        bucket = parse_resource_path(self._documents_location())[0]
+        blocks = await self.document_client.read_blocks(bucket=bucket, keys=[key])
+        if not blocks or not blocks[0]["found"]:
+            raise NotFoundError("文档不存在")
+        return {"key": key, "text": blocks[0]["text"]}
 
     async def replace_resources(self, refs, sizes):
         return await self._ask("replace_resources", refs, sizes)
