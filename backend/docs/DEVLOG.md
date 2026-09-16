@@ -4,6 +4,12 @@ last updated: 2026-09-16
 
 ## 2026-09-16
 
+### 会话生命周期故障出口与文件业务串行化（问题 3 修复）
+
+- fail() 从"只标损坏"改为完整退出语义：置 broken、把 runtime 引用清空并取消执行、清空缓存 active_turn_id、补发挂起 pending_cancel 的响应（{"status": "failed"}）、关闭并清空订阅，最后生成尽力收口任务（把活跃轮条件更新为 failed/storage_failure、清 session 认领；数据库仍不可用时静默交给重启收口）。close() 等待收口任务完成，消除收口写与 db.close() 的连接竞争（曾触发 sqlite 段错误）。效果：一次事务写失败不再"命令循环卡死 + manager 永不回收"，空闲期限后 reaper 可回收，重载的会话直接可用；此前除 detach 外所有命令被拒直到重启。
+- upload_files/remove_file 的业务主体移入命令队列（新命令 upload/remove）：与调用方输入无关的文件形状校验留在入队前，配额检查（依赖会话当前资源状态）、document service 调用和资源替换在 _handle_upload/_handle_remove 内串行执行；_handle_replace_resources 收缩为转调新抽取的 _replace_resources 事务壳，public get_file（唯一调用者是 remove_file）并入 _handle_remove。修复并发上传的配额 TOCTOU、last-write-wins 与失败方孤儿 bundle。
+- TDD：新增 test_finish_write_failure_resolves_cancel_reclaims_and_recovers（旧实现下 cancel 等待悬挂超时、close 挂起）与 test_concurrent_uploads_serialize_and_enforce_quota（旧实现下两笔并发上传都成功，last-write-wins）。backend 90 项通过（88+2），test_session_manager+test_session_files 连续 5 轮全绿（曾暴露收口任务与 teardown 竞争，由 close() 等待修复）。
+
 ### 已完成工作
 
 - 打通引用回溯读链路：document service 新增 ReadBlocks RPC（按会话桶拉取 documents.zip 归档，按 key 精确提取段落文本，缺失 key 返回 found=false，缺桶/无归档映射 NOT_FOUND）；backend 的 DocumentResourceClient 增加 read_blocks 映射；manager.read_block 从本会话 documents 引用解析 bucket 并转发（桶按会话隔离，跨会话不可达）；新增 HTTP 端点 GET /chat/sessions/{id}/blocks?key=... 供前端回溯答案中的段落引用。proto 用 canonical 方式重新生成（-I. 输出到仓库根，agent/tests 的 packaging 测试提供生成方式权威），修复此前错误的生成方式。TDD：document service RPC 测试 3 个、client 往返测试、manager 归属测试、ASGI 端点测试先行。全仓 349 项通过（agent 203+3 skip / backend 88 / document_service+shared+storage 58）。

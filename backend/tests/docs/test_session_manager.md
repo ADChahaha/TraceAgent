@@ -25,3 +25,4 @@
 - `test_get_unknown_session_raises_not_found`：Registry.get 对未加载会话返回 NotFound，不触发冷加载。
 - `test_missing_tool_result_does_not_fabricate_history`：缺少真实工具结果时拒绝入库，不补造失败正文。
 - `test_registry_can_load_after_cleanup`：Registry 清理资源后仍可重新加载已有会话，不通过服务关闭标志拒绝访问。
+- `test_finish_write_failure_resolves_cancel_reclaims_and_recovers`：收口写事务失败时挂起的 cancel 立即补发 {"status": "failed"}，manager 清空执行态和缓存认领、关闭订阅；收口任务把活跃轮写为 failed/storage_failure 并清 session 认领；close() 与 reaper 正常完成，重载的会话可直接发起新轮次。

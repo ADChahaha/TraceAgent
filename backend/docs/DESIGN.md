@@ -8,7 +8,7 @@ backend 管理多轮 session、稳定模型消息和页面恢复，通过独立 
 POST /chat/completion → routes/chat.py 校验输入
   → SessionRegistry.get_or_create 复用或取得创建权，返回唯一 manager
   → SessionManager.create_completion 校验并串行化 create 命令（事务在 TurnRuntime.begin）
-  → 会话文件：manager.upload_files/remove_file 校验并调用 document_client.prepare_resources → DocumentResourceService gRPC
+  → 会话文件：manager.upload_files/remove_file 以队列命令串行执行（配额校验、document_client.prepare_resources → DocumentResourceService gRPC、资源替换）
   → SessionManager 替换资源引用
   → TurnRuntime → AgentClient.chat_completion → AgentService gRPC
   → agent 事件交回 manager → 校验身份和状态 → 事务落库
@@ -62,7 +62,7 @@ chat_messages 只保存完整模型历史。工具组按原始 call_id 配齐实
 
 manager 只缓存当前 turn，终结后释放。SSE 在捕获的活跃轮终结时关闭，空闲会话只发送一次快照。无活跃轮、执行句柄、订阅及待处理命令时才回收 manager：entry 先从 READY 置为 CLOSING，锁外关闭后移除，此间该 session 的请求收到冲突。cancel 只操作已加载的 manager，空闲已回收会话返回 404。backend 重启把遗留活跃轮标为 failed/backend_restarted，不重新执行 agent。
 
-数据库事务失败会回滚并将 manager 标记损坏、取消执行、关闭订阅；当前没有自动重建损坏 manager。部署使用单 backend 进程、单用户；尚无跨进程 owner 协调和租户鉴权。旧 task 路由已删除，frontend 尚未迁移。
+数据库事务失败会回滚并将 manager 标记损坏、取消执行、清空执行态与缓存认领、补发挂起的 cancel、关闭订阅，并尽力把活跃轮收口为 failed（数据库仍不可用时交给重启收口）；损坏 manager 在空闲期限后可被回收，重载即恢复，当前没有在线原地重建。部署使用单 backend 进程、单用户；尚无跨进程 owner 协调和租户鉴权。旧 task 路由已删除，frontend 尚未迁移。
 
 [详细设计](SESSION_MANAGER.md) · [接口](API.md) · [数据表](table.md)。Agent 合并方案已取消，AGENT_MERGE.md 仅为历史草案。
 

@@ -33,7 +33,7 @@ manager 对 runtime 的唯一反向通道是 `runtime.cancel()`：只设标志�
 | routes/chat.py | JSON/multipart 校验，调用 get_or_create + manager 命令（create/attach/cancel），生成 SSE 或 JSON |
 | session_registry.py | Manager 状态机（CREATING/READY/CLOSING）与加载权；回收与启动恢复；不含业务逻辑 |
 | turn_runtime.py | 自治执行体：建轮事务、agent 事件配组落库、终态收口、广播；持有 database 并自带事务壳，依赖经构造参数注入，不引用 manager |
-| session_manager.py | create/cancel/attach 三命令 FIFO 串行，create 入口校验内容和 run_options；upload_files/remove_file 业务（校验、document service、资源替换）；订阅管理；终态广播的 pending_cancel 补发；向 runtime 注入 refresh/publish/fail 回调（_refresh_state/_runtime_publish） |
+| session_manager.py | create/cancel/attach/upload/remove/replace_resources 六命令 FIFO 串行；create 与文件形状校验在入口完成；配额校验、document service 调用和资源替换在队列内串行；订阅管理；终态广播的 pending_cancel 补发；fail 损坏出口（清执行态、补发 cancel、尽力收口、close 等待收口任务）；向 runtime 注入 refresh/publish/fail 回调（_refresh_state/_runtime_publish） |
 | turn_view.py | 过程事件折叠成当前轮 items，输出深拷贝快照 |
 | subscription.py | 独立有界队列，发布不阻塞，等待者取消不丢事件 |
 | session_history.py | 读取 chat_messages 与 chat_turns 渲染历史轮，不常驻 manager |
@@ -59,8 +59,8 @@ POST /chat/completion 输入 content、session_id、run_options
 
 ```text
 SessionRegistry.get_or_create → 唯一 manager
-  → manager.upload_files/remove_file（校验 -> DocumentResourceClient.prepare_resources）
-  → manager.replace_resources 命令：事务替换资源引用
+  → manager.upload_files/remove_file 以队列命令串行执行：
+    队列内校验累计配额（基于最新资源状态） -> DocumentResourceClient.prepare_resources -> 事务替换资源引用
   → 资源变更完成后才允许下一轮使用新引用
 
 TurnRuntime.run（自治）
@@ -71,7 +71,7 @@ TurnRuntime.run（自治）
   → 异常/提前流结束/取消 → _finish 收口（cancelled 或 failed）
 ```
 
-文件上传和删除在独立的 document service 中完成，成功后 backend 原子替换 session 资源引用；轮次执行只调用 agent service，不重复准备资源。资源准备失败不会启动轮次，调用方可重试上传或删除。对 agent 下发的 resource_path 与 resources.prepared 事件 payload 一律只含 bundle 引用（documents/index）；raw 是会话资源清单的一部分，用于删除和限额校验，不下发给 agent。前端回溯引用经 manager.read_block：bucket 取自本会话 documents 引用并透传 document service 的 ReadBlocks，段落文本按归档内 key 提取，key 跨会话不可达。
+文件上传和删除在独立的 document service 中完成，成功后 backend 原子替换 session 资源引用；轮次执行只调用 agent service，不重复准备资源。上传/删除/替换都是队列命令：校验、document service 调用和资源替换对同一会话严格串行，资源准备失败不改变会话资源、不会启动轮次，调用方可重试上传或删除。对 agent 下发的 resource_path 与 resources.prepared 事件 payload 一律只含 bundle 引用（documents/index）；raw 是会话资源清单的一部分，用于删除和限额校验，不下发给 agent。前端回溯引用经 manager.read_block：bucket 取自本会话 documents 引用并透传 document service 的 ReadBlocks，段落文本按归档内 key 提取，key 跨会话不可达。
 
 gRPC 分别使用 document service 的 PrepareResources 与 agent service 的 ChatCompletion；取消使用原 call.cancel()。没有 CancelCompletion、GetCompletion 或 agent 端 resume RPC。agent_completion_id 用于关联，本身不能重新接入远端运行。
 
@@ -79,14 +79,15 @@ gRPC 分别使用 document service 的 PrepareResources 与 agent service 的 Ch
 
 串行化分两层，对齐 Codex 的"core 串行化 op、app-server 串行化投影"：
 
-- manager 命令队列：create/cancel/attach/detach 编码为 Command(name, args, reply) 进入有界 FIFO 队列，_run 是唯一消费者。对外业务入口只有 create/cancel/attach，内容和 run_options 校验在 create 入口完成；detach/close 是生命周期管道。外部命令队列满直接拒绝；调用方协程取消不撤销已入队命令，handler 产生但无人接收的订阅由 _run 统一回收。
-- runtime 内部串行：单任务顺序处理事件并顺序 await 每次写，无需应用层写锁；每次写独占一个线程池线程，thread-local 连接保证同一连接上事务不重叠，跨连接写竞争由 SQLite 文件锁和 busy_timeout 排队。runtime 的写失败经 `manager.fail()` 标记损坏：拒绝后续命令、取消执行、关闭订阅。
+- manager 命令队列：create/cancel/attach/detach/upload/remove/replace_resources 编码为 Command(name, args, reply) 进入有界 FIFO 队列，_run 是唯一消费者。对外业务入口只有 create/cancel/attach/upload_files/remove_file；create 内容与 run_options 校验、文件形状校验在入口完成，依赖会话状态的配额校验随命令在队列内执行——并发上传各自基于最新资源状态判定，不存在读改写竞争。外部命令队列满直接拒绝；调用方协程取消不撤销已入队命令，handler 产生但无人接收的订阅由 _run 统一回收。
+- runtime 内部串行：单任务顺序处理事件并顺序 await 每次写，无需应用层写锁；每次写独占一个线程池线程，thread-local 连接保证同一连接上事务不重叠，跨连接写竞争由 SQLite 文件锁和 busy_timeout 排队。
+- 写失败的出口：runtime 的写失败经 `manager.fail()` 标记损坏，fail 同时清空 runtime 引用与缓存 active_turn_id（让 idle 条件可满足）、补发挂起 pending_cancel 的响应（{"status": "failed"}）、关闭并清空订阅，并生成尽力收口任务：活跃轮条件更新为 failed/storage_failure、session 认领清空（数据库仍不可用时交给重启收口，任务静默结束）。收口任务由 close() 等待完成，避免与数据库关闭竞争。损坏 manager 拒绝除 detach 外的命令，但空闲期限后可被 reaper 回收，重载的会话直接可用。
 
 cancel 语义对齐 Codex 的 interrupt：`_handle_cancel` 校验轮次身份后登记 `pending_cancel` 等待者并调 `runtime.cancel()`，命令即返回等待；runtime 观察标志后自己写 cancelled 终态并广播，manager 在 broadcast 终态时补发 cancel 响应。已终结的轮次返回原终态。
 
 service 的数据查询和写入统一调用 CRUD，不直接执行 SQL。每个写事务放入一次 asyncio.to_thread，使用线程内连接和 crud.transaction；CRUD 写函数只执行语句、永不自行提交，transaction() 负责单条和多条写入统一的 BEGIN IMMEDIATE、提交及异常回滚。成功提交后才更新 TurnView、广播。
 
-损坏 manager 当前不会在线自动重建；backend 重启扫描持久化状态收口遗留轮次。投影更新异常同样停止该 manager，避免数据库与内存分歧后继续服务。
+损坏 manager 当前不会在线原地重建；收口任务已把活跃轮标为 failed 并清空认领，回收重载即恢复。backend 重启扫描持久化状态收口遗留轮次。投影更新异常同样停止该 manager，避免数据库与内存分歧后继续服务。
 
 不同 session 可并发处理，但 SQLite 写事务仍由数据库协调。当前必须单 backend worker；进程内唯一 manager 不能解决多进程 owner 问题。
 

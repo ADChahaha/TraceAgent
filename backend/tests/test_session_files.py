@@ -200,3 +200,27 @@ def test_upload_broadcasts_resources_prepared_to_subscribers(tmp_path):
             await registry.close()
             db.close()
     asyncio.run(scenario())
+
+
+def test_concurrent_uploads_serialize_and_enforce_quota(tmp_path):
+    """上传的配额校验与 document service 调用在命令队列内串行：并发上传各自基于最新状态判定。"""
+    async def scenario():
+        registry, db, agent = await setup(tmp_path, upload_max_files=1)
+        try:
+            session_id = await registry.create_session()
+            manager = await registry.get_or_create(session_id)
+            results = await asyncio.gather(
+                manager.upload_files(files=[file("a.pdf")]),
+                manager.upload_files(files=[file("b.pdf")]),
+                return_exceptions=True)
+            assert isinstance(results[0], list)
+            assert isinstance(results[1], ValidationError)
+            # 失败方在校验阶段被拒，未触达 document service，也无资源替换。
+            assert agent.prepared == [(session_id, [file("a.pdf")], [])]
+            rows = db.connect().execute("SELECT location FROM chat_resources").fetchall()
+            assert [row["location"] for row in rows if "/raw/" in row["location"]] == [
+                f"s3://res_{session_id}/raw/a.pdf"]
+        finally:
+            await registry.close()
+            db.close()
+    asyncio.run(scenario())

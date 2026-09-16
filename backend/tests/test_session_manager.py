@@ -703,3 +703,53 @@ def test_registry_can_load_after_cleanup(tmp_path):
             await registry.close()
             db.close()
     asyncio.run(scenario())
+
+
+def test_finish_write_failure_resolves_cancel_reclaims_and_recovers(tmp_path, monkeypatch):
+    """收口写事务失败不能卡死命令循环：cancel 立即补发、manager 可回收、数据库尽力收口后可重载。"""
+    async def scenario():
+        import sqlite3
+        registry, db, agent = await setup(tmp_path)
+        try:
+            manager, context = await new_session_complete(registry, "问题")
+            await agent.created.get()
+            attempts = {"n": 0}
+            real_update = crud.update_turn_status_if_current
+            def flaky_update(*args, **kwargs):
+                attempts["n"] += 1
+                if attempts["n"] == 1:
+                    raise sqlite3.OperationalError("injected finish failure")
+                return real_update(*args, **kwargs)
+            monkeypatch.setattr(crud, "update_turn_status_if_current", flaky_update)
+
+            cancelled = asyncio.create_task(manager.cancel(context.turn_id))
+            # cancel 的等待者必须补发响应，而不是随写失败永远悬挂。
+            assert await asyncio.wait_for(cancelled, 2) == {"status": "failed"}
+            assert manager.broken
+            assert manager.runtime is None
+            assert manager.active_turn_id is None
+            assert not manager.subscribers
+
+            def turn_status():
+                return db.connect().execute(
+                    "SELECT status FROM chat_turns WHERE id=?", (context.turn_id,)).fetchone()[0]
+
+            # 尽力收口：活跃轮写 failed、session 认领清空，重载后的会话可用。
+            await wait_for_condition(lambda: turn_status() == "failed")
+            assert db.connect().execute(
+                "SELECT active_turn_id FROM chat_sessions WHERE id=?", (manager.session_id,)).fetchone()[0] is None
+            # close() 必须完成而不是挂在命令循环上。
+            await asyncio.wait_for(manager.close(), 2)
+            manager.last_activity = 0
+            await registry.evict_idle()
+            assert manager.session_id not in registry.entries
+            reloaded = await registry.get_or_create(manager.session_id)
+            retried = await reloaded.create_completion(content="重试", run_options={})
+            assert reloaded.active_turn_id == retried.turn_id
+        finally:
+            try:
+                await asyncio.wait_for(registry.close(), 3)
+            except asyncio.TimeoutError:
+                pass
+            db.close()
+    asyncio.run(scenario())

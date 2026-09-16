@@ -1,4 +1,4 @@
-"""会话级命令串行化：create / cancel / attach / get_file / replace_resources + 订阅管理。
+"""会话级命令串行化：create / cancel / attach / upload / remove / replace_resources + 订阅管理。
 
 对应 codex app-server 的 ThreadState：只拥有 session 级状态（session 行、
 active_turn_id、订阅者、资源引用），turn 执行态全部在 TurnRuntime。manager 对 runtime
@@ -44,6 +44,7 @@ class SessionManager:
         self.pending_cancel = None
         self.commands = asyncio.Queue(maxsize=settings.session_command_limit)
         self.closed = self.closing = self.broken = False
+        self.recovery_task = None
         self.last_activity = asyncio.get_running_loop().time()
         self.task = asyncio.create_task(self._run(), name=f"session:{self.session_id}")
 
@@ -52,12 +53,38 @@ class SessionManager:
         return self.session["active_turn_id"]
 
     def fail(self):
-        """runtime 事务失败时标记 manager 损坏：拒绝后续命令并断开订阅。"""
+        """事务写失败时标记 manager 损坏：清空执行态让 idle 可通过，补发挂起的
+        cancel，断开订阅，并尽力把活跃轮收口为 failed 让回收重载后的会话可用。"""
         self.broken = True
-        if self.runtime is not None:
-            self.runtime.cancel()
+        runtime, self.runtime = self.runtime, None
+        if runtime is not None:
+            runtime.cancel()
+        turn_id = self.active_turn_id
+        self.session = {**self.session, "active_turn_id": None}
+        if self.pending_cancel is not None:
+            pending, self.pending_cancel = self.pending_cancel, None
+            if not pending.reply.done():
+                pending.reply.set_result({"status": "failed"})
         for subscription in self.subscribers.values():
             subscription.close()
+        self.subscribers.clear()
+        self.recovery_task = asyncio.create_task(self._recover_active_turn(turn_id))
+
+    async def _recover_active_turn(self, turn_id):
+        """尽力收口：活跃轮标 failed、session 认领清空；数据库仍不可用时交给重启收口。"""
+        def recover():
+            db = self.database.connect()
+            with crud.transaction(db):
+                if turn_id is not None:
+                    crud.update_turn_status_if_current(db, turn_id=turn_id,
+                                                       current_statuses={"queued", "in_progress", "cancelling"},
+                                                       status="failed", now=utc_now(), error="storage_failure")
+                crud.update_session(db, session_id=self.session_id, now=utc_now(), clear_active_turn=True,
+                                    status="ready")
+        try:
+            await asyncio.to_thread(recover)
+        except Exception:
+            pass
 
     def _recycle_subscription(self, result):
         if isinstance(result, ResumeContext):
@@ -214,21 +241,21 @@ class SessionManager:
         if not self.closed:
             await self._ask("detach", subscription_id)
 
-    async def get_file(self, resource_id):
-        return await self._ask("get_file", resource_id)
-
-    async def _handle_get_file(self, resource_id):
-        row = crud.get_resource(self.database.connect(), resource_id)
-        if row is None or row["session_id"] != self.session_id:
-            raise NotFoundError("资源不存在")
-        if row["type"] != "raw":
-            raise ValidationError("只能删除原始文件")
-        return row
+    async def _handle_detach(self, subscription_id):
+        subscription = self.subscribers.pop(subscription_id, None)
+        if subscription:
+            subscription.close()
 
     async def upload_files(self, files):
-        """会话级上传：校验 -> document service 物化重建 -> 原子替换资源引用。"""
+        """会话级上传：与调用方输入无关的文件形状校验在入队前完成；
+        依赖会话状态的配额检查、document service 物化和资源替换作为
+        一个命令在队列内执行，和其他命令严格串行，避免并发读改写。"""
         if not files:
             raise ValidationError("files 不能为空")
+        self._check_file_shapes(files)
+        return await self._ask("upload", files)
+
+    def _check_file_shapes(self, files):
         filenames = set()
         for file in files:
             filename = file.get("filename") if isinstance(file, dict) else None
@@ -242,6 +269,9 @@ class SessionManager:
                 raise ValidationError("只支持 PDF/DOCX 文件")
             if not isinstance(content, bytes) or not content:
                 raise ValidationError("文件内容不能为空")
+
+    async def _handle_upload(self, files):
+        """基于当前会话状态校验配额 -> document service 物化重建 -> 原子替换资源引用。"""
         raw_rows = [row for row in self.resources if row["type"] == "raw"]
         if len(raw_rows) + len(files) > self.settings.upload_max_files:
             raise ValidationError("会话文件数超过限制")
@@ -249,15 +279,22 @@ class SessionManager:
         if total > self.settings.upload_max_bytes:
             raise ValidationError("会话资源总量超过限制")
         refs = await self.document_client.prepare_resources(session_id=self.session_id, files=files)
-        return await self.replace_resources(refs, self._raw_sizes(refs, files))
+        return await self._replace_resources(refs, self._raw_sizes(refs, files))
 
     async def remove_file(self, resource_id):
         """删除会话里的原始文件：document service 排除 raw 并重建 bundle，再替换资源引用。"""
-        resource = await self.get_file(resource_id)
+        return await self._ask("remove", resource_id)
+
+    async def _handle_remove(self, resource_id):
+        row = crud.get_resource(self.database.connect(), resource_id)
+        if row is None or row["session_id"] != self.session_id:
+            raise NotFoundError("资源不存在")
+        if row["type"] != "raw":
+            raise ValidationError("只能删除原始文件")
         refs = await self.document_client.prepare_resources(
             session_id=self.session_id, files=[],
-            remove_raw=[{"type": resource["type"], "location": resource["location"]}])
-        return await self.replace_resources(refs, {})
+            remove_raw=[{"type": row["type"], "location": row["location"]}])
+        return await self._replace_resources(refs, {})
 
     @staticmethod
     def _raw_sizes(refs, files):
@@ -285,6 +322,9 @@ class SessionManager:
         return await self._ask("replace_resources", refs, sizes)
 
     async def _handle_replace_resources(self, refs, sizes):
+        return await self._replace_resources(refs, sizes)
+
+    async def _replace_resources(self, refs, sizes):
         """以 agent 返回的全量 refs 替换会话资源；raw 尺寸优先取本次上传，未变的沿用旧值。"""
         old_sizes = {row["location"]: row["size_bytes"] for row in self.resources if row["type"] == "raw"}
 
@@ -317,6 +357,8 @@ class SessionManager:
         if self.runtime is not None and not self.broken:
             self.runtime.cancel()
             await self.runtime.wait_closed()
+        if self.recovery_task is not None:
+            await asyncio.gather(self.recovery_task, return_exceptions=True)
         await self.commands.put(Command("stop", (), asyncio.get_running_loop().create_future()))
         await self.task
 
