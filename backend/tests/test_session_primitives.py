@@ -61,7 +61,7 @@ def test_runtime_cancel_before_first_step_cleans_up():
             pass
 
         runtime = TurnRuntime(session_id="s", agent_client=None, write=write, publish=publish, fail=fail,
-                              turn_id="turn", run_options={})
+                              turn_id="turn", content="问题", run_options={})
         runtime.start()
         runtime.cancel()
         await asyncio.gather(runtime.task, return_exceptions=True)

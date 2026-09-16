@@ -205,6 +205,23 @@ def test_attach_snapshot_survives_completion_and_next_turn(tmp_path):
     asyncio.run(scenario())
 
 
+def test_created_turn_snapshot_carries_user_message(tmp_path):
+    async def scenario():
+        registry, db, agent = await setup(tmp_path)
+        try:
+            manager, context = await new_session_complete(registry, "问题")
+            snapshot = await build_snapshot(db, context)
+            current = snapshot["state"]["turns"][-1]
+            assert current["id"] == context.turn_id
+            assert current["status"] == "in_progress"
+            assert [item["kind"] for item in current["items"]] == ["user"]
+            assert current["items"][0]["text"] == "问题"
+        finally:
+            await registry.close()
+            db.close()
+    asyncio.run(scenario())
+
+
 def test_cancel_rejects_late_event_and_does_not_cancel_new_turn(tmp_path):
     async def scenario():
         registry, db, agent = await setup(tmp_path)
@@ -343,47 +360,48 @@ def test_cancelled_create_during_handler_recycles_subscription(tmp_path, monkeyp
             crud.create_session(db.connect(), session_id="cold", status="ready", now="now")
             manager = await registry.get_or_create("cold")
             entered, release = asyncio.Event(), asyncio.Event()
-            original_transaction = manager._transaction
+            original_commit = manager._runtime_commit
 
-            async def gated_transaction(operation, events):
+            async def gated_commit(operation, events):
                 entered.set()
                 await release.wait()
-                return await original_transaction(operation, events)
+                return await original_commit(operation, events)
 
-            monkeypatch.setattr(manager, "_transaction", gated_transaction)
+            monkeypatch.setattr(manager, "_runtime_commit", gated_commit)
 
             request = asyncio.create_task(manager.create_completion(content="问题", run_options={}))
-            await entered.wait()
-            request.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await request
-            release.set()
+            try:
+                await entered.wait()
+                request.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await request
+            finally:
+                release.set()
             # 命令仍执行并创建轮次；无人接收的订阅由 _run 回收。
             await wait_for_condition(lambda: not manager.subscribers and manager.runtime is not None)
         finally:
-            release.set()
             await registry.close()
             db.close()
     asyncio.run(scenario())
 
 
-def test_create_failure_returns_error_without_runtime_or_subscription(tmp_path, monkeypatch):
+def test_failed_begin_returns_error_without_runtime_or_subscription(tmp_path, monkeypatch):
     async def scenario():
         registry, db, agent = await setup(tmp_path)
         try:
             crud.create_session(db.connect(), session_id="cold", status="ready", now="now")
             manager = await registry.get_or_create("cold")
 
-            async def failing_transaction(operation, events):
+            async def failing_commit(operation, events):
                 raise RuntimeError("写入失败")
 
-            monkeypatch.setattr(manager, "_transaction", failing_transaction)
+            monkeypatch.setattr(manager, "_runtime_commit", failing_commit)
             with pytest.raises(RuntimeError, match="写入失败"):
                 await manager.create_completion(content="问题", run_options={})
-            assert manager.runtime is None
             assert manager.subscribers == {}
             assert manager.active_turn_id is None
             assert db.connect().execute("SELECT COUNT(*) FROM chat_turns").fetchone()[0] == 0
+            assert db.connect().execute("SELECT COUNT(*) FROM chat_messages").fetchone()[0] == 0
         finally:
             await registry.close()
             db.close()

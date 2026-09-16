@@ -140,30 +140,21 @@ class SessionManager:
         if self.active_turn_id:
             raise ConflictError("会话已有活跃轮次")
         turn_id = uuid.uuid4().hex
-
-        def create(db, events):
-            now = utc_now()
-            crud.create_turn(db, turn_id=turn_id, session_id=self.session_id, status="queued", now=now, commit=False)
-            message_id = uuid.uuid4().hex
-            crud.create_message(db, message_id=message_id, session_id=self.session_id, turn_id=turn_id, role="user", content=content,
-                                now=now, sequence=crud.get_next_message_sequence(db, turn_id), group_id=message_id, group_index=0, commit=False)
-            crud.update_session(db, session_id=self.session_id, now=now, status="running", active_turn_id=turn_id, commit=False)
-            events.append({"type": "turn.created", "turn_id": turn_id, "payload": {}})
-            events.append({"type": "message.created", "turn_id": turn_id,
-                           "payload": {"message_id": message_id, "role": "user", "content": content}})
-
-        events = []
-        await self._transaction(create, events)
         runtime = TurnRuntime(session_id=self.session_id, agent_client=self.agent_client,
                               write=self._runtime_commit, publish=self._runtime_publish, fail=self.fail,
-                              turn_id=turn_id, run_options=run_options)
+                              turn_id=turn_id, content=content, run_options=run_options)
         self.runtime = runtime
+        runtime.start()
+        # 等 runtime 的 begin 事务提交：建轮+用户消息+认领 active_turn_id 同事务持久化后，
+        # 命令才返回。响应先于提交会打开丢消息窗口；不等待则并发 create 会双建轮。
+        await runtime.begun.wait()
+        if runtime.begin_error is not None:
+            raise runtime.begin_error
         subscription = Subscription(max_events=self.settings.subscription_max_events, max_bytes=self.settings.subscription_max_bytes)
         self.subscribers[subscription.id] = subscription
-        context = ResumeContext(self.session_id, turn_id, [turn_id], copy.deepcopy(self.session),
-                                copy.deepcopy(self.resources), runtime.snapshot(), subscription, self.settings.snapshot_max_bytes)
-        runtime.start()
-        return context
+        return ResumeContext(self.session_id, turn_id, [turn_id], copy.deepcopy(self.session),
+                             copy.deepcopy(self.resources), runtime.snapshot(), subscription,
+                             self.settings.snapshot_max_bytes)
 
     async def _runtime_commit(self, operation, events):
         """runtime 写通道：开事务执行并刷新 session/resources 缓存；失败标记损坏。"""
@@ -284,7 +275,7 @@ class SessionManager:
         if self.closed:
             return
         self.closing = True
-        if self.active_turn_id and not self.broken and self.runtime is not None:
+        if self.runtime is not None and not self.broken:
             self.runtime.cancel()
             await self.runtime.wait_closed()
         await self.commands.put(Command("stop", (), asyncio.get_running_loop().create_future()))

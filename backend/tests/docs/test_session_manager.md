@@ -10,8 +10,9 @@
 - `test_completion_has_no_request_deduplication`：接口拒绝已删除的 request_id；相同问题独立提交创建不同会话，各自产生独立轮次。
 - `test_cancelled_creation_aborts_ownership_and_retry`：创建权持有期间其他 complete/get 冲突；请求被取消后创建权回滚、未产生轮次，下一次请求可重新创建。
 - `test_cancelled_queued_create_recycles_subscription`：create 命令排队期间调用方取消，命令仍执行并创建轮次，无人接收的订阅被回收。
-- `test_cancelled_create_during_handler_recycles_subscription`：handler 执行中调用方取消，同样不撤销命令且回收订阅。
-- `test_create_failure_returns_error_without_runtime_or_subscription`：create 写入失败把异常直接还给调用方，不残留 runtime 或订阅。
+- `test_cancelled_create_during_handler_recycles_subscription`：begin 事务执行中调用方取消，同样不撤销命令且回收订阅。
+- `test_failed_begin_returns_error_without_runtime_or_subscription`：runtime 的 begin 建轮事务失败把异常直接还给调用方，轮次和用户消息整体回滚，不残留订阅或活跃认领。
+- `test_created_turn_snapshot_carries_user_message`：create 返回的首帧快照由 runtime 的 begin 事务提交后的视图渲染，携带用户消息和 in_progress 状态。
 - `test_cancel_rejects_events_after_signal`：取消信号后 runtime 丢弃后续事件，不写库。
 - `test_cancelled_caller_after_result_recycles_subscription`：handler 已写入结果、调用方恢复前被取消的窄窗口，订阅由同步守卫回收。
 - `test_tool_group_is_atomic_and_next_history_uses_original_ids`：同名工具按原调用 ID 配对，乱序成功/失败结果齐备后整组提交（runtime 自治写库）。

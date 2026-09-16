@@ -8,7 +8,7 @@
 FastAPI lifespan → SessionRegistry.start → 扫描遗留运行状态
 HTTP handler → SessionRegistry → DocumentResourceClient（上传/删除文件时）
 HTTP handler → SessionManager 命令队列（create/cancel/attach/detach）
-SessionManager._handle_create → 建 turn+用户消息事务 → 创建 TurnRuntime（注入 session_id/agent_client 与 write/publish/fail 回调） → runtime.start()
+SessionManager._handle_create → 冲突检查、分配 turn_id → 创建 TurnRuntime（携带用户消息） → runtime.start() → await runtime.begun（begin 事务提交后返回）
 TurnRuntime（自治）→ AgentClient → 独立 agent gRPC 服务
 TurnRuntime → 工具组配对 → 事务写 chat_messages → 更新 TurnView → publish 回调 → manager.broadcast → Subscription
 HTTP handler → session_history.build_snapshot → 首帧 → Subscription.receive → SSE
@@ -22,6 +22,7 @@ FastAPI shutdown → registry.close → manager.close → runtime.cancel/wait_cl
 | session 行、active_turn_id、订阅者 | manager | session 级，跨轮存在 |
 | 轮内 seq、工具组配对、TurnView、gRPC call | runtime | turn 私有，随轮生灭 |
 | chat_messages 写入 | runtime | 活跃轮唯一 + per-turn seq，无第二个写者 |
+| turn 创建与用户消息写入 | runtime begin 事务 | manager 只做冲突检查和分配 turn_id，落库随 begin 提交 |
 | 轮终态写入 | runtime | `update_turn_status_if_current` 条件更新，取消/失败/完成只有一个赢家 |
 | chat_turns/chat_sessions 收口 | runtime 事务内 | 同事务清 active_turn_id |
 
@@ -45,12 +46,12 @@ POST /chat/completion 输入 content、session_id、run_options
   → Registry 校验内容和有限正数执行超时
   → 请求协程取得创建权：不存在时锁内写入 CREATING，锁外创建/恢复 Manager
   → 无 session_id：创建 session；有则加载对应唯一 manager
-  → manager 检查无活跃轮；failed 会话要求新文件
-  → 同一事务创建 turn、用户消息、turn.created/message.created，设置 active_turn_id
-  → 登记本次请求的订阅并启动 runtime
+  → manager 检查无活跃轮；failed 会话要求新文件；分配 turn_id 并构造携带用户消息的 runtime
+  → runtime.begin 事务：创建 turn、用户消息、turn.created/message.created、置 in_progress、认领 active_turn_id
+  → 命令在 begun 信号上等待事务提交，之后登记本次请求的订阅并返回
 ```
 
-每次 POST 都创建新轮次；同一 session 有活跃轮时拒绝新提交。断线后使用 session_id 调用 resume。首帧前丢失连接且尚未拿到 session_id 时，重新提交可能产生独立会话，当前不提供提交去重。创建权是 exclusive-create：Manager 处于 CREATING 时其他请求立即冲突，不等待也不共享创建过程。
+每次 POST 都创建新轮次；同一 session 有活跃轮时拒绝新提交。断线后使用 session_id 调用 resume。首帧前丢失连接且尚未拿到 session_id 时，重新提交可能产生独立会话，当前不提供提交去重。创建权是 exclusive-create：Manager 处于 CREATING 时其他请求立即冲突，不等待也不共享创建过程。建轮事务由 runtime 的 begin 执行，命令协程在 begun 信号上等待提交后返回：响应先于提交会打开丢消息窗口，不等待则并发 create 会双建轮。
 
 显式取消创建中的请求协程会 abort 创建权，由创建方关闭尚未注册的 manager；下一次请求可重新创建/恢复。浏览器断开本身不等同于请求协程被取消。GET /resume 对已回收或重启后的 session 与 complete 共用同一创建入口。
 
@@ -63,7 +64,7 @@ SessionRegistry.upload_files/remove_file（会话资源变更）
   → 资源变更完成后才允许下一轮使用新引用
 
 TurnRuntime.run（自治）
-  → _begin 事务：设置 in_progress、按轮序读取 chat_messages
+  → begin 事务：创建 turn 和用户消息、置 in_progress、认领 active_turn_id、按轮序读取 chat_messages
   → AgentClient.chat_completion(resources, messages, run_options)
   → 每个事件 _on_event：校验 → 配组 → 配齐则事务写 chat_messages → TurnView → broadcast
   → completion.completed/failed/cancelled → _finish 写终态事务并清 active_turn_id

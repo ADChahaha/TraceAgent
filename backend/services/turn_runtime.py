@@ -1,4 +1,4 @@
-"""单轮自治执行体：资源准备、gRPC 消费、工具组配对、消息落库、终态收口。
+"""单轮自治执行体：建轮、gRPC 消费、工具组配对、消息落库、终态收口。
 
 对应 codex-core 的 Session+turn 循环：轮内全部状态（配对组、展示视图、序号）
 归本任务私有；对 manager 没有任何直接引用，依赖以启动参数注入：
@@ -17,18 +17,21 @@ from backend.services.turn_view import TurnView
 
 
 class TurnRuntime:
-    def __init__(self, *, session_id, agent_client, write, publish, fail, turn_id, run_options):
+    def __init__(self, *, session_id, agent_client, write, publish, fail, turn_id, content, run_options):
         self.session_id = session_id
         self.agent_client = agent_client
         self.write = write
         self.publish = publish
         self.fail = fail
         self.turn_id = turn_id
+        self.content = content
         self.run_options = run_options
         self.call = None
         self.cancel_requested = False
         self.task = None
         self.done = asyncio.Event()
+        self.begun = asyncio.Event()
+        self.begin_error = None
         self.error = None
         self.status = "queued"
         self.view = TurnView(turn_id)
@@ -73,14 +76,29 @@ class TurnRuntime:
             self.done.set()
 
     async def _begin(self):
-        """启动轮次并返回模型请求输入。"""
-        return await self._write(self._begin_operation())
+        """建轮事务：创建 turn、用户消息、认领 active_turn_id，并返回模型请求输入。
+        结果经 begun 信号告知创建方；失败时 begin_error 携带异常。"""
+        try:
+            request = await self._write(self._begin_operation())
+        except BaseException as exc:
+            self.begin_error = exc
+            raise
+        finally:
+            self.begun.set()
+        return request
 
     def _begin_operation(self):
         def begin(db, events):
             now = utc_now()
+            crud.create_turn(db, turn_id=self.turn_id, session_id=self.session_id, status="queued", now=now, commit=False)
+            message_id = uuid.uuid4().hex
+            crud.create_message(db, message_id=message_id, session_id=self.session_id, turn_id=self.turn_id, role="user",
+                                content=self.content, now=now, sequence=crud.get_next_message_sequence(db, self.turn_id),
+                                group_id=message_id, group_index=0, commit=False)
             crud.update_turn(db, turn_id=self.turn_id, now=now, status="in_progress", agent_completion_id=self.turn_id, commit=False)
-            crud.update_session(db, session_id=self.session_id, now=now, status="running", commit=False)
+            crud.update_session(db, session_id=self.session_id, now=now, status="running", active_turn_id=self.turn_id, commit=False)
+            self._emit(events, "turn.created")
+            self._emit(events, "message.created", {"message_id": message_id, "role": "user", "content": self.content})
             self._emit(events, "turn.started")
             messages = [{"role": row["role"], "content": row["content"], "tool_calls_json": row["tool_calls_json"],
                          **{key: row[key] for key in ("tool_call_id", "name") if row[key] is not None}}
