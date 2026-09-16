@@ -222,3 +222,22 @@ def test_parser_failure_identifies_file_and_does_not_build_index(resources, docu
     assert error.value.code() == grpc.StatusCode.INTERNAL
     assert "bad.pdf" in error.value.details() and "invalid PDF" in error.value.details()
     assert resources[1] == []
+
+
+def test_failed_upload_does_not_poison_session(resources, document_rpc, s3_store, session_id, monkeypatch):
+    """解析失败不写 raw：同一会话的后续上传不被坏文件永久卡死。"""
+    from document_service.document_processor import processor
+    from document_service.document_processor.schemas import ProcessResult
+    def parse(file, file_type=None):
+        if file.filename == "bad.pdf":
+            raise RuntimeError("corrupt document")
+        return ProcessResult(filename=file.filename, html="<p>ok</p>")
+    monkeypatch.setattr(processor, "process", parse)
+    with pytest.raises(grpc.RpcError) as error:
+        prepare(document_rpc, session_id, files=[pb.UploadedFile(filename="bad.pdf", content=b"corrupt")])
+    assert error.value.code() == grpc.StatusCode.INTERNAL
+    bucket = f"res_{session_id}"
+    assert s3_store.list_objects(bucket, prefix="raw/") == []
+    result = prepare(document_rpc, session_id, files=[pb.UploadedFile(filename="a.docx", content=_docx_bytes())])
+    refs = list(result.resource_path)
+    assert [ref.location.rsplit("/", 1)[1] for ref in refs if ref.type == "raw"] == ["a.docx"]

@@ -12,10 +12,11 @@ PrepareResources(session_id, files: filename + bytes, remove_raw: raw 引用)
   -> 从桶内读回 raw/* 作为现有文件集（桶是事实来源，调用方无需传全量）
   -> 校验新文件（文件名非空且不含路径分隔符、内容非空）并按文件名覆盖合并
   -> 校验 remove_raw（type 必须为 raw、location 必须属于本会话桶），
-     对桶内同名 raw delete_object，目标不存在则幂等跳过
-  -> 剩余为空：删除 documents.zip、manifest.json、index/*，返回空引用
-  -> 否则全批次类型校验（PDF/DOCX）后逐个解析
-  -> document_processor.process：PDF -> MinerU HTML，DOCX -> python-docx HTML
+     目标不存在则幂等跳过
+  -> 剩余为空：删除桶内同名 raw、documents.zip、manifest.json、index/*，返回空引用
+  -> 否则先全量解析：document_processor.process（PDF -> MinerU HTML，DOCX -> python-docx HTML），
+     解析失败时会话桶保持原状，坏文件不进入事实来源、不毒化后续重建
+  -> 解析通过后写桶：删除被移除的 raw、写入新上传的 raw
   -> document_resources.publish_resources：HTML -> Markdown 文件树
   -> 使用缓存 embedder 分块并生成 index/index.json + vectors.npy
   -> 校验 manifest、向量维度和文档引用
@@ -40,4 +41,4 @@ PrepareResources(session_id, files: filename + bytes, remove_raw: raw 引用)
 
 - 全量重建会重新解析并重新 embedding 桶内全部 raw，单文件成本随会话文件数线性增长。
 - 同一会话桶并发调用存在读改写竞争，依赖 backend 侧串行化。
-- 构建或发布失败没有远端回滚；可能留下新写入的 raw 对象，会在下一次成功调用时随桶内容合并，自愈但短暂不一致。
+- 解析失败发生在任何写桶之前，会话桶保持原状；发布阶段失败没有远端回滚，可能留下新写入的 raw 对象——它们可正常解析，会在下一次成功调用时随桶内容合并自愈，短暂不一致但不会毒化。

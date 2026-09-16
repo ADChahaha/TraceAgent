@@ -9,16 +9,17 @@ res_<session_id>。每次调用的真实流程是：
   -> 从桶内读回 raw/* 作为现有文件集（桶是事实来源）
   -> 校验新文件（文件名非空且不含路径分隔符、内容非空）并按文件名覆盖合并
   -> 校验 remove_raw（type 必须为 raw、location 必须属于本会话桶），
-     对桶内同名 raw 执行 delete_object，目标不存在则幂等跳过
-  -> 剩余为空：删除桶内 documents.zip、manifest.json、index/*，返回 []
-  -> 否则全批次类型校验（PDF/DOCX）后逐个解析为 HTML
+     目标不存在则幂等跳过
+  -> 剩余为空：删除桶内同名 raw、documents.zip、manifest.json、index/*，返回 []
+  -> 否则先全量解析（类型校验 + HTML 化），解析失败时桶保持原状
+  -> 解析通过后写桶：删除被移除的 raw、写入新上传的 raw
   -> resources.publish_resources 在同一桶内重建 documents.zip 与 index
   -> 返回 documents/index 加全部剩余 raw 的资源定位数组
 ```
 
 解析失败包装 RuntimeError 并标明文件名；调用参数只接收普通 Python 数据。
-当前没有远端回滚或原子发布：重建失败可能留下新写入的 raw 对象，会在下一次
-调用时随桶内容合并恢复；同一桶并发调用存在读改写竞争，依赖调用方串行化。
+发布阶段失败没有远端回滚：可能留下新写入的 raw 对象，它们可正常解析，
+会在下一次调用时随桶内容合并自愈；同一桶并发调用存在读改写竞争，依赖调用方串行化。
 """
 
 from dataclasses import dataclass
@@ -57,19 +58,25 @@ def prepare_session_resources(
     uploads = _validated_uploads(files)
     if not uploads and not removed and not raws:
         raise ValueError("files or remove_raw must be non-empty")
-    raws.update(uploads)
+    merged = dict(raws)
+    merged.update(uploads)
     for name in removed:
-        raws.pop(name, None)
-        store.delete_object(bucket, f"raw/{name}")
-    for name, content in uploads.items():
-        if name in raws:
-            store.put_object(bucket, f"raw/{name}", content)
-    if not raws:
+        merged.pop(name, None)
+    if not merged:
+        for name in removed:
+            store.delete_object(bucket, f"raw/{name}")
         _delete_published(store, bucket)
         return []
-    documents = _parse_documents(raws)
+    # 解析先于任何写桶操作：解析失败时会话桶保持原状，坏文件不会成为
+    # 事实来源毒化后续重建，也不会留下 remove_file 够不到的孤儿 raw。
+    documents = _parse_documents(merged)
+    for name in removed:
+        store.delete_object(bucket, f"raw/{name}")
+    for name, content in uploads.items():
+        if name in merged:
+            store.put_object(bucket, f"raw/{name}", content)
     refs = publish_resources(store, bucket, documents)
-    refs.extend(ResourceRef(type="raw", location=f"s3://{bucket}/raw/{name}") for name in sorted(raws))
+    refs.extend(ResourceRef(type="raw", location=f"s3://{bucket}/raw/{name}") for name in sorted(merged))
     return refs
 
 

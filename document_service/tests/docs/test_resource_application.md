@@ -14,4 +14,5 @@ prepare_session_resources 的真实输入是 session_id + 上传文件 + remove_
 - `test_rebuild_parses_all_session_raws`：每次调用重新解析桶内全部 raw（全量重建语义），第二次调用解析已有 a.pdf 和新 b.pdf。
 - `test_upload_rejects_invalid_filename_or_content`：空文件名、路径分隔符、空内容在写桶前失败，不产生半成品。
 - `test_invalid_batch_never_parses`：合并后批次含不支持类型时，任何文件都不开始解析。
+- `test_failed_parse_leaves_session_bucket_unchanged`：解析失败发生在任何写桶之前，会话桶保持原状（无孤儿 raw、已发布产物不变），坏文件不毒化同一会话的后续上传。
 - `test_preparation_reuses_model_for_tokenization`：对 OpenVINO/Torch 分别执行两次真实构建发布，确认只构造一个模型，分块与编码共用其 tokenizer；publish 已改为显式传入 store 与桶名。

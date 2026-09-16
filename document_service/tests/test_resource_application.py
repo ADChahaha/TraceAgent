@@ -152,6 +152,28 @@ def test_invalid_batch_never_parses(app, store, monkeypatch):
         app.prepare_session_resources("s1", [upload_file("bad.txt")], store=store)
 
 
+def test_failed_parse_leaves_session_bucket_unchanged(app, store, published, monkeypatch):
+    """解析失败不写桶：不留孤儿 raw，也不毒化同一会话的后续上传。"""
+    def parse(file_obj):
+        if file_obj.filename == "bad.pdf":
+            raise RuntimeError("corrupt document")
+        return SimpleNamespace(filename=file_obj.filename, html="<p>ok</p>")
+
+    monkeypatch.setattr(app.processor, "process", parse)
+    app.prepare_session_resources("s1", [upload_file("a.pdf", b"good")], store=store)
+    before = store.get_object("res_s1", "documents.zip")
+
+    with pytest.raises(RuntimeError, match="corrupt document"):
+        app.prepare_session_resources("s1", [upload_file("bad.pdf", b"broken")], store=store)
+
+    assert store.get_object("res_s1", "raw/bad.pdf") is None
+    assert store.get_object("res_s1", "documents.zip") == before
+    # 坏文件从未进入桶，后续上传不被毒化。
+    refs = app.prepare_session_resources("s1", [upload_file("b.pdf", b"second")], store=store)
+    assert [ref.location for ref in refs if ref.type == "raw"] == [
+        "s3://res_s1/raw/a.pdf", "s3://res_s1/raw/b.pdf"]
+
+
 @pytest.mark.parametrize("backend", ["openvino", "torch"])
 def test_preparation_reuses_model_for_tokenization(monkeypatch, tmp_path, backend):
     """两次真实资源构建共用同一后端模型及其 tokenizer，不为分块再次加载模型。"""

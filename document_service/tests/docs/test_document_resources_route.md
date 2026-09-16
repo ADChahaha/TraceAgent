@@ -17,6 +17,7 @@
 - `test_prepare_rejects_unsupported_or_missing_files`：空上传或不支持的类型在处理前返回 INVALID_ARGUMENT。
 - `test_prepare_pdf_calls_parser_then_builds_resource`：PDF bytes 交给解析器，返回的 HTML 进入真实资源构建，发布到会话桶（调用 embedding 说明已建索引）。
 - `test_parser_failure_identifies_file_and_does_not_build_index`：解析异常映射 INTERNAL 并标明文件，不进入索引构建。
+- `test_failed_upload_does_not_poison_session`：解析失败不写 raw，同一会话的后续上传不被坏文件永久卡死。
 - `test_read_blocks_returns_block_text_from_archive`：归档内 key 返回原文；不存在的 key 返回 found=false。
 - `test_read_blocks_requires_bucket_and_keys`：空 bucket 或空 keys 返回 INVALID_ARGUMENT。
 - `test_read_blocks_missing_archive_is_not_found`：归档缺失（未上传会话）返回 NOT_FOUND。
