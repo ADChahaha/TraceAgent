@@ -88,18 +88,18 @@ def test_upload_rejects_bad_type_limits_and_unknown_session(tmp_path):
         registry, db, agent = await setup(tmp_path, upload_max_files=2, upload_max_bytes=8)
         try:
             session_id = await registry.create_session()
+            manager = await registry.get_or_create(session_id)
             with pytest.raises(ValidationError):
-                await registry.upload_files(session_id=session_id, files=[file("bad.txt")])
+                await manager.upload_files(files=[file("bad.txt")])
             with pytest.raises(NotFoundError):
                 await registry.get_or_create("missing")
-            manager = await registry.get_or_create(session_id)
             await manager.upload_files(files=[file("a.pdf", b"aaa")])
             # 累计文件数：已有 1 个，再传 2 个超过 upload_max_files=2。
             with pytest.raises(ValidationError):
                 await manager.upload_files(files=[file("b.pdf"), file("c.pdf")])
-            # 累计字节：3 + 2 > upload_max_bytes=8。
+            # 累计字节：3 + 8（默认 content）> upload_max_bytes=8。
             with pytest.raises(ValidationError):
-                await manager.upload_files(files=[file("b.pdf", b"bb")])
+                await manager.upload_files(files=[file("b.pdf")])
             with pytest.raises(ValidationError):
                 await manager.upload_files(files=[])
         finally:
@@ -113,8 +113,8 @@ def test_resources_persist_across_turns_without_replacement(tmp_path):
         registry, db, agent = await setup(tmp_path)
         try:
             session_id = await registry.create_session()
-            rows = await registry.upload_files(session_id=session_id, files=[file("a.pdf")])
             first = await registry.get_or_create(session_id)
+            rows = await first.upload_files(files=[file("a.pdf")])
             context = await first.create_completion(content="第一问", run_options={})
             call = await agent.created.get()
             await finish(call, first, context.turn_id)
@@ -140,7 +140,6 @@ def test_delete_removes_raw_and_rebuilds_bundle(tmp_path):
             manager = await registry.get_or_create(session_id)
             rows = await manager.upload_files(files=[file("a.pdf"), file("b.pdf")])
             raw_id = next(row["id"] for row in rows if row["location"].endswith("/raw/a.pdf"))
-            manager = await registry.get_or_create(session_id)
             context = await manager.create_completion(content="问题", run_options={})
             updated = await manager.remove_file(resource_id=raw_id)
             # 删除调用 agent：files 为空，remove_raw 指向被删文件；bundle 引用整体替换。
@@ -148,9 +147,9 @@ def test_delete_removes_raw_and_rebuilds_bundle(tmp_path):
             assert all(not row["location"].endswith("/raw/a.pdf") for row in updated)
             call = await agent.created.get()
             await finish(call, manager, context.turn_id)
+            # resource_path 只含 bundle 引用；删除发生在轮次之后，本轮请求不受影响。
             paths = agent.requests[0]["resource_path"]
-            assert {"type": "raw", "location": f"s3://res_{session_id}/raw/b.pdf"} in paths
-            assert {"type": "raw", "location": f"s3://res_{session_id}/raw/a.pdf"} not in paths
+            assert paths == [{"type": row["type"], "location": row["location"]} for row in updated if row["type"] != "raw"]
             with pytest.raises(NotFoundError):
                 await manager.remove_file(resource_id="missing")
             bundle_id = next(row["id"] for row in updated if row["type"] == "documents")

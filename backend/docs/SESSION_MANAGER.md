@@ -71,7 +71,7 @@ TurnRuntime.run（自治）
   → 异常/提前流结束/取消 → _finish 收口（cancelled 或 failed）
 ```
 
-文件上传和删除在独立的 document service 中完成，成功后 backend 原子替换 session 资源引用；轮次执行只调用 agent service，不重复准备资源。资源准备失败不会启动轮次，调用方可重试上传或删除。
+文件上传和删除在独立的 document service 中完成，成功后 backend 原子替换 session 资源引用；轮次执行只调用 agent service，不重复准备资源。资源准备失败不会启动轮次，调用方可重试上传或删除。对 agent 下发的 resource_path 与 resources.prepared 事件 payload 一律只含 bundle 引用（documents/index）；raw 是会话资源清单的一部分，用于删除和限额校验，不下发给 agent。
 
 gRPC 分别使用 document service 的 PrepareResources 与 agent service 的 ChatCompletion；取消使用原 call.cancel()。没有 CancelCompletion、GetCompletion 或 agent 端 resume RPC。agent_completion_id 用于关联，本身不能重新接入远端运行。
 

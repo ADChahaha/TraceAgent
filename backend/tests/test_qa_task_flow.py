@@ -92,7 +92,7 @@ def test_http_disconnect_does_not_cancel_background_turn(tmp_path):
         agent = FakeAgent()
         app = create_app(settings=BackendSettings(database_path=tmp_path / "disconnect.sqlite3"), agent_client=agent)
         async with app.router.lifespan_context(app):
-            session_id = app.state.session_registry.create_session().__await__()
+            session_id = await app.state.session_registry.create_session()
             request_events = asyncio.Queue()
             body = json.dumps({"content": "问题", "session_id": session_id}).encode()
             await request_events.put({"type": "http.request", "body": body, "more_body": False})

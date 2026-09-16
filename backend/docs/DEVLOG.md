@@ -6,6 +6,8 @@ last updated: 2026-09-16
 
 ### 已完成工作
 
+- 修复 8 个从未绿过的存量测试并定案资源下发契约。诊断：这 8 个测试自 26527f0（document service 拆分）提交起就是红的，从未通过，混杂三类问题：(1) resource_path 契约矛盾——4 个测试期望 bundle-only、test_delete 期望含 raw；查 agent 侧 load_workspace_payload 后定案 bundle-only（agent 只消费 documents/index），turn_runtime begin 和 resources.prepared payload 过滤 raw，test_delete 断言重写为对齐契约；(2) 测试自身陈旧——qa_crud 列集缺后来迁移的 size_bytes，upload_rejects 字节用例算术错误（2 字节永远超不了 8 的限额，改用默认 8 字节 content）；(3) 测试 bug——http_disconnect 用 create_session().__await__() 拿 coroutine wrapper 去 json 序列化，改为正常 await。另外补上此前迁移遗漏的 2 处 registry.upload_files 调用点。全量 85 项通过，首次全绿。
+
 - SessionManager 清理：删除无调用者的 _complete_pending_cancel（旧 cancel 命令设计的残留，pending_cancel 补发实际在 broadcast 终态分支完成）；broadcast 的订阅循环从 terminal/else 两份重复合并为一份；_transaction 的广播循环改用 broadcast 复用同一发布路径。纯重构，行为不变，328 行收敛到 314 行。
 
 - 删除 CRUD 的 commit 参数：9 个写函数只执行语句、永不自行提交，提交权统一收进 crud.transaction() 边界（单条和多条写入共用同一提交点）。services 里 11 处 commit=False 全部消失，registry 的单条 create_session 包进事务；测试种子写入按跨连接可见性包进事务块，回滚测试同步适配。原子性从约定变成结构：业务代码不再能中途提交。全量 77 项通过，失败集合与基线一致。

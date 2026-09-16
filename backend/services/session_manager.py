@@ -284,7 +284,8 @@ class SessionManager:
                                      resource_type=ref["type"], location=ref["location"], now=now,
                                      size_bytes=int(sizes.get(ref["location"], old_sizes.get(ref["location"], 0))))
             events.append({"type": "resources.prepared", "turn_id": None,
-                           "payload": {"resources": [{"type": ref["type"], "location": ref["location"]} for ref in refs]}})
+                           "payload": {"resources": [{"type": ref["type"], "location": ref["location"]}
+                                                     for ref in refs if ref["type"] != "raw"]}})
 
         await self._transaction(replace, [])
         return self.resources

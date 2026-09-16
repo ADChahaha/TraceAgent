@@ -81,7 +81,7 @@ def test_create_and_list_resource_columns(db):
         location="# title",
         now="2026-01-02T00:00:00Z",
     )
-    assert set(first) == {"id", "session_id", "type", "location", "created_at"}
+    assert set(first) == {"id", "session_id", "type", "location", "created_at", "size_bytes"}
     resources = chat_crud.list_resources(db, "session-1")
     assert [resource["id"] for resource in resources] == ["res-1", "res-2"]
     assert resources[1]["type"] == "markdown"

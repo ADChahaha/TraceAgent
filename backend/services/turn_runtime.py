@@ -105,7 +105,8 @@ class TurnRuntime:
                          **{key: row[key] for key in ("tool_call_id", "name") if row[key] is not None}}
                         for row in crud.list_messages(db, self.session_id)]
             return {"completion_id": self.turn_id,
-                    "resource_path": [{"type": row["type"], "location": row["location"]} for row in crud.list_resources(db, self.session_id)],
+                    "resource_path": [{"type": row["type"], "location": row["location"]}
+                                      for row in crud.list_resources(db, self.session_id) if row["type"] != "raw"],
                     "messages": messages}
 
         return begin
