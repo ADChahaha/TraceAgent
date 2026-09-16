@@ -6,6 +6,8 @@ last updated: 2026-09-16
 
 ### 已完成工作
 
+- SessionManager 清理：删除无调用者的 _complete_pending_cancel（旧 cancel 命令设计的残留，pending_cancel 补发实际在 broadcast 终态分支完成）；broadcast 的订阅循环从 terminal/else 两份重复合并为一份；_transaction 的广播循环改用 broadcast 复用同一发布路径。纯重构，行为不变，328 行收敛到 314 行。
+
 - 删除 CRUD 的 commit 参数：9 个写函数只执行语句、永不自行提交，提交权统一收进 crud.transaction() 边界（单条和多条写入共用同一提交点）。services 里 11 处 commit=False 全部消失，registry 的单条 create_session 包进事务；测试种子写入按跨连接可见性包进事务块，回滚测试同步适配。原子性从约定变成结构：业务代码不再能中途提交。全量 77 项通过，失败集合与基线一致。
 
 - 上传/删除文件业务从 registry 迁入 manager：upload_files（校验含累计限制、document service 物化、_raw_sizes、replace_resources）和 remove_file（get_file 校验、remove_raw、替换）成为 manager 方法，manager 构造参数新增 document_client；registry 删除两个业务方法和 Path/ValidationError 导入，只剩生命周期协调。routes 改为 get_or_create 后直调 manager。TDD：新增 manager 层上传校验测试（旧实现下红），调用点适配 14 处，补齐 tests/docs/test_session_files.md；全量 77 项通过，失败集合与基线一致。

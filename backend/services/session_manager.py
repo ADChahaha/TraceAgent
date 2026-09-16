@@ -105,36 +105,24 @@ class SessionManager:
             if command.name == "stop":
                 return
 
-    def _complete_pending_cancel(self):
-        """cancel 命令处理完后，若 runtime 已广播终态则补发响应。"""
-        if self.pending_cancel is None or self.pending_cancel.reply.done():
-            return
-        turn_id = self.pending_cancel.args[0]
-        if self.runtime is None or self.runtime.turn_id != turn_id or self.runtime.status != "queued":
-            self.pending_cancel.reply.set_result({"status": "cancelled"})
-
     async def broadcast(self, turn_id, event):
         """runtime 广播通道：在 runtime 任务上下文中执行，asyncio 单线程内原子。"""
-        terminal = event["type"] in {"turn.completed", "turn.failed", "turn.cancelled"}
-        if terminal:
-            for key, subscription in list(self.subscribers.items()):
-                if not subscription.publish(event):
-                    self.subscribers.pop(key, None)
-            if self.active_turn_id == turn_id:
-                self.session = {**self.session, "active_turn_id": None}
-            self.runtime = None
-            if self.pending_cancel is not None and self.pending_cancel.args[0] == turn_id:
-                self.pending_cancel.reply.set_result({"status": event["type"].split(".")[1]})
-                self.pending_cancel = None
-            if self.closing:
-                self.closed = True
-                for subscription in self.subscribers.values():
-                    subscription.close()
-                self.subscribers.clear()
-        else:
-            for key, subscription in list(self.subscribers.items()):
-                if not subscription.publish(event):
-                    self.subscribers.pop(key, None)
+        for key, subscription in list(self.subscribers.items()):
+            if not subscription.publish(event):
+                self.subscribers.pop(key, None)
+        if event["type"] not in {"turn.completed", "turn.failed", "turn.cancelled"}:
+            return
+        if self.active_turn_id == turn_id:
+            self.session = {**self.session, "active_turn_id": None}
+        self.runtime = None
+        if self.pending_cancel is not None and self.pending_cancel.args[0] == turn_id:
+            self.pending_cancel.reply.set_result({"status": event["type"].split(".")[1]})
+            self.pending_cancel = None
+        if self.closing:
+            self.closed = True
+            for subscription in self.subscribers.values():
+                subscription.close()
+            self.subscribers.clear()
 
     async def create_completion(self, *, content, run_options=None):
         content = content.strip()
@@ -186,9 +174,7 @@ class SessionManager:
         result, self.session, self.resources = await asyncio.to_thread(execute)
         try:
             for event in events:
-                for key, subscription in list(self.subscribers.items()):
-                    if not subscription.publish(event):
-                        self.subscribers.pop(key, None)
+                await self.broadcast(event["turn_id"], event)
         except Exception:
             self.fail()
             raise
