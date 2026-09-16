@@ -7,6 +7,7 @@ active_turn_id、订阅者、资源引用），turn 执行态全部在 TurnRunti
 
 import asyncio
 import copy
+import math
 import sqlite3
 import uuid
 from dataclasses import dataclass
@@ -133,7 +134,16 @@ class SessionManager:
                 if not subscription.publish(event):
                     self.subscribers.pop(key, None)
 
-    async def create_completion(self, *, content, run_options):
+    async def create_completion(self, *, content, run_options=None):
+        content = content.strip()
+        if not content:
+            raise ValidationError("content 不能为空")
+        run_options = run_options or {}
+        if set(run_options) - {"tool_execution_timeout"}:
+            raise ValidationError("未知的 run_options 字段")
+        timeout = run_options.get("tool_execution_timeout")
+        if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0):
+            raise ValidationError("工具超时必须为有限正数")
         return await self._ask("create", content, run_options)
 
     async def _handle_create(self, content, run_options):

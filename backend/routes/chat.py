@@ -125,7 +125,8 @@ async def remove_file(request: Request, session_id: str, resource_id: str):
 async def completion(request: Request):
     try:
         body = CompletionInput.model_validate(await request.json())
-        manager, context = await request.app.state.session_registry.complete(**body.model_dump())
+        manager = await request.app.state.session_registry.get_or_create(body.session_id)
+        context = await manager.create_completion(content=body.content, run_options=body.run_options)
         return await _response(request, manager, context)
     except (PydanticValidationError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

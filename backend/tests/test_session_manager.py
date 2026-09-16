@@ -10,7 +10,7 @@ from backend.core.db import ThreadLocalDatabase, initialize_database
 from backend.crud import crud
 from backend.services.session_registry import ManagerState, SessionRegistry
 from backend.services.session_history import build_snapshot
-from backend.services.errors import ConflictError, NotFoundError
+from backend.services.errors import ConflictError, NotFoundError, ValidationError
 
 
 class FakeCall:
@@ -75,7 +75,9 @@ async def setup(tmp_path, **overrides):
 async def new_session_complete(registry, content, **kwargs):
     """新契约：先独立建会话，再在该会话上发起轮次。"""
     session_id = await registry.create_session()
-    return await registry.complete(content=content, session_id=session_id, **kwargs)
+    manager = await registry.get_or_create(session_id)
+    context = await manager.create_completion(content=content, **kwargs)
+    return manager, context
 
 
 async def next_type(subscription, expected):
@@ -101,6 +103,24 @@ async def finish(call, manager, turn_id, text="回答"):
     await manager.detach(context.subscription.id)
 
 
+def test_manager_create_validates_content_and_run_options(tmp_path):
+    async def scenario():
+        registry, db, agent = await setup(tmp_path)
+        try:
+            session_id = await registry.create_session()
+            manager = await registry.get_or_create(session_id)
+            with pytest.raises(ValidationError):
+                await manager.create_completion(content="   ", run_options={})
+            with pytest.raises(ValidationError):
+                await manager.create_completion(content="问题", run_options={"unknown": 1})
+            with pytest.raises(ValidationError):
+                await manager.create_completion(content="问题", run_options={"tool_execution_timeout": 0})
+        finally:
+            await registry.close()
+            db.close()
+    asyncio.run(scenario())
+
+
 def test_detach_keeps_execution_and_resume_merges_history(tmp_path):
     async def scenario():
         registry, db, agent = await setup(tmp_path)
@@ -111,8 +131,7 @@ def test_detach_keeps_execution_and_resume_merges_history(tmp_path):
             assert not call.cancelled
             await finish(call, manager, first.turn_id)
             assert manager.runtime is None
-            manager2, second = await registry.complete(session_id=manager.session_id, content="第二问")
-            assert manager2 is manager
+            second = await manager.create_completion(content="第二问", run_options={})
             call2 = await asyncio.wait_for(agent.created.get(), 2)
             await call2.events.put({"type": "model_message.delta", "seq": 1, "message_id": "m2", "delta": "半个回答"})
             await next_type(second.subscription, "model_message.delta")
@@ -191,7 +210,7 @@ def test_attach_snapshot_survives_completion_and_next_turn(tmp_path):
             call = await agent.created.get()
             context = await manager.attach()
             await finish(call, manager, first.turn_id)
-            _, second = await registry.complete(session_id=manager.session_id, content="新问题")
+            second = await manager.create_completion(content="新问题", run_options={})
             snapshot = await build_snapshot(db, context)
             assert len(snapshot["state"]["turns"]) == 1
             assert snapshot["state"]["turns"][0]["status"] != "completed"
@@ -231,7 +250,7 @@ def test_cancel_rejects_late_event_and_does_not_cancel_new_turn(tmp_path):
             old_runtime = manager.runtime
             assert (await manager.cancel(first.turn_id))["status"] == "cancelled"
             assert call.cancelled
-            _, second = await registry.complete(session_id=manager.session_id, content="新问题")
+            second = await manager.create_completion(content="新问题", run_options={})
             new_call = await agent.created.get()
             # 取消后旧 runtime 的事件被 runtime 自身丢弃：直接对旧 runtime 投递验证。
             await old_runtime._on_event({"type": "model_message.done", "message_id": "late", "content": "迟到"})
@@ -254,7 +273,7 @@ def test_concurrent_create_has_one_active_turn_and_one_manager(tmp_path):
             managers = await asyncio.gather(*(registry.get_or_create(manager.session_id) for _ in range(8)))
             assert all(item is manager for item in managers)
             with pytest.raises(ConflictError):
-                await registry.complete(session_id=manager.session_id, content="并发问题")
+                await manager.create_completion(content="并发问题", run_options={})
             assert db.connect().execute("SELECT COUNT(*) FROM chat_turns").fetchone()[0] == 1
         finally:
             await registry.close()
@@ -296,20 +315,26 @@ def test_cancelled_creation_aborts_ownership_and_retry(tmp_path, monkeypatch):
         monkeypatch.setattr(registry, "_load_manager", delayed)
         try:
             crud.create_session(db.connect(), session_id="cold", status="ready", now="now")
-            request = asyncio.create_task(registry.complete(session_id="cold", content="问题"))
+
+            async def submit_cold():
+                manager = await registry.get_or_create("cold")
+                return await manager.create_completion(content="问题", run_options={})
+
+            request = asyncio.create_task(submit_cold())
             await entered.wait()
             assert registry.entries["cold"].state is ManagerState.CREATING
             with pytest.raises(ConflictError):
                 await registry.get("cold")
             with pytest.raises(ConflictError):
-                await registry.complete(session_id="cold", content="另一问")
+                await registry.get_or_create("cold")
             request.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await request
             assert "cold" not in registry.entries
             assert db.connect().execute("SELECT COUNT(*) FROM chat_turns").fetchone()[0] == 0
             release.set()
-            manager, context = await registry.complete(session_id="cold", content="重试")
+            manager = await registry.get_or_create("cold")
+            context = await manager.create_completion(content="重试", run_options={})
             assert manager.active_turn_id == context.turn_id
         finally:
             release.set()
@@ -604,7 +629,7 @@ def test_closing_entry_rejects_get_until_removed(tmp_path, monkeypatch):
             with pytest.raises(ConflictError):
                 await registry.get(manager.session_id)
             with pytest.raises(ConflictError):
-                await registry.complete(session_id=manager.session_id, content="新问题")
+                await registry.get_or_create(manager.session_id)
             release.set()
             await evict
             assert manager.session_id not in registry.entries

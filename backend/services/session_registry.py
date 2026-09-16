@@ -4,7 +4,6 @@
 """
 
 import asyncio
-import math
 import uuid
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -180,19 +179,6 @@ class SessionRegistry:
                 if ref["type"] == "raw" and ref["location"].endswith(f"/raw/{file['filename']}"):
                     sizes[ref["location"]] = len(file["content"])
         return sizes
-
-    async def complete(self, *, content, session_id, run_options=None):
-        if not isinstance(content, str) or not content.strip():
-            raise ValidationError("content 不能为空")
-        run_options = run_options or {}
-        if set(run_options) - {"tool_execution_timeout"}:
-            raise ValidationError("未知的 run_options 字段")
-        timeout = run_options.get("tool_execution_timeout")
-        if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0):
-            raise ValidationError("工具超时必须为有限正数")
-        manager = await self.get_or_create(session_id)
-        context = await manager.create_completion(content=content.strip(), run_options=run_options)
-        return manager, context
 
     async def evict_idle(self):
         closing = []

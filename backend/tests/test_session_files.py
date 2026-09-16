@@ -26,7 +26,8 @@ def test_create_session_starts_ready_without_turns(tmp_path):
             assert session_id
             row = db.connect().execute("SELECT * FROM chat_sessions WHERE id=?", (session_id,)).fetchone()
             assert row["status"] == "ready" and row["active_turn_id"] is None
-            manager, context = await registry.complete(content="问题", session_id=session_id)
+            manager = await registry.get_or_create(session_id)
+            context = await manager.create_completion(content="问题", run_options={})
             assert context.turn_id
             call = await agent.created.get()
             await finish(call, manager, context.turn_id)
@@ -49,7 +50,8 @@ def test_upload_materializes_at_upload_and_binds_to_session(tmp_path):
             assert set(raws) == {f"s3://res_{session_id}/raw/a.pdf", f"s3://res_{session_id}/raw/b.docx"}
             assert set(raws.values()) == {3}
             assert bundle_paths(rows)
-            manager, context = await registry.complete(content="问题", session_id=session_id)
+            manager = await registry.get_or_create(session_id)
+            context = await manager.create_completion(content="问题", run_options={})
             snapshot = await build_snapshot(db, context)
             assert snapshot["state"]["resources"] == rows
             call = await agent.created.get()
@@ -92,10 +94,12 @@ def test_resources_persist_across_turns_without_replacement(tmp_path):
         try:
             session_id = await registry.create_session()
             rows = await registry.upload_files(session_id=session_id, files=[file("a.pdf")])
-            first, context = await registry.complete(content="第一问", session_id=session_id)
+            first = await registry.get_or_create(session_id)
+            context = await first.create_completion(content="第一问", run_options={})
             call = await agent.created.get()
             await finish(call, first, context.turn_id)
-            second, context2 = await registry.complete(session_id=session_id, content="第二问")
+            second = await registry.get_or_create(session_id)
+            context2 = await second.create_completion(content="第二问", run_options={})
             call2 = await agent.created.get()
             # 两次轮次的 resource_path 完全一致；轮次不替换、不准备资源。
             assert agent.requests[1]["resource_path"] == bundle_paths(rows)
@@ -115,7 +119,8 @@ def test_delete_removes_raw_and_rebuilds_bundle(tmp_path):
             session_id = await registry.create_session()
             rows = await registry.upload_files(session_id=session_id, files=[file("a.pdf"), file("b.pdf")])
             raw_id = next(row["id"] for row in rows if row["location"].endswith("/raw/a.pdf"))
-            manager, context = await registry.complete(content="问题", session_id=session_id)
+            manager = await registry.get_or_create(session_id)
+            context = await manager.create_completion(content="问题", run_options={})
             updated = await registry.remove_file(session_id=session_id, resource_id=raw_id)
             # 删除调用 agent：files 为空，remove_raw 指向被删文件；bundle 引用整体替换。
             assert agent.prepared[-1] == (session_id, [], [{"type": "raw", "location": f"s3://res_{session_id}/raw/a.pdf"}])

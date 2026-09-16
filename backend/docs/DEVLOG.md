@@ -6,6 +6,9 @@ last updated: 2026-09-16
 
 ### 已完成工作
 
+- 删除 SessionRegistry.complete：registry 收缩为纯 manager 生命周期协调（get_or_create/create_session/回收），不再承担业务校验和命令转发。内容和 run_options 校验（含空白 content、未知字段、正数超时）迁入 manager 的 create_completion 入口；routes 改为 get_or_create 后直调 manager.create_completion。TDD：新增 manager 层校验测试（旧实现下红），调用点适配 14 处，全量 76 项通过，失败集合与基线一致。
+- 同步 SESSION_MANAGER.md、DESIGN.md 的调用链与 tests/docs。
+
 - 建轮事务从 manager 迁入 runtime 的 begin：_handle_create 收缩为冲突检查、分配 turn_id、构造携带 content 的 runtime；begin 事务创建 turn、用户消息、置 in_progress、认领 active_turn_id，命令协程经 begun 信号等待提交后返回（堵住丢消息窗口与并发双建轮）。close 的等待条件改为 runtime 存在即等待，覆盖建轮窗口。TDD：3 个目标测试先行（begin 失败整体回滚、首帧快照携带用户消息、取消时序），全量 75 项通过，失败集合与基线一致。
 - 同步 SESSION_MANAGER.md 的调用链、创建流程、所有权表与 tests/docs/test_session_manager.md。
 

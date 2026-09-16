@@ -30,7 +30,7 @@ manager 对 runtime 的唯一反向通道是 `runtime.cancel()`：只设标志�
 
 | 文件 | 输入、处理与输出 |
 | --- | --- |
-| routes/chat.py | JSON/multipart 校验，调用 complete/attach/cancel，生成 SSE 或 JSON |
+| routes/chat.py | JSON/multipart 校验，调用 get_or_create + manager 命令（create/attach/cancel），生成 SSE 或 JSON |
 | session_registry.py | Manager 状态机（CREATING/READY/CLOSING）与加载权；回收与启动恢复 |
 | turn_runtime.py | 自治执行体：begin 事务、agent 事件配组落库、终态收口、广播；依赖经构造参数注入，不引用 manager |
 | session_manager.py | create/cancel/attach 三命令 FIFO 串行；订阅管理；终态广播的 pending_cancel 补发；向 runtime 注入 write/publish/fail 回调（_runtime_commit/_runtime_publish） |
@@ -43,7 +43,7 @@ manager 对 runtime 的唯一反向通道是 `runtime.cancel()`：只设标志�
 
 ```text
 POST /chat/completion 输入 content、session_id、run_options
-  → Registry 校验内容和有限正数执行超时
+  → Registry 只负责取得创建权并返回唯一 manager；manager 校验内容和有限正数执行超时
   → 请求协程取得创建权：不存在时锁内写入 CREATING，锁外创建/恢复 Manager
   → 无 session_id：创建 session；有则加载对应唯一 manager
   → manager 检查无活跃轮；failed 会话要求新文件；分配 turn_id 并构造携带用户消息的 runtime
@@ -79,7 +79,7 @@ gRPC 分别使用 document service 的 PrepareResources 与 agent service 的 Ch
 
 串行化分两层，对齐 Codex 的"core 串行化 op、app-server 串行化投影"：
 
-- manager 命令队列：create/cancel/attach/detach 编码为 Command(name, args, reply) 进入有界 FIFO 队列，_run 是唯一消费者。对外业务入口只有 create/cancel/attach；detach/close 是生命周期管道。外部命令队列满直接拒绝；调用方协程取消不撤销已入队命令，handler 产生但无人接收的订阅由 _run 统一回收。
+- manager 命令队列：create/cancel/attach/detach 编码为 Command(name, args, reply) 进入有界 FIFO 队列，_run 是唯一消费者。对外业务入口只有 create/cancel/attach，内容和 run_options 校验在 create 入口完成；detach/close 是生命周期管道。外部命令队列满直接拒绝；调用方协程取消不撤销已入队命令，handler 产生但无人接收的订阅由 _run 统一回收。
 - runtime 内部串行：单任务顺序处理事件并顺序 await 每次写，无需应用层写锁；每次写独占一个线程池线程，thread-local 连接保证同一连接上事务不重叠，跨连接写竞争由 SQLite 文件锁和 busy_timeout 排队。runtime 的写失败经 `manager.fail()` 标记损坏：拒绝后续命令、取消执行、关闭订阅。
 
 cancel 语义对齐 Codex 的 interrupt：`_handle_cancel` 校验轮次身份后登记 `pending_cancel` 等待者并调 `runtime.cancel()`，命令即返回等待；runtime 观察标志后自己写 cancelled 终态并广播，manager 在 broadcast 终态时补发 cancel 响应。已终结的轮次返回原终态。

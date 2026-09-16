@@ -6,7 +6,8 @@ backend 管理多轮 session、稳定模型消息和页面恢复，通过独立 
 
 ```text
 POST /chat/completion → routes/chat.py 校验输入
-  → SessionRegistry.complete 复用或取得创建权，返回唯一 manager
+  → SessionRegistry.get_or_create 复用或取得创建权，返回唯一 manager
+  → SessionManager.create_completion 校验并串行化 create 命令
   → SessionManager 事务创建 turn、用户消息、事件
   → SessionRegistry.document_client.prepare_resources → DocumentResourceService gRPC
   → SessionManager 替换资源引用
@@ -39,7 +40,7 @@ POST /cancel → Registry.get 取得现有 manager，只操作已加载会话
 | document_client.py | DocumentResourceService protobuf 与 grpc.aio 转换，只负责 PrepareResources |
 | core/db.py、crud/crud.py | 线程内连接、事务和参数化 SQL |
 
-Registry 用每 session 的 Entry 状态协调 Manager 生命周期：不存在时由当前请求取得创建权（CREATING），锁外完成加载后转 READY；complete 和 cold resume 共用该入口，cancel 只取现有 READY manager。真正的后台执行由 TurnRuntime.start 创建；创建请求被显式取消时 abort 创建权，由创建方关闭未注册 manager。
+Registry 用每 session 的 Entry 状态协调 Manager 生命周期：不存在时由当前请求取得创建权（CREATING），锁外完成加载后转 READY；complete（现由 routes 直取 manager 后走 create 命令）和 cold resume 共用该入口，cancel 只取现有 READY manager。真正的后台执行由 TurnRuntime.start 创建；创建请求被显式取消时 abort 创建权，由创建方关闭未注册 manager。
 
 ## 数据访问边界
 

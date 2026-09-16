@@ -8,7 +8,8 @@
 - `test_cancel_rejects_late_event_and_does_not_cancel_new_turn`：旧轮取消后 runtime 丢弃迟到事件，重复取消旧轮不伤害新轮。
 - `test_concurrent_create_has_one_active_turn_and_one_manager`：并发获取返回同一 manager，重复启动活跃轮拒绝。
 - `test_completion_has_no_request_deduplication`：接口拒绝已删除的 request_id；相同问题独立提交创建不同会话，各自产生独立轮次。
-- `test_cancelled_creation_aborts_ownership_and_retry`：创建权持有期间其他 complete/get 冲突；请求被取消后创建权回滚、未产生轮次，下一次请求可重新创建。
+- `test_manager_create_validates_content_and_run_options`：manager 的 create 入口校验空白 content、未知 run_options 字段和非正数工具超时，registry 不再承担业务校验。
+- `test_cancelled_creation_aborts_ownership_and_retry`：创建权持有期间其他 get/get_or_create 冲突；请求被取消后创建权回滚、未产生轮次，下一次请求可重新创建。
 - `test_cancelled_queued_create_recycles_subscription`：create 命令排队期间调用方取消，命令仍执行并创建轮次，无人接收的订阅被回收。
 - `test_cancelled_create_during_handler_recycles_subscription`：begin 事务执行中调用方取消，同样不撤销命令且回收订阅。
 - `test_failed_begin_returns_error_without_runtime_or_subscription`：runtime 的 begin 建轮事务失败把异常直接还给调用方，轮次和用户消息整体回滚，不残留订阅或活跃认领。
@@ -20,7 +21,7 @@
 - `test_idle_unload_and_cold_resume_do_not_keep_history_in_manager`：无订阅的活跃任务不卸载，空闲后冷恢复可查询历史且不常驻历史缓存。
 - `test_startup_marks_orphan_execution_failed_without_restarting_agent`：启动时收口遗留活跃轮次，不重放模型执行。
 - `test_retry_marks_failed_attempt_and_terminal_clears_retry_state`：重试标记原模型尝试失败，终态不会留下仍在重试的展示项。
-- `test_closing_entry_rejects_get_until_removed`：回收关闭期间 entry 为 CLOSING，get/complete 冲突；关闭完成后移除，可重新加载新 manager。
+- `test_closing_entry_rejects_get_until_removed`：回收关闭期间 entry 为 CLOSING，get/get_or_create 冲突；关闭完成后移除，可重新加载新 manager。
 - `test_get_unknown_session_raises_not_found`：Registry.get 对未加载会话返回 NotFound，不触发冷加载。
 - `test_missing_tool_result_does_not_fabricate_history`：缺少真实工具结果时拒绝入库，不补造失败正文。
 - `test_registry_can_load_after_cleanup`：Registry 清理资源后仍可重新加载已有会话，不通过服务关闭标志拒绝访问。
