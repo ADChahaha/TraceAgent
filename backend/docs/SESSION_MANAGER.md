@@ -31,9 +31,9 @@ manager 对 runtime 的唯一反向通道是 `runtime.cancel()`：只设标志�
 | 文件 | 输入、处理与输出 |
 | --- | --- |
 | routes/chat.py | JSON/multipart 校验，调用 get_or_create + manager 命令（create/attach/cancel），生成 SSE 或 JSON |
-| session_registry.py | Manager 状态机（CREATING/READY/CLOSING）与加载权；回收与启动恢复 |
+| session_registry.py | Manager 状态机（CREATING/READY/CLOSING）与加载权；回收与启动恢复；不含业务逻辑 |
 | turn_runtime.py | 自治执行体：建轮事务、agent 事件配组落库、终态收口、广播；持有 database 并自带事务壳，依赖经构造参数注入，不引用 manager |
-| session_manager.py | create/cancel/attach 三命令 FIFO 串行；订阅管理；终态广播的 pending_cancel 补发；向 runtime 注入 refresh/publish/fail 回调（_refresh_state/_runtime_publish） |
+| session_manager.py | create/cancel/attach 三命令 FIFO 串行，create 入口校验内容和 run_options；upload_files/remove_file 业务（校验、document service、资源替换）；订阅管理；终态广播的 pending_cancel 补发；向 runtime 注入 refresh/publish/fail 回调（_refresh_state/_runtime_publish） |
 | turn_view.py | 过程事件折叠成当前轮 items，输出深拷贝快照 |
 | subscription.py | 独立有界队列，发布不阻塞，等待者取消不丢事件 |
 | session_history.py | 读取 chat_messages 与 chat_turns 渲染历史轮，不常驻 manager |
@@ -58,9 +58,9 @@ POST /chat/completion 输入 content、session_id、run_options
 ## 3. 资源与执行
 
 ```text
-SessionRegistry.upload_files/remove_file（会话资源变更）
-  → await DocumentResourceClient.prepare_resources
-  → SessionManager 事务替换资源引用
+SessionRegistry.get_or_create → 唯一 manager
+  → manager.upload_files/remove_file（校验 -> DocumentResourceClient.prepare_resources）
+  → manager.replace_resources 命令：事务替换资源引用
   → 资源变更完成后才允许下一轮使用新引用
 
 TurnRuntime.run（自治）

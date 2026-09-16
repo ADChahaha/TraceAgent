@@ -37,20 +37,39 @@ def test_create_session_starts_ready_without_turns(tmp_path):
     asyncio.run(scenario())
 
 
+def test_manager_upload_validates_before_document_call(tmp_path):
+    async def scenario():
+        registry, db, agent = await setup(tmp_path)
+        try:
+            session_id = await registry.create_session()
+            manager = await registry.get_or_create(session_id)
+            with pytest.raises(ValidationError):
+                await manager.upload_files(files=[])
+            with pytest.raises(ValidationError):
+                await manager.upload_files(files=[file("bad.txt")])
+            with pytest.raises(ValidationError):
+                await manager.upload_files(files=[file("a.pdf", b"")])
+            # 校验失败不触达 document service。
+            assert agent.prepared == []
+        finally:
+            await registry.close()
+            db.close()
+    asyncio.run(scenario())
+
+
 def test_upload_materializes_at_upload_and_binds_to_session(tmp_path):
     async def scenario():
         registry, db, agent = await setup(tmp_path)
         try:
             session_id = await registry.create_session()
-            rows = await registry.upload_files(session_id=session_id,
-                                               files=[file("a.pdf", b"aaa"), file("b.docx", b"bbb")])
+            manager = await registry.get_or_create(session_id)
+            rows = await manager.upload_files(files=[file("a.pdf", b"aaa"), file("b.docx", b"bbb")])
             # 物化在上传时发生并携带 session_id；轮次执行不再触达准备。
             assert agent.prepared == [(session_id, [file("a.pdf", b"aaa"), file("b.docx", b"bbb")], [])]
             raws = {row["location"]: row["size_bytes"] for row in rows if row["type"] == "raw"}
             assert set(raws) == {f"s3://res_{session_id}/raw/a.pdf", f"s3://res_{session_id}/raw/b.docx"}
             assert set(raws.values()) == {3}
             assert bundle_paths(rows)
-            manager = await registry.get_or_create(session_id)
             context = await manager.create_completion(content="问题", run_options={})
             snapshot = await build_snapshot(db, context)
             assert snapshot["state"]["resources"] == rows
@@ -72,16 +91,17 @@ def test_upload_rejects_bad_type_limits_and_unknown_session(tmp_path):
             with pytest.raises(ValidationError):
                 await registry.upload_files(session_id=session_id, files=[file("bad.txt")])
             with pytest.raises(NotFoundError):
-                await registry.upload_files(session_id="missing", files=[file("a.pdf")])
-            await registry.upload_files(session_id=session_id, files=[file("a.pdf", b"aaa")])
+                await registry.get_or_create("missing")
+            manager = await registry.get_or_create(session_id)
+            await manager.upload_files(files=[file("a.pdf", b"aaa")])
             # 累计文件数：已有 1 个，再传 2 个超过 upload_max_files=2。
             with pytest.raises(ValidationError):
-                await registry.upload_files(session_id=session_id, files=[file("b.pdf"), file("c.pdf")])
+                await manager.upload_files(files=[file("b.pdf"), file("c.pdf")])
             # 累计字节：3 + 2 > upload_max_bytes=8。
             with pytest.raises(ValidationError):
-                await registry.upload_files(session_id=session_id, files=[file("b.pdf", b"bb")])
+                await manager.upload_files(files=[file("b.pdf", b"bb")])
             with pytest.raises(ValidationError):
-                await registry.upload_files(session_id=session_id, files=[])
+                await manager.upload_files(files=[])
         finally:
             await registry.close()
             db.close()
@@ -117,11 +137,12 @@ def test_delete_removes_raw_and_rebuilds_bundle(tmp_path):
         registry, db, agent = await setup(tmp_path)
         try:
             session_id = await registry.create_session()
-            rows = await registry.upload_files(session_id=session_id, files=[file("a.pdf"), file("b.pdf")])
+            manager = await registry.get_or_create(session_id)
+            rows = await manager.upload_files(files=[file("a.pdf"), file("b.pdf")])
             raw_id = next(row["id"] for row in rows if row["location"].endswith("/raw/a.pdf"))
             manager = await registry.get_or_create(session_id)
             context = await manager.create_completion(content="问题", run_options={})
-            updated = await registry.remove_file(session_id=session_id, resource_id=raw_id)
+            updated = await manager.remove_file(resource_id=raw_id)
             # 删除调用 agent：files 为空，remove_raw 指向被删文件；bundle 引用整体替换。
             assert agent.prepared[-1] == (session_id, [], [{"type": "raw", "location": f"s3://res_{session_id}/raw/a.pdf"}])
             assert all(not row["location"].endswith("/raw/a.pdf") for row in updated)
@@ -131,10 +152,10 @@ def test_delete_removes_raw_and_rebuilds_bundle(tmp_path):
             assert {"type": "raw", "location": f"s3://res_{session_id}/raw/b.pdf"} in paths
             assert {"type": "raw", "location": f"s3://res_{session_id}/raw/a.pdf"} not in paths
             with pytest.raises(NotFoundError):
-                await registry.remove_file(session_id=session_id, resource_id="missing")
+                await manager.remove_file(resource_id="missing")
             bundle_id = next(row["id"] for row in updated if row["type"] == "documents")
             with pytest.raises(ValidationError):
-                await registry.remove_file(session_id=session_id, resource_id=bundle_id)
+                await manager.remove_file(resource_id=bundle_id)
         finally:
             await registry.close()
             db.close()
@@ -146,10 +167,10 @@ def test_upload_broadcasts_resources_prepared_to_subscribers(tmp_path):
         registry, db, agent = await setup(tmp_path)
         try:
             session_id = await registry.create_session()
-            await registry.upload_files(session_id=session_id, files=[file("a.pdf")])
             manager = await registry.get_or_create(session_id)
+            await manager.upload_files(files=[file("a.pdf")])
             context = await manager.attach()
-            rows = await registry.upload_files(session_id=session_id, files=[file("b.pdf")])
+            rows = await manager.upload_files(files=[file("b.pdf")])
             event = await next_type(context.subscription, "resources.prepared")
             assert event["payload"]["resources"] == bundle_paths(rows)
         finally:

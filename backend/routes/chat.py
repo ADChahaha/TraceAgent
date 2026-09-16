@@ -106,7 +106,8 @@ async def create_session(request: Request):
 async def upload_files(request: Request, session_id: str):
     try:
         files = await _read_files(request)
-        resources = await request.app.state.session_registry.upload_files(session_id=session_id, files=files)
+        manager = await request.app.state.session_registry.get_or_create(session_id)
+        resources = await manager.upload_files(files=files)
         return {"resources": resources}
     except BackendServiceError as exc:
         raise_http_error(exc)
@@ -115,7 +116,8 @@ async def upload_files(request: Request, session_id: str):
 @router.delete("/chat/sessions/{session_id}/files/{resource_id}")
 async def remove_file(request: Request, session_id: str, resource_id: str):
     try:
-        resources = await request.app.state.session_registry.remove_file(session_id=session_id, resource_id=resource_id)
+        manager = await request.app.state.session_registry.get_or_create(session_id)
+        resources = await manager.remove_file(resource_id=resource_id)
         return {"resource_id": resource_id, "resources": resources}
     except BackendServiceError as exc:
         raise_http_error(exc)

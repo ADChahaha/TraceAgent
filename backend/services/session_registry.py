@@ -7,10 +7,9 @@ import asyncio
 import uuid
 from dataclasses import dataclass
 from enum import Enum, auto
-from pathlib import Path
 
 from backend.crud import crud
-from backend.services.errors import ConflictError, NotFoundError, ValidationError
+from backend.services.errors import ConflictError, NotFoundError
 from backend.services.session_manager import SessionManager
 from backend.services.time_utils import utc_now
 
@@ -121,64 +120,18 @@ class SessionRegistry:
                 raise NotFoundError("会话不存在")
             return session, crud.list_resources(db, session_id)
         session, resources = await asyncio.to_thread(read)
-        return SessionManager(session=session, resources=resources,
-                              database=self.database, agent_client=self.agent_client, settings=self.settings)
+        return SessionManager(session=session, resources=resources, database=self.database,
+                              agent_client=self.agent_client, document_client=self.document_client,
+                              settings=self.settings)
 
     def _create_session(self, session_id):
         crud.create_session(self.database.connect(), session_id=session_id, status="ready", now=utc_now())
 
     async def create_session(self):
-        """创建会话行并返回 session_id；文件随后经 upload_files 绑定。"""
+        """创建会话行并返回 session_id；文件随后经 manager 上传绑定。"""
         session_id = uuid.uuid4().hex
         await asyncio.to_thread(self._create_session, session_id)
         return session_id
-
-    async def upload_files(self, *, session_id, files):
-        """会话级上传：校验 -> document service 物化重建 -> 原子替换资源引用。"""
-        if not files:
-            raise ValidationError("files 不能为空")
-        filenames = set()
-        for file in files:
-            filename = file.get("filename") if isinstance(file, dict) else None
-            content = file.get("content") if isinstance(file, dict) else None
-            if not isinstance(filename, str) or not filename.strip() or "/" in filename or "\\" in filename:
-                raise ValidationError("文件名不能为空且不能包含路径分隔符")
-            if filename in filenames:
-                raise ValidationError("同一批上传文件名重复")
-            filenames.add(filename)
-            if Path(filename).suffix.lower().lstrip(".") not in self.settings.supported_file_types:
-                raise ValidationError("只支持 PDF/DOCX 文件")
-            if not isinstance(content, bytes) or not content:
-                raise ValidationError("文件内容不能为空")
-        manager = await self.get_or_create(session_id)
-        raw_rows = [row for row in manager.resources if row["type"] == "raw"]
-        if len(raw_rows) + len(files) > self.settings.upload_max_files:
-            raise ValidationError("会话文件数超过限制")
-        total = sum(row["size_bytes"] for row in raw_rows) + sum(len(file["content"]) for file in files)
-        if total > self.settings.upload_max_bytes:
-            raise ValidationError("会话资源总量超过限制")
-        refs = await self.document_client.prepare_resources(session_id=session_id, files=files)
-        sizes = self._raw_sizes(refs, files)
-        return await manager.replace_resources(refs, sizes)
-
-    async def remove_file(self, *, session_id, resource_id):
-        """删除会话里的原始文件：document service 排除 raw 并重建 bundle，再替换资源引用。"""
-        manager = await self.get_or_create(session_id)
-        resource = await manager.get_file(resource_id)
-        refs = await self.document_client.prepare_resources(
-            session_id=session_id, files=[],
-            remove_raw=[{"type": resource["type"], "location": resource["location"]}])
-        return await manager.replace_resources(refs, {})
-
-    @staticmethod
-    def _raw_sizes(refs, files):
-        """把上传文件大小按 raw/<filename> 后缀对齐到 agent 返回的 raw 引用。"""
-        sizes = {}
-        for file in files:
-            for ref in refs:
-                if ref["type"] == "raw" and ref["location"].endswith(f"/raw/{file['filename']}"):
-                    sizes[ref["location"]] = len(file["content"])
-        return sizes
 
     async def evict_idle(self):
         closing = []
