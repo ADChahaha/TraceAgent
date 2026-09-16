@@ -8,9 +8,9 @@
 FastAPI lifespan → SessionRegistry.start → 扫描遗留运行状态
 HTTP handler → SessionRegistry → DocumentResourceClient（上传/删除文件时）
 HTTP handler → SessionManager 命令队列（create/cancel/attach/detach）
-SessionManager._handle_create → 建 turn+用户消息事务 → 创建 TurnRuntime → runtime.start()
+SessionManager._handle_create → 建 turn+用户消息事务 → 创建 TurnRuntime（注入 session_id/agent_client 与 write/publish/fail 回调） → runtime.start()
 TurnRuntime（自治）→ AgentClient → 独立 agent gRPC 服务
-TurnRuntime → 工具组配对 → 事务写 chat_messages → 更新 TurnView → manager.broadcast → Subscription
+TurnRuntime → 工具组配对 → 事务写 chat_messages → 更新 TurnView → publish 回调 → manager.broadcast → Subscription
 HTTP handler → session_history.build_snapshot → 首帧 → Subscription.receive → SSE
 FastAPI shutdown → registry.close → manager.close → runtime.cancel/wait_closed
 ```
@@ -25,14 +25,14 @@ FastAPI shutdown → registry.close → manager.close → runtime.cancel/wait_cl
 | 轮终态写入 | runtime | `update_turn_status_if_current` 条件更新，取消/失败/完成只有一个赢家 |
 | chat_turns/chat_sessions 收口 | runtime 事务内 | 同事务清 active_turn_id |
 
-manager 对 runtime 的唯一反向通道是 `runtime.cancel()`：只设标志并取消 gRPC call，不进队列、不打断在途写事务。runtime 到 manager 的正向通道是 `broadcast(turn_id, event)`（asyncio 单线程内同步语义，原子）与事务失败时的 `manager.fail()`。
+manager 对 runtime 的唯一反向通道是 `runtime.cancel()`：只设标志并取消 gRPC call，不进队列、不打断在途写事务。runtime 不持有 manager 引用，依赖以启动参数注入：`session_id`、`agent_client` 是数据依赖；`write`（事务提交并刷新 session/resources 缓存）、`publish`（事件广播）、`fail`（损坏标记）是 manager 注入的回调通道。broadcast 为 asyncio 单线程内同步语义，原子。
 
 | 文件 | 输入、处理与输出 |
 | --- | --- |
 | routes/chat.py | JSON/multipart 校验，调用 complete/attach/cancel，生成 SSE 或 JSON |
 | session_registry.py | Manager 状态机（CREATING/READY/CLOSING）与加载权；回收与启动恢复 |
-| session_manager.py | create/cancel/attach 三命令 FIFO 串行；订阅管理；终态广播的 pending_cancel 补发 |
-| turn_runtime.py | 自治执行体：begin 事务、agent 事件配组落库、终态收口、广播 |
+| turn_runtime.py | 自治执行体：begin 事务、agent 事件配组落库、终态收口、广播；依赖经构造参数注入，不引用 manager |
+| session_manager.py | create/cancel/attach 三命令 FIFO 串行；订阅管理；终态广播的 pending_cancel 补发；向 runtime 注入 write/publish/fail 回调（_runtime_commit/_runtime_publish） |
 | turn_view.py | 过程事件折叠成当前轮 items，输出深拷贝快照 |
 | subscription.py | 独立有界队列，发布不阻塞，等待者取消不丢事件 |
 | session_history.py | 读取 chat_messages 与 chat_turns 渲染历史轮，不常驻 manager |

@@ -154,7 +154,9 @@ class SessionManager:
 
         events = []
         await self._transaction(create, events)
-        runtime = TurnRuntime(manager=self, turn_id=turn_id, run_options=run_options)
+        runtime = TurnRuntime(session_id=self.session_id, agent_client=self.agent_client,
+                              write=self._runtime_commit, publish=self._runtime_publish, fail=self.fail,
+                              turn_id=turn_id, run_options=run_options)
         self.runtime = runtime
         subscription = Subscription(max_events=self.settings.subscription_max_events, max_bytes=self.settings.subscription_max_bytes)
         self.subscribers[subscription.id] = subscription
@@ -162,6 +164,29 @@ class SessionManager:
                                 copy.deepcopy(self.resources), runtime.snapshot(), subscription, self.settings.snapshot_max_bytes)
         runtime.start()
         return context
+
+    async def _runtime_commit(self, operation, events):
+        """runtime 写通道：开事务执行并刷新 session/resources 缓存；失败标记损坏。"""
+        def execute():
+            db = self.database.connect()
+            with crud.transaction(db):
+                result = operation(db, events)
+                return result, crud.get_session(db, self.session_id), crud.list_resources(db, self.session_id)
+
+        try:
+            result, self.session, self.resources = await asyncio.to_thread(execute)
+        except Exception:
+            self.fail()
+            raise
+        return result
+
+    async def _runtime_publish(self, event):
+        """runtime 广播通道：事务提交后逐事件转发；失败标记损坏。"""
+        try:
+            await self.broadcast(event["turn_id"], event)
+        except Exception:
+            self.fail()
+            raise
 
     async def _transaction(self, operation, events):
         def execute():

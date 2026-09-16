@@ -50,23 +50,18 @@ def test_runtime_cancel_before_first_step_cleans_up():
         from backend.services.turn_runtime import TurnRuntime
         ended = asyncio.Event()
 
-        class FakeDB:
-            def connect(self):
-                raise RuntimeError("测试不触达真实数据库")
+        async def write(operation, events):
+            raise RuntimeError("测试不触达真实数据库")
 
-        class Manager:
-            session_id = "s"
-            session = {"status": "ready", "active_turn_id": "turn"}
-            database = FakeDB()
+        async def publish(event):
+            if event["type"] == "turn.cancelled":
+                ended.set()
 
-            async def broadcast(self, turn_id, event):
-                if event["type"] == "turn.cancelled":
-                    ended.set()
+        def fail():
+            pass
 
-            def fail(self):
-                pass
-
-        runtime = TurnRuntime(manager=Manager(), turn_id="turn", files=[], run_options={})
+        runtime = TurnRuntime(session_id="s", agent_client=None, write=write, publish=publish, fail=fail,
+                              turn_id="turn", run_options={})
         runtime.start()
         runtime.cancel()
         await asyncio.gather(runtime.task, return_exceptions=True)

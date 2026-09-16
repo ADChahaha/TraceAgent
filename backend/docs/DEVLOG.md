@@ -6,6 +6,10 @@ last updated: 2026-09-16
 
 ### 已完成工作
 
+- TurnRuntime 去除 manager 耦合：构造参数改为 session_id、agent_client 与 write/publish/fail 回调；manager 新增 _runtime_commit（事务提交+缓存刷新+失败标损坏）和 _runtime_publish（事件转发）两个注入点。runtime 不再读写 manager 状态，测试假对象从 fake Manager 变为三个 lambda 式回调。纯重构，行为不变。
+- 顺带修复 test_runtime_cancel_before_first_step_cleans_up：旧用例向构造函数传入不存在的 files 参数导致 TypeError，属存量失败；新签名下修正并恢复通过（全量 74 通过 / 8 存量失败，失败集合与改前一致）。
+- 同步 SESSION_MANAGER.md 的调用链、所有权与回调通道描述。
+
 - 删除 TurnRuntime.write_lock：run() 单任务内顺序 await 每次写，锁永远无竞争；同连接事务不重叠实际由 to_thread 独占线程 + thread-local 连接保证，跨连接写竞争由 SQLite 文件锁和 busy_timeout 排队。纯重构，行为不变。
 - 同步 SESSION_MANAGER.md 的串行边界与取消语义描述（write_lock 引用改为真实串行机制）。
 

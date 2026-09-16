@@ -1,7 +1,9 @@
 """单轮自治执行体：资源准备、gRPC 消费、工具组配对、消息落库、终态收口。
 
 对应 codex-core 的 Session+turn 循环：轮内全部状态（配对组、展示视图、序号）
-归本任务私有；对 manager 只有一个反向通道 cancel()，其余交互是启动参数与广播。
+归本任务私有；对 manager 没有任何直接引用，依赖以启动参数注入：
+session_id、agent_client 是数据依赖，write/publish/fail 是 manager 提供的
+回调通道（事务提交+缓存刷新、事件广播、损坏标记）。
 """
 
 import asyncio
@@ -10,14 +12,17 @@ import json
 import uuid
 
 from backend.crud import crud
-from backend.services.errors import BackendServiceError
 from backend.services.time_utils import utc_now
 from backend.services.turn_view import TurnView
 
 
 class TurnRuntime:
-    def __init__(self, *, manager, turn_id, run_options):
-        self.manager = manager
+    def __init__(self, *, session_id, agent_client, write, publish, fail, turn_id, run_options):
+        self.session_id = session_id
+        self.agent_client = agent_client
+        self.write = write
+        self.publish = publish
+        self.fail = fail
         self.turn_id = turn_id
         self.run_options = run_options
         self.call = None
@@ -48,7 +53,7 @@ class TurnRuntime:
         try:
             request = await self._begin()
             if request is not None and not self.cancel_requested:
-                self.call = self.manager.agent_client.chat_completion(**request, run_options=self.run_options)
+                self.call = self.agent_client.chat_completion(**request, run_options=self.run_options)
                 if not self.cancel_requested:
                     async for event in self.call:
                         if not await self._on_event(event):
@@ -68,24 +73,20 @@ class TurnRuntime:
             self.done.set()
 
     async def _begin(self):
-        """启动轮次并返回模型请求输入；事务失败标记 manager 损坏。"""
-        try:
-            return await self._write(True, self._begin_operation())
-        except Exception:
-            self.manager.fail()
-            raise
+        """启动轮次并返回模型请求输入。"""
+        return await self._write(self._begin_operation())
 
     def _begin_operation(self):
         def begin(db, events):
             now = utc_now()
             crud.update_turn(db, turn_id=self.turn_id, now=now, status="in_progress", agent_completion_id=self.turn_id, commit=False)
-            crud.update_session(db, session_id=self.manager.session_id, now=now, status="running", commit=False)
+            crud.update_session(db, session_id=self.session_id, now=now, status="running", commit=False)
             self._emit(events, "turn.started")
             messages = [{"role": row["role"], "content": row["content"], "tool_calls_json": row["tool_calls_json"],
                          **{key: row[key] for key in ("tool_call_id", "name") if row[key] is not None}}
-                        for row in crud.list_messages(db, self.manager.session_id)]
+                        for row in crud.list_messages(db, self.session_id)]
             return {"completion_id": self.turn_id,
-                    "resource_path": [{"type": row["type"], "location": row["location"]} for row in crud.list_resources(db, self.manager.session_id)],
+                    "resource_path": [{"type": row["type"], "location": row["location"]} for row in crud.list_resources(db, self.session_id)],
                     "messages": messages}
 
         return begin
@@ -116,11 +117,7 @@ class TurnRuntime:
         elif kind in {"tool_completed", "tool_failed"}:
             ready = self._accept_tool_result(kind, event)
 
-        try:
-            await self._write(True, self._event_operation(kind, event, ready))
-        except Exception:
-            self.manager.fail()
-            raise
+        await self._write(self._event_operation(kind, event, ready))
         if ready:
             self.completed_groups[ready[0]] = True
         if seq:
@@ -183,19 +180,18 @@ class TurnRuntime:
             messages.append({"role": "tool", "content": content, "tool_call_id": call["id"], "name": call["name"]})
         sequence = crud.get_next_message_sequence(db, self.turn_id)
         for index, message in enumerate(messages):
-            crud.create_message(db, message_id=uuid.uuid4().hex, session_id=self.manager.session_id, turn_id=self.turn_id,
+            crud.create_message(db, message_id=uuid.uuid4().hex, session_id=self.session_id, turn_id=self.turn_id,
                                 now=utc_now(), sequence=sequence + index, group_id=mid, group_index=index, commit=False, **message)
 
     async def _finish(self, status, error=None):
-        """写轮终态并清空 session 活跃标记；写失败时标记 manager 损坏但不无限重试。"""
+        """写轮终态并清空 session 活跃标记；写失败时不无限重试。"""
         if self.status != "queued":
             return
         self.status = status
         self.error = error
         try:
-            await self._write(True, self._finish_operation(status, error))
+            await self._write(self._finish_operation(status, error))
         except Exception:
-            self.manager.fail()
             return
         self.pending_groups.clear()
         self.completed_groups.clear()
@@ -210,36 +206,25 @@ class TurnRuntime:
                 return
             if status == "cancelled":
                 self._emit(events, "turn.cancel_requested")
-            crud.update_session(db, session_id=self.manager.session_id, now=now, clear_active_turn=True,
+            crud.update_session(db, session_id=self.session_id, now=now, clear_active_turn=True,
                                 status="ready", commit=False)
             self._emit(events, "turn." + status, {"error": error})
 
         return finish
 
-    async def _write(self, update_manager_state, operation):
-        """执行一个写事务并广播。run() 单任务内顺序 await 每次写，天然串行；
-        每次写独占一个线程池线程，thread-local 连接保证同一连接上事务不重叠；
-        跨连接的写竞争由 SQLite 文件锁和 busy_timeout 排队。
-        提交后更新视图并广播。update_manager_state 为 False 时不刷新 manager 的
-        session/resources 缓存。"""
+    async def _write(self, operation):
+        """执行一个写事务并广播。事务提交与 session/resources 缓存刷新经 write
+        回调；事件先入展示视图，再经 publish 回调逐条转发；异常经 fail 回调标记
+        manager 损坏。"""
         events = []
-
-        def execute():
-            db = self.manager.database.connect()
-            with crud.transaction(db):
-                result = operation(db, events)
-                return result, crud.get_session(db, self.manager.session_id), crud.list_resources(db, self.manager.session_id)
-
-        result, session, resources = await asyncio.to_thread(execute)
-        if update_manager_state:
-            self.manager.session, self.manager.resources = session, resources
+        result = await self.write(operation, events)
         try:
             for event in events:
                 self.view.apply(event)
                 self.broadcast_count += 1
-                await self.manager.broadcast(self.turn_id, event)
+                await self.publish(event)
         except Exception:
-            self.manager.fail()
+            self.fail()
             raise
         return result
 
