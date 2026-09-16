@@ -29,7 +29,6 @@ class TurnRuntime:
         self.view = TurnView(turn_id)
         self.pending_groups, self.completed_groups, self.last_seq = {}, {}, 0
         self.broadcast_count = 0
-        self.write_lock = asyncio.Lock()
 
     def start(self):
         self.task = asyncio.create_task(self.run(), name=f"turn:{self.turn_id}")
@@ -218,19 +217,20 @@ class TurnRuntime:
         return finish
 
     async def _write(self, update_manager_state, operation):
-        """串行执行事务：cancel 可能打断 begin 的事务，写锁保证同一连接上事务不重叠。
+        """执行一个写事务并广播。run() 单任务内顺序 await 每次写，天然串行；
+        每次写独占一个线程池线程，thread-local 连接保证同一连接上事务不重叠；
+        跨连接的写竞争由 SQLite 文件锁和 busy_timeout 排队。
         提交后更新视图并广播。update_manager_state 为 False 时不刷新 manager 的
         session/resources 缓存。"""
         events = []
-        async with self.write_lock:
 
-            def execute():
-                db = self.manager.database.connect()
-                with crud.transaction(db):
-                    result = operation(db, events)
-                    return result, crud.get_session(db, self.manager.session_id), crud.list_resources(db, self.manager.session_id)
+        def execute():
+            db = self.manager.database.connect()
+            with crud.transaction(db):
+                result = operation(db, events)
+                return result, crud.get_session(db, self.manager.session_id), crud.list_resources(db, self.manager.session_id)
 
-            result, session, resources = await asyncio.to_thread(execute)
+        result, session, resources = await asyncio.to_thread(execute)
         if update_manager_state:
             self.manager.session, self.manager.resources = session, resources
         try:

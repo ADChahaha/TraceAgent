@@ -1,6 +1,13 @@
 # Backend Devlog
 
-last updated: 2026-09-15
+last updated: 2026-09-16
+
+## 2026-09-16
+
+### 已完成工作
+
+- 删除 TurnRuntime.write_lock：run() 单任务内顺序 await 每次写，锁永远无竞争；同连接事务不重叠实际由 to_thread 独占线程 + thread-local 连接保证，跨连接写竞争由 SQLite 文件锁和 busy_timeout 排队。纯重构，行为不变。
+- 同步 SESSION_MANAGER.md 的串行边界与取消语义描述（write_lock 引用改为真实串行机制）。
 
 ## 2026-09-15
 

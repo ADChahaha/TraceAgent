@@ -79,7 +79,7 @@ gRPC 分别使用 document service 的 PrepareResources 与 agent service 的 Ch
 串行化分两层，对齐 Codex 的"core 串行化 op、app-server 串行化投影"：
 
 - manager 命令队列：create/cancel/attach/detach 编码为 Command(name, args, reply) 进入有界 FIFO 队列，_run 是唯一消费者。对外业务入口只有 create/cancel/attach；detach/close 是生命周期管道。外部命令队列满直接拒绝；调用方协程取消不撤销已入队命令，handler 产生但无人接收的订阅由 _run 统一回收。
-- runtime 内部串行：单任务顺序处理事件；`write_lock` 保证同一连接上事务不重叠（cancel 可在 begin 事务在途时到达，终态事务必须等它提交）。runtime 的写失败经 `manager.fail()` 标记损坏：拒绝后续命令、取消执行、关闭订阅。
+- runtime 内部串行：单任务顺序处理事件并顺序 await 每次写，无需应用层写锁；每次写独占一个线程池线程，thread-local 连接保证同一连接上事务不重叠，跨连接写竞争由 SQLite 文件锁和 busy_timeout 排队。runtime 的写失败经 `manager.fail()` 标记损坏：拒绝后续命令、取消执行、关闭订阅。
 
 cancel 语义对齐 Codex 的 interrupt：`_handle_cancel` 校验轮次身份后登记 `pending_cancel` 等待者并调 `runtime.cancel()`，命令即返回等待；runtime 观察标志后自己写 cancelled 终态并广播，manager 在 broadcast 终态时补发 cancel 响应。已终结的轮次返回原终态。
 
@@ -139,7 +139,7 @@ GET /resume → manager.attach 在串行命令中：
 
 ## 8. 取消、卸载与重启
 
-cancel 必须同时携带 session_id 和 turn_id。Registry.get 只获取现有 READY manager，不触发加载：会话空闲已被回收时直接返回 404。manager 登记 pending_cancel 后调 `runtime.cancel()`（设标志 + call.cancel()），响应在 runtime 广播终态后补发；已终结的轮次直接返回原终态。取消不撤销在途写事务：write_lock 保证 begin 事务提交后终态事务才执行，未配齐组随 runtime 消亡被丢弃。
+cancel 必须同时携带 session_id 和 turn_id。Registry.get 只获取现有 READY manager，不触发加载：会话空闲已被回收时直接返回 404。manager 登记 pending_cancel 后调 `runtime.cancel()`（设标志 + call.cancel()），响应在 runtime 广播终态后补发；已终结的轮次直接返回原终态。取消不撤销在途写事务：runtime 单任务顺序执行写，begin 事务提交后终态事务才执行，未配齐组随 runtime 消亡被丢弃。
 
 取消后 runtime 不再接受新事件（`_on_event` 首查 cancel_requested），旧 call 取消后仍到达的事件不能污染数据。即使 runtime 尚未执行第一行就取消，run 的收口分支仍写终态并广播，不留悬挂句柄。
 
