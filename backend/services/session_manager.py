@@ -150,8 +150,8 @@ class SessionManager:
         if self.active_turn_id:
             raise ConflictError("会话已有活跃轮次")
         turn_id = uuid.uuid4().hex
-        runtime = TurnRuntime(session_id=self.session_id, agent_client=self.agent_client,
-                              write=self._runtime_commit, publish=self._runtime_publish, fail=self.fail,
+        runtime = TurnRuntime(session_id=self.session_id, agent_client=self.agent_client, database=self.database,
+                              refresh=self._refresh_state, publish=self._runtime_publish, fail=self.fail,
                               turn_id=turn_id, content=content, run_options=run_options)
         self.runtime = runtime
         runtime.start()
@@ -166,28 +166,13 @@ class SessionManager:
                              copy.deepcopy(self.resources), runtime.snapshot(), subscription,
                              self.settings.snapshot_max_bytes)
 
-    async def _runtime_commit(self, operation, events):
-        """runtime 写通道：开事务执行并刷新 session/resources 缓存；失败标记损坏。"""
-        def execute():
-            db = self.database.connect()
-            with crud.transaction(db):
-                result = operation(db, events)
-                return result, crud.get_session(db, self.session_id), crud.list_resources(db, self.session_id)
-
-        try:
-            result, self.session, self.resources = await asyncio.to_thread(execute)
-        except Exception:
-            self.fail()
-            raise
-        return result
+    def _refresh_state(self, session, resources):
+        """runtime 写事务的缓存同步点：事务内快照直接成为 manager 的状态。"""
+        self.session, self.resources = session, resources
 
     async def _runtime_publish(self, event):
-        """runtime 广播通道：事务提交后逐事件转发；失败标记损坏。"""
-        try:
-            await self.broadcast(event["turn_id"], event)
-        except Exception:
-            self.fail()
-            raise
+        """runtime 广播通道：事务提交后逐事件转发。"""
+        await self.broadcast(event["turn_id"], event)
 
     async def _transaction(self, operation, events):
         def execute():

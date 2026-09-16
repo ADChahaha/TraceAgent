@@ -26,14 +26,14 @@ FastAPI shutdown → registry.close → manager.close → runtime.cancel/wait_cl
 | 轮终态写入 | runtime | `update_turn_status_if_current` 条件更新，取消/失败/完成只有一个赢家 |
 | chat_turns/chat_sessions 收口 | runtime 事务内 | 同事务清 active_turn_id |
 
-manager 对 runtime 的唯一反向通道是 `runtime.cancel()`：只设标志并取消 gRPC call，不进队列、不打断在途写事务。runtime 不持有 manager 引用，依赖以启动参数注入：`session_id`、`agent_client` 是数据依赖；`write`（事务提交并刷新 session/resources 缓存）、`publish`（事件广播）、`fail`（损坏标记）是 manager 注入的回调通道。broadcast 为 asyncio 单线程内同步语义，原子。
+manager 对 runtime 的唯一反向通道是 `runtime.cancel()`：只设标志并取消 gRPC call，不进队列、不打断在途写事务。runtime 不持有 manager 引用，依赖以启动参数注入：`session_id`、`agent_client`、`database` 是数据依赖，事务壳（连接、BEGIN、提交、线程调度）归 runtime 自有；`refresh`（缓存同步）、`publish`（事件广播）、`fail`（损坏标记）是 manager 注入的回调通道。broadcast 为 asyncio 单线程内同步语义，原子。
 
 | 文件 | 输入、处理与输出 |
 | --- | --- |
 | routes/chat.py | JSON/multipart 校验，调用 get_or_create + manager 命令（create/attach/cancel），生成 SSE 或 JSON |
 | session_registry.py | Manager 状态机（CREATING/READY/CLOSING）与加载权；回收与启动恢复 |
-| turn_runtime.py | 自治执行体：begin 事务、agent 事件配组落库、终态收口、广播；依赖经构造参数注入，不引用 manager |
-| session_manager.py | create/cancel/attach 三命令 FIFO 串行；订阅管理；终态广播的 pending_cancel 补发；向 runtime 注入 write/publish/fail 回调（_runtime_commit/_runtime_publish） |
+| turn_runtime.py | 自治执行体：建轮事务、agent 事件配组落库、终态收口、广播；持有 database 并自带事务壳，依赖经构造参数注入，不引用 manager |
+| session_manager.py | create/cancel/attach 三命令 FIFO 串行；订阅管理；终态广播的 pending_cancel 补发；向 runtime 注入 refresh/publish/fail 回调（_refresh_state/_runtime_publish） |
 | turn_view.py | 过程事件折叠成当前轮 items，输出深拷贝快照 |
 | subscription.py | 独立有界队列，发布不阻塞，等待者取消不丢事件 |
 | session_history.py | 读取 chat_messages 与 chat_turns 渲染历史轮，不常驻 manager |

@@ -385,14 +385,14 @@ def test_cancelled_create_during_handler_recycles_subscription(tmp_path, monkeyp
             crud.create_session(db.connect(), session_id="cold", status="ready", now="now")
             manager = await registry.get_or_create("cold")
             entered, release = asyncio.Event(), asyncio.Event()
-            original_commit = manager._runtime_commit
+            original_publish = manager._runtime_publish
 
-            async def gated_commit(operation, events):
+            async def gated_publish(event):
                 entered.set()
                 await release.wait()
-                return await original_commit(operation, events)
+                return await original_publish(event)
 
-            monkeypatch.setattr(manager, "_runtime_commit", gated_commit)
+            monkeypatch.setattr(manager, "_runtime_publish", gated_publish)
 
             request = asyncio.create_task(manager.create_completion(content="问题", run_options={}))
             try:
@@ -417,11 +417,12 @@ def test_failed_begin_returns_error_without_runtime_or_subscription(tmp_path, mo
             crud.create_session(db.connect(), session_id="cold", status="ready", now="now")
             manager = await registry.get_or_create("cold")
 
-            async def failing_commit(operation, events):
-                raise RuntimeError("写入失败")
+            class BrokenDatabase:
+                def connect(self):
+                    raise RuntimeError("写库失败")
 
-            monkeypatch.setattr(manager, "_runtime_commit", failing_commit)
-            with pytest.raises(RuntimeError, match="写入失败"):
+            monkeypatch.setattr(manager, "database", BrokenDatabase())
+            with pytest.raises(RuntimeError, match="写库失败"):
                 await manager.create_completion(content="问题", run_options={})
             assert manager.subscribers == {}
             assert manager.active_turn_id is None

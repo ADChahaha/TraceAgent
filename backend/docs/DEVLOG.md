@@ -6,6 +6,8 @@ last updated: 2026-09-16
 
 ### 已完成工作
 
+- 事务壳归还 runtime：TurnRuntime 构造参数从 write 回调改为直接持有 database，_write 自带连接、BEGIN、提交与 to_thread；manager 侧 _runtime_commit 删除，换成 _refresh_state（缓存同步点）。refresh/publish/fail 三个注入回调保持纯职责，事务失败标损坏的语义并入 runtime 的 _write。写所有权与写执行权对齐：runtime 写库就自己开事务。纯重构，76 项通过，失败集合与基线一致；测试注入点适配（假 database 替代假 write，取消测试改闸 _runtime_publish）。
+
 - 删除 SessionRegistry.complete：registry 收缩为纯 manager 生命周期协调（get_or_create/create_session/回收），不再承担业务校验和命令转发。内容和 run_options 校验（含空白 content、未知字段、正数超时）迁入 manager 的 create_completion 入口；routes 改为 get_or_create 后直调 manager.create_completion。TDD：新增 manager 层校验测试（旧实现下红），调用点适配 14 处，全量 76 项通过，失败集合与基线一致。
 - 同步 SESSION_MANAGER.md、DESIGN.md 的调用链与 tests/docs。
 

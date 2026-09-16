@@ -11,7 +11,7 @@
 - `test_manager_create_validates_content_and_run_options`：manager 的 create 入口校验空白 content、未知 run_options 字段和非正数工具超时，registry 不再承担业务校验。
 - `test_cancelled_creation_aborts_ownership_and_retry`：创建权持有期间其他 get/get_or_create 冲突；请求被取消后创建权回滚、未产生轮次，下一次请求可重新创建。
 - `test_cancelled_queued_create_recycles_subscription`：create 命令排队期间调用方取消，命令仍执行并创建轮次，无人接收的订阅被回收。
-- `test_cancelled_create_during_handler_recycles_subscription`：begin 事务执行中调用方取消，同样不撤销命令且回收订阅。
+- `test_cancelled_create_during_handler_recycles_subscription`：建轮命令执行中（事务提交后、命令返回前）调用方取消，同样不撤销命令且回收订阅。
 - `test_failed_begin_returns_error_without_runtime_or_subscription`：runtime 的 begin 建轮事务失败把异常直接还给调用方，轮次和用户消息整体回滚，不残留订阅或活跃认领。
 - `test_created_turn_snapshot_carries_user_message`：create 返回的首帧快照由 runtime 的 begin 事务提交后的视图渲染，携带用户消息和 in_progress 状态。
 - `test_cancel_rejects_events_after_signal`：取消信号后 runtime 丢弃后续事件，不写库。

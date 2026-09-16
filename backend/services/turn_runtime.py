@@ -1,9 +1,9 @@
 """单轮自治执行体：建轮、gRPC 消费、工具组配对、消息落库、终态收口。
 
 对应 codex-core 的 Session+turn 循环：轮内全部状态（配对组、展示视图、序号）
-归本任务私有；对 manager 没有任何直接引用，依赖以启动参数注入：
-session_id、agent_client 是数据依赖，write/publish/fail 是 manager 提供的
-回调通道（事务提交+缓存刷新、事件广播、损坏标记）。
+和写事务壳（连接、BEGIN、提交、线程调度）归本任务私有；对 manager 没有任何
+直接引用，依赖以启动参数注入：session_id、agent_client、database 是数据依赖，
+refresh/publish/fail 是 manager 提供的回调通道（缓存同步、事件广播、损坏标记）。
 """
 
 import asyncio
@@ -17,10 +17,11 @@ from backend.services.turn_view import TurnView
 
 
 class TurnRuntime:
-    def __init__(self, *, session_id, agent_client, write, publish, fail, turn_id, content, run_options):
+    def __init__(self, *, session_id, agent_client, database, refresh, publish, fail, turn_id, content, run_options):
         self.session_id = session_id
         self.agent_client = agent_client
-        self.write = write
+        self.database = database
+        self.refresh = refresh
         self.publish = publish
         self.fail = fail
         self.turn_id = turn_id
@@ -231,11 +232,23 @@ class TurnRuntime:
         return finish
 
     async def _write(self, operation):
-        """执行一个写事务并广播。事务提交与 session/resources 缓存刷新经 write
-        回调；事件先入展示视图，再经 publish 回调逐条转发；异常经 fail 回调标记
-        manager 损坏。"""
+        """开事务执行并提交；事务内的会话与资源快照经 refresh 回调同步到 manager
+        缓存，事件先入展示视图再经 publish 回调逐条转发；事务或广播失败经 fail
+        回调标记 manager 损坏。"""
         events = []
-        result = await self.write(operation, events)
+
+        def execute():
+            db = self.database.connect()
+            with crud.transaction(db):
+                result = operation(db, events)
+                return result, crud.get_session(db, self.session_id), crud.list_resources(db, self.session_id)
+
+        try:
+            result, session, resources = await asyncio.to_thread(execute)
+        except Exception:
+            self.fail()
+            raise
+        self.refresh(session, resources)
         try:
             for event in events:
                 self.view.apply(event)
