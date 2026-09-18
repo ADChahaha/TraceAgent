@@ -81,6 +81,10 @@ conda create -n agent-gate python=3.11 -y && conda activate agent-gate
 ./scripts/install.sh          # 安装 Python 包 + 构建前端
 ```
 
+安装包含 storage 服务及默认 OpenVINO embedding 依赖。首次上传文档时会下载 embedding 模型，需要能访问 Hugging Face。
+
+若公开模型下载返回 401，而匿名访问正常，可在 `.env` 设置 `HF_HUB_DISABLE_IMPLICIT_TOKEN=1`，避免自动发送本机已有的 Hugging Face token；需要访问私有模型时应使用有效凭据。
+
 **3. 配置环境变量**
 
 在仓库根目录创建 `.env`，启动脚本会自动读取：
@@ -94,15 +98,19 @@ MODEL_API_TRANSPORT="responses"
 DOCUMENT_PROCESSOR_MINERU_LANG="japan"
 
 AGENT_PORT=8001
+DOCUMENT_PORT=8002
 BACKEND_PORT=8000
 FRONTEND_PORT=3000
+STORAGE_PORT=9000
 ```
 
 **4. 启动服务**
 
 ```bash
-./scripts/start.sh            # 同时启动 agent / backend / frontend
+./scripts/start.sh            # 启动 storage / agent / document service / backend / frontend
 ```
+
+默认先启动本地 storage，数据保存在 `storage/data`，可用 `STORAGE_DATA_ROOT` 改目录。若使用已有 S3 兼容服务，在 `.env` 配置 `S3_ENDPOINT_URL`，脚本会复用该地址并跳过本地 storage。退出脚本时会停止本次启动的服务。
 
 打开 http://127.0.0.1:3000 即可使用。
 

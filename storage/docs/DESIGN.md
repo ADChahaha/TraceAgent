@@ -42,7 +42,10 @@ GET    /healthz                   -> 探活
 ## 数据目录
 
 - 默认数据根：`storage/data`（可由 `STORAGE_DATA_ROOT` 环境变量覆盖）。
-- 启动：`python -m uvicorn storage.main:app --port 9000`，或 `python -m storage.main`。
+- 独立启动：`python -m uvicorn storage.main:create_app --factory --host 127.0.0.1 --port 9000`。模块提供应用工厂，不提供全局 `app` 或命令行入口。
+- 仓库 `scripts/start.sh` 默认先启动 storage，监听 `STORAGE_HOST` / `STORAGE_PORT`（默认 `127.0.0.1:9000`），再启动 agent、document service、backend 和 frontend。脚本将生成的 `S3_ENDPOINT_URL` 导出给子进程，使所有资源读写指向同一个服务。
+- 已显式配置非空 `S3_ENDPOINT_URL` 时，脚本使用该外部服务，不启动本地 storage；外部服务由部署者管理。
+- 脚本以 `exec` 启动服务，记录的 PID 就是服务进程，退出时统一终止并等待它们，不停止外部 storage。
 
 ## 与 agent 的关系
 

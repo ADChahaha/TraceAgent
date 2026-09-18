@@ -33,6 +33,15 @@ BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
 FRONTEND_HOST="${FRONTEND_HOST:-127.0.0.1}"
 FRONTEND_PORT="${FRONTEND_PORT:-3000}"
+STORAGE_HOST="${STORAGE_HOST:-127.0.0.1}"
+STORAGE_PORT="${STORAGE_PORT:-9000}"
+
+START_LOCAL_STORAGE=false
+if [[ -z "${S3_ENDPOINT_URL:-}" ]]; then
+  START_LOCAL_STORAGE=true
+  S3_ENDPOINT_URL="http://${STORAGE_HOST}:${STORAGE_PORT}"
+fi
+export S3_ENDPOINT_URL
 
 AGENT_SERVICE_TARGET="${AGENT_SERVICE_TARGET:-${AGENT_HOST}:${AGENT_PORT}}"
 DOCUMENT_SERVICE_TARGET="${DOCUMENT_SERVICE_TARGET:-${DOCUMENT_HOST}:${DOCUMENT_PORT}}"
@@ -48,6 +57,7 @@ pids=()
 
 cleanup() {
   local status=$?
+  trap - EXIT INT TERM
   if [[ ${#pids[@]} -gt 0 ]]; then
     echo
     echo "Stopping TraceAgent services..."
@@ -66,7 +76,7 @@ start_service() {
   echo "Starting $name..."
   (
     cd "$ROOT_DIR"
-    "$@"
+    exec "$@"
   ) &
 
   local pid=$!
@@ -81,6 +91,11 @@ start_service() {
     exit "$status"
   fi
 }
+
+if [[ "$START_LOCAL_STORAGE" == true ]]; then
+  start_service "storage  ${S3_ENDPOINT_URL}" \
+    python -m uvicorn storage.main:create_app --factory --host "$STORAGE_HOST" --port "$STORAGE_PORT"
+fi
 
 start_service "agent    gRPC ${AGENT_HOST}:${AGENT_PORT}" \
   python agent/main.py --host "$AGENT_HOST" --port "$AGENT_PORT"
@@ -99,6 +114,7 @@ start_service "frontend http://${FRONTEND_HOST}:${FRONTEND_PORT}" \
 
 echo
 echo "TraceAgent is running:"
+echo "  storage:  ${S3_ENDPOINT_URL}"
 echo "  agent:    gRPC ${AGENT_HOST}:${AGENT_PORT}"
 echo "  document: gRPC ${DOCUMENT_HOST}:${DOCUMENT_PORT}"
 echo "  backend:  http://${BACKEND_HOST}:${BACKEND_PORT}"

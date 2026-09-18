@@ -15,8 +15,8 @@ fi
 
 cd "$ROOT_DIR"
 
-echo "Installing shared protocol, shared storage, agent, and document service..."
-python -m pip install -e ./agent_proto -e ./shared -e "agent[dev]" -e "document_service[dev]"
+echo "Installing shared protocol, storage, agent, and document service with embeddings..."
+python -m pip install -e ./agent_proto -e ./shared -e ./storage -e "agent[dev,embeddings]" -e "document_service[dev,embeddings]"
 
 echo "Installing backend..."
 python -m pip install -e backend

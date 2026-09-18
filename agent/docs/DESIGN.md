@@ -52,6 +52,8 @@ AgentService.ChatCompletion（resource_refs + messages）
 
 ## 传输与部署
 
+仓库安装脚本同时安装 storage 包、agent 和 document service 的 `embeddings` 扩展依赖，补齐默认 OpenVINO 查询编码器与文档索引构建所需运行时。首次使用 embedding 模型时仍需要下载模型文件。启动脚本默认先启动本地 storage，并向各服务导出统一的 `S3_ENDPOINT_URL`；显式设置该地址时复用外部 storage。所有本地服务由脚本记录 PID 并在退出时清理。
+
 ```text
 document_service/main.py（默认 8002）读取监听地址、阻塞工作线程数和消息上限
   → asyncio.run 创建 document service 事件循环，启动 grpc.aio.Server 与异步标准 Health
