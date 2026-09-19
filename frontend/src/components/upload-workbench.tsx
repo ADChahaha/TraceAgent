@@ -2,10 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { FileText, Loader2, Plus, SendHorizonal, X } from "lucide-react";
-import { createSession, openCompletion, uploadSessionFiles } from "@/lib/api";
+import { createSession, openCompletion } from "@/lib/api";
 import { consumeSessionStream } from "@/lib/session-stream";
 import { rememberSession } from "@/lib/session-store";
-import { DOCUMENT_ACCEPT, mergeFiles, validateFiles } from "@/lib/document-files";
+import { DOCUMENT_ACCEPT } from "@/lib/document-files";
+import { useFileUploads } from "@/lib/use-file-uploads";
+import { UploadStatus } from "@/components/session/upload-status";
+import Link from "next/link";
 import { WorkspaceShell } from "@/components/session/workspace-shell";
 import { Button } from "@/components/ui/button";
 import { WorkspaceOverview, QuestionSuggestions } from "@/components/session/workspace-overview";
@@ -14,7 +17,8 @@ import { Textarea } from "@/components/ui/textarea";
 
 export function UploadWorkbench({ onCreated }: { onCreated?: (sessionId: string) => void }) {
   const [question, setQuestion] = useState("");
-  const [files, setFiles] = useState<File[]>([]);
+  const [sourceRequest, setSourceRequest] = useState(0);
+  const [createdId, setCreatedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -23,9 +27,21 @@ export function UploadWorkbench({ onCreated }: { onCreated?: (sessionId: string)
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => { controller.current?.abort(); }, []);
 
+  const uploads = useFileUploads(async () => {
+    if (!sessionId.current) {
+      sessionId.current = (await createSession()).session_id;
+      rememberSession(sessionId.current);
+      setCreatedId(sessionId.current);
+    }
+    return sessionId.current;
+  });
+  const files = uploads.items.map((item) => item.file);
+
   async function submit() {
-    if (lock.current) return;
-    const invalid = validateFiles(files) ?? (!question.trim() ? "Enter a question" : null);
+    if (lock.current || uploads.busy) return;
+    const invalid = !files.length ? "Select at least one PDF or DOCX file"
+      : !uploads.ready ? "Retry or remove failed files before asking"
+      : !question.trim() ? "Enter a question" : null;
     if (invalid) { setError(invalid); return; }
     lock.current = true;
     setSubmitting(true);
@@ -33,10 +49,7 @@ export function UploadWorkbench({ onCreated }: { onCreated?: (sessionId: string)
     controller.current = new AbortController();
     const signal = controller.current.signal;
     try {
-      const id = sessionId.current ?? (await createSession()).session_id;
-      sessionId.current = id;
-      rememberSession(id);
-      await uploadSessionFiles(id, files);
+      const id = sessionId.current!;
       if (signal.aborted) return;
       const response = await openCompletion(id, question.trim(), signal);
       let accepted = false;
@@ -64,22 +77,21 @@ export function UploadWorkbench({ onCreated }: { onCreated?: (sessionId: string)
   const sources = <section className={styles.sources}>
     <div className={styles.sourceHeading}><h2>Sources</h2><span>{files.length}</span></div>
     <ul className={styles.sourceList} aria-label="Sources list">
-      {files.map((file) => <li key={`${file.name}-${file.lastModified}-${file.size}`}>
-        <span className={styles.fileIcon}><FileText size={23} /></span>
-        <span className={styles.fileName}>{file.name}<small>{file.name.split(".").at(-1)?.toUpperCase()} · {(file.size / 1024).toFixed(1)} KB</small></span>
-        <button type="button" disabled={submitting} aria-label={`Remove ${file.name}`} onClick={() => setFiles((current) => current.filter((entry) => entry !== file))}><X size={16} /></button>
+      {uploads.items.map((item) => <li key={item.file.name}>
+        <FileRow item={item} submitting={submitting} busy={uploads.busy} onRetry={() => uploads.retry(item.file)} onRemove={() => void uploads.remove(item.file)} />
       </li>)}
     </ul>
     {!files.length && <div className={styles.sourceEmpty}><FileText size={30} strokeWidth={1.3} /><p>Your sources live here</p><small>Add a PDF or Word document to get started.</small></div>}
     <button type="button" className={styles.addSource} disabled={submitting} onClick={() => fileInput.current?.click()}><Plus size={19} />Add source</button>
   </section>;
-  return <WorkspaceShell review={sources}>
+  return <WorkspaceShell sessionId={createdId ?? undefined} review={sources} reviewRequest={sourceRequest}>
     <main className={styles.home} aria-label="Agent task workspace">
       <WorkspaceOverview count={files.length} onAdd={() => fileInput.current?.click()} onPrompt={choosePrompt} />
       <form className={styles.firstComposer} aria-label="Create task composer" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
         <input ref={fileInput} type="file" multiple accept={DOCUMENT_ACCEPT} aria-label="Document file input" className="sr-only" disabled={submitting} onChange={(event) => {
           const selected = Array.from(event.target.files ?? []);
-          setFiles((current) => mergeFiles(current, selected));
+          uploads.add(selected);
+          setSourceRequest((value) => value + 1);
           event.target.value = ""; setError(null);
         }} />
         <div className={styles.inputRow}>
@@ -90,14 +102,27 @@ export function UploadWorkbench({ onCreated }: { onCreated?: (sessionId: string)
                 event.preventDefault(); void submit();
               }
             }} />
-          <Button type="submit" size="icon" aria-label="Upload documents and ask" disabled={submitting}>
+          <Button type="submit" size="icon" aria-label="Upload documents and ask" disabled={submitting || uploads.busy || (files.length > 0 && !uploads.ready)}>
             {submitting ? <Loader2 size={20} className="animate-spin" /> : <SendHorizonal size={20} />}
           </Button>
         </div>
-        {error && <div className="home-task-composer-error" role="alert">{error}</div>}
+        {(error || uploads.error) && <div className="home-task-composer-error" role="alert">{error ?? uploads.error}</div>}
         <QuestionSuggestions onSelect={choosePrompt} />
-        <div className={styles.composerHint}>{submitting ? "Preparing your workspace..." : files.length ? `${files.length} document${files.length > 1 ? "s" : ""}` : "Add sources to start a conversation"}</div>
+        <div className={styles.composerHint}>{submitting ? "Starting your answer..." : uploads.busy ? "Processing sources..." : files.length ? `${files.length} document${files.length > 1 ? "s" : ""}` : "Add sources to start a conversation"}</div>
+        {createdId && !uploads.busy && <Link className="text-xs underline" href={`/tasks/${createdId}`}>Open workspace</Link>}
       </form>
     </main>
   </WorkspaceShell>;
+}
+
+function FileRow({ item, submitting, busy, onRetry, onRemove }: {
+  item: import("@/lib/use-file-uploads").FileUpload; submitting: boolean; busy: boolean; onRetry: () => void; onRemove: () => void;
+}) {
+  const file = item.file;
+  return <>
+    <span className={styles.fileIcon}><FileText size={23} /></span>
+    <span className={styles.fileName}>{file.name}<small>{file.name.split(".").at(-1)?.toUpperCase()} · {(file.size / 1024).toFixed(1)} KB</small>{item.error && <small role="alert" className="text-destructive">{item.error}</small>}</span>
+    <UploadStatus item={item} disabled={submitting} onRetry={onRetry} />
+    <button type="button" disabled={submitting || ["processing", "removing"].includes(item.status) || (busy && item.status === "ready")} aria-label={`Remove ${file.name}`} onClick={onRemove}><X size={16} /></button>
+  </>;
 }

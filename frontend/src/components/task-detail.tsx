@@ -3,8 +3,9 @@
 import { BookOpen } from "lucide-react";
 import styles from "@/components/session/workspace.module.css";
 import { useRef, useState } from "react";
-import { removeSessionFile, uploadSessionFiles } from "@/lib/api";
-import { documentKey, validateFiles } from "@/lib/document-files";
+import { removeSessionFile } from "@/lib/api";
+import { documentKey } from "@/lib/document-files";
+import { useFileUploads } from "@/lib/use-file-uploads";
 import { useSession } from "@/lib/use-session";
 import { WorkspaceShell } from "@/components/session/workspace-shell";
 import { Conversation } from "@/components/session/conversation";
@@ -19,10 +20,19 @@ function SessionWorkspace({ sessionId }: { sessionId: string }) {
   const session = useSession(sessionId);
   const [selection, setSelection] = useState<DocumentSelection | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
+  const [sourceRequest, setSourceRequest] = useState(0);
   const [fileBusy, setFileBusy] = useState(false);
   const fileLock = useRef(false);
   const resources = session.snapshot?.state.resources ?? [];
   const unavailable = !session.snapshot || !["idle", "live"].includes(session.connection);
+
+  const uploads = useFileUploads(async () => sessionId, () => { setSelection(null); session.refresh(); });
+
+  function addFiles(files: File[]) {
+    if (fileBusy || session.running || unavailable) return;
+    uploads.add(files);
+    setSourceRequest((value) => value + 1);
+  }
 
   function openEvidence(uri: string, block = true) {
     const key = documentKey(uri);
@@ -30,18 +40,15 @@ function SessionWorkspace({ sessionId }: { sessionId: string }) {
     setSelection((current) => ({ key, block, version: (current?.version ?? 0) + 1 }));
   }
 
-  async function changeFiles(files?: File[], resourceId?: string) {
-    if (fileLock.current || session.running || unavailable) return;
-    if (files) {
-      const invalid = validateFiles(files);
-      if (invalid) { setFileError(invalid); return; }
-    }
+  async function removeFile(resourceId: string) {
+    if (fileLock.current || uploads.busy || session.running || unavailable) return;
     fileLock.current = true;
     setFileBusy(true);
     setFileError(null);
     try {
-      if (files) await uploadSessionFiles(sessionId, files);
-      else if (resourceId) await removeSessionFile(sessionId, resourceId);
+      await removeSessionFile(sessionId, resourceId);
+      const name = resources.find((resource) => resource.id === resourceId)?.location.split("/").at(-1);
+      if (name) uploads.forget(name);
       setSelection(null);
       session.refresh();
     } catch (cause) {
@@ -51,22 +58,22 @@ function SessionWorkspace({ sessionId }: { sessionId: string }) {
   }
 
   const review = session.snapshot ? <SessionDocuments sessionId={sessionId} resources={resources}
-    disabled={fileBusy || session.running || unavailable} selection={selection}
-    onSelect={(key) => openEvidence(key, false)} onUpload={(files) => void changeFiles(files)}
-    onRemove={(id) => void changeFiles(undefined, id)} /> : undefined;
+    disabled={fileBusy || session.running || unavailable} mutating={uploads.busy} uploads={uploads.items} onRetry={uploads.retry} onDismiss={(file) => void uploads.remove(file)} selection={selection}
+    onSelect={(key) => openEvidence(key, false)} onUpload={addFiles}
+    onRemove={(id) => void removeFile(id)} /> : undefined;
   return <main className="task-detail-fullscreen-shell" aria-label="Task detail workspace">
-    <WorkspaceShell sessionId={sessionId} status={fileBusy ? "Updating documents" : session.connection} review={review} reviewRequest={selection?.version}>
+    <WorkspaceShell sessionId={sessionId} status={fileBusy || uploads.busy ? "Updating documents" : session.connection} review={review} reviewRequest={(selection?.version ?? 0) + sourceRequest}>
       <section className="replay-agent-panel-slot" aria-label="Agent workspace" data-agent-content-mode="centered">
         <div className="replay-agent-panel">
           <header className={styles.sessionHeading}><BookOpen size={25} /><div><h1>Document conversation</h1><p>{resources.filter((resource) => resource.type === "raw").length} sources · Answers grounded in your documents</p></div></header>
-          {(session.error || fileError) && <div role="alert" className="border-b p-3 text-sm text-destructive">
-            {fileError ?? session.error}
+          {(session.error || fileError || uploads.error) && <div role="alert" className="border-b p-3 text-sm text-destructive">
+            {fileError ?? uploads.error ?? session.error}
             {session.connection === "reconnecting" ? <span> Reconnecting...</span> : session.error && <button onClick={() => session.refresh()} className="ml-2 underline">Reconnect</button>}
           </div>}
           {!session.snapshot && <p className="p-4 text-sm text-muted-foreground">Loading session...</p>}
           <Conversation turns={session.snapshot?.state.turns ?? []} running={session.running} pending={session.pending} onEvidence={(uri) => openEvidence(uri)} />
           <SessionComposer running={session.running} canCancel={Boolean(session.snapshot?.state.active_turn_id)} cancelling={session.cancelling}
-            disabled={unavailable || fileBusy || !resources.some((resource) => resource.type === "documents")}
+            disabled={unavailable || fileBusy || uploads.busy || uploads.items.some((item) => item.status === "failed") || !resources.some((resource) => resource.type === "documents")}
             onSend={session.send} onCancel={() => void session.cancel()} />
         </div>
       </section>

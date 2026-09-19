@@ -4,17 +4,21 @@
 
 ## 创建与恢复
 
-首页先校验 PDF/DOCX 文件、20 文件和 32 MiB 单批上限，以及非空问题，然后执行：
+首页选择文件时即校验 PDF/DOCX、20 文件和 32 MiB 上限，创建一次会话并将每个文件加入处理队列。后端文件接口返回时已经完成解析与索引，前端据此更新文件状态：
 
 ```text
-POST /chat/sessions -> session_id
-POST /chat/sessions/{session_id}/files -> resources
-POST /chat/completion {session_id, content} -> SSE
+选择文件 -> POST /chat/sessions（首次）-> 缓存会话 ID
+每个文件 queued -> processing -> POST /chat/sessions/{id}/files（单文件）-> ready / failed
+全部处理完成 -> 用户发送问题 -> POST /chat/completion -> SSE
 收到 session.snapshot -> 释放首问订阅 -> 跳转 /tasks/{session_id}
-详情页 GET /resume?session_id=... -> 历史与当前轮快照 -> 后续增量
+也可不提问，点击 Open workspace -> GET /resume 获取已处理资源
 ```
 
-首页等待首问快照确认后再跳转，避免详情页在首问创建之前读到空闲快照。释放订阅不调用取消接口，后端持有的轮次继续执行。上传失败时不提交问题，手动重试复用已经创建的会话。已创建的会话立即进入本机侧栏，网络结果不确定时可以打开该会话检查状态。
+`use-file-uploads.ts` 在首页和详情页共享逐文件队列。处理请求串行执行，避免同一会话重建索引时发生资源竞争；队列中等待的文件显示 Queued，正在处理的文件右侧显示旋转图标，成功显示就绪，失败行保留原因和单独重试入口。一个文件失败不会阻止后续文件处理。重复选择同名文件不重复排队；成功文件不随提问再次上传。处理中可编辑问题，发送按钮与 Enter 提交均被阻止；失败文件需重试或移除后提问。
+
+首页删除已处理文件调用后端删除接口，移除排队或失败文件仅清理本地队列。删除失败保留原文件及错误提示。详情补传使用相同队列，资源变更后用 resume 刷新；删除刚补传的文件同时清理本地就绪占位。窄屏选文件后自动打开来源面板，使逐文件状态可见。
+
+首页仍等待首问快照确认后跳转，释放订阅不取消后端轮次。文件处理完成即提供 Open workspace，不要求先提问才能访问资源。会话一经创建就进入本机导航缓存。
 
 后端没有会话列表接口。`session-store.ts` 仅在 localStorage 保存最近访问的会话 ID、状态提示和更新时间，使用独立的 recent-sessions key，不把旧 QA task ID 当作新会话迁移。历史消息、资源和当前运行态始终从 `/resume` 获取；缓存不可写时不阻断 API 操作。服务端渲染使用空缓存快照，避免 hydration 差异。
 
@@ -56,7 +60,8 @@ session.event -> session-state 按 turn/message/tool ID 更新
 
 ## 组件边界与布局
 
-- `upload-workbench.tsx`：首页文件选择、校验、创建和首问确认。
+- `upload-workbench.tsx`：首页文件选择即处理、逐文件状态、创建会话和首问确认。
+- `use-file-uploads.ts`、`session/upload-status.tsx`：单文件串行处理队列、重试/删除以及来源行右侧状态。
 - `task-detail.tsx`：组合会话 hook、文件操作和证据选择。
 - `session/workspace-shell.tsx`：顶部品牌与主题、最近会话抽屉、可调整宽度的来源分栏。
 - `session/workspace-overview.tsx`：首页概览和问题建议；建议只填入草稿，仍由用户确认发送。
@@ -75,4 +80,4 @@ session.event -> session-state 按 turn/message/tool ID 更新
 
 backend-proxy 原样转发 multipart/JSON，响应体按流透传，保留文件下载 Content-Disposition，避免二进制文件经文本解码损坏。请求 AbortSignal 传到上游 fetch，关闭浏览器订阅可释放后端订阅；后端轮次仍独立存在。Next.js 代理容量为 40mb，覆盖后端 32 MiB 文件内容及 multipart 开销，业务配额由后端最终校验。
 
-测试按 API/SSE、纯投影、连接生命周期、首页、详情、引用和代理分层，每个测试文件在 tests/docs 下有对应说明。运行 `pnpm --dir frontend exec jest --runInBand`、`pnpm --dir frontend lint`、`pnpm --dir frontend build`。浏览器验证使用临时数据库和独立 storage 目录，避免修改用户已有会话。
+测试按 API/SSE、纯投影、连接生命周期、首页、详情、引用和代理分层，每个测试文件在 tests/docs 下有对应说明。运行 `pnpm --dir frontend exec jest --runInBand`、`pnpm --dir frontend lint`、`pnpm --dir frontend build`。普通运行从仓库根目录执行 scripts/start.sh，使用 .env 配置或默认 backend/backend.sqlite3 与 storage/data。独立测试库仅用于隔离验证，不能作为交付时的服务数据库；测试会话不会自动迁移到实际库。最近会话缓存按浏览器和站点地址隔离，跨浏览器应使用完整会话链接。旧 backend/backend/backend.sqlite3 属于此前从 backend 目录启动产生的旧 tasks 结构，不自动迁移到新 chat 会话。

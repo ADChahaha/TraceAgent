@@ -4,18 +4,23 @@ import { FileText, Plus, Search } from "lucide-react";
 import styles from "./workspace.module.css";
 import { useEffect, useState } from "react";
 import { listSessionDocuments, readSessionBlock, readSessionDocument, sessionFileUrl } from "@/lib/api";
+import type { FileUpload } from "@/lib/use-file-uploads";
+import { UploadStatus } from "./upload-status";
 import { DOCUMENT_ACCEPT } from "@/lib/document-files";
 import { MarkdownEvidence } from "@/components/markdown-evidence";
 import type { DocumentContent, DocumentEntry, SessionResource } from "@/lib/session-types";
 
 export interface DocumentSelection { key: string; block: boolean; version: number }
-export function SessionDocuments({ sessionId, resources, disabled, selection, onSelect, onUpload, onRemove }: {
+export function SessionDocuments({ sessionId, resources, disabled, selection, onSelect, onUpload, onRemove, uploads = [], mutating = false, onRetry, onDismiss }: {
+  uploads?: FileUpload[]; mutating?: boolean; onRetry?: (file: File) => void; onDismiss?: (file: File) => void;
   sessionId: string; resources: SessionResource[]; disabled: boolean;
   selection: DocumentSelection | null; onSelect: (key: string) => void;
   onUpload: (files: File[]) => void; onRemove: (id: string) => void;
 }) {
   const [search, setSearch] = useState("");
   const raw = resources.filter((resource) => resource.type === "raw");
+  const pending = uploads.filter((item) => item.status !== "ready" || !raw.some((resource) => resource.location.split("/").at(-1) === item.file.name));
+  const visibleUploads = pending.filter((item) => item.file.name.toLowerCase().includes(search.toLowerCase()));
   const filtered = raw.filter((resource) => resource.location.split("/").at(-1)?.toLowerCase().includes(search.toLowerCase()));
   const [entries, setEntries] = useState<DocumentEntry[]>([]);
   const [result, setResult] = useState<{ id: string; key: string; version: number; content?: DocumentContent; error?: string } | null>(null);
@@ -45,20 +50,26 @@ export function SessionDocuments({ sessionId, resources, disabled, selection, on
   const shown = result?.id === sessionId && result.key === key && result.version === version ? result : null;
   return <section className={styles.sources} aria-label="Session documents">
     <div className={styles.documentControls}>
-      <div className={styles.sourceHeading}><h2>Sources</h2><span>{raw.length}</span>
+      <div className={styles.sourceHeading}><h2>Sources</h2><span>{raw.length + pending.filter((item) => !raw.some((resource) => resource.location.split("/").at(-1) === item.file.name)).length}</span>
         <label className={styles.uploadLabel}><Plus size={16} />Add files<input type="file" className="sr-only" aria-label="Add session files" multiple accept={DOCUMENT_ACCEPT} disabled={disabled} onChange={(event) => {
           const files = Array.from(event.target.files ?? []); event.target.value = ""; if (files.length) onUpload(files);
         }} /></label>
       </div>
       <label className={styles.search}><Search size={16} /><input type="search" aria-label="Search sources" placeholder="Search sources" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
-      {search && !filtered.length && <p className="text-sm text-muted-foreground">No matching sources</p>}
+      {search && !filtered.length && !visibleUploads.length && <p className="text-sm text-muted-foreground">No matching sources</p>}
       <ul className={styles.sourceList} aria-label="Sources list">
+        {visibleUploads.map((item) => <li key={`upload:${item.file.name}`}>
+          <span className={styles.fileIcon}><FileText size={21} /></span>
+          <span className={styles.fileName}>{item.file.name}{item.error && <small role="alert" className="text-destructive">{item.error}</small>}</span>
+          <UploadStatus item={item} disabled={disabled} onRetry={() => onRetry?.(item.file)} />
+          {item.status === "failed" && <button aria-label={`Dismiss ${item.file.name}`} onClick={() => onDismiss?.(item.file)}>Remove</button>}
+        </li>)}
         {filtered.map((resource) => {
           const name = resource.location.split("/").at(-1) ?? "Document";
           return <li key={resource.id} >
             <span className={styles.fileIcon}><FileText size={21} /></span>
             <a href={sessionFileUrl(sessionId, resource.id)} aria-label={`Download ${name}`} className={styles.fileName}>{name}<small>{name.split(".").at(-1)?.toUpperCase()} · Download</small></a>
-            <button disabled={disabled} aria-label={`Remove ${name}`} onClick={() => onRemove(resource.id)} className="text-muted-foreground disabled:opacity-40">Remove</button>
+            <button disabled={disabled || mutating} aria-label={`Remove ${name}`} onClick={() => onRemove(resource.id)} className="text-muted-foreground disabled:opacity-40">Remove</button>
           </li>;
         })}
       </ul>

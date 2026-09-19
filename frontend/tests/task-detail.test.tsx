@@ -105,3 +105,41 @@ it("来源搜索过滤文件但保留当前原文，清空搜索恢复列表", a
   fireEvent.change(screen.getByRole("searchbox", { name: "Search sources" }), { target: { value: "" } });
   expect(screen.getByRole("link", { name: "Download contract.docx" })).toBeInTheDocument();
 });
+
+
+it("补传立即逐文件处理，列表显示对应转圈并禁止处理期间提问", async () => {
+  resume.mockImplementation(async () => controlledStream(ready).response);
+  let finish!: () => void;
+  jest.mocked(api.uploadSessionFiles).mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve({ resources: ready.state.resources }); }))
+    .mockResolvedValue({ resources: ready.state.resources });
+  render(<TaskDetail taskId="s1" />);
+  await screen.findByText("Full source document");
+  const files = [new File(["a"], "a.docx"), new File(["b"], "b.docx")];
+  await userEvent.upload(screen.getByLabelText("Add session files"), files);
+  expect(api.uploadSessionFiles).toHaveBeenCalledWith("s1", [files[0]]);
+  expect(screen.getByRole("status", { name: "Processing a.docx" })).toBeInTheDocument();
+  expect(screen.getByRole("status", { name: "Queued b.docx" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Submit or pause answer" })).toBeDisabled();
+  await act(async () => finish());
+  await waitFor(() => expect(api.uploadSessionFiles).toHaveBeenNthCalledWith(2, "s1", [files[1]]));
+});
+
+it("删除刚补传成功的文件后不留下本地就绪占位", async () => {
+  let resources = ready.state.resources;
+  resume.mockImplementation(async () => controlledStream({ ...ready, state: { ...ready.state, resources } }).response);
+  jest.mocked(api.uploadSessionFiles).mockImplementation(async () => {
+    resources = [...resources, { id: "new-raw", type: "raw", location: "s3://bucket/raw/new.docx" }];
+    return { resources };
+  });
+  jest.mocked(api.removeSessionFile).mockImplementation(async () => {
+    resources = ready.state.resources;
+    return { resources };
+  });
+  render(<TaskDetail taskId="s1" />);
+  await screen.findByText("Full source document");
+  await userEvent.upload(screen.getByLabelText("Add session files"), new File(["doc"], "new.docx"));
+  await screen.findByRole("link", { name: "Download new.docx" });
+  await userEvent.click(screen.getByRole("button", { name: "Remove new.docx" }));
+  await waitFor(() => expect(api.removeSessionFile).toHaveBeenCalledWith("s1", "new-raw"));
+  await waitFor(() => expect(screen.queryByText("new.docx")).not.toBeInTheDocument());
+});
