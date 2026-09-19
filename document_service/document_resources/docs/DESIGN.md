@@ -1,54 +1,29 @@
 # 文档资源设计
 
-本模块属于独立 document service 的业务核心，负责把解析后的 HTML 准备成可跨轮复用的资源，并发布到独立的 storage 服务。
-application 层通过 `prepare_uploaded_resources` 串联文件解析与资源准备；`document_service/main.py` 注册 `DocumentResourceService`，gRPC 层只适配上传数据和响应；问答 agent 只接收返回的资源定位数组。
+本包负责会话文档资源的生产与删除裁剪，RPC 入口调用 `application.prepare_session_resources`，桶固定为 `res_<session_id>`。backend 保存返回的全量 ResourceRef；agent 只消费归档与索引，不重新解析文档。
 
-```text
-files（PDF / DOCX）
-  -> route 将 protobuf 转成 UploadedFile(filename, content)，在线程中调用 application.prepare_uploaded_resources
-  -> application 校验全部文件类型，调用 document_processor.process
-  -> prepare_resources(documents, raw_files) 在本机临时目录生成 Markdown 文件树并构建索引
-       -> get_embedder(model_id, backend) 取得缓存模型；同一实例的 tokenize 分块、encode 生成向量
-  -> 校验临时产物（manifest/index/文档引用）
-  -> 通过 S3ObjectStore（boto3）发布到 storage 服务（bucket = res_*）：
-       documents 文件树整棵打成单个对象 documents.zip（成员名保留 documents/... 逻辑路径）
-       index/index.json、index/vectors.npy、manifest.json 各自独立
-       raw/<filename> 原始文件 bytes 各自独立，不和文档树混在一起
-  -> 返回资源定位数组 [{type, location}]：
-       documents -> s3://<bucket>/documents.zip（单个归档对象）
-       index     -> s3://<bucket>/index
-       raw       -> s3://<bucket>/raw/<filename>（每个原始文件一项）
-```
+## 上传构建
 
-已发布资源由 Agent 工具经 storage 服务读取：文档树从 `documents.zip` 整包解到内存虚拟文件系统，索引仍从独立对象读取；本模块不提供消费端加载接口。
+输入文件名与 bytes，以及可选 remove_raw。application 校验会话、文件名与引用归属，读回桶内 raw 后合并上传、排除删除目标。非空集合先调用 document_processor 解析成 HTML；解析失败不改变桶。随后写 raw，由 `resources.publish_resources` 生成 Markdown 树、按文档分块、调用缓存 embedder 生成归一化向量，校验后发布。上传仍对剩余全集重新解析与 embedding。
 
-上传入口对空批次或不支持的类型抛 ValueError；解析失败包装 RuntimeError 并标明文件名；构建和发布异常直接传播，由路由映射 RPC 状态。
+`documents.py` 负责 HTML 到编号目录与 Markdown；`index.py` 负责 tokenizer 分块及向量构建；`model.py` 按 model_id/backend 缓存模型，分块与编码复用同一个模型实例。生成包不导入 agent。
 
-## 边界
+## 纯删除
 
-- 本包导出上传入口 `prepare_uploaded_resources` 和 HTML 入口 `prepare_resources`；均返回 `list[ResourceRef]`（强类型，type + location）。
-- `documents.py` 负责 HTML 转文件（本地临时目录）；`index.py` 负责文档分块和索引构建；
-  `model.py` 只供生成阶段加载模型与 tokenizer。
-- 模型按 model_id/backend 缓存，分块复用 embedder.tokenize；不再为 tokenizer 单独构造 SentenceTransformer。
-- `_validate_prepared` 只校验本次临时产物，成功后才发布到 storage；不提供消费端 `load_resource`。
-  生成包不导入 Agent 工具。
-- 两边遵守相同存储格式：manifest 版本 1，记录模型/后端；index/index.json 记录维度与 chunks，
-  index/vectors.npy 保存归一化文档向量；covered_files 相对 documents 保存。
-- 资源 bucket 名 `res_*`；每次准备生成独立 bucket，不使用 task_id 或 completion_id 作为标识。
-  首版不做内容去重、自动过期或删除接口。
-- `documents/` 是模型唯一可浏览的 key 前缀；`index/` 与 `manifest.json` 保存内部数据。
-  索引引用使用相对文档路径。
-- 清单固定 embedding 模型、后端及分块配置；查询沿用资源模型，不能因环境变量变化改用其他模型。
-- 构建或校验失败不开始上传；上传逐对象执行，中途失败可能留下远端部分对象，但不返回资源定位。成功或失败都清理本地临时目录，当前没有远端回滚或原子发布机制。问答工具对无效资源抛 ValueError，不重新解析或构建索引。
-- 资源与 completion 生命周期分离；问答完成、失败或取消均保留资源。
+只有 remove_raw 时，application 只列举 raw 名称，不下载原文件。存在剩余文件且目标确实存在时，`resources.remove_published_documents` 读取既有归档、清单和索引，在临时目录校验，按文件到目录映射移除目标文档、对应 chunks 和 vectors 行，再次校验后发布。剩余正文、路径、chunk_id 和向量原样保留，不调用解析、tokenizer 或 embedding。
 
-## 与 storage 服务的关系
+manifest 的 `document_roots` 映射原文件名到一级文档目录。旧清单没有此字段时，按 documents 数组顺序与目录数字前缀恢复，首次裁剪后保存映射，连续删除时保留编号空缺。无法恢复映射或索引损坏时抛 ValueError，不回退到全量解析。未知目标幂等跳过；最后一个文件删除时直接清空产物并返回 []。
 
-`prepare_resources` 通过 `build_s3_object_store()`（boto3，endpoint 由 `S3_ENDPOINT_URL`
-配置，默认 `http://localhost:9000`）写入 storage 服务。storage 服务与本包平级，
-纯 Python 自写的 S3 兼容 HTTP 服务，底层本地目录落盘。
+成功发布裁剪结果后 application 才删除目标 raw，返回 documents/index 及剩余 raw 的全量引用。构建或校验失败不写桶；发布中途失败仍可能留下部分产物，当前没有远端回滚或原子发布。同桶操作依赖 backend 串行化。
 
-## 接口选择
+## 存储契约
 
-PrepareResources 同步返回，调用方等待完整资源发布。内部解析与资源构建保持独立模块，
-gRPC 调用方无需传输解析中间产物；backend 尚未适配新协议。
+通过共享 ObjectStore 写入独立 storage 服务，endpoint 由 `S3_ENDPOINT_URL` 配置。对象布局为：
+
+- `documents.zip`：成员路径保留 `documents/...`，是 agent 唯一可浏览的文档树。
+- `index/index.json`：模型 ID、维度和 chunks；covered_files 相对 documents。
+- `index/vectors.npy`：与 chunks 顺序对应的归一化向量。
+- `manifest.json`：版本 1、模型、后端、分块配置、原文件列表及可选 document_roots。
+- `raw/<filename>`：原始文件，增删由 application 管理。
+
+模型及分块配置随产物固定；删除沿用旧配置，不受当前环境变量影响。`_validate_prepared` 检查临时产物的清单、向量维度、数值和文档引用；不提供消费端加载接口。上传和删除均同步等待发布完成，资源在会话问答完成或取消后仍保留。

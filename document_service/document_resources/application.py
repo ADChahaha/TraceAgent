@@ -1,25 +1,11 @@
-"""会话资源入口：以会话桶内的 raw 对象为事实来源，增量合并后全量重建发布。
+"""会话资源入口：上传合并 raw 后全量重建，纯删除裁剪已发布的文档与向量。
 
-prepare_session_resources 是 PrepareResources 的业务入口：bucket 固定为
-res_<session_id>。每次调用的真实流程是：
-
-```text
-输入 session_id + files(上传文件) + remove_raw(要移除的 raw 引用)
-  -> 校验 session_id 并推导 bucket = res_<session_id>
-  -> 从桶内读回 raw/* 作为现有文件集（桶是事实来源）
-  -> 校验新文件（文件名非空且不含路径分隔符、内容非空）并按文件名覆盖合并
-  -> 校验 remove_raw（type 必须为 raw、location 必须属于本会话桶），
-     目标不存在则幂等跳过
-  -> 剩余为空：删除桶内同名 raw、documents.zip、manifest.json、index/*，返回 []
-  -> 否则先全量解析（类型校验 + HTML 化），解析失败时桶保持原状
-  -> 解析通过后写桶：删除被移除的 raw、写入新上传的 raw
-  -> resources.publish_resources 在同一桶内重建 documents.zip 与 index
-  -> 返回 documents/index 加全部剩余 raw 的资源定位数组
-```
-
-解析失败包装 RuntimeError 并标明文件名；调用参数只接收普通 Python 数据。
-发布阶段失败没有远端回滚：可能留下新写入的 raw 对象，它们可正常解析，
-会在下一次调用时随桶内容合并自愈；同一桶并发调用存在读改写竞争，依赖调用方串行化。
+输入 session_id、files 和 remove_raw；校验文件名及引用归属后固定使用
+res_<session_id> 桶。纯删除只列举 raw 名称，调用 remove_published_documents
+剔除目标文档和索引行，发布成功后删除 raw；最后一个文件直接清空产物。
+上传仍读回全部 raw、合并并先解析后发布；解析失败不改变桶。
+返回 documents/index 及剩余 raw 的全量 ResourceRef；空会话返回 []。
+构建或校验异常向上传递，发布仍逐对象执行，无远端回滚；同桶操作依赖调用方串行化。
 """
 
 from dataclasses import dataclass
@@ -28,7 +14,7 @@ from typing import Any
 
 from traceagent_shared.object_store import ObjectStore, ResourceRef, build_s3_object_store, parse_resource_path
 from document_service.document_processor import processor
-from document_service.document_resources.resources import publish_resources
+from document_service.document_resources.resources import publish_resources, remove_published_documents
 from document_service.document_resources.schemas import InputDocument, UploadedFile
 
 
@@ -50,12 +36,25 @@ def prepare_session_resources(
     remove_raw: list[dict] = (),
     store: ObjectStore | None = None,
 ) -> list[ResourceRef]:
-    """应用会话桶内的增删并全量重建，返回资源定位数组。"""
+    """上传全量重建、纯删除复用已发布产物，返回剩余资源引用。"""
     bucket = _session_bucket(session_id)
     store = store if store is not None else build_s3_object_store()
-    raws = _read_raws(store, bucket)
     removed = _removed_names(remove_raw, bucket)
     uploads = _validated_uploads(files)
+    if removed and not uploads:
+        names = {key.removeprefix("raw/") for key in store.list_objects(bucket, "raw/")}
+        remaining = names - removed
+        refs = remove_published_documents(store, bucket, removed) if remaining and names & removed else []
+        if not remaining:
+            _delete_published(store, bucket)
+        for name in names & removed:
+            store.delete_object(bucket, f"raw/{name}")
+        if remaining and not refs:
+            refs = [ResourceRef(type="documents", location=f"s3://{bucket}/documents.zip"),
+                    ResourceRef(type="index", location=f"s3://{bucket}/index")]
+        refs.extend(ResourceRef(type="raw", location=f"s3://{bucket}/raw/{name}") for name in sorted(remaining))
+        return refs
+    raws = _read_raws(store, bucket)
     if not uploads and not removed and not raws:
         raise ValueError("files or remove_raw must be non-empty")
     merged = dict(raws)

@@ -6,6 +6,8 @@ ObjectStore 桶，最后返回 documents/index 资源定位数组 [{type, locati
 raw/ 对象的写入与删除由会话层（application）负责，本模块只覆盖构建产物。
 读取端把 documents.zip 解到内存虚拟文件系统，索引仍从独立对象读取。
 
+remove_published_documents 在删除时读取既有归档与索引，按文件到目录映射剔除
+目标文档及对应向量行，校验后重新发布；剩余路径、分块和向量原样保留。
 已发布资源由 Agent 工具从 ObjectStore 读取，本模块不提供消费端加载接口。
 构建或校验失败不开始上传；上传失败可能留下远端部分对象，不返回资源定位。
 成功或失败都会清理本地临时目录；当前没有远端回滚或原子发布机制。
@@ -19,6 +21,7 @@ import os
 import shutil
 import uuid
 import zipfile
+from tempfile import TemporaryDirectory
 from dataclasses import asdict
 from pathlib import Path
 
@@ -70,6 +73,8 @@ def publish_resources(
             "version": 1, "embedding_model": model_id, "embedding_backend": backend,
             "chunk_size": chunk_size, "overlap": overlap,
             "documents": [doc.filename for doc in documents],
+            "document_roots": dict(zip([doc.filename for doc in documents],
+                                       sorted(entry.name for entry in document.iterdir()))),
         })
         _validate_prepared(temporary)
         _publish_to_store(store, bucket, temporary)
@@ -166,3 +171,60 @@ def _document_streams(document: Path) -> dict[str, list[tuple[str, str]]]:
 
 def _write_json(path: Path, value) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+
+
+def remove_published_documents(store: ObjectStore, bucket: str, removed: set[str]) -> list[ResourceRef]:
+    """从既有归档和索引剔除文档，保留剩余路径及向量，不解析或调用模型。"""
+    with TemporaryDirectory(prefix="document-removal-") as directory:
+        temporary = Path(directory).resolve()
+        (temporary / "documents").mkdir()
+        (temporary / "index").mkdir()
+        for key in ("manifest.json", "index/index.json", "index/vectors.npy"):
+            data = store.get_object(bucket, key)
+            if data is None:
+                raise ValueError(f"missing published resource: {key}")
+            (temporary / key).write_bytes(data)
+        data = store.get_object(bucket, "documents.zip")
+        if data is None:
+            raise ValueError("missing published resource: documents.zip")
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            for entry in archive.infolist():
+                target = (temporary / entry.filename).resolve()
+                if not target.is_relative_to(temporary / "documents"):
+                    raise ValueError("invalid document archive path")
+                if not entry.is_dir():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(archive.read(entry))
+        _validate_prepared(temporary)
+        manifest = json.loads((temporary / "manifest.json").read_text(encoding="utf-8"))
+        roots = manifest.get("document_roots")
+        if roots is None:
+            # 旧清单按上传顺序编号；首次删除时补齐映射，后续不因编号空缺而错配。
+            directories = [entry.name for entry in (temporary / "documents").iterdir()]
+            roots = {}
+            for index, name in enumerate(manifest["documents"], start=1):
+                matches = [root for root in directories if root.startswith(f"{index:03d}-")]
+                if len(matches) != 1:
+                    raise ValueError("cannot map published document to raw file")
+                roots[name] = matches[0]
+        removed_roots = {roots[name] for name in removed if name in roots}
+        for root in removed_roots:
+            target = (temporary / "documents" / root).resolve()
+            if target.parent != temporary / "documents":
+                raise ValueError("invalid document root")
+            if target.exists():
+                shutil.rmtree(target)
+        meta_path = temporary / "index" / "index.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        keep = [i for i, chunk in enumerate(meta["chunks"]) if chunk["document"] not in removed_roots]
+        vectors_path = temporary / "index" / "vectors.npy"
+        vectors = np.load(vectors_path, allow_pickle=False)
+        np.save(vectors_path, vectors[keep], allow_pickle=False)
+        meta["chunks"] = [meta["chunks"][i] for i in keep]
+        _write_json(meta_path, meta)
+        manifest["documents"] = [name for name in manifest["documents"] if name not in removed]
+        manifest["document_roots"] = {name: root for name, root in roots.items() if name not in removed}
+        _write_json(temporary / "manifest.json", manifest)
+        _validate_prepared(temporary)
+        _publish_to_store(store, bucket, temporary)
+    return _resource_refs(bucket)

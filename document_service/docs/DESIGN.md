@@ -4,12 +4,14 @@ document service 是独立的文档资源生产服务，不导入 agent 的问�
 
 ## 资源契约
 
-会话的物理资源落在一个固定桶 `res_<session_id>` 内，桶内 `raw/` 前缀对象是该会话文件的事实来源；`documents.zip`、`index/`、`manifest.json` 是由桶内 raw 全量重建的产物。`PrepareResources` 每次调用执行一次"增量合并 + 全量重建"：
+会话的物理资源落在一个固定桶 `res_<session_id>` 内，桶内 `raw/` 前缀对象是该会话文件的事实来源；`documents.zip`、`index/`、`manifest.json` 是 raw 的派生产物。`PrepareResources` 在上传时合并后全量重建，纯删除复用已有产物：
 
 ```text
 PrepareResources(session_id, files: filename + bytes, remove_raw: raw 引用)
   -> 校验 session_id，桶固定为 res_<session_id>
-  -> 从桶内读回 raw/* 作为现有文件集（桶是事实来源，调用方无需传全量）
+  -> 纯删除：只列 raw 名称，按清单映射裁剪归档、分块和向量，校验发布后删 raw；
+     无剩余文件则清空产物并返回 []，未知目标幂等返回，不读取 raw 字节
+  -> 含上传请求从桶内读回 raw/* 作为现有文件集（桶是事实来源，调用方无需传全量）
   -> 校验新文件（文件名非空且不含路径分隔符、内容非空）并按文件名覆盖合并
   -> 校验 remove_raw（type 必须为 raw、location 必须属于本会话桶），
      目标不存在则幂等跳过
@@ -24,21 +26,25 @@ PrepareResources(session_id, files: filename + bytes, remove_raw: raw 引用)
   -> 返回 ResourceRef[]（documents/index + 全部剩余 raw）
 ```
 
-上传与移除都返回重建后的全量引用；未变化的 raw 位置不变，backend 据此沿用旧尺寸并原子替换资源表。
+上传与移除都返回更新后的全量引用；未变化的 raw 位置不变，backend 据此沿用旧尺寸并原子替换资源表。
 
 服务入口为 [main.py](../main.py)，RPC 适配为 [routes.py](../routes.py)，共享协议位于仓库顶层 `agent_proto`。服务默认监听 `127.0.0.1:8002`，问答 agent 默认监听 `127.0.0.1:8001`；两者通过 storage 交接，不通过 Python import 交接。
 
 ## 边界
 
 - `document_processor` 只负责单文件 PDF/DOCX -> HTML，不拥有资源发布。
-- `document_resources.resources` 负责文档树构建、索引和 S3-compatible 发布到指定桶，不管理 raw 增删。
-- `document_resources.application` 是会话层入口：维护桶内 raw 事实来源、应用上传与移除、驱动全量重建。
+- `document_resources.resources` 负责文档树构建、索引、删除裁剪和 S3-compatible 发布到指定桶，不管理 raw 增删。
+- `document_resources.application` 是会话层入口：维护桶内 raw 事实来源、应用上传与移除、驱动上传重建或纯删除裁剪。
 - `traceagent_shared` 只提供 ObjectStore/S3 语义，不理解 document 或 agent 业务。
 - backend 负责 session、权限和资源引用；document service 不直接暴露用户 HTTP API。
 - agent 只读取已发布资源，不重新解析或构建文档向量。
 
 ## 已知限制
 
-- 全量重建会重新解析并重新 embedding 桶内全部 raw，单文件成本随会话文件数线性增长。
+- 上传仍重新解析并 embedding 全部 raw；纯删除只读写归档和索引，不调用解析器和模型。仍有归档压缩与存储读写成本。
 - 同一会话桶并发调用存在读改写竞争，依赖 backend 侧串行化。
 - 解析失败发生在任何写桶之前，会话桶保持原状；发布阶段失败没有远端回滚，可能留下新写入的 raw 对象——它们可正常解析，会在下一次成功调用时随桶内容合并自愈，短暂不一致但不会毒化。
+
+## 删除复用与兼容
+
+manifest 新增 `document_roots`，将原文件名映射到文档一级目录。旧清单按 documents 原始顺序和三位数字前缀恢复映射，首次删除后保存映射；连续删除不重新编号。剩余 Markdown 路径、chunk_id、covered_files 及向量行保持不变，历史引用仍可定位。索引和映射无效时拒绝删除，不静默重算；校验全部在写桶之前，发布成功后才删除原文件。逐对象发布的中途故障仍不具备原子回滚。

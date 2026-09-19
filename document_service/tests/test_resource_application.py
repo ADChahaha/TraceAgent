@@ -1,4 +1,4 @@
-"""会话资源入口：桶内 raw 是事实来源，上传即合并，移除即删除并全量重建。"""
+"""会话资源入口：桶内 raw 是事实来源，上传合并重建，纯删除复用既有文档和向量。"""
 
 import importlib
 from types import SimpleNamespace
@@ -68,14 +68,17 @@ def test_second_upload_reuses_bucket_and_keeps_previous_raws(app, store, parsed,
     assert {path.name for path in (tmp_path / "storage").iterdir()} == {"res_s1"}
 
 
-def test_remove_raw_with_empty_files_deletes_object_and_rebuilds(app, store, parsed, published):
+def test_remove_raw_with_empty_files_deletes_object_and_prunes(app, store, parsed, published, monkeypatch):
+    pruned = []
+    monkeypatch.setattr(app, "remove_published_documents", lambda store, bucket, names: pruned.append((bucket, names)) or [])
     first = app.prepare_session_resources("s1", [upload_file("a.pdf"), upload_file("b.pdf")], store=store)
     target = next(ref.location for ref in first if ref.type == "raw" and ref.location.endswith("/raw/a.pdf"))
     refs = app.prepare_session_resources("s1", [], [{"type": "raw", "location": target}], store=store)
     assert raw_locations(refs) == ["s3://res_s1/raw/b.pdf"]
     assert store.get_object("res_s1", "raw/a.pdf") is None
     assert store.get_object("res_s1", "raw/b.pdf") == b"pdf"
-    assert [doc.filename for doc in published[1][2]] == ["b.pdf"]
+    assert len(published) == 1
+    assert pruned == [("res_s1", {"a.pdf"})]
 
 
 def test_remove_last_raw_clears_published_artifacts(app, store, parsed, published):
@@ -212,3 +215,83 @@ def test_preparation_reuses_model_for_tokenization(monkeypatch, tmp_path, backen
         options["backend"] = "openvino"
     assert constructed == [("test-model", options)]
     assert tokenized and encoded and tokenized == encoded
+
+
+@pytest.fixture
+def indexed(app, store, parsed, monkeypatch, tmp_path):
+    """生成真实归档与索引，随后禁止解析、模型加载及 raw 下载。"""
+    import numpy as np
+    from document_service.document_resources import model
+    monkeypatch.setenv("DOCUMENT_RESOURCES_ROOT", str(tmp_path / "resources"))
+    monkeypatch.setenv("EMBEDDING_BACKEND", "torch")
+    monkeypatch.setattr(model, "get_embedder", lambda **kwargs: SimpleNamespace(
+        tokenize=lambda text: [(i, i + 1) for i in range(len(text))],
+        encode=lambda texts: np.arange(1, len(texts) * 2 + 1, dtype=np.float32).reshape(-1, 2)))
+    app.prepare_session_resources("s1", [upload_file(name) for name in ("a.pdf", "b.pdf", "c.pdf")], store=store)
+    monkeypatch.setattr(app.processor, "process", lambda *args: pytest.fail("删除不能重新解析"))
+    monkeypatch.setattr(model, "get_embedder", lambda **kwargs: pytest.fail("删除不能加载 embedding 模型"))
+    original_get = store.get_object
+    def get(bucket, key):
+        assert not key.startswith("raw/"), "删除不能下载原文件"
+        return original_get(bucket, key)
+    monkeypatch.setattr(store, "get_object", get)
+    return store
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_remove_reuses_vectors_and_preserves_paths_across_repeated_deletes(app, indexed, legacy):
+    import io
+    import json
+    import zipfile
+    import numpy as np
+    bucket = "res_s1"
+    manifest = json.loads(indexed.get_object(bucket, "manifest.json"))
+    if legacy:
+        manifest.pop("document_roots", None)
+        indexed.put_object(bucket, "manifest.json", json.dumps(manifest).encode())
+    before = json.loads(indexed.get_object(bucket, "index/index.json"))
+    vectors = np.load(io.BytesIO(indexed.get_object(bucket, "index/vectors.npy")))
+    with zipfile.ZipFile(io.BytesIO(indexed.get_object(bucket, "documents.zip"))) as archive:
+        original_files = {key: archive.read(key) for key in archive.namelist()}
+    for name, remaining in [("a.pdf", ["b.pdf", "c.pdf"]), ("b.pdf", ["c.pdf"])]:
+        refs = app.prepare_session_resources("s1", [], [raw_ref(bucket, name)], store=indexed)
+        assert raw_locations(refs) == [f"s3://{bucket}/raw/{file}" for file in remaining]
+        assert sorted(indexed.list_objects(bucket, "raw/")) == [f"raw/{file}" for file in remaining]
+        meta = json.loads(indexed.get_object(bucket, "index/index.json"))
+        keep = [i for i, chunk in enumerate(before["chunks"]) if chunk["document"].split("-", 1)[1] + ".pdf" in remaining]
+        assert meta["chunks"] == [before["chunks"][i] for i in keep]
+        np.testing.assert_array_equal(np.load(io.BytesIO(indexed.get_object(bucket, "index/vectors.npy"))), vectors[keep])
+        with zipfile.ZipFile(io.BytesIO(indexed.get_object(bucket, "documents.zip"))) as archive:
+            assert {key: archive.read(key) for key in archive.namelist()} == {
+                key: value for key, value in original_files.items() if key.split("/")[1].split("-", 1)[1] + ".pdf" in remaining}
+        assert json.loads(indexed.get_object(bucket, "manifest.json"))["documents"] == remaining
+    app.prepare_session_resources("s1", [], [raw_ref(bucket, "c.pdf")], store=indexed)
+    assert indexed.list_objects(bucket, "") == []
+
+
+def test_remove_invalid_index_leaves_raw_and_published_objects_unchanged(app, indexed):
+    indexed.put_object("res_s1", "index/vectors.npy", b"broken")
+    before = {key: indexed.get_object("res_s1", key) for key in indexed.list_objects("res_s1", "") if not key.startswith("raw/")}
+    with pytest.raises(ValueError):
+        app.prepare_session_resources("s1", [], [raw_ref("res_s1", "a.pdf")], store=indexed)
+    assert sorted(indexed.list_objects("res_s1", "raw/")) == ["raw/a.pdf", "raw/b.pdf", "raw/c.pdf"]
+    assert before == {key: indexed.get_object("res_s1", key) for key in before}
+
+
+def test_remove_multiple_and_unknown_targets_without_rebuilding(app, indexed):
+    refs = app.prepare_session_resources("s1", [], [raw_ref("res_s1", name) for name in ("a.pdf", "c.pdf", "ghost.pdf")], store=indexed)
+    assert raw_locations(refs) == ["s3://res_s1/raw/b.pdf"]
+    before = {key: indexed.get_object("res_s1", key) for key in indexed.list_objects("res_s1", "") if not key.startswith("raw/")}
+    assert app.prepare_session_resources("s1", [], [raw_ref("res_s1", "a.pdf")], store=indexed) == refs
+    assert before == {key: indexed.get_object("res_s1", key) for key in before}
+
+
+def test_remove_preserves_empty_document_without_vectors(app, store, monkeypatch, tmp_path):
+    from document_service.document_resources import model
+    monkeypatch.setenv("DOCUMENT_RESOURCES_ROOT", str(tmp_path / "resources"))
+    monkeypatch.setenv("EMBEDDING_BACKEND", "torch")
+    monkeypatch.setattr(model, "get_embedder", lambda **kwargs: SimpleNamespace(tokenize=lambda text: []))
+    monkeypatch.setattr(app.processor, "process", lambda file: SimpleNamespace(filename=file.filename, html="<div></div>"))
+    app.prepare_session_resources("s1", [upload_file("a.pdf"), upload_file("b.pdf")], store=store)
+    refs = app.prepare_session_resources("s1", [], [raw_ref("res_s1", "a.pdf")], store=store)
+    assert raw_locations(refs) == ["s3://res_s1/raw/b.pdf"]
