@@ -17,6 +17,7 @@ from pathlib import Path
 
 from backend.crud import crud
 from backend.services.errors import BackendServiceError, ConflictError, NotFoundError, ValidationError
+from backend.services.document_view import full_document
 from backend.services.session_history import ResumeContext
 from backend.services.subscription import Subscription
 from backend.services.time_utils import utc_now
@@ -358,6 +359,14 @@ class SessionManager:
         with zipfile.ZipFile(io.BytesIO(archive)) as members:
             return [{"key": info.filename, "size": info.file_size} for info in members.infolist()
                     if not info.is_dir()]
+
+    async def read_full_document(self, key):
+        """按当前会话的归档引用读取整份文档，保留各块 key 供前端定位。"""
+        bucket, archive_key = parse_resource_path(self._documents_location())
+        archive = await asyncio.to_thread(lambda: self._store().get_object(bucket, archive_key))
+        if archive is None:
+            raise NotFoundError("会话没有文档归档")
+        return await asyncio.to_thread(full_document, archive, key)
 
     async def read_document(self, key):
         """读取会话归档内单个 md 文件全文，供前端查看处理后文档。"""

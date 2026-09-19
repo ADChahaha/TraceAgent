@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TaskDetail } from "@/components/task-detail";
 import * as api from "@/lib/api";
@@ -6,7 +6,7 @@ import { controlledStream, ready, running } from "./helpers/session-fixtures";
 
 jest.mock("@/lib/api", () => ({
   openResume: jest.fn(), openCompletion: jest.fn(), cancelCompletion: jest.fn(),
-  listSessionDocuments: jest.fn(), readSessionDocument: jest.fn(), readSessionBlock: jest.fn(),
+  readFullDocument: jest.fn(), listSessionDocuments: jest.fn(), readSessionDocument: jest.fn(), readSessionBlock: jest.fn(),
   uploadSessionFiles: jest.fn(), removeSessionFile: jest.fn(), sessionFileUrl: () => "/download", ApiError: class extends Error {},
 }));
 const resume = jest.mocked(api.openResume);
@@ -15,11 +15,13 @@ const complete = jest.mocked(api.openCompletion);
 beforeEach(() => {
   jest.resetAllMocks(); localStorage.clear();
   jest.mocked(api.listSessionDocuments).mockResolvedValue({ documents: [{ key: "documents/contract.md", size: 25 }] });
-  jest.mocked(api.readSessionDocument).mockResolvedValue({ key: "documents/contract.md", text: "Full source document" });
+  jest.mocked(api.readFullDocument).mockResolvedValue({ key: "documents/contract.md", blocks: [
+    { key: "documents/contract.md", text: "Full source document\n\nPayment due in 37 days" },
+  ] });
   jest.mocked(api.readSessionBlock).mockResolvedValue({ key: "documents/contract.md", text: "Payment due in 37 days", found: true });
 });
 
-it("恢复历史和实时增量，done 不重复文本，引用从 blocks 读取", async () => {
+it("恢复历史和实时增量，done 不重复文本，引用高亮整份原文中的段落", async () => {
   const stream = controlledStream(running);
   resume.mockResolvedValue(stream.response);
   render(<TaskDetail taskId="s1" />);
@@ -29,10 +31,10 @@ it("恢复历史和实时增量，done 不重复文本，引用从 blocks 读取
     stream.event("model_message.done", { message_id: "m", content: "37 days [source](documents/contract.md)" });
     stream.event("turn.completed");
   });
-  expect(screen.getAllByText(/37 days/)).toHaveLength(1);
+  expect(within(screen.getByLabelText("QA conversation and reading process")).getAllByText(/37 days/)).toHaveLength(1);
   await userEvent.click(screen.getByRole("link", { name: "Source 1" }));
   expect(await screen.findByText("Payment due in 37 days")).toBeInTheDocument();
-  expect(api.readSessionBlock).toHaveBeenCalledWith("s1", "documents/contract.md");
+  expect(api.readFullDocument).toHaveBeenCalledWith("s1", "documents/contract.md");
 });
 
 it("追问走 POST 流，输入框节点稳定，取消携带当前轮次", async () => {

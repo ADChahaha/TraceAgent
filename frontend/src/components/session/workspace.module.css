@@ -149,3 +149,24 @@
 @media (prefers-reduced-motion: reduce) {
   .root *, .root *::before, .root *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+.root :global(.replay-evidence-citation-marker) {
+  width: 19px;
+  height: 19px;
+  background: var(--workspace-accent);
+  color: var(--workspace-surface);
+  border: 1px solid var(--workspace-accent);
+  font-size: 11px;
+  font-weight: 700;
+}
+.root :global(.replay-evidence-citation-marker:hover),
+.root :global(.replay-evidence-citation-marker:focus-visible) {
+  background: var(--workspace-accent);
+  outline: 2px solid var(--workspace-accent);
+  outline-offset: 2px;
+}
+.fullDocument { padding-bottom: 35vh; }
+.fullDocument .documentTitle { font-size: 20px; margin: 0 0 24px; }
+.sourceBlock { padding: 8px 10px; margin: 0 -10px 8px; border-left: 3px solid transparent; border-radius: 5px; scroll-margin-block: 28px; transition: background .2s, border-color .2s; }
+.sourceBlock[data-evidence-selected="true"] { background: var(--workspace-tint); border-left-color: var(--workspace-accent); }
+.sourceBlock :global(p) { color: inherit; }

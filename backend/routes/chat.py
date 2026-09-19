@@ -169,6 +169,15 @@ async def list_documents(request: Request, session_id: str):
         raise_http_error(exc)
 
 
+@router.get("/chat/sessions/{session_id}/documents/full")
+async def read_full_document(request: Request, session_id: str, key: str):
+    try:
+        manager = await request.app.state.session_registry.get_or_create(session_id)
+        return await manager.read_full_document(key)
+    except BackendServiceError as exc:
+        raise_http_error(exc)
+
+
 @router.get("/chat/sessions/{session_id}/documents/content")
 async def read_document(request: Request, session_id: str, key: str):
     """按归档 key 返回处理后 md 文件全文，供前端查看文档。"""

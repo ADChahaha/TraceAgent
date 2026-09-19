@@ -1,4 +1,4 @@
-import type { DocumentContent, DocumentEntry, SessionResource } from "@/lib/session-types";
+import type { DocumentContent, DocumentEntry, FullDocument, SessionResource } from "@/lib/session-types";
 
 export class ApiError extends Error {
   constructor(message: string, public readonly status: number, public readonly payload: unknown) {
@@ -83,4 +83,8 @@ export function readSessionDocument(id: string, key: string) {
 
 export function readSessionBlock(id: string, key: string) {
   return requestJson<DocumentContent>(`${sessionPath(id)}/blocks?${new URLSearchParams({ key })}`);
+}
+
+export function readFullDocument(id: string, key: string) {
+  return requestJson<FullDocument>(`${sessionPath(id)}/documents/full?${new URLSearchParams({ key })}`);
 }

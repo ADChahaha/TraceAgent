@@ -49,6 +49,12 @@ resource_id 来自资源引用列表中的 raw 行；归属由 session_id 隔离
 
 key 与 GET /blocks 使用同一套 `documents/...` 路径；size 是字节大小。会话没有上传过文件时 404。
 
+## GET /chat/sessions/{session_id}/documents/full?key=...
+
+key 可以是 `documents/001-合同` 文档目录或该目录下的具体引用块。返回 `{"key":"documents/001-合同","blocks":[{"key":"documents/001-合同/001-开头.md","text":"..."}]}`，包含所选文档的全部 Markdown 块，按路径数字顺序排序。前端连续渲染全部块，并用保留的 key 定位引用，不混入其他文档。
+
+归档只取本会话的资源引用。越界或非 documents 路径返回 422；缺少文档、归档或会话返回 404。原 content 接口仍返回单个 Markdown 成员内容。
+
 ## GET /chat/sessions/{session_id}/documents/content?key=...
 
 按归档 key 返回处理后 md 文件全文，供前端渲染文档内容：

@@ -44,3 +44,5 @@ export type SessionFrame =
 
 export interface DocumentEntry { key: string; size: number }
 export interface DocumentContent { key: string; text: string; found?: boolean }
+
+export interface FullDocument { key: string; blocks: DocumentContent[] }
