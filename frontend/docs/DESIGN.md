@@ -53,7 +53,7 @@ session.event -> session-state 按 turn/message/tool ID 更新
 
 ## 文件与引用
 
-`SessionDocuments` 在左栏使用互斥的 Sources 和阅读视图。selection 为空时只显示来源列表，不预加载正文；选择文档或点击引用后，阅读器替换整个 Sources 区域，顶部保留文档切换和 Close document 关闭按钮。关闭清空 selection 并返回 Sources，重新点击引用仍可打开和定位。阅读视图没有来源列表挤占高度，全文滚动区域占满剩余空间，选中块使用淡黄色强调并保留所有前后章节。
+`SessionDocuments` 在左栏使用互斥的 Sources 和阅读视图。selection 为空时只显示来源列表，不展示 Open a document 下拉框，不预加载正文；点击引用后，阅读器替换整个 Sources 区域，顶部保留文档切换和 Close document 关闭按钮。关闭清空 selection 并返回 Sources，重新点击引用仍可打开和定位。阅读视图没有来源列表挤占高度，全文滚动区域占满剩余空间，选中块使用淡黄色强调并保留所有前后章节。
 
 来源列表展示快照中的 raw 资源，用资源 ID 生成下载和删除 URL。补传走 multipart `/chat/sessions/{id}/files`，删除走对应资源 DELETE；完成后用 resume 刷新全量资源和历史。文件变更与问答提交在页面上互斥，避免使用旧索引。
 

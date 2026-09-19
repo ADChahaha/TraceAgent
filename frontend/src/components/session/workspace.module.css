@@ -95,7 +95,6 @@
 .uploadLabel:has(input:disabled) { opacity: .45; cursor: not-allowed; }
 .search { display: flex; align-items: center; gap: 8px; margin: 0 20px 14px; color: var(--workspace-muted); }
 .search input { width: 100%; font-size: 12px; padding: 8px 0; background: transparent; min-width: 0; }
-.sourcesControls select { width: calc(100% - 40px); margin: 12px 20px 0; padding: 8px; border: 1px solid var(--workspace-line); border-radius: 8px; font-size: 11px; background: var(--workspace-surface); }
 .sourceContent { min-height: 0; flex: 1; overflow: auto; padding: 24px; font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; }
 .sourceContent pre { overflow: auto; }
 .sourceContent h1, .sourceContent h2, .sourceContent h3 { font-weight: 600; margin: 14px 0; }

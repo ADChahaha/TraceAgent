@@ -73,10 +73,6 @@ export function SessionDocuments({ sessionId, resources, disabled, selection, on
           </li>;
         })}
       </ul>
-      {hasDocuments && <select aria-label="Source document" className="w-full rounded border bg-background p-2 text-xs" value="" onChange={(event) => onSelect(event.target.value)}>
-        <option value="" disabled>Open a document...</option>
-        {roots.map((key) => <option key={key} value={key}>{documentLabel(key)}</option>)}
-      </select>}
     </div>
     {listError && <p role="alert" className="p-4 text-sm">{listError}</p>}
     {!hasDocuments && <p className="p-4 text-sm text-muted-foreground">Upload documents to start.</p>}

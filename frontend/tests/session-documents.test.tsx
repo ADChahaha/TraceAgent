@@ -53,7 +53,9 @@ it("按文档而不是片段切换，切换后加载另一整份文档", async (
 it("默认只显示 Sources，阅读器替换整个列表，关闭后返回列表", async () => {
   const onClose = jest.fn();
   const view = render(<SessionDocuments {...props} onClose={onClose} />);
-  await screen.findByRole("option", { name: "contract" });
+  await waitFor(() => expect(api.listSessionDocuments).toHaveBeenCalledWith("s1"));
+  expect(screen.queryByRole("combobox", { name: "Source document" })).not.toBeInTheDocument();
+  expect(screen.queryByText("Open a document...")).not.toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Sources" })).toBeInTheDocument();
   expect(screen.queryByLabelText("Source content")).not.toBeInTheDocument();
   expect(api.readFullDocument).not.toHaveBeenCalled();
