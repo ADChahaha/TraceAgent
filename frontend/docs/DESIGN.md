@@ -59,7 +59,7 @@ session.event -> session-state 按 turn/message/tool ID 更新
 
 回答中的 `[label](documents/...)` 和带 documents 路径的 evidence 链接由 MarkdownEvidence 接管。引用路径确定所属文档及目标块；同文档切换引用只更新 data-evidence-selected，并在原文滚动区定位，不替换全文、不重复请求。跨文档引用才加载另一整份文档。按 documents 资源 ID 和 location 判断版本，普通 5 秒会话同步不重新请求正文，也不反复滚动。异步迟到结果被忽略；缺失引用显示明确提示，不高亮其他段落。
 
-数字引用在默认状态就使用工作台强调色背景和高对比文字，悬浮仅增加轮廓，避免旧 replay 色彩变量缺失造成透明背景上的白字。模型直接引用含空格的 Markdown key 时，先对链接目标中的空格编码，代码示例保持原文，避免 Markdown 把引用当成普通文本。数字引用按 Markdown 中的节点位置分配，StrictMode 重复渲染复用编号。路径通过查询参数编码，绝对地址和越界路径不会当作本会话证据。旧数字 selector 没有新协议映射时明确显示无法定位，不伪造引用结果。
+数字引用使用 14px 黑底白字小圆标，字号 9px，默认即可见；悬浮仅轻微变灰并增加细轮廓，避免旧 replay 色彩变量缺失造成透明背景上的白字。模型直接引用含空格的 Markdown key 时，先对链接目标中的空格编码，代码示例保持原文，避免 Markdown 把引用当成普通文本。数字引用按 Markdown 中的节点位置分配，StrictMode 重复渲染复用编号。路径通过查询参数编码，绝对地址和越界路径不会当作本会话证据。旧数字 selector 没有新协议映射时明确显示无法定位，不伪造引用结果。
 
 原文用 Markdown 渲染，不再依赖后端已不返回的 display_html/source_selectors。历史和当前完成的无工具调用 assistant 消息使用数字引用。读取失败在文档面板显示；连续点击不同文档时，旧异步结果不能覆盖新选择。
 

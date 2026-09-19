@@ -151,18 +151,18 @@
 }
 
 .root :global(.replay-evidence-citation-marker) {
-  width: 19px;
-  height: 19px;
-  background: var(--workspace-accent);
-  color: var(--workspace-surface);
-  border: 1px solid var(--workspace-accent);
-  font-size: 11px;
-  font-weight: 700;
+  width: 14px;
+  height: 14px;
+  background: #202124;
+  color: #fff;
+  border: 1px solid #202124;
+  font-size: 9px;
+  font-weight: 600;
 }
 .root :global(.replay-evidence-citation-marker:hover),
 .root :global(.replay-evidence-citation-marker:focus-visible) {
-  background: var(--workspace-accent);
-  outline: 2px solid var(--workspace-accent);
+  background: #333;
+  outline: 1px solid #6b7280;
   outline-offset: 2px;
 }
 .fullDocument { padding-bottom: 35vh; }
