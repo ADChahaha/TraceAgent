@@ -1,6 +1,6 @@
 "use client";
 
-import { FileText, Plus, Search } from "lucide-react";
+import { FileText, Plus, Search, X } from "lucide-react";
 import styles from "./workspace.module.css";
 import { useEffect, useState } from "react";
 import { listSessionDocuments, sessionFileUrl } from "@/lib/api";
@@ -11,8 +11,9 @@ import { SourceReader, documentRoot, documentLabel } from "./source-reader";
 import type { DocumentEntry, SessionResource } from "@/lib/session-types";
 
 export interface DocumentSelection { key: string; block: boolean; version: number }
-export function SessionDocuments({ sessionId, resources, disabled, selection, onSelect, onUpload, onRemove, uploads = [], mutating = false, onRetry, onDismiss }: {
+export function SessionDocuments({ sessionId, resources, disabled, selection, onSelect, onUpload, onRemove, uploads = [], mutating = false, onRetry, onDismiss, onClose }: {
   uploads?: FileUpload[]; mutating?: boolean; onRetry?: (file: File) => void; onDismiss?: (file: File) => void;
+  onClose: () => void;
   sessionId: string; resources: SessionResource[]; disabled: boolean;
   selection: DocumentSelection | null; onSelect: (key: string) => void;
   onUpload: (files: File[]) => void; onRemove: (id: string) => void;
@@ -35,9 +36,20 @@ export function SessionDocuments({ sessionId, resources, disabled, selection, on
     return () => { cancelled = true; };
   }, [sessionId, revision, hasDocuments]);
   const roots = [...new Set(entries.map((entry) => documentRoot(entry.key)))];
-  const root = selection?.key ? documentRoot(selection.key) : roots[0];
+  const root = selection?.key ? documentRoot(selection.key) : null;
+  if (root && hasDocuments) return <section className={styles.sources} aria-label="Document reader">
+    <header className={styles.readerHeader}>
+      <label><span>Source document</span><select aria-label="Source document" value={root} onChange={(event) => onSelect(event.target.value)}>
+        {roots.map((key) => <option key={key} value={key}>{documentLabel(key)}</option>)}
+      </select></label>
+      <button type="button" aria-label="Close document" title="Back to sources" onClick={onClose}><X size={18} /></button>
+    </header>
+    <div className={styles.sourceContent} aria-label="Source content">
+      <SourceReader sessionId={sessionId} root={root} revision={revision} selection={selection} onSelect={onSelect} />
+    </div>
+  </section>;
   return <section className={styles.sources} aria-label="Session documents">
-    <div className={styles.documentControls}>
+    <div className={styles.sourcesControls}>
       <div className={styles.sourceHeading}><h2>Sources</h2><span>{raw.length + pending.filter((item) => !raw.some((resource) => resource.location.split("/").at(-1) === item.file.name)).length}</span>
         <label className={styles.uploadLabel}><Plus size={16} />Add files<input type="file" className="sr-only" aria-label="Add session files" multiple accept={DOCUMENT_ACCEPT} disabled={disabled} onChange={(event) => {
           const files = Array.from(event.target.files ?? []); event.target.value = ""; if (files.length) onUpload(files);
@@ -61,15 +73,12 @@ export function SessionDocuments({ sessionId, resources, disabled, selection, on
           </li>;
         })}
       </ul>
-      {hasDocuments && <select aria-label="Source document" className="w-full rounded border bg-background p-2 text-xs" value={root ?? ""} onChange={(event) => onSelect(event.target.value)}>
+      {hasDocuments && <select aria-label="Source document" className="w-full rounded border bg-background p-2 text-xs" value="" onChange={(event) => onSelect(event.target.value)}>
+        <option value="" disabled>Open a document...</option>
         {roots.map((key) => <option key={key} value={key}>{documentLabel(key)}</option>)}
       </select>}
     </div>
-    <div className={styles.sourceContent} aria-label="Source content">
-      {!hasDocuments ? <p className="text-sm text-muted-foreground">Upload documents to start.</p> : <>
-        {listError && <p role="alert">{listError}</p>}
-        {root && <SourceReader sessionId={sessionId} root={root} revision={revision} selection={selection} onSelect={onSelect} />}
-      </>}
-    </div>
+    {listError && <p role="alert" className="p-4 text-sm">{listError}</p>}
+    {!hasDocuments && <p className="p-4 text-sm text-muted-foreground">Upload documents to start.</p>}
   </section>;
 }

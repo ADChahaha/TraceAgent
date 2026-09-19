@@ -53,7 +53,9 @@ session.event -> session-state 按 turn/message/tool ID 更新
 
 ## 文件与引用
 
-`SessionDocuments` 展示快照中的 raw 资源，用资源 ID 生成下载和删除 URL。补传走 multipart `/chat/sessions/{id}/files`，删除走对应资源 DELETE；完成后用 resume 刷新全量资源和历史。文件变更与问答提交在页面上互斥，避免使用旧索引。
+`SessionDocuments` 在左栏使用互斥的 Sources 和阅读视图。selection 为空时只显示来源列表，不预加载正文；选择文档或点击引用后，阅读器替换整个 Sources 区域，顶部保留文档切换和 Close document 关闭按钮。关闭清空 selection 并返回 Sources，重新点击引用仍可打开和定位。阅读视图没有来源列表挤占高度，全文滚动区域占满剩余空间，选中块使用淡黄色强调并保留所有前后章节。
+
+来源列表展示快照中的 raw 资源，用资源 ID 生成下载和删除 URL。补传走 multipart `/chat/sessions/{id}/files`，删除走对应资源 DELETE；完成后用 resume 刷新全量资源和历史。文件变更与问答提交在页面上互斥，避免使用旧索引。
 
 `/documents` 返回归档成员目录，前端按 documents 下的一级目录归为整份文档，文档选择器不再列出单个段落。`/documents/full?key=...` 一次读取所选文档的全部 Markdown 块，保留每块 key 和原有顺序。SourceReader 根据目录层级显示章节标题，再将所有块连续渲染到同一 article，段落、列表、表格保持 Markdown 展示。
 

@@ -77,7 +77,7 @@ function SessionWorkspace({ sessionId }: { sessionId: string }) {
 
   const review = session.snapshot ? <SessionDocuments sessionId={sessionId} resources={resources}
     disabled={fileBusy || session.running || unavailable} mutating={uploads.busy} uploads={uploads.items} onRetry={uploads.retry} onDismiss={(file) => void uploads.remove(file)} selection={selection}
-    onSelect={(key) => openEvidence(key, false)} onUpload={addFiles}
+    onSelect={(key) => openEvidence(key, false)} onClose={() => setSelection(null)} onUpload={addFiles}
     onRemove={(id) => void removeFile(id)} /> : undefined;
   return <main className="task-detail-fullscreen-shell" aria-label="Task detail workspace">
     <WorkspaceShell sessionId={sessionId} status={fileBusy || uploads.busy ? "Updating documents" : session.connection} review={review} reviewRequest={(selection?.version ?? 0) + sourceRequest}>

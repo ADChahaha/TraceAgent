@@ -35,6 +35,12 @@ it("恢复历史和实时增量，done 不重复文本，引用高亮整份原�
   await userEvent.click(screen.getByRole("link", { name: "Source 1" }));
   expect(await screen.findByText("Payment due in 37 days")).toBeInTheDocument();
   expect(api.readFullDocument).toHaveBeenCalledWith("s1", "documents/contract.md");
+  expect(screen.queryByLabelText("Sources list")).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Close document" }));
+  expect(screen.getByLabelText("Sources list")).toBeInTheDocument();
+  expect(screen.queryByLabelText("Full document")).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("link", { name: "Source 1" }));
+  expect(await screen.findByText("Payment due in 37 days")).toBeInTheDocument();
 });
 
 it("追问走 POST 流，输入框节点稳定，取消携带当前轮次", async () => {
@@ -43,7 +49,7 @@ it("追问走 POST 流，输入框节点稳定，取消携带当前轮次", asyn
   complete.mockResolvedValue(stream.response);
   jest.mocked(api.cancelCompletion).mockResolvedValue({ status: "cancelled" });
   render(<TaskDetail taskId="s1" />);
-  await screen.findByText("Full source document");
+  await screen.findByRole("link", { name: "Download contract.docx" });
   const input = screen.getByLabelText("QA question input");
   const action = screen.getByRole("button", { name: "Submit or pause answer" });
   fireEvent.change(input, { target: { value: "Question" } });
@@ -96,14 +102,14 @@ it("用户取消的历史轮次显示取消状态，不再重复报错", async (
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
-it("来源搜索过滤文件但保留当前原文，清空搜索恢复列表", async () => {
+it("来源列表默认不加载原文，搜索过滤文件且清空后恢复列表", async () => {
   resume.mockResolvedValue(controlledStream(ready).response);
   render(<TaskDetail taskId="s1" />);
-  await screen.findByText("Full source document");
+  await screen.findByRole("link", { name: "Download contract.docx" });
   fireEvent.change(screen.getByRole("searchbox", { name: "Search sources" }), { target: { value: "missing" } });
   expect(screen.queryByRole("link", { name: "Download contract.docx" })).not.toBeInTheDocument();
   expect(screen.getByText("No matching sources")).toBeInTheDocument();
-  expect(screen.getByText("Full source document")).toBeInTheDocument();
+  expect(screen.queryByLabelText("Full document")).not.toBeInTheDocument();
   fireEvent.change(screen.getByRole("searchbox", { name: "Search sources" }), { target: { value: "" } });
   expect(screen.getByRole("link", { name: "Download contract.docx" })).toBeInTheDocument();
 });
@@ -115,7 +121,7 @@ it("补传立即逐文件处理，列表显示对应转圈并禁止处理期间�
   jest.mocked(api.uploadSessionFiles).mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve({ resources: ready.state.resources }); }))
     .mockResolvedValue({ resources: ready.state.resources });
   render(<TaskDetail taskId="s1" />);
-  await screen.findByText("Full source document");
+  await screen.findByRole("link", { name: "Download contract.docx" });
   const files = [new File(["a"], "a.docx"), new File(["b"], "b.docx")];
   await userEvent.upload(screen.getByLabelText("Add session files"), files);
   expect(api.uploadSessionFiles).toHaveBeenCalledWith("s1", [files[0]]);
@@ -138,7 +144,7 @@ it("删除刚补传成功的文件后不留下本地就绪占位", async () => {
     return { resources };
   });
   render(<TaskDetail taskId="s1" />);
-  await screen.findByText("Full source document");
+  await screen.findByRole("link", { name: "Download contract.docx" });
   await userEvent.upload(screen.getByLabelText("Add session files"), new File(["doc"], "new.docx"));
   await screen.findByRole("link", { name: "Download new.docx" });
   await userEvent.click(screen.getByRole("button", { name: "Remove new.docx" }));
@@ -180,7 +186,7 @@ it("另一标签页删除已补传文件后，恢复时不重建本地上传占�
     return { resources };
   });
   render(<TaskDetail taskId="s1" />);
-  await screen.findByText("Full source document");
+  await screen.findByRole("link", { name: "Download contract.docx" });
   await userEvent.upload(screen.getByLabelText("Add session files"), new File(["doc"], "cross.docx"));
   await screen.findByRole("link", { name: "Download cross.docx" });
   resources = ready.state.resources;
