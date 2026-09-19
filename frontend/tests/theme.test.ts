@@ -224,3 +224,8 @@ it("首页打开左侧栏时窄视口仍保留侧栏和拖拽手柄", () => {
     /@media\s*\(max-width:\s*900px\)\s*\{[\s\S]*?\.home-task-workbench\[data-left-panel-open="false"\]\s+\.replay-task-sidebar,\s*\.home-task-workbench\[data-left-panel-open="false"\]\s+\.replay-panel-resize-handle\s*\{[\s\S]*?display:\s*none;/
   );
 });
+
+it("资料工作台的分栏拖动条显式占位，聊天区不落入拖动条列", () => {
+  const workspaceCss = readFileSync(resolve(__dirname, "../src/components/session/workspace.module.css"), "utf8");
+  expect(workspaceCss).toMatch(/\.root :global\(\.replay-panel-resize-handle\)\s*\{[^}]*display:\s*inline-flex;/);
+});

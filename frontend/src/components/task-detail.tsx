@@ -48,6 +48,7 @@ function SessionWorkspace({ sessionId }: { sessionId: string }) {
 
   function addFiles(files: File[]) {
     if (fileBusy || session.running || unavailable) return;
+    setSelection(null);
     uploads.add(files);
     setSourceRequest((value) => value + 1);
   }
@@ -90,7 +91,7 @@ function SessionWorkspace({ sessionId }: { sessionId: string }) {
           </div>}
           {!session.snapshot && <p className="p-4 text-sm text-muted-foreground">Loading session...</p>}
           <Conversation turns={session.snapshot?.state.turns ?? []} running={session.running} pending={session.pending} onEvidence={(uri) => openEvidence(uri)} />
-          <SessionComposer initialDraft={initialDraft} running={session.running} canCancel={Boolean(session.snapshot?.state.active_turn_id)} cancelling={session.cancelling}
+          <SessionComposer onUpload={addFiles} uploadDisabled={unavailable || fileBusy || session.running} initialDraft={initialDraft} running={session.running} canCancel={Boolean(session.snapshot?.state.active_turn_id)} cancelling={session.cancelling}
             disabled={unavailable || fileBusy || uploads.busy || uploads.items.some((item) => item.status === "failed") || !resources.some((resource) => resource.type === "documents")}
             onSend={(content) => { saveWorkspaceDraft(sessionId, ""); session.send(content); }} onCancel={() => void session.cancel()} />
         </div>

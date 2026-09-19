@@ -47,7 +47,7 @@
 .review, .content { min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--workspace-line); border-radius: 18px; }
 .review { background: color-mix(in srgb, var(--workspace-surface) 42%, var(--workspace-bg)); }
 .content { background: var(--workspace-surface); }
-.root :global(.replay-panel-resize-handle) { height: 100%; width: 20px; background: transparent; border: 0; }
+.root :global(.replay-panel-resize-handle) { display: inline-flex; height: 100%; width: 20px; background: transparent; border: 0; }
 .root :global(.replay-panel-resize-grip) { background: var(--workspace-line); width: 2px; }
 .backdrop { position: absolute; inset: 84px 0 0; z-index: 20; background: rgb(15 23 42 / .18); }
 .sidebar { position: absolute; top: 84px; left: 20px; bottom: 20px; width: min(330px, calc(100vw - 40px)); z-index: 21; background: var(--workspace-surface); border: 1px solid var(--workspace-line); border-radius: 16px; padding: 22px; overflow: auto; box-shadow: 0 16px 50px #0002; }
