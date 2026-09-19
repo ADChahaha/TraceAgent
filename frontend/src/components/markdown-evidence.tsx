@@ -16,7 +16,9 @@ type MarkdownChildrenProps = {
   children?: React.ReactNode;
 };
 
-type MarkdownAnchorProps = React.AnchorHTMLAttributes<HTMLAnchorElement> & MarkdownChildrenProps;
+type MarkdownAnchorProps = React.AnchorHTMLAttributes<HTMLAnchorElement> & MarkdownChildrenProps & {
+  node?: { position?: { start: { offset?: number } } };
+};
 
 type MarkdownBlock = {
   body: string;
@@ -43,7 +45,7 @@ export function MarkdownEvidence({ markdown, className, onOpenEvidence, evidence
 
 function markdownComponents(onOpenEvidence?: (uri: string, label: string) => void, evidencePlacement: "inline" | "citation" = "inline") {
   const shouldRenderCitationMarkers = evidencePlacement === "citation";
-  let citationIndex = 0;
+  const citationNumbers = new Map<number | string, number>();
 
   function MarkdownParagraph({ children }: MarkdownChildrenProps) {
     return <p className="whitespace-pre-wrap text-muted-foreground">{children}</p>;
@@ -80,13 +82,14 @@ function markdownComponents(onOpenEvidence?: (uri: string, label: string) => voi
       }
       return <code className="rounded bg-muted px-1 py-0.5 text-xs text-foreground">{children}</code>;
     },
-    a: ({ children, href }: MarkdownAnchorProps) => {
+    a: ({ children, href, node }: MarkdownAnchorProps) => {
       const safeHref = href ?? "";
       const label = textFromChildren(children);
       if (safeHref.startsWith("evidence://") || documentKey(safeHref)) {
         if (shouldRenderCitationMarkers) {
-          citationIndex += 1;
-          const citationNumber = String(citationIndex);
+          const position = node?.position?.start.offset ?? safeHref;
+          if (!citationNumbers.has(position)) citationNumbers.set(position, citationNumbers.size + 1);
+          const citationNumber = String(citationNumbers.get(position));
           const citationLabel = `Source ${citationNumber}`;
           return (
             <a
@@ -175,7 +178,14 @@ function isSourcesHeading(line: string): boolean {
 }
 
 function normalizeMarkdown(markdown: string): string {
-  return markdown
+  // 原文 key 保留空格；仅编码引用目标，跳过代码示例。
+  const links = markdown.replace(
+    /(`{3,}|~{3,})[^\n]*\n[\s\S]*?\1|(`+)[^`]*?\2|\[([^\]\n]+)\]\(((?:evidence:\/\/|\.\/)?documents\/(?:[^()\n]|\([^()\n]*\))*?\.md)\)/g,
+    (match, fence, code, label, target: string | undefined) => target
+      ? `[${label}](${target.replace(/[ \t]/g, (space) => encodeURIComponent(space))})`
+      : match,
+  );
+  return links
     .replace(/\r\n/g, "\n")
     .split("\n")
     .flatMap((line) => expandCompactTableLine(line) ?? [line])

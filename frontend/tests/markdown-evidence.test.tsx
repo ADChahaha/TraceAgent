@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 
 import { MarkdownEvidence } from "@/components/markdown-evidence";
@@ -136,4 +137,25 @@ describe("MarkdownEvidence", () => {
     );
     expect(container.querySelectorAll(".replay-evidence-footer")).toHaveLength(0);
   });
+});
+
+it("真实文档路径包含空格时仍生成可点击的数字引用", () => {
+  const onOpenEvidence = jest.fn();
+  const key = "documents/001-orion-pilot-Processed DOCX/002-Schedule and budget/001-The Orion pilot launches.md";
+  render(<MarkdownEvidence markdown={`Budget: $48,000. [1](${key})`} evidencePlacement="citation" onOpenEvidence={onOpenEvidence} />);
+  fireEvent.click(screen.getByRole("link", { name: "Source 1" }));
+  expect(onOpenEvidence).toHaveBeenCalledWith(key.replaceAll(" ", "%20"), "Source 1");
+});
+
+it("代码中的路径示例不被引用归一化改写", () => {
+  const example = "[1](documents/My file.md)";
+  const { container } = render(<MarkdownEvidence markdown={`\`${example}\`\n\n\`\`\`text\n${example}\n\`\`\``} />);
+  expect(Array.from(container.querySelectorAll("code")).map((node) => node.textContent?.trim())).toEqual([example, example]);
+  expect(screen.queryByRole("link")).not.toBeInTheDocument();
+});
+
+it("StrictMode 重复渲染不会使引用编号跳号", () => {
+  render(<StrictMode><MarkdownEvidence markdown="A [1](documents/a.md), B [2](documents/b.md)" evidencePlacement="citation" /></StrictMode>);
+  expect(screen.getByRole("link", { name: "Source 1" })).toHaveTextContent("1");
+  expect(screen.getByRole("link", { name: "Source 2" })).toHaveTextContent("2");
 });

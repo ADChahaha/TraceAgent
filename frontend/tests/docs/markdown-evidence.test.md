@@ -23,3 +23,7 @@ MarkdownEvidence(markdown)
 - `renders each bullet evidence as inline numbered citations`：验证连续 bullet 每一条自己的 evidence 都会留在该条 bullet 句尾并显示为递增数字 marker，不会另起引用行。
 
 - 新文档路径引用留在当前页面并交给证据查看器：`documents/...` 与原 evidence 协议一样生成引用标记，点击时交给文档面板而非新开网页。
+
+- 真实文档路径包含空格时仍生成可点击的数字引用：使用真实解析器的目录命名格式，验证空格编码后的回调路径。
+- 代码中的路径示例不被引用归一化改写：行内代码与围栏代码保留字面示例，不生成链接。
+- StrictMode 重复渲染不会使引用编号跳号：双次渲染时两条引用仍为 1、2，不变为 2、4。

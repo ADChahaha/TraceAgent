@@ -50,7 +50,7 @@ session.event -> session-state 按 turn/message/tool ID 更新
 
 `SessionDocuments` 展示快照中的 raw 资源，用资源 ID 生成下载和删除 URL。补传走 multipart `/chat/sessions/{id}/files`，删除走对应资源 DELETE；完成后用 resume 刷新全量资源和历史。文件变更与问答提交在页面上互斥，避免使用旧索引。
 
-`/documents` 返回归档成员目录，`/documents/content?key=...` 返回全文。回答中的 `[label](documents/...)` 和带 documents 路径的 evidence 链接由 MarkdownEvidence 接管，通过 `/blocks?key=...` 读取对应原文。路径通过查询参数编码，绝对地址和越界路径不会当作本会话证据。旧数字 selector 没有新协议映射时明确显示无法定位，不伪造引用结果。
+`/documents` 返回归档成员目录，`/documents/content?key=...` 返回全文。回答中的 `[label](documents/...)` 和带 documents 路径的 evidence 链接由 MarkdownEvidence 接管，通过 `/blocks?key=...` 读取对应原文。模型直接引用含空格的 Markdown key 时，先对链接目标中的空格编码，代码示例保持原文，避免 Markdown 把引用当成普通文本。数字引用按 Markdown 中的节点位置分配，StrictMode 重复渲染复用编号。路径通过查询参数编码，绝对地址和越界路径不会当作本会话证据。旧数字 selector 没有新协议映射时明确显示无法定位，不伪造引用结果。
 
 原文用 Markdown 渲染，不再依赖后端已不返回的 display_html/source_selectors。历史和当前完成的无工具调用 assistant 消息使用数字引用。读取失败在文档面板显示；连续点击不同文档时，旧异步结果不能覆盖新选择。
 
