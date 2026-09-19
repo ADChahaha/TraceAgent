@@ -2,6 +2,10 @@
 
 POST /chat/completion 创建轮次；GET /resume 恢复页面及观察流；POST /cancel 取消指定轮次。前两个接口先发送快照，再发送增量。断开只取消订阅，执行由 backend 持有。
 
+## GET /chat/sessions?limit=100
+
+从数据库读取最近会话，返回 `{"sessions":[{"id":"...","status":"ready","active_turn_id":null,"created_at":"...","updated_at":"..."}]}`。按 updated_at、created_at 和插入顺序倒序排列；limit 默认 100，允许 1-200，越界返回 422。该目录不依赖浏览器缓存，也不加载会话执行器；打开具体会话继续调用 /resume。
+
 ## POST /chat/completion
 
 ```json

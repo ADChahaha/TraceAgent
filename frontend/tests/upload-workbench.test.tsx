@@ -4,13 +4,14 @@ import { UploadWorkbench } from "@/components/upload-workbench";
 import * as api from "@/lib/api";
 import { controlledStream, ready, running } from "./helpers/session-fixtures";
 
-jest.mock("@/lib/api", () => ({ createSession: jest.fn(), uploadSessionFiles: jest.fn(), openCompletion: jest.fn(), removeSessionFile: jest.fn() }));
+jest.mock("@/lib/api", () => ({ listSessions: jest.fn(), createSession: jest.fn(), uploadSessionFiles: jest.fn(), openCompletion: jest.fn(), removeSessionFile: jest.fn() }));
 const create = jest.mocked(api.createSession);
 const upload = jest.mocked(api.uploadSessionFiles);
 const complete = jest.mocked(api.openCompletion);
 
 beforeEach(() => {
   jest.resetAllMocks(); localStorage.clear();
+  jest.mocked(api.listSessions).mockResolvedValue({ sessions: [{ id: "s1", status: "ready", updated_at: "now", active_turn_id: null }] });
   create.mockResolvedValue({ session_id: "s1" });
   upload.mockImplementation(async (_id, files) => ({ resources: [
     ...ready.state.resources, ...files.map((file) => ({ id: file.name, type: "raw" as const, location: `s3://bucket/raw/${file.name}` })),
@@ -37,7 +38,7 @@ it("按创建会话、上传、首问快照顺序执行，再跳转", async () =
   expect(create.mock.invocationCallOrder[0]).toBeLessThan(upload.mock.invocationCallOrder[0]);
   expect(upload.mock.invocationCallOrder[0]).toBeLessThan(complete.mock.invocationCallOrder[0]);
   await user.click(screen.getByRole("button", { name: "Open sidebar" }));
-  expect(screen.getByText("s1")).toBeInTheDocument();
+  expect(await screen.findByText("s1")).toBeInTheDocument();
 });
 
 it("上传失败不发首问，重试复用同一会话", async () => {
@@ -145,4 +146,13 @@ it("移除已处理文件调用后端删除，失败文件不阻塞其他文件�
   expect(screen.getByRole("button", { name: "Retry bad.docx" })).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Remove good.docx" }));
   await waitFor(() => expect(api.removeSessionFile).toHaveBeenCalledWith("s1", "good.docx"));
+});
+
+it("文件完成后通知进入固定工作区地址并保留未发送的问题", async () => {
+  const onFilesReady = jest.fn();
+  render(<UploadWorkbench onFilesReady={onFilesReady} />);
+  fireEvent.change(screen.getByLabelText("QA question input"), { target: { value: "My draft" } });
+  await userEvent.upload(screen.getByLabelText("Document file input"), new File(["doc"], "contract.docx"));
+  await waitFor(() => expect(onFilesReady).toHaveBeenCalledWith("s1", "My draft"));
+  expect(complete).not.toHaveBeenCalled();
 });

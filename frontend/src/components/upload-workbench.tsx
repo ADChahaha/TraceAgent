@@ -15,7 +15,7 @@ import { WorkspaceOverview, QuestionSuggestions } from "@/components/session/wor
 import styles from "@/components/session/workspace.module.css";
 import { Textarea } from "@/components/ui/textarea";
 
-export function UploadWorkbench({ onCreated }: { onCreated?: (sessionId: string) => void }) {
+export function UploadWorkbench({ onCreated, onFilesReady }: { onCreated?: (sessionId: string) => void; onFilesReady?: (sessionId: string, draft: string) => void }) {
   const [question, setQuestion] = useState("");
   const [sourceRequest, setSourceRequest] = useState(0);
   const [createdId, setCreatedId] = useState<string | null>(null);
@@ -36,6 +36,13 @@ export function UploadWorkbench({ onCreated }: { onCreated?: (sessionId: string)
     return sessionId.current;
   });
   const files = uploads.items.map((item) => item.file);
+  const opened = useRef(false);
+  useEffect(() => {
+    if (createdId && uploads.ready && onFilesReady && !opened.current) {
+      opened.current = true;
+      onFilesReady(createdId, question);
+    }
+  }, [createdId, uploads.ready, onFilesReady, question]);
 
   async function submit() {
     if (lock.current || uploads.busy) return;

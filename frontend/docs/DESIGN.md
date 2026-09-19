@@ -9,18 +9,19 @@
 ```text
 选择文件 -> POST /chat/sessions（首次）-> 缓存会话 ID
 每个文件 queued -> processing -> POST /chat/sessions/{id}/files（单文件）-> ready / failed
-全部处理完成 -> 用户发送问题 -> POST /chat/completion -> SSE
-收到 session.snapshot -> 释放首问订阅 -> 跳转 /tasks/{session_id}
-也可不提问，点击 Open workspace -> GET /resume 获取已处理资源
+全部处理完成 -> 自动跳转 /tasks/{session_id} -> GET /resume 获取已处理资源
+用户发送问题 -> POST /chat/completion -> SSE
 ```
 
 `use-file-uploads.ts` 在首页和详情页共享逐文件队列。处理请求串行执行，避免同一会话重建索引时发生资源竞争；队列中等待的文件显示 Queued，正在处理的文件右侧显示旋转图标，成功显示就绪，失败行保留原因和单独重试入口。一个文件失败不会阻止后续文件处理。重复选择同名文件不重复排队；成功文件不随提问再次上传。处理中可编辑问题，发送按钮与 Enter 提交均被阻止；失败文件需重试或移除后提问。
 
 首页删除已处理文件调用后端删除接口，移除排队或失败文件仅清理本地队列。删除失败保留原文件及错误提示。详情补传使用相同队列，资源变更后用 resume 刷新；删除刚补传的文件同时清理本地就绪占位。窄屏选文件后自动打开来源面板，使逐文件状态可见。
 
-首页仍等待首问快照确认后跳转，释放订阅不取消后端轮次。文件处理完成即提供 Open workspace，不要求先提问才能访问资源。会话一经创建就进入本机导航缓存。
+首页文件处理完成后自动进入固定会话地址，不要求先提问。未发送的问题通过同一页面进程内的草稿映射交接到会话输入框，草稿不放入 URL。复制 /tasks/{id} 到其他标签页通过 resume 读取相同文件和历史。上传队列尚未结束时不会导航，避免丢弃剩余待处理文件。
 
-后端没有会话列表接口。`session-store.ts` 仅在 localStorage 保存最近访问的会话 ID、状态提示和更新时间，使用独立的 recent-sessions key，不把旧 QA task ID 当作新会话迁移。历史消息、资源和当前运行态始终从 `/resume` 获取；缓存不可写时不阻断 API 操作。服务端渲染使用空缓存快照，避免 hydration 差异。
+`workspace-list.tsx` 打开菜单时调用 GET /chat/sessions，从实际数据库读取最近 100 个会话；重新聚焦或本页会话更新时重读，迟到请求不能覆盖新结果。列表失败显示错误，不回退为隔离的浏览器缓存。localStorage 不再决定 workspace 是否可见，localhost、127.0.0.1 和不同浏览器只要代理到同一 backend，就共享目录。
+
+`session-store.ts` 只负责本页列表刷新通知和导航时的草稿交接。历史消息、资源和当前运行态始终从 /resume 获取。空闲详情页每 5 秒及重新获得焦点时刷新服务端快照，以取得其他标签页新上传的文件或新对话；本页上传、删除、提问或接收回答期间停止空闲轮询，不因焦点切换打断正在执行的操作。服务端快照确认上传成功后清理本地占位，避免其他标签页删除文件后再次显示旧占位。
 
 ## 流与状态
 
@@ -80,4 +81,4 @@ session.event -> session-state 按 turn/message/tool ID 更新
 
 backend-proxy 原样转发 multipart/JSON，响应体按流透传，保留文件下载 Content-Disposition，避免二进制文件经文本解码损坏。请求 AbortSignal 传到上游 fetch，关闭浏览器订阅可释放后端订阅；后端轮次仍独立存在。Next.js 代理容量为 40mb，覆盖后端 32 MiB 文件内容及 multipart 开销，业务配额由后端最终校验。
 
-测试按 API/SSE、纯投影、连接生命周期、首页、详情、引用和代理分层，每个测试文件在 tests/docs 下有对应说明。运行 `pnpm --dir frontend exec jest --runInBand`、`pnpm --dir frontend lint`、`pnpm --dir frontend build`。普通运行从仓库根目录执行 scripts/start.sh，使用 .env 配置或默认 backend/backend.sqlite3 与 storage/data。独立测试库仅用于隔离验证，不能作为交付时的服务数据库；测试会话不会自动迁移到实际库。最近会话缓存按浏览器和站点地址隔离，跨浏览器应使用完整会话链接。旧 backend/backend/backend.sqlite3 属于此前从 backend 目录启动产生的旧 tasks 结构，不自动迁移到新 chat 会话。
+测试按 API/SSE、纯投影、连接生命周期、首页、详情、引用和代理分层，每个测试文件在 tests/docs 下有对应说明。运行 `pnpm --dir frontend exec jest --runInBand`、`pnpm --dir frontend lint`、`pnpm --dir frontend build`。普通运行从仓库根目录执行 scripts/start.sh，使用 .env 配置或默认 backend/backend.sqlite3 与 storage/data。独立测试库仅用于隔离验证，不能作为交付时的服务数据库；测试会话不会自动迁移到实际库。最近会话目录由 backend 共享，跨浏览器可从菜单选择，也可使用完整会话链接。旧 backend/backend/backend.sqlite3 属于此前从 backend 目录启动产生的旧 tasks 结构，不自动迁移到新 chat 会话。

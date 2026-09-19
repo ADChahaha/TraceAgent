@@ -41,6 +41,12 @@ export function createSession() {
   return requestJson<{ session_id: string }>("/api/backend/chat/sessions", { method: "POST" });
 }
 
+export interface SessionSummary { id: string; status: string; updated_at: string; active_turn_id: string | null }
+
+export function listSessions() {
+  return requestJson<{ sessions: SessionSummary[] }>("/api/backend/chat/sessions");
+}
+
 export function uploadSessionFiles(id: string, files: File[]) {
   const body = new FormData();
   files.forEach((file) => body.append("files", file));

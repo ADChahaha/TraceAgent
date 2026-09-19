@@ -4,7 +4,7 @@ import { useEffect, useState, useSyncExternalStore, type CSSProperties, type Rea
 import Link from "next/link";
 import { Moon, Sun, Menu, Plus, BookOpen, X } from "lucide-react";
 import { applyStoredTheme, getServerThemeSnapshot, getThemeSnapshot, subscribeTheme } from "@/lib/theme";
-import { recentSessions, serverSessions, subscribeSessions } from "@/lib/session-store";
+import { WorkspaceList } from "./workspace-list";
 import { LeftSidebarResizeHandle, useLeftSidebarResize } from "@/components/sidebar-resize";
 import styles from "./workspace.module.css";
 
@@ -21,7 +21,6 @@ export function WorkspaceShell({ sessionId, status, children, review, reviewRequ
   const [open, setOpen] = useState(false);
   const [mobileReview, setMobileReview] = useState(false);
   const compact = useSyncExternalStore(subscribeWidth, compactWidth, serverWidth);
-  const sessions = useSyncExternalStore(subscribeSessions, recentSessions, serverSessions);
   const theme = useSyncExternalStore(subscribeTheme, getThemeSnapshot, getServerThemeSnapshot);
   const left = useLeftSidebarResize();
   useEffect(() => { applyStoredTheme(theme); }, [theme]);
@@ -57,12 +56,7 @@ export function WorkspaceShell({ sessionId, status, children, review, reviewRequ
       <button className={styles.backdrop} aria-label="Dismiss sidebar" onClick={() => setOpen(false)} />
       <aside className={styles.sidebar} aria-label="Tasks sidebar">
         <div className={styles.drawerHeading}><h2>Recent workspaces</h2><button aria-label="Close recent workspaces" onClick={() => setOpen(false)}><X size={18} /></button></div>
-        <nav aria-label="Recent sessions">
-          {sessions.length === 0 && <p>No workspaces yet.</p>}
-          {sessions.map((session) => <Link key={session.id} href={`/tasks/${encodeURIComponent(session.id)}`} onClick={() => setOpen(false)} aria-current={session.id === sessionId ? "page" : undefined}>
-            <BookOpen size={18} /><span>{session.id}<small>{session.status}</small></span>
-          </Link>)}
-        </nav>
+        <WorkspaceList sessionId={sessionId} onSelect={() => setOpen(false)} />
       </aside>
     </>}
     <div className={styles.stage} aria-label="QA stage" data-has-review={Boolean(review)} data-mobile-review={compact && mobileReview ? "true" : "false"}

@@ -2,6 +2,8 @@
 
 backend 管理多轮 session、稳定模型消息和页面恢复，通过独立 document service 准备资源、通过独立 agent service 执行单次 turn。每个已加载 session 有唯一 SessionManager，串行处理创建、取消、事件和订阅；网络等待位于独立 TurnRuntime。浏览器断开只释放订阅。
 
+GET /chat/sessions 从数据库按更新时间读取最近会话，默认 100 条、limit 范围 1-200；读取不加载 manager、不创建会话，所有连接到同一 backend 的浏览器共享列表。
+
 ## 调用关系
 
 ```text

@@ -143,3 +143,45 @@ it("删除刚补传成功的文件后不留下本地就绪占位", async () => {
   await waitFor(() => expect(api.removeSessionFile).toHaveBeenCalledWith("s1", "new-raw"));
   await waitFor(() => expect(screen.queryByText("new.docx")).not.toBeInTheDocument());
 });
+
+it("其他标签页修改文件后，当前空闲工作区重新聚焦即恢复新快照", async () => {
+  resume.mockResolvedValueOnce(controlledStream(ready).response)
+    .mockResolvedValue(controlledStream({ ...ready, state: { ...ready.state, resources: [] } }).response);
+  render(<TaskDetail taskId="s1" />);
+  await screen.findByRole("link", { name: "Download contract.docx" });
+  fireEvent(window, new Event("focus"));
+  await waitFor(() => expect(screen.queryByRole("link", { name: "Download contract.docx" })).not.toBeInTheDocument());
+});
+
+it("空闲标签页定期同步其他标签页的更新，不重新提交问题", async () => {
+  resume.mockResolvedValueOnce(controlledStream(ready).response)
+    .mockResolvedValue(controlledStream({ ...ready, state: { ...ready.state, resources: [] } }).response);
+  const view = render(<TaskDetail taskId="s1" />);
+  await screen.findByRole("link", { name: "Download contract.docx" });
+  jest.useFakeTimers();
+  try {
+    // 切换焦点使空闲订阅在可控计时器下重新建立。
+    fireEvent(window, new Event("focus"));
+    await act(async () => {});
+    resume.mockResolvedValue(controlledStream(ready).response);
+    await act(async () => { await jest.advanceTimersByTimeAsync(5000); });
+    expect(screen.getByRole("link", { name: "Download contract.docx" })).toBeInTheDocument();
+    expect(complete).not.toHaveBeenCalled();
+  } finally { view.unmount(); jest.useRealTimers(); }
+});
+
+it("另一标签页删除已补传文件后，恢复时不重建本地上传占位", async () => {
+  let resources = ready.state.resources;
+  resume.mockImplementation(async () => controlledStream({ ...ready, state: { ...ready.state, resources } }).response);
+  jest.mocked(api.uploadSessionFiles).mockImplementation(async () => {
+    resources = [...resources, { id: "cross-tab", type: "raw", location: "s3://bucket/raw/cross.docx" }];
+    return { resources };
+  });
+  render(<TaskDetail taskId="s1" />);
+  await screen.findByText("Full source document");
+  await userEvent.upload(screen.getByLabelText("Add session files"), new File(["doc"], "cross.docx"));
+  await screen.findByRole("link", { name: "Download cross.docx" });
+  resources = ready.state.resources;
+  fireEvent(window, new Event("focus"));
+  await waitFor(() => expect(screen.queryByText("cross.docx")).not.toBeInTheDocument());
+});

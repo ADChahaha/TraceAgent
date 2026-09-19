@@ -5,12 +5,13 @@ import { Pause, SendHorizonal } from "lucide-react";
 import { QuestionSuggestions } from "./workspace-overview";
 import { Button } from "@/components/ui/button";
 
-export function SessionComposer({ running, disabled, canCancel, cancelling, onSend, onCancel }: {
+export function SessionComposer({ running, disabled, canCancel, cancelling, onSend, onCancel, initialDraft = "" }: {
+  initialDraft?: string;
   running: boolean; disabled: boolean; canCancel: boolean; cancelling: boolean;
   onSend: (content: string) => void; onCancel: () => void;
 }) {
   const input = useRef<HTMLTextAreaElement>(null);
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useState(initialDraft);
   function send() {
     if (running || disabled || !draft.trim()) return;
     onSend(draft.trim());

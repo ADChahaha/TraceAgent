@@ -2,7 +2,8 @@
 
 import { BookOpen } from "lucide-react";
 import styles from "@/components/session/workspace.module.css";
-import { useRef, useState } from "react";
+import { readWorkspaceDraft, saveWorkspaceDraft } from "@/lib/session-store";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { removeSessionFile } from "@/lib/api";
 import { documentKey } from "@/lib/document-files";
 import { useFileUploads } from "@/lib/use-file-uploads";
@@ -18,15 +19,32 @@ export function TaskDetail({ taskId }: { taskId: string }) {
 
 function SessionWorkspace({ sessionId }: { sessionId: string }) {
   const session = useSession(sessionId);
+  const [initialDraft] = useState(() => readWorkspaceDraft(sessionId));
   const [selection, setSelection] = useState<DocumentSelection | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const [sourceRequest, setSourceRequest] = useState(0);
   const [fileBusy, setFileBusy] = useState(false);
   const fileLock = useRef(false);
-  const resources = session.snapshot?.state.resources ?? [];
+  const resources = useMemo(() => session.snapshot?.state.resources ?? [], [session.snapshot]);
   const unavailable = !session.snapshot || !["idle", "live"].includes(session.connection);
 
   const uploads = useFileUploads(async () => sessionId, () => { setSelection(null); session.refresh(); });
+
+  useEffect(() => {
+    // 服务端快照接管已完成文件，避免其他标签页删除后本地占位再次出现。
+    for (const item of uploads.items) {
+      if (item.status === "ready" && resources.some((resource) => resource.type === "raw" && resource.location.split("/").at(-1) === item.file.name)) uploads.forget(item.file.name);
+    }
+  }, [uploads, resources]);
+
+  const canRefresh = !fileBusy && !uploads.busy && !session.running && session.connection === "idle";
+  const refreshSession = session.refresh;
+  useEffect(() => {
+    const refresh = () => { if (canRefresh) refreshSession(); };
+    window.addEventListener("focus", refresh);
+    const timer = canRefresh ? window.setInterval(refresh, 5000) : undefined;
+    return () => { window.removeEventListener("focus", refresh); window.clearInterval(timer); };
+  }, [canRefresh, refreshSession]);
 
   function addFiles(files: File[]) {
     if (fileBusy || session.running || unavailable) return;
@@ -72,9 +90,9 @@ function SessionWorkspace({ sessionId }: { sessionId: string }) {
           </div>}
           {!session.snapshot && <p className="p-4 text-sm text-muted-foreground">Loading session...</p>}
           <Conversation turns={session.snapshot?.state.turns ?? []} running={session.running} pending={session.pending} onEvidence={(uri) => openEvidence(uri)} />
-          <SessionComposer running={session.running} canCancel={Boolean(session.snapshot?.state.active_turn_id)} cancelling={session.cancelling}
+          <SessionComposer initialDraft={initialDraft} running={session.running} canCancel={Boolean(session.snapshot?.state.active_turn_id)} cancelling={session.cancelling}
             disabled={unavailable || fileBusy || uploads.busy || uploads.items.some((item) => item.status === "failed") || !resources.some((resource) => resource.type === "documents")}
-            onSend={session.send} onCancel={() => void session.cancel()} />
+            onSend={(content) => { saveWorkspaceDraft(sessionId, ""); session.send(content); }} onCancel={() => void session.cancel()} />
         </div>
       </section>
     </WorkspaceShell>
