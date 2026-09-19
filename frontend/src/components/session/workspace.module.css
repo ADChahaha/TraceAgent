@@ -89,9 +89,6 @@
 .inputRow textarea { min-height: 66px; resize: none; border: 0; box-shadow: none; background: transparent; font-size: 16px; padding: 7px 3px; }
 .inputRow button, .root :global(.replay-agent-composer-actions button) { border-radius: 50%; background: #7696ff; color: white; width: 46px; height: 46px; flex-shrink: 0; transition: background .2s; }
 .inputRow button:hover, .root :global(.replay-agent-composer-actions button:hover) { background: #416cf0; }
-.suggestions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.suggestions button { border: 1px solid var(--workspace-line); border-radius: 24px; padding: 9px 13px; color: var(--workspace-muted); font-size: 12px; line-height: 1.4; text-align: left; transition: background .18s; }
-.suggestions button:hover { background: var(--workspace-tint); color: var(--workspace-accent); }
 .composerHint { margin-top: 12px; color: var(--workspace-muted); font-size: 11px; }
 .sourcesControls { flex: 1; min-height: 0; overflow: auto; padding-bottom: 20px; }
 .uploadLabel { margin-left: auto; display: flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer; }
@@ -139,7 +136,6 @@
   .description { font-size: 15px; margin-top: 20px; }
   .quickActions { margin-top: 24px; }
   .firstComposer { padding: 14px; }
-  .suggestions button { font-size: 11px; padding: 8px 10px; }
   .root :global(.replay-agent-stream) { padding: 22px 18px; }
   .root :global(.replay-agent-composer) { margin: 0 12px 12px; padding: 12px; }
   .sessionHeading { padding: 20px; }

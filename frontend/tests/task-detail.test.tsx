@@ -50,6 +50,9 @@ it("追问走 POST 流，输入框节点稳定，取消携带当前轮次", asyn
   jest.mocked(api.cancelCompletion).mockResolvedValue({ status: "cancelled" });
   render(<TaskDetail taskId="s1" />);
   await screen.findByRole("link", { name: "Download contract.docx" });
+  for (const name of ["Summarize the main ideas", "What are the key findings?", "Compare the sources"]) {
+    expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+  }
   const input = screen.getByLabelText("QA question input");
   const action = screen.getByRole("button", { name: "Submit or pause answer" });
   fireEvent.change(input, { target: { value: "Question" } });

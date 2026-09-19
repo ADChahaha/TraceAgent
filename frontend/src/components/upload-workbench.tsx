@@ -11,7 +11,7 @@ import { UploadStatus } from "@/components/session/upload-status";
 import Link from "next/link";
 import { WorkspaceShell } from "@/components/session/workspace-shell";
 import { Button } from "@/components/ui/button";
-import { WorkspaceOverview, QuestionSuggestions } from "@/components/session/workspace-overview";
+import { WorkspaceOverview } from "@/components/session/workspace-overview";
 import styles from "@/components/session/workspace.module.css";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -114,7 +114,6 @@ export function UploadWorkbench({ onCreated, onFilesReady }: { onCreated?: (sess
           </Button>
         </div>
         {(error || uploads.error) && <div className="home-task-composer-error" role="alert">{error ?? uploads.error}</div>}
-        <QuestionSuggestions onSelect={choosePrompt} />
         <div className={styles.composerHint}>{submitting ? "Starting your answer..." : uploads.busy ? "Processing sources..." : files.length ? `${files.length} document${files.length > 1 ? "s" : ""}` : "Add sources to start a conversation"}</div>
         {createdId && !uploads.busy && <Link className="text-xs underline" href={`/tasks/${createdId}`}>Open workspace</Link>}
       </form>

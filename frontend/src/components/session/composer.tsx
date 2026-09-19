@@ -1,8 +1,7 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { Pause, SendHorizonal } from "lucide-react";
-import { QuestionSuggestions } from "./workspace-overview";
 import { Button } from "@/components/ui/button";
 
 export function SessionComposer({ running, disabled, canCancel, cancelling, onSend, onCancel, initialDraft = "" }: {
@@ -10,7 +9,6 @@ export function SessionComposer({ running, disabled, canCancel, cancelling, onSe
   running: boolean; disabled: boolean; canCancel: boolean; cancelling: boolean;
   onSend: (content: string) => void; onCancel: () => void;
 }) {
-  const input = useRef<HTMLTextAreaElement>(null);
   const [draft, setDraft] = useState(initialDraft);
   function send() {
     if (running || disabled || !draft.trim()) return;
@@ -19,7 +17,7 @@ export function SessionComposer({ running, disabled, canCancel, cancelling, onSe
   }
   return <form className="replay-agent-composer" aria-label="QA composer" onSubmit={(event) => { event.preventDefault(); send(); }}>
     <div className="replay-agent-composer-balance-row">
-      <textarea ref={input} aria-label="QA question input" value={draft} onChange={(event) => setDraft(event.target.value)}
+      <textarea aria-label="QA question input" value={draft} onChange={(event) => setDraft(event.target.value)}
         placeholder="Ask a follow-up question" className="replay-agent-composer-input"
         onKeyDown={(event) => {
           if (event.key === "Enter" && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey && !event.nativeEvent.isComposing) { event.preventDefault(); send(); }
@@ -34,6 +32,5 @@ export function SessionComposer({ running, disabled, canCancel, cancelling, onSe
         </Button>
       </div>
     </div>
-    <QuestionSuggestions onSelect={(prompt) => { setDraft(prompt); input.current?.focus(); }} />
   </form>;
 }

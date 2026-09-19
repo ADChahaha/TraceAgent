@@ -100,12 +100,15 @@ it("窄窗口默认收起侧栏，仍可打开最近会话", async () => {
   } finally { Object.defineProperty(window, "innerWidth", { configurable: true, value: width }); }
 });
 
-it("资料工作台提供来源列表和可编辑的问题建议，不显示参考品牌", async () => {
+it("资料工作台保留摘要入口，但输入框下方不显示建议问题", async () => {
   render(<UploadWorkbench />);
   expect(screen.getByRole("heading", { name: "Your document workspace" })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Sources" })).toBeInTheDocument();
   expect(screen.queryByText(/notebooklm/i)).not.toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "Summarize the main ideas" }));
+  for (const name of ["Summarize the main ideas", "What are the key findings?", "Compare the sources"]) {
+    expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+  }
+  await userEvent.click(screen.getByRole("button", { name: /Get a summary/ }));
   expect(screen.getByLabelText("QA question input")).toHaveValue("Summarize the main ideas");
   expect(create).not.toHaveBeenCalled();
   await userEvent.upload(screen.getByLabelText("Document file input"), new File(["doc"], "contract.docx"));
