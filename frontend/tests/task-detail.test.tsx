@@ -197,7 +197,7 @@ it("另一标签页删除已补传文件后，恢复时不重建本地上传占�
   await waitFor(() => expect(screen.queryByText("cross.docx")).not.toBeInTheDocument());
 });
 
-it("回答后阅读引用时仍可从聊天补传，保留历史和草稿后继续追问", async () => {
+it("回答后使用原有 Sources 入口补传，保留历史和草稿后继续追问", async () => {
   const turns = [{ id: "t1", status: "completed" as const, error: null, items: [
     { id: "message:m", kind: "assistant" as const, status: "completed" as const, text: "37 days [source](documents/contract.md)" },
   ] }];
@@ -215,10 +215,11 @@ it("回答后阅读引用时仍可从聊天补传，保留历史和草稿后继�
   await userEvent.click(await screen.findByRole("link", { name: "Source 1" }));
   await screen.findByText("Payment due in 37 days");
   const composer = within(screen.getByRole("form", { name: "QA composer" }));
-  expect(composer.getByRole("button", { name: "Add files" })).toBeEnabled();
+  expect(composer.queryByText("Add files")).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Close document" }));
   fireEvent.change(composer.getByLabelText("QA question input"), { target: { value: "Use the new file" } });
   const file = new File(["doc"], "new.docx");
-  await userEvent.upload(composer.getByLabelText("Attach documents"), file);
+  await userEvent.upload(screen.getByLabelText("Add session files"), file);
   expect(api.uploadSessionFiles).toHaveBeenCalledWith("s1", [file]);
   expect(screen.getByRole("status", { name: "Processing new.docx" })).toBeInTheDocument();
   expect(composer.getByRole("button", { name: "Submit or pause answer" })).toBeDisabled();
@@ -231,16 +232,41 @@ it("回答后阅读引用时仍可从聊天补传，保留历史和草稿后继�
   await waitFor(() => expect(complete).toHaveBeenCalledWith("s1", "Use the new file", expect.any(AbortSignal)));
 });
 
-it("回答期间禁止聊天附件，空资料会话仍可添加文件", async () => {
+it("回答期间禁止补传，空资料会话仍可用原有入口添加文件", async () => {
   const stream = controlledStream(running);
   resume.mockResolvedValue(stream.response);
   render(<TaskDetail taskId="s1" />);
   await screen.findByText("Question");
-  expect(screen.getByRole("button", { name: "Add files" })).toBeDisabled();
-  expect(screen.getByLabelText("Attach documents")).toBeDisabled();
+  expect(screen.getByLabelText("Add session files")).toBeDisabled();
   await act(async () => {
     stream.push({ event: "session.snapshot", data: { ...ready, state: { ...ready.state, resources: [] } } });
   });
-  expect(screen.getByRole("button", { name: "Add files" })).toBeEnabled();
+  expect(screen.getByLabelText("Add session files")).toBeEnabled();
   expect(screen.getByRole("button", { name: "Submit or pause answer" })).toBeDisabled();
+});
+
+
+it("原有文件选择器打开时焦点和轮询不禁用补传，取消后恢复同步", async () => {
+  resume.mockImplementation(async () => controlledStream(ready).response);
+  jest.mocked(api.uploadSessionFiles).mockResolvedValue({ resources: ready.state.resources });
+  const view = render(<TaskDetail taskId="s1" />);
+  await screen.findByRole("link", { name: "Download contract.docx" });
+  const input = screen.getByLabelText("Add session files");
+  fireEvent.click(input);
+  jest.useFakeTimers();
+  try {
+    fireEvent(window, new Event("focus"));
+    await act(async () => { await jest.advanceTimersByTimeAsync(5000); });
+    expect(resume).toHaveBeenCalledTimes(1);
+    const file = new File(["doc"], "new.docx");
+    fireEvent.change(input, { target: { files: [file] } });
+    await act(async () => {});
+    expect(api.uploadSessionFiles).toHaveBeenCalledWith("s1", [file]);
+    fireEvent.click(input);
+    const calls = resume.mock.calls.length;
+    fireEvent(input, new Event("cancel", { bubbles: true }));
+    fireEvent(window, new Event("focus"));
+    await act(async () => {});
+    expect(resume.mock.calls.length).toBeGreaterThan(calls);
+  } finally { view.unmount(); jest.useRealTimers(); }
 });

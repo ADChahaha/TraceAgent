@@ -1,17 +1,14 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { Paperclip, Pause, SendHorizonal } from "lucide-react";
-import { DOCUMENT_ACCEPT } from "@/lib/document-files";
+import { useState } from "react";
+import { Pause, SendHorizonal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-export function SessionComposer({ running, disabled, canCancel, cancelling, onSend, onCancel, onUpload, uploadDisabled, initialDraft = "" }: {
+export function SessionComposer({ running, disabled, canCancel, cancelling, onSend, onCancel, initialDraft = "" }: {
   initialDraft?: string;
-  onUpload: (files: File[]) => void; uploadDisabled: boolean;
   running: boolean; disabled: boolean; canCancel: boolean; cancelling: boolean;
   onSend: (content: string) => void; onCancel: () => void;
 }) {
-  const fileInput = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState(initialDraft);
   function send() {
     if (running || disabled || !draft.trim()) return;
@@ -34,17 +31,6 @@ export function SessionComposer({ running, disabled, canCancel, cancelling, onSe
           </span>
         </Button>
       </div>
-    </div>
-    <div className="mt-2">
-      <Button type="button" variant="ghost" size="sm" disabled={uploadDisabled} onClick={() => fileInput.current?.click()}>
-        <Paperclip size={16} />Add files
-      </Button>
-      <input ref={fileInput} type="file" className="sr-only" aria-label="Attach documents" accept={DOCUMENT_ACCEPT} multiple disabled={uploadDisabled}
-        onChange={(event) => {
-          const files = Array.from(event.target.files ?? []);
-          event.target.value = "";
-          if (files.length) onUpload(files);
-        }} />
     </div>
   </form>;
 }

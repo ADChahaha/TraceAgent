@@ -25,6 +25,7 @@ function SessionWorkspace({ sessionId }: { sessionId: string }) {
   const [sourceRequest, setSourceRequest] = useState(0);
   const [fileBusy, setFileBusy] = useState(false);
   const fileLock = useRef(false);
+  const filePickerOpen = useRef(false);
   const resources = useMemo(() => session.snapshot?.state.resources ?? [], [session.snapshot]);
   const unavailable = !session.snapshot || !["idle", "live"].includes(session.connection);
 
@@ -40,7 +41,7 @@ function SessionWorkspace({ sessionId }: { sessionId: string }) {
   const canRefresh = !fileBusy && !uploads.busy && !session.running && session.connection === "idle";
   const refreshSession = session.refresh;
   useEffect(() => {
-    const refresh = () => { if (canRefresh) refreshSession(); };
+    const refresh = () => { if (canRefresh && !filePickerOpen.current) refreshSession(); };
     window.addEventListener("focus", refresh);
     const timer = canRefresh ? window.setInterval(refresh, 5000) : undefined;
     return () => { window.removeEventListener("focus", refresh); window.clearInterval(timer); };
@@ -78,7 +79,7 @@ function SessionWorkspace({ sessionId }: { sessionId: string }) {
 
   const review = session.snapshot ? <SessionDocuments sessionId={sessionId} resources={resources}
     disabled={fileBusy || session.running || unavailable} mutating={uploads.busy} uploads={uploads.items} onRetry={uploads.retry} onDismiss={(file) => void uploads.remove(file)} selection={selection}
-    onSelect={(key) => openEvidence(key, false)} onClose={() => setSelection(null)} onUpload={addFiles}
+    onSelect={(key) => openEvidence(key, false)} onClose={() => setSelection(null)} onUpload={addFiles} onFilePickerChange={(open) => { filePickerOpen.current = open; }}
     onRemove={(id) => void removeFile(id)} /> : undefined;
   return <main className="task-detail-fullscreen-shell" aria-label="Task detail workspace">
     <WorkspaceShell sessionId={sessionId} status={fileBusy || uploads.busy ? "Updating documents" : session.connection} review={review} reviewRequest={(selection?.version ?? 0) + sourceRequest}>
@@ -91,7 +92,7 @@ function SessionWorkspace({ sessionId }: { sessionId: string }) {
           </div>}
           {!session.snapshot && <p className="p-4 text-sm text-muted-foreground">Loading session...</p>}
           <Conversation turns={session.snapshot?.state.turns ?? []} running={session.running} pending={session.pending} onEvidence={(uri) => openEvidence(uri)} />
-          <SessionComposer onUpload={addFiles} uploadDisabled={unavailable || fileBusy || session.running} initialDraft={initialDraft} running={session.running} canCancel={Boolean(session.snapshot?.state.active_turn_id)} cancelling={session.cancelling}
+          <SessionComposer initialDraft={initialDraft} running={session.running} canCancel={Boolean(session.snapshot?.state.active_turn_id)} cancelling={session.cancelling}
             disabled={unavailable || fileBusy || uploads.busy || uploads.items.some((item) => item.status === "failed") || !resources.some((resource) => resource.type === "documents")}
             onSend={(content) => { saveWorkspaceDraft(sessionId, ""); session.send(content); }} onCancel={() => void session.cancel()} />
         </div>
