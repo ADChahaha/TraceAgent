@@ -802,3 +802,20 @@ def test_finish_write_failure_resolves_cancel_reclaims_and_recovers(tmp_path, mo
                 pass
             db.close()
     asyncio.run(scenario())
+
+
+def test_completion_snapshot_keeps_previous_turns(tmp_path):
+    async def scenario():
+        registry, db, agent = await setup(tmp_path)
+        try:
+            manager, first = await new_session_complete(registry, "第一问")
+            call = await agent.created.get()
+            await finish(call, manager, first.turn_id)
+            second = await manager.create_completion(content="第二问")
+            snapshot = await build_snapshot(db, second)
+            assert [turn["id"] for turn in snapshot["state"]["turns"]] == [first.turn_id, second.turn_id]
+            assert snapshot["state"]["turns"][0]["items"][0]["text"] == "第一问"
+        finally:
+            await registry.close()
+            db.close()
+    asyncio.run(scenario())

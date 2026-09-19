@@ -1,3 +1,9 @@
+## 2026-09-19 前端联调：追问保留历史
+
+真实浏览器中提交第二轮后，旧对话从页面消失；数据库内容仍在。原因是 create 的 ResumeContext.turn_ids 只包含新轮，前端用该首帧替换快照后丢失历史。现于 begin 提交后读取会话全部轮次 ID，再登记订阅并捕获当前轮副本；首帧和 resume 使用同一历史组装机制。
+
+先增加 test_completion_snapshot_keeps_previous_turns 复现缺少第一轮，再修改 create 上下文。backend 全量 94 项测试通过；重启后浏览器提交追问时，既有答案和取消轮次均保持显示。
+
 # Backend Devlog
 
 last updated: 2026-09-16

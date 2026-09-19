@@ -181,9 +181,11 @@ class SessionManager:
         await runtime.begun.wait()
         if runtime.begin_error is not None:
             raise runtime.begin_error
+        turn_ids = await asyncio.to_thread(
+            lambda: [turn["id"] for turn in crud.list_turns(self.database.connect(), self.session_id)])
         subscription = Subscription(max_events=self.settings.subscription_max_events, max_bytes=self.settings.subscription_max_bytes)
         self.subscribers[subscription.id] = subscription
-        return ResumeContext(self.session_id, turn_id, [turn_id], copy.deepcopy(self.session),
+        return ResumeContext(self.session_id, turn_id, turn_ids, copy.deepcopy(self.session),
                              copy.deepcopy(self.resources), runtime.snapshot(), subscription,
                              self.settings.snapshot_max_bytes)
 

@@ -7,7 +7,7 @@ backend 管理多轮 session、稳定模型消息和页面恢复，通过独立 
 ```text
 POST /chat/completion → routes/chat.py 校验输入
   → SessionRegistry.get_or_create 复用或取得创建权，返回唯一 manager
-  → SessionManager.create_completion 校验并串行化 create 命令（事务在 TurnRuntime.begin）
+  → SessionManager.create_completion 校验并串行化 create 命令（事务在 TurnRuntime.begin），首帧捕获全部已存在轮次 ID，与 resume 一样合并完整历史
   → 会话文件：manager.upload_files/remove_file 以队列命令串行执行（配额校验、document_client.prepare_resources → DocumentResourceService gRPC、资源替换）
   → SessionManager 替换资源引用
   → TurnRuntime → AgentClient.chat_completion → AgentService gRPC
