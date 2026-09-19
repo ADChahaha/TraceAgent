@@ -1,146 +1,80 @@
-import type {
-  Capabilities,
-  QaInputCreated,
-  TaskCreated,
-  TaskDetailData,
-  TaskEvent,
-  TaskList,
-  TaskSummary,
-} from "@/lib/types";
+import type { DocumentContent, DocumentEntry, SessionResource } from "@/lib/session-types";
 
 export class ApiError extends Error {
-  constructor(
-    message: string,
-    public readonly status: number,
-    public readonly payload: unknown
-  ) {
+  constructor(message: string, public readonly status: number, public readonly payload: unknown) {
     super(message);
     this.name = "ApiError";
   }
 }
 
-export async function getCapabilities(): Promise<Capabilities> {
-  return requestJson<Capabilities>("/api/backend/capabilities");
-}
+const sessionPath = (id: string) => `/api/backend/chat/sessions/${encodeURIComponent(id)}`;
+const jsonBody = (value: unknown): RequestInit => ({
+  method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(value),
+});
 
-export async function createTask(formData: FormData): Promise<TaskCreated> {
-  return requestJson<TaskCreated>("/api/backend/qa/tasks", {
-    method: "POST",
-    body: formData
-  });
-}
-
-export async function listTasks(): Promise<TaskSummary[]> {
-  const payload = await requestJson<TaskList>("/api/backend/qa/tasks");
-  return payload.tasks;
-}
-
-export async function getTaskSummary(taskId: string): Promise<TaskSummary> {
-  return requestJson<TaskSummary>(`/api/backend/qa/tasks/${encodeURIComponent(taskId)}`);
-}
-
-export async function createTaskInput(
-  taskId: string,
-  content: string,
-  runOptions?: Record<string, unknown>
-): Promise<QaInputCreated> {
-  const body = runOptions === undefined ? { content } : { content, run_options: runOptions };
-  return requestJson<QaInputCreated>(`/api/backend/qa/tasks/${encodeURIComponent(taskId)}/inputs`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body)
-  });
-}
-
-export async function cancelTask(taskId: string): Promise<unknown> {
-  return requestJson<unknown>(`/api/backend/qa/tasks/${encodeURIComponent(taskId)}/cancel`, {
-    method: "POST"
-  });
-}
-
-export function getTaskEventsUrl(taskId: string, afterSeq = 0): string {
-  const params = new URLSearchParams({ after_seq: String(Math.max(0, afterSeq)) });
-  return `/api/backend/qa/tasks/${encodeURIComponent(taskId)}/events?${params.toString()}`;
-}
-
-export function createTaskEventSource(taskId: string, afterSeq = 0): EventSource {
-  if (typeof EventSource === "undefined") {
-    return createNoopEventSource();
-  }
-  return new EventSource(getTaskEventsUrl(taskId, afterSeq));
-}
-
-export function parseTaskEventMessage(event: MessageEvent<string>): TaskEvent | null {
-  try {
-    return JSON.parse(event.data) as TaskEvent;
-  } catch {
-    return null;
-  }
-}
-
-export async function loadTaskDetail(taskId: string): Promise<TaskDetailData> {
-  const summary = await getTaskSummary(taskId);
-  return {
-    summary,
-    result: null,
-    trace: null,
-    replay: null,
-    audit: null
-  };
-}
-
-async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(input, {
-    ...init,
-    cache: "no-store"
-  });
-  const payload = await parseResponsePayload(response);
+async function checkedFetch(path: string, init?: RequestInit): Promise<Response> {
+  const response = await fetch(path, { ...init, cache: "no-store" });
   if (!response.ok) {
-    throw new ApiError(getErrorMessage(payload, response.statusText), response.status, payload);
+    const text = await response.text();
+    let payload: unknown = text;
+    try { payload = JSON.parse(text); } catch { /* 非 JSON 错误保留原文。 */ }
+    const detail = payload && typeof payload === "object" && "detail" in payload ? payload.detail : text;
+    throw new ApiError(typeof detail === "string" ? detail : response.statusText || "Request failed", response.status, payload);
   }
-  return payload as T;
+  return response;
 }
 
-async function parseResponsePayload(response: Response): Promise<unknown> {
-  const text = await response.text();
-  if (!text) {
-    return null;
-  }
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text;
-  }
+async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+  return (await checkedFetch(path, init)).json() as Promise<T>;
 }
 
-function getErrorMessage(payload: unknown, fallback: string): string {
-  if (
-    payload &&
-    typeof payload === "object" &&
-    "detail" in payload &&
-    typeof payload.detail === "string"
-  ) {
-    return payload.detail;
+async function requestStream(path: string, init?: RequestInit): Promise<Response> {
+  const response = await checkedFetch(path, init);
+  if (!response.headers.get("content-type")?.includes("text/event-stream")) {
+    await response.body?.cancel();
+    throw new Error("Expected an event stream");
   }
-  return fallback || "Request failed";
+  return response;
 }
 
-function createNoopEventSource(): EventSource {
-  return {
-    close() {},
-    addEventListener() {},
-    removeEventListener() {},
-    dispatchEvent() {
-      return false;
-    },
-    onerror: null,
-    onmessage: null,
-    onopen: null,
-    readyState: 2,
-    url: "",
-    withCredentials: false,
-    CONNECTING: 0,
-    OPEN: 1,
-    CLOSED: 2,
-  } as EventSource;
+export function createSession() {
+  return requestJson<{ session_id: string }>("/api/backend/chat/sessions", { method: "POST" });
+}
+
+export function uploadSessionFiles(id: string, files: File[]) {
+  const body = new FormData();
+  files.forEach((file) => body.append("files", file));
+  return requestJson<{ resources: SessionResource[] }>(`${sessionPath(id)}/files`, { method: "POST", body });
+}
+
+export function removeSessionFile(id: string, resourceId: string) {
+  return requestJson<{ resources: SessionResource[] }>(sessionFileUrl(id, resourceId), { method: "DELETE" });
+}
+
+export function sessionFileUrl(id: string, resourceId: string) {
+  return `${sessionPath(id)}/files/${encodeURIComponent(resourceId)}`;
+}
+
+export function openCompletion(id: string, content: string, signal?: AbortSignal) {
+  return requestStream("/api/backend/chat/completion", { ...jsonBody({ session_id: id, content }), signal });
+}
+
+export function openResume(id: string, signal?: AbortSignal) {
+  return requestStream(`/api/backend/resume?${new URLSearchParams({ session_id: id })}`, { signal });
+}
+
+export function cancelCompletion(id: string, turnId: string) {
+  return requestJson<{ status: string }>("/api/backend/cancel", jsonBody({ session_id: id, turn_id: turnId }));
+}
+
+export function listSessionDocuments(id: string) {
+  return requestJson<{ documents: DocumentEntry[] }>(`${sessionPath(id)}/documents`);
+}
+
+export function readSessionDocument(id: string, key: string) {
+  return requestJson<DocumentContent>(`${sessionPath(id)}/documents/content?${new URLSearchParams({ key })}`);
+}
+
+export function readSessionBlock(id: string, key: string) {
+  return requestJson<DocumentContent>(`${sessionPath(id)}/blocks?${new URLSearchParams({ key })}`);
 }

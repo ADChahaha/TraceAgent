@@ -1,413 +1,106 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import * as React from "react";
-import { renderToString } from "react-dom/server";
-
 import { UploadWorkbench } from "@/components/upload-workbench";
-import type { QaInputCreated, TaskCreated, TaskSummary } from "@/lib/types";
+import * as api from "@/lib/api";
+import { controlledStream, ready, running } from "./helpers/session-fixtures";
 
-type CreateTaskFn = (formData: FormData) => Promise<TaskCreated>;
-type CreateTaskInputFn = (taskId: string, content: string) => Promise<QaInputCreated>;
-type ListTasksFn = () => Promise<TaskSummary[]>;
+jest.mock("@/lib/api", () => ({ createSession: jest.fn(), uploadSessionFiles: jest.fn(), openCompletion: jest.fn() }));
+const create = jest.mocked(api.createSession);
+const upload = jest.mocked(api.uploadSessionFiles);
+const complete = jest.mocked(api.openCompletion);
 
-const defaultCreatedTask: TaskCreated = {
-  task_id: "task-created",
-  status: "ready",
-  stage: "ready",
-  error_message: null,
-  document_count: 1,
-  active_turn_id: null,
-  stream: {
-    state: "idle",
-    last_event_seq: 3
-  }
-};
+beforeEach(() => {
+  jest.resetAllMocks(); localStorage.clear();
+  create.mockResolvedValue({ session_id: "s1" });
+  upload.mockResolvedValue({ resources: ready.state.resources });
+  complete.mockResolvedValue(controlledStream(running).response);
+});
 
-const defaultInputCreated: QaInputCreated = {
-  task_id: "task-created",
-  turn_id: "turn-created",
-  status: "completed",
-  agent_completion_id: "cmp-created"
-};
-
-function setup(
-  createTask: CreateTaskFn = jest.fn(async () => defaultCreatedTask),
-  createTaskInput: CreateTaskInputFn = jest.fn(async () => defaultInputCreated),
-  listTasks: ListTasksFn = jest.fn(async () => []),
-  options: { strict?: boolean } = {}
-) {
-  const onCreated = jest.fn();
-  const element = (
-    <UploadWorkbench
-      createTask={createTask}
-      createTaskInput={createTaskInput}
-      listTasks={listTasks}
-      onCreated={onCreated}
-    />
-  );
-  render(options.strict ? <React.StrictMode>{element}</React.StrictMode> : element);
-  return {
-    createTask: createTask as jest.MockedFunction<CreateTaskFn>,
-    createTaskInput: createTaskInput as jest.MockedFunction<CreateTaskInputFn>,
-    listTasks: listTasks as jest.MockedFunction<ListTasksFn>,
-    onCreated
-  };
+async function fill() {
+  const user = userEvent.setup();
+  await user.upload(screen.getByLabelText("Document file input"), new File(["doc"], "contract.docx"));
+  fireEvent.change(screen.getByLabelText("QA question input"), { target: { value: "Question" } });
+  return user;
 }
 
-it("首页默认就是 Codex 式新任务界面，不再显示旧上传首屏", () => {
-  setup();
-
-  expect(screen.getByRole("complementary", { name: "Tasks sidebar" })).toBeInTheDocument();
-  expect(screen.getByRole("main", { name: "Agent task workspace" })).toBeInTheDocument();
-  expect(
-    screen.getByRole("heading", { name: "What should we ask these documents?" })
-  ).toBeInTheDocument();
-  expect(screen.getByRole("form", { name: "Create task composer" })).toBeInTheDocument();
-  expect(screen.getByLabelText("QA question input")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Add document" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Upload documents and ask" })).toBeInTheDocument();
-
-  expect(screen.queryByText("上传工作台")).not.toBeInTheDocument();
-  expect(screen.queryByText("backend 能力边界")).not.toBeInTheDocument();
-  expect(screen.queryByText("等待 task_spec。")).not.toBeInTheDocument();
-  expect(screen.queryByLabelText("Agent text stream")).not.toBeInTheDocument();
-  expect(screen.queryByLabelText("task_type")).not.toBeInTheDocument();
-  expect(screen.queryByLabelText("metadata JSON")).not.toBeInTheDocument();
-});
-
-it("首页服务端首帧不读取 localStorage，避免服务端 HTML 与客户端 hydrate 不一致", async () => {
-  window.localStorage.setItem(
-    "agent-gate.recent-tasks",
-    JSON.stringify([
-      {
-        task_id: "local-task-before-hydration",
-        status: "completed",
-        stage: "done",
-        created_at: "2026-05-18T00:00:00Z"
-      }
-    ])
-  );
-
-  const serverHtml = renderToString(<UploadWorkbench listTasks={async () => []} />);
-  expect(serverHtml).not.toContain("local-task-before-hydration");
-
-  setup(undefined, undefined, async () => []);
-
-  expect(await screen.findByText("local-task-before-hydration")).toBeInTheDocument();
-});
-
-it("New Chat 关闭左侧任务栏后不自动显示右侧 Progress", async () => {
-  const user = userEvent.setup();
-  setup();
-
-  expect(screen.getByRole("complementary", { name: "Tasks sidebar" })).toBeInTheDocument();
-  expect(screen.queryByLabelText("当前进度")).not.toBeInTheDocument();
-
-  await user.click(screen.getByRole("button", { name: "Close sidebar" }));
-
-  expect(screen.queryByRole("complementary", { name: "Tasks sidebar" })).not.toBeInTheDocument();
-  expect(screen.getByRole("main", { name: "Agent task workspace" })).toBeInTheDocument();
-  expect(screen.queryByLabelText("当前进度")).not.toBeInTheDocument();
-});
-
-it("首页左侧任务栏默认宽度和详情页一致，并支持键盘调整", async () => {
-  const user = userEvent.setup();
-  setup();
-
-  const resizeHandle = screen.getByRole("separator", { name: "Resize left sidebar" });
-  expect(resizeHandle).toHaveAttribute("aria-valuemin", "176");
-  expect(resizeHandle).toHaveAttribute("aria-valuemax", "360");
-  expect(resizeHandle).toHaveAttribute("aria-valuenow", "224");
-
-  await user.keyboard("{ArrowRight}");
-  expect(resizeHandle).toHaveAttribute("aria-valuenow", "224");
-
-  resizeHandle.focus();
-  await user.keyboard("{ArrowRight}");
-
-  expect(resizeHandle).toHaveAttribute("aria-valuenow", "240");
-
-  fireEvent(resizeHandle, new MouseEvent("pointerdown", { bubbles: true, clientX: 100 }));
-  fireEvent(window, new MouseEvent("pointermove", { bubbles: true, clientX: 120 }));
-  fireEvent(window, new MouseEvent("pointerup", { bubbles: true, clientX: 120 }));
-
-  expect(resizeHandle).toHaveAttribute("aria-valuenow", "260");
-});
-
-it("启动时从 backend 任务列表加载左侧任务栏", async () => {
-  window.localStorage.clear();
-  const listTasks = jest.fn(async () => [
-    {
-      task_id: "task_contract_nli_hard5_enum_final_evidence_72",
-      status: "running",
-      stage: "answering",
-      error_message: null,
-      document_count: 2,
-      active_turn_id: "turn-72",
-      stream: { state: "running", last_event_seq: 12 },
-      created_at: "2026-05-14T03:36:34Z",
-      updated_at: "2026-05-14T16:50:44Z"
-    },
-    {
-      task_id: "task_contract_nli_hard5_enum_final_evidence_27",
-      status: "ready",
-      stage: "ready",
-      error_message: null,
-      document_count: 1,
-      active_turn_id: null,
-      stream: { state: "idle", last_event_seq: 9 },
-      created_at: "2026-05-14T03:36:32Z",
-      updated_at: "2026-05-14T16:50:44Z"
-    }
-  ] satisfies TaskSummary[]);
-
-  setup(undefined, undefined, listTasks, { strict: true });
-
-  await waitFor(() => expect(listTasks).toHaveBeenCalled());
-  const sidebar = screen.getByRole("complementary", { name: "Tasks sidebar" });
-  expect(await within(sidebar).findByText("task_contract_nli_hard5_enum_final_evidence_72")).toBeInTheDocument();
-  expect(within(sidebar).getByText("task_contract_nli_hard5_enum_final_evidence_27")).toBeInTheDocument();
-});
-
-it("QA composer 会创建 PDF/DOCX 多文档 task 并提交首轮问题", async () => {
-  const user = userEvent.setup();
-  const created: TaskCreated = {
-    task_id: "task-001",
-    status: "ready",
-    stage: "ready",
-    error_message: null,
-    document_count: 2,
-    active_turn_id: null,
-    stream: { state: "idle", last_event_seq: 3 }
-  };
-  const createTask = jest.fn<Promise<TaskCreated>, [FormData]>(async () => created);
-  let resolveInput: (value: QaInputCreated) => void = () => {};
-  const createTaskInput = jest.fn<Promise<QaInputCreated>, [string, string]>(
-    () =>
-      new Promise<QaInputCreated>((resolve) => {
-        resolveInput = resolve;
-      })
-  );
-  const { onCreated } = setup(createTask, createTaskInput);
-
-  await user.upload(
-    screen.getByLabelText("Document file input"),
-    [
-      new File(["%PDF-1.4 fake"], "contract.pdf", { type: "application/pdf" }),
-      new File(["PK\u0003\u0004 appendix"], "appendix.docx", {
-        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-      })
-    ]
-  );
-  fireEvent.change(screen.getByLabelText("QA question input"), {
-    target: { value: "这份合同可以提前终止吗？" }
-  });
+it("按创建会话、上传、首问快照顺序执行，再跳转", async () => {
+  const onCreated = jest.fn();
+  render(<UploadWorkbench onCreated={onCreated} />);
+  const user = await fill();
   await user.click(screen.getByRole("button", { name: "Upload documents and ask" }));
-
-  await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
-  const formData = createTask.mock.calls[0][0];
-  expect(formData.get("task_type")).toBeNull();
-  expect(formData.get("task_spec")).toBeNull();
-  expect(formData.get("metadata")).toBeNull();
-  expect(formData.getAll("files")).toHaveLength(2);
-  expect((formData.getAll("files")[0] as File).name).toBe("contract.pdf");
-  expect((formData.getAll("files")[1] as File).name).toBe("appendix.docx");
-  await waitFor(() => expect(createTaskInput).toHaveBeenCalledWith("task-001", "这份合同可以提前终止吗？"));
-  expect(await screen.findByText("task-001")).toBeInTheDocument();
-  expect(onCreated).toHaveBeenCalledWith(created);
-  resolveInput({
-    task_id: "task-001",
-    turn_id: "turn-001",
-    status: "queued",
-    agent_completion_id: null
-  });
+  await waitFor(() => expect(onCreated).toHaveBeenCalledWith("s1"));
+  expect(upload).toHaveBeenCalledWith("s1", [expect.any(File)]);
+  expect(complete).toHaveBeenCalledWith("s1", "Question", expect.any(AbortSignal));
+  expect(create.mock.invocationCallOrder[0]).toBeLessThan(upload.mock.invocationCallOrder[0]);
+  expect(upload.mock.invocationCallOrder[0]).toBeLessThan(complete.mock.invocationCallOrder[0]);
+  await user.click(screen.getByRole("button", { name: "Open sidebar" }));
+  expect(screen.getByText("s1")).toBeInTheDocument();
 });
 
-it("QA composer 用 Enter 提交问题，Shift Enter 保留换行", async () => {
-  const user = userEvent.setup();
-  const created: TaskCreated = {
-    task_id: "task-keyboard",
-    status: "ready",
-    stage: "ready",
-    error_message: null,
-    document_count: 1,
-    active_turn_id: null,
-    stream: { state: "idle", last_event_seq: 1 }
-  };
-  const createTask = jest.fn<Promise<TaskCreated>, [FormData]>(async () => created);
-  const createTaskInput = jest.fn(async () => ({
-    task_id: "task-keyboard",
-    turn_id: "turn-keyboard",
-    status: "queued",
-    agent_completion_id: null
-  }));
-  setup(createTask, createTaskInput);
-
-  await user.upload(
-    screen.getByLabelText("Document file input"),
-    new File(["%PDF-1.4 fake"], "contract.pdf", { type: "application/pdf" })
-  );
-  const input = screen.getByLabelText("QA question input");
-  await user.type(input, "第一行{Shift>}{Enter}{/Shift}第二行");
-
-  expect(input).toHaveValue("第一行\n第二行");
-  expect(createTask).not.toHaveBeenCalled();
-
-  await user.keyboard("{Enter}");
-
-  await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
-  await waitFor(() => expect(createTaskInput).toHaveBeenCalledWith("task-keyboard", "第一行\n第二行"));
-});
-
-it("没有文档或问题为空时不会创建任务", async () => {
-  const user = userEvent.setup();
-  const { createTask, createTaskInput } = setup();
-
-  fireEvent.change(screen.getByLabelText("QA question input"), {
-    target: { value: "   " }
-  });
+it("上传失败不发首问，重试复用同一会话", async () => {
+  upload.mockRejectedValueOnce(new Error("Upload failed"));
+  render(<UploadWorkbench onCreated={jest.fn()} />);
+  const user = await fill();
   await user.click(screen.getByRole("button", { name: "Upload documents and ask" }));
-
-  expect(await screen.findByText("Select at least one PDF or DOCX file")).toBeInTheDocument();
-  expect(createTask).not.toHaveBeenCalled();
-  expect(createTaskInput).not.toHaveBeenCalled();
-
-  await user.upload(
-    screen.getByLabelText("Document file input"),
-    new File(["%PDF-1.4 fake"], "contract.pdf", { type: "application/pdf" })
-  );
+  expect(await screen.findByRole("alert")).toHaveTextContent("Upload failed");
+  expect(complete).not.toHaveBeenCalled();
   await user.click(screen.getByRole("button", { name: "Upload documents and ask" }));
-
-  expect(await screen.findByText("Enter a question")).toBeInTheDocument();
-  expect(createTask).not.toHaveBeenCalled();
-  expect(createTaskInput).not.toHaveBeenCalled();
+  await waitFor(() => expect(complete).toHaveBeenCalledTimes(1));
+  expect(create).toHaveBeenCalledTimes(1);
 });
 
-it("已选择的文档可以逐个移除", async () => {
-  const user = userEvent.setup();
-  setup();
-
-  await user.upload(
-    screen.getByLabelText("Document file input"),
-    [
-      new File(["%PDF-1.4 fake"], "contract.pdf", { type: "application/pdf" }),
-      new File(["PK\u0003\u0004 appendix"], "appendix.docx", {
-        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-      })
-    ]
-  );
-
-  expect(screen.getByText("contract.pdf")).toBeInTheDocument();
-  expect(screen.getByText("appendix.docx")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Remove contract.pdf" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Remove appendix.docx" })).toBeInTheDocument();
-
-  await user.click(screen.getByRole("button", { name: "Remove contract.pdf" }));
-
-  expect(screen.queryByText("contract.pdf")).not.toBeInTheDocument();
-  expect(screen.getByText("appendix.docx")).toBeInTheDocument();
-});
-
-it("再次选择文档会追加到已选文件而不是覆盖", async () => {
-  const user = userEvent.setup();
-  const created: TaskCreated = {
-    task_id: "task-multi-add",
-    status: "ready",
-    stage: "ready",
-    error_message: null,
-    document_count: 2,
-    active_turn_id: null,
-    stream: { state: "idle", last_event_seq: 3 }
-  };
-  const createTask = jest.fn<Promise<TaskCreated>, [FormData]>(async () => created);
-  const createTaskInput = jest.fn<Promise<QaInputCreated>, [string, string]>(async () => ({
-    task_id: "task-multi-add",
-    turn_id: "turn-multi-add",
-    status: "completed",
-    agent_completion_id: "cmp-multi-add"
-  }));
-  setup(createTask, createTaskInput);
-
-  await user.upload(
-    screen.getByLabelText("Document file input"),
-    new File(["%PDF-1.4 fake"], "contract.pdf", { type: "application/pdf" })
-  );
-  await user.upload(
-    screen.getByLabelText("Document file input"),
-    new File(["PK\u0003\u0004 appendix"], "appendix.docx", {
-      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    })
-  );
-
-  expect(screen.getByText("contract.pdf")).toBeInTheDocument();
-  expect(screen.getByText("appendix.docx")).toBeInTheDocument();
+it("追加去重文件、移除文件，Enter 提交而 Shift Enter 换行", async () => {
+  render(<UploadWorkbench />);
+  const user = await fill();
+  const second = new File(["pdf"], "second.pdf", { type: "application/pdf" });
+  await user.upload(screen.getByLabelText("Document file input"), second);
+  await user.upload(screen.getByLabelText("Document file input"), second);
   expect(screen.getByText("2 documents")).toBeInTheDocument();
-
-  fireEvent.change(screen.getByLabelText("QA question input"), {
-    target: { value: "这两份文档有什么共同点？" }
-  });
-  await user.click(screen.getByRole("button", { name: "Upload documents and ask" }));
-
-  await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
-  const formData = createTask.mock.calls[0][0];
-  expect(formData.getAll("files")).toHaveLength(2);
-  expect((formData.getAll("files")[0] as File).name).toBe("contract.pdf");
-  expect((formData.getAll("files")[1] as File).name).toBe("appendix.docx");
-  expect(await screen.findByText("task-multi-add")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Remove second.pdf" }));
+  const input = screen.getByLabelText("QA question input");
+  await user.click(input);
+  await user.keyboard("{Shift>}{Enter}{/Shift}More");
+  expect(input).toHaveValue("Question\nMore");
+  expect(create).not.toHaveBeenCalled();
+  await user.keyboard("{Enter}");
+  await waitFor(() => expect(complete).toHaveBeenCalled());
 });
 
-it("创建任务后左侧任务栏立即显示新任务，不轮询刷新摘要", async () => {
+it("无文件或空问题时不创建会话，保留主题和侧栏缩放", async () => {
+  render(<UploadWorkbench />);
   const user = userEvent.setup();
-  window.localStorage.clear();
-  const created: TaskCreated = {
-    task_id: "task-queue",
-    status: "ready",
-    stage: "ready",
-    error_message: null,
-    document_count: 1,
-    active_turn_id: null,
-    stream: { state: "idle", last_event_seq: 3 }
-  };
-  const createTask = jest.fn(async () => created);
-  const createTaskInput = jest.fn(async () => ({
-    task_id: "task-queue",
-    turn_id: "turn-queue",
-    status: "completed",
-    agent_completion_id: "cmp-queue"
-  }));
-  setup(createTask, createTaskInput, jest.fn(async () => []));
-
-  await user.upload(
-    screen.getByLabelText("Document file input"),
-    new File(["%PDF-1.4 fake"], "sample.pdf", { type: "application/pdf" })
-  );
-  fireEvent.change(screen.getByLabelText("QA question input"), {
-    target: { value: "总结这份 PDF。" }
-  });
   await user.click(screen.getByRole("button", { name: "Upload documents and ask" }));
-
-  expect(await screen.findByText("task-queue")).toBeInTheDocument();
-  expect(screen.getByText("ready / ready")).toBeInTheDocument();
-  await waitFor(() => expect(createTaskInput).toHaveBeenCalledWith("task-queue", "总结这份 PDF。"));
-
-  expect(document.querySelector(".replay-task-route")).not.toBeInTheDocument();
-  expect(document.querySelector(".replay-task-status-detail")).toBeInTheDocument();
-});
-
-it("主题切换仍在任务工作台顶部生效", async () => {
-  const user = userEvent.setup();
-  window.localStorage.clear();
-  document.documentElement.removeAttribute("data-theme");
-
-  setup();
-
-  const themeButton = screen.getByRole("button", { name: "Toggle theme" });
-  expect(themeButton).toHaveTextContent("Light");
-  expect(document.documentElement).toHaveAttribute("data-theme", "light");
-
-  await user.click(themeButton);
-
+  expect(await screen.findByRole("alert")).toHaveTextContent("Select at least one");
+  await user.upload(screen.getByLabelText("Document file input"), new File(["doc"], "a.docx"));
+  await user.click(screen.getByRole("button", { name: "Upload documents and ask" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Enter a question");
+  expect(create).not.toHaveBeenCalled();
+  const resize = screen.getByRole("separator", { name: "Resize left sidebar" });
+  resize.focus(); await user.keyboard("{ArrowRight}");
+  expect(resize).toHaveAttribute("aria-valuenow", "240");
+  await user.click(screen.getByRole("button", { name: "Toggle theme" }));
   expect(document.documentElement).toHaveAttribute("data-theme", "dark");
-  expect(window.localStorage.getItem("agent-gate.theme")).toBe("dark");
-  expect(themeButton).toHaveTextContent("Dark");
+});
+
+it("窄窗口默认收起侧栏，仍可打开最近会话", async () => {
+  const width = window.innerWidth;
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: 600 });
+  try {
+    render(<UploadWorkbench />);
+    expect(screen.queryByRole("complementary", { name: "Tasks sidebar" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Open sidebar" }));
+    expect(screen.getByRole("complementary", { name: "Tasks sidebar" })).toBeInTheDocument();
+  } finally { Object.defineProperty(window, "innerWidth", { configurable: true, value: width }); }
+});
+
+it("资料工作台提供来源列表和可编辑的问题建议，不显示参考品牌", async () => {
+  render(<UploadWorkbench />);
+  expect(screen.getByRole("heading", { name: "Your document workspace" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Sources" })).toBeInTheDocument();
+  expect(screen.queryByText(/notebooklm/i)).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Summarize the main ideas" }));
+  expect(screen.getByLabelText("QA question input")).toHaveValue("Summarize the main ideas");
+  expect(create).not.toHaveBeenCalled();
+  await userEvent.upload(screen.getByLabelText("Document file input"), new File(["doc"], "contract.docx"));
+  expect(screen.getByLabelText("Sources list")).toHaveTextContent("contract.docx");
 });

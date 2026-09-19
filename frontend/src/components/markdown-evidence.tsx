@@ -3,6 +3,7 @@
 import * as React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { documentKey } from "@/lib/document-files";
 
 interface MarkdownEvidenceProps {
   markdown: string;
@@ -82,7 +83,7 @@ function markdownComponents(onOpenEvidence?: (uri: string, label: string) => voi
     a: ({ children, href }: MarkdownAnchorProps) => {
       const safeHref = href ?? "";
       const label = textFromChildren(children);
-      if (safeHref.startsWith("evidence://")) {
+      if (safeHref.startsWith("evidence://") || documentKey(safeHref)) {
         if (shouldRenderCitationMarkers) {
           citationIndex += 1;
           const citationNumber = String(citationIndex);

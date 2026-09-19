@@ -21,3 +21,5 @@ MarkdownEvidence(markdown)
 - `renders final answer evidence as inline numbered citations after sentences`：验证最终回答模式会把原正文里的 descriptive evidence label 换成句尾数字 marker，marker 仍保留原 href 并可打开 evidence。
 - `strips model-authored trailing sources sections in final citation mode`：验证模型如果仍输出末尾 `Sources` 区，前端会在最终回答 citation 模式下移除它，避免重复引用区。
 - `renders each bullet evidence as inline numbered citations`：验证连续 bullet 每一条自己的 evidence 都会留在该条 bullet 句尾并显示为递增数字 marker，不会另起引用行。
+
+- 新文档路径引用留在当前页面并交给证据查看器：`documents/...` 与原 evidence 协议一样生成引用标记，点击时交给文档面板而非新开网页。

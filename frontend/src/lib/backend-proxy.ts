@@ -17,7 +17,7 @@ const STRIPPED_REQUEST_HEADERS = new Set([
   "trailer",
   "upgrade"
 ]);
-const FORWARDED_RESPONSE_HEADERS = ["content-type", "cache-control"];
+const FORWARDED_RESPONSE_HEADERS = ["content-type", "cache-control", "content-disposition", "x-accel-buffering"];
 
 export async function forwardBackendRequest(
   request: Request,
@@ -38,6 +38,7 @@ export async function forwardBackendRequest(
       method,
       headers,
       body,
+      signal: request.signal,
       cache: "no-store"
     });
   } catch {
@@ -52,7 +53,7 @@ export async function forwardBackendRequest(
     });
   }
 
-  return new Response(await backendResponse.text(), {
+  return new Response(backendResponse.body, {
     status: backendResponse.status,
     statusText: backendResponse.statusText,
     headers: buildResponseHeaders(backendResponse.headers)

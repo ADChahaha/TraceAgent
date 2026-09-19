@@ -4,6 +4,12 @@ import { MarkdownEvidence } from "@/components/markdown-evidence";
 
 
 describe("MarkdownEvidence", () => {
+  it("新文档路径引用留在当前页面并交给证据查看器", () => {
+    const onOpenEvidence = jest.fn();
+    render(<MarkdownEvidence markdown="Answer [source](documents/contract.md)" evidencePlacement="citation" onOpenEvidence={onOpenEvidence} />);
+    fireEvent.click(screen.getByRole("link", { name: "Source 1" }));
+    expect(onOpenEvidence).toHaveBeenCalledWith("documents/contract.md", "Source 1");
+  });
   it("renders ordered list items with nested bullet details as one list", () => {
     const markdown = [
       "当然。",
