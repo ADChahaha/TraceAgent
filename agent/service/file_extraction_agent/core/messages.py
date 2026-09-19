@@ -179,6 +179,8 @@ def _validate_model_message(message: AIMessage) -> None:
         )
     if stop_signal not in _terminal_stop_signals():
         raise RuntimeError("model response ended without tool calls or terminal stop signal")
+    if not visible_text(message.content).strip():
+        raise RuntimeError("model response ended with empty visible content")
     return
 
 

@@ -107,7 +107,7 @@ application 负责业务校验、prepare_workspace 子进程预检和模型装�
 
 事件包装不维护 pending 配对字典。工具节点按调用 ID 保留已发布的完整 ToolMessage；执行器异常时仅为未发布项补失败结果，再按原调用顺序写入模型历史，已发布结果不覆盖、不重复输出。普通模型调用失败在图中指数退避，五次耗尽后通过 ModelFailed 以 completion.failed 收口。
 
-消息仅提取可见文本，不输出隐藏推理。合法 terminal stop signal 且无 tool_calls 时标记 is_final=true。图更新不重复输出历史消息或最后一条回答。
+消息仅提取可见文本，不输出隐藏推理。合法 terminal stop signal、无 tool_calls 且可见正文非空时标记 is_final=true。无工具调用的空白或仅隐藏推理响应由 messages 校验拒绝，经既有五次重试处理，不进入 messages 历史，不向 backend 发布 model_message.done；工具调用仍允许空正文。图更新不重复输出历史消息或最后一条回答。
 
 ## 取消与进程边界
 
