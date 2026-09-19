@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import boto3
+from botocore.handlers import add_expect_header
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,8 @@ class S3ObjectStore:
             aws_secret_access_key=os.getenv("S3_SECRET_KEY", "minioadmin"),
             region_name="us-east-1",
         )
+        # 写入内容已是 bytes，直接发送，避免兼容端点的 100 Continue 超时等待。
+        self._client.meta.events.unregister("before-call.s3", add_expect_header)
         self.bucket_prefix = bucket_prefix
 
     def _bucket(self, bucket: str) -> str:

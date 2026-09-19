@@ -57,3 +57,20 @@ def test_get_object_returns_none_for_missing_key():
         assert store.get_object(bucket, "missing.md") is None
     finally:
         store.delete_object(bucket, "missing.md")
+
+
+@pytest.mark.parametrize("payload", [b"tiny", bytes(range(256)) * 1024], ids=["small", "binary"])
+def test_put_object_sends_bytes_without_continue_handshake(payload):
+    """真实 HTTP 写入不等待 100 Continue，读回字节保持一致。"""
+    import uuid
+    store = build_s3_object_store()
+    bucket = f"put-{uuid.uuid4().hex[:8]}"
+    headers = []
+    store._client.meta.events.register("before-send.s3.PutObject", lambda request, **kwargs: headers.append(dict(request.headers)))
+    store.create_bucket(bucket)
+    try:
+        store.put_object(bucket, "value.bin", payload)
+        assert store.get_object(bucket, "value.bin") == payload
+        assert all("Expect" not in item for item in headers)
+    finally:
+        store.delete_object(bucket, "value.bin")

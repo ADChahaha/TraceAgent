@@ -1,6 +1,6 @@
 # test_object_store.md
 
-对应测试文件：`tests/file_extraction_agent/test_object_store.py`
+对应测试文件：`shared/tests/test_object_store.py`
 
 ## 验证内容
 
@@ -27,3 +27,4 @@
 | `test_s3_object_store_bucket_prefix` | 桶名前缀拼接正确。 |
 | `test_build_s3_object_store_uses_env` | 环境变量正确注入 endpoint 与前缀。 |
 | `test_get_object_returns_none_for_missing_key` | storage 返回可解析的 S3 NoSuchKey，缺失对象经 S3ObjectStore 返回 None 而不是抛异常。 |
+| `test_put_object_sends_bytes_without_continue_handshake` | 真实 HTTP 写入小正文与 256KiB 二进制对象，读回字节一致且请求不带 Expect，防止每次写入固定等待握手超时。 |
