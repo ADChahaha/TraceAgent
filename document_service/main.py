@@ -11,12 +11,15 @@ from grpc_health.v1 import health, health_pb2, health_pb2_grpc
 
 from agent_proto import agent_pb2_grpc
 from document_service.routes import DocumentResourceService
+from document_service.document_resources import model
 
 
-async def create_server(*, max_message_bytes: int = 64 * 1024 * 1024) -> grpc.aio.Server:
+async def create_server(*, max_message_bytes: int = 64 * 1024 * 1024, warmup: bool = False) -> grpc.aio.Server:
     """创建只注册文档资源 RPC 的 gRPC server。"""
     if max_message_bytes <= 0:
         raise ValueError("max_message_bytes must be positive")
+    if warmup:
+        await asyncio.to_thread(lambda: model.get_embedder().encode(["预热"]))
     server = grpc.aio.server(options=[
         ("grpc.max_receive_message_length", max_message_bytes),
         ("grpc.max_send_message_length", max_message_bytes),
@@ -64,7 +67,7 @@ async def run(args) -> int:
 
     loop = asyncio.get_running_loop()
     loop.set_default_executor(ThreadPoolExecutor(max_workers=args.workers, thread_name_prefix="document-blocking"))
-    server = await create_server(max_message_bytes=args.max_message_bytes)
+    server = await create_server(max_message_bytes=args.max_message_bytes, warmup=True)
     host = f"[{args.host}]" if ":" in args.host and not args.host.startswith("[") else args.host
     port = server.add_insecure_port(f"{host}:{args.port}")
     if not port:

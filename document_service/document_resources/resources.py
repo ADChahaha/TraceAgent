@@ -42,6 +42,9 @@ def publish_resources(
     store: ObjectStore,
     bucket: str,
     documents: list[InputDocument],
+    *,
+    incremental: bool = False,
+    removed: set[str] | frozenset[str] = frozenset(),
 ) -> list[ResourceRef]:
     """在给定桶内构建并发布文档树归档与索引，返回 documents/index 资源定位数组。"""
     if not documents or any(not doc.filename.strip() or not doc.html.strip() for doc in documents):
@@ -51,30 +54,65 @@ def publish_resources(
     temporary = parent / f".building-{uuid.uuid4().hex}"
     temporary.mkdir()
     try:
-        document = materialize_tree(documents, temporary / "documents")
-        model_id = os.getenv("EMBEDDING_MODEL", model.DEFAULT_EMBEDDING_MODEL)
-        backend = os.getenv("EMBEDDING_BACKEND", "openvino")
-        chunk_size = int(os.getenv("EMBEDDING_CHUNK_SIZE", "256"))
-        overlap = int(os.getenv("EMBEDDING_CHUNK_OVERLAP", "32"))
+        previous = _load_published(store, bucket, temporary) if incremental else None
+        roots = _document_roots(previous, temporary) if previous else {}
+        model_id = previous["embedding_model"] if previous else os.getenv("EMBEDDING_MODEL", model.DEFAULT_EMBEDDING_MODEL)
+        backend = previous["embedding_backend"] if previous else os.getenv("EMBEDDING_BACKEND", "openvino")
+        chunk_size = previous["chunk_size"] if previous else int(os.getenv("EMBEDDING_CHUNK_SIZE", "256"))
+        overlap = previous["overlap"] if previous else int(os.getenv("EMBEDDING_CHUNK_OVERLAP", "32"))
+        replaced = removed | {doc.filename for doc in documents}
+        removed_roots = {root for name, root in roots.items() if name in replaced}
+        old_meta = json.loads((temporary / "index/index.json").read_text()) if previous else None
+        old_vectors = np.load(temporary / "index/vectors.npy", allow_pickle=False) if previous else None
+        for root in removed_roots:
+            target = (temporary / "documents" / root).resolve()
+            if target.parent != temporary / "documents":
+                raise ValueError("invalid document root")
+            if target.exists():
+                shutil.rmtree(target)
+        next_number = max((order_key(root) for root in roots.values()), default=0) + 1
+        roots = {name: root for name, root in roots.items() if name not in replaced}
+        document = temporary / "documents"
+        document.mkdir(exist_ok=True)
+        # 新目录先独立生成，再编号，避免覆盖已有路径或改变历史引用。
+        staging = materialize_tree(documents, temporary / "new-documents")
+        new_roots = []
+        for source, entry in zip(documents, sorted(staging.iterdir(), key=lambda item: order_key(item.name))):
+            root = f"{next_number:03d}-" + entry.name.split("-", 1)[1]
+            next_number += 1
+            entry.rename(document / root)
+            roots[source.filename] = root
+            new_roots.append(root)
+        staging.rmdir()
         embedder = model.get_embedder(model_id=model_id, backend=backend)
         index = build_index(
-            _document_streams(document), embedder=embedder,
+            _document_streams(document, roots=set(new_roots)), embedder=embedder,
             model_id=model_id, tokenize=embedder.tokenize,
             chunk_size=chunk_size, overlap=overlap,
         )
+        chunks = [asdict(chunk) for chunk in index.chunks]
+        vectors = index.vectors
+        dimension = index.dimension
+        if old_meta is not None:
+            keep = [i for i, chunk in enumerate(old_meta["chunks"]) if chunk["document"] not in removed_roots]
+            if keep:
+                if chunks and dimension != old_meta["dimension"]:
+                    raise ValueError("embedding dimension changed")
+                dimension = old_meta["dimension"]
+                vectors = np.concatenate([old_vectors[keep], vectors]) if chunks else old_vectors[keep]
+                chunks = [old_meta["chunks"][i] for i in keep] + chunks
         index_dir = temporary / "index"
-        index_dir.mkdir()
+        index_dir.mkdir(exist_ok=True)
         _write_json(index_dir / "index.json", {
-            "model_id": model_id, "dimension": index.dimension,
-            "chunks": [asdict(chunk) for chunk in index.chunks],
+            "model_id": model_id, "dimension": dimension,
+            "chunks": chunks,
         })
-        np.save(index_dir / "vectors.npy", index.vectors, allow_pickle=False)
+        np.save(index_dir / "vectors.npy", vectors, allow_pickle=False)
         _write_json(temporary / "manifest.json", {
             "version": 1, "embedding_model": model_id, "embedding_backend": backend,
             "chunk_size": chunk_size, "overlap": overlap,
-            "documents": [doc.filename for doc in documents],
-            "document_roots": dict(zip([doc.filename for doc in documents],
-                                       sorted(entry.name for entry in document.iterdir()))),
+            "documents": list(roots),
+            "document_roots": roots,
         })
         _validate_prepared(temporary)
         _publish_to_store(store, bucket, temporary)
@@ -151,7 +189,7 @@ def _validate_prepared(path: Path) -> None:
                 raise ValueError("invalid index document reference")
 
 
-def _document_streams(document: Path) -> dict[str, list[tuple[str, str]]]:
+def _document_streams(document: Path, *, roots: set[str] | None = None) -> dict[str, list[tuple[str, str]]]:
     streams = {}
 
     def walk(directory):
@@ -164,7 +202,7 @@ def _document_streams(document: Path) -> dict[str, list[tuple[str, str]]]:
         return files
 
     for entry in sorted(document.iterdir(), key=lambda item: order_key(item.name)):
-        if entry.is_dir():
+        if entry.is_dir() and (roots is None or entry.name in roots):
             streams[entry.name] = walk(entry)
     return streams
 
@@ -177,36 +215,8 @@ def remove_published_documents(store: ObjectStore, bucket: str, removed: set[str
     """从既有归档和索引剔除文档，保留剩余路径及向量，不解析或调用模型。"""
     with TemporaryDirectory(prefix="document-removal-") as directory:
         temporary = Path(directory).resolve()
-        (temporary / "documents").mkdir()
-        (temporary / "index").mkdir()
-        for key in ("manifest.json", "index/index.json", "index/vectors.npy"):
-            data = store.get_object(bucket, key)
-            if data is None:
-                raise ValueError(f"missing published resource: {key}")
-            (temporary / key).write_bytes(data)
-        data = store.get_object(bucket, "documents.zip")
-        if data is None:
-            raise ValueError("missing published resource: documents.zip")
-        with zipfile.ZipFile(io.BytesIO(data)) as archive:
-            for entry in archive.infolist():
-                target = (temporary / entry.filename).resolve()
-                if not target.is_relative_to(temporary / "documents"):
-                    raise ValueError("invalid document archive path")
-                if not entry.is_dir():
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(archive.read(entry))
-        _validate_prepared(temporary)
-        manifest = json.loads((temporary / "manifest.json").read_text(encoding="utf-8"))
-        roots = manifest.get("document_roots")
-        if roots is None:
-            # 旧清单按上传顺序编号；首次删除时补齐映射，后续不因编号空缺而错配。
-            directories = [entry.name for entry in (temporary / "documents").iterdir()]
-            roots = {}
-            for index, name in enumerate(manifest["documents"], start=1):
-                matches = [root for root in directories if root.startswith(f"{index:03d}-")]
-                if len(matches) != 1:
-                    raise ValueError("cannot map published document to raw file")
-                roots[name] = matches[0]
+        manifest = _load_published(store, bucket, temporary)
+        roots = _document_roots(manifest, temporary)
         removed_roots = {roots[name] for name in removed if name in roots}
         for root in removed_roots:
             target = (temporary / "documents" / root).resolve()
@@ -228,3 +238,41 @@ def remove_published_documents(store: ObjectStore, bucket: str, removed: set[str
         _validate_prepared(temporary)
         _publish_to_store(store, bucket, temporary)
     return _resource_refs(bucket)
+
+
+def _load_published(store: ObjectStore, bucket: str, temporary: Path):
+    (temporary / "documents").mkdir()
+    (temporary / "index").mkdir()
+    for key in ("manifest.json", "index/index.json", "index/vectors.npy"):
+        data = store.get_object(bucket, key)
+        if data is None:
+            raise ValueError(f"missing published resource: {key}")
+        (temporary / key).write_bytes(data)
+    data = store.get_object(bucket, "documents.zip")
+    if data is None:
+        raise ValueError("missing published resource: documents.zip")
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        for entry in archive.infolist():
+            target = (temporary / entry.filename).resolve()
+            if not target.is_relative_to(temporary / "documents"):
+                raise ValueError("invalid document archive path")
+            if not entry.is_dir():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(archive.read(entry))
+    _validate_prepared(temporary)
+    manifest = json.loads((temporary / "manifest.json").read_text(encoding="utf-8"))
+    return manifest
+
+
+def _document_roots(manifest, temporary: Path):
+    roots = manifest.get("document_roots")
+    if roots is None:
+        # 旧清单按上传顺序编号；首次删除时补齐映射，后续不因编号空缺而错配。
+        directories = [entry.name for entry in (temporary / "documents").iterdir()]
+        roots = {}
+        for index, name in enumerate(manifest["documents"], start=1):
+            matches = [root for root in directories if root.startswith(f"{index:03d}-")]
+            if len(matches) != 1:
+                raise ValueError("cannot map published document to raw file")
+            roots[name] = matches[0]
+    return roots

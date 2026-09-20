@@ -25,3 +25,5 @@
 对缺失对象的检查使用 list_objects/head_object 而非 get_object：storage 当前对缺失 key 返回非 S3 XML 错误体，boto3 `NoSuchKey` 分支不触发（见 DEVLOG 已知问题）。
 
 embedding 替身同时提供 encode 与 tokenize，资源构建复用同一个实例，不再注入独立 get_tokenizer。
+
+- `test_server_warms_embedding_before_becoming_available`：生产启动模式在返回可启动服务前完成一次短文本编码，首次上传复用预热模型。

@@ -1,4 +1,4 @@
-"""会话资源入口：桶内 raw 是事实来源，上传合并重建，纯删除复用既有文档和向量。"""
+"""会话资源入口：桶内 raw 是事实来源，上传增量构建，纯删除复用既有文档和向量。"""
 
 import importlib
 from types import SimpleNamespace
@@ -29,7 +29,7 @@ def published(app, monkeypatch):
     """隔离真实构建：记录 publish_resources 的入参并返回空 refs。"""
     calls = []
 
-    def fake_publish(store, bucket, documents):
+    def fake_publish(store, bucket, documents, **kwargs):
         calls.append((store, bucket, list(documents)))
         return []
 
@@ -64,7 +64,7 @@ def test_second_upload_reuses_bucket_and_keeps_previous_raws(app, store, parsed,
     refs = app.prepare_session_resources("s1", [upload_file("b.pdf")], store=store)
     assert raw_locations(refs) == ["s3://res_s1/raw/a.pdf", "s3://res_s1/raw/b.pdf"]
     assert store.get_object("res_s1", "raw/a.pdf") == b"pdf"
-    assert [doc.filename for doc in published[1][2]] == ["a.pdf", "b.pdf"]
+    assert [doc.filename for doc in published[1][2]] == ["b.pdf"]
     assert {path.name for path in (tmp_path / "storage").iterdir()} == {"res_s1"}
 
 
@@ -127,7 +127,7 @@ def test_remove_raw_must_be_raw_in_session_bucket(app, store, parsed):
             app.prepare_session_resources("s1", [], [ref], store=store)
 
 
-def test_rebuild_parses_all_session_raws(app, store, monkeypatch, published):
+def test_upload_parses_only_new_files(app, store, monkeypatch, published):
     seen = []
 
     def parse(file_obj):
@@ -137,7 +137,7 @@ def test_rebuild_parses_all_session_raws(app, store, monkeypatch, published):
     monkeypatch.setattr(app.processor, "process", parse)
     app.prepare_session_resources("s1", [upload_file("a.pdf", b"first")], store=store)
     app.prepare_session_resources("s1", [upload_file("b.pdf", b"second")], store=store)
-    assert seen == [("a.pdf", b"first"), ("a.pdf", b"first"), ("b.pdf", b"second")]
+    assert seen == [("a.pdf", b"first"), ("b.pdf", b"second")]
 
 
 def test_upload_rejects_invalid_filename_or_content(app, store, parsed):
@@ -295,3 +295,94 @@ def test_remove_preserves_empty_document_without_vectors(app, store, monkeypatch
     app.prepare_session_resources("s1", [upload_file("a.pdf"), upload_file("b.pdf")], store=store)
     refs = app.prepare_session_resources("s1", [], [raw_ref("res_s1", "a.pdf")], store=store)
     assert raw_locations(refs) == ["s3://res_s1/raw/b.pdf"]
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_upload_only_encodes_new_documents_and_preserves_existing_artifacts(app, store, monkeypatch, tmp_path, legacy):
+    import io
+    import json
+    import zipfile
+    import numpy as np
+    from document_service.document_resources import model
+    parsed_names, encoded = [], []
+    def parse(file):
+        parsed_names.append(file.filename)
+        return SimpleNamespace(filename=file.filename, html=f"<p>{file.read().decode()}</p>")
+    def encode(texts):
+        encoded.extend(texts)
+        return np.array([[len(text), 1] for text in texts], dtype=np.float32)
+    monkeypatch.setattr(app.processor, "process", parse)
+    monkeypatch.setattr(model, "get_embedder", lambda **kwargs: SimpleNamespace(
+        tokenize=lambda text: [(i, i + 1) for i in range(len(text))], encode=encode))
+    monkeypatch.setenv("DOCUMENT_RESOURCES_ROOT", str(tmp_path / "resources"))
+    bucket = "res_s1"
+    app.prepare_session_resources("s1", [upload_file("a.pdf", b"old a"), upload_file("b.pdf", b"old b")], store=store)
+    manifest = json.loads(store.get_object(bucket, "manifest.json"))
+    if legacy:
+        manifest.pop("document_roots")
+        store.put_object(bucket, "manifest.json", json.dumps(manifest).encode())
+    before = json.loads(store.get_object(bucket, "index/index.json"))
+    vectors = np.load(io.BytesIO(store.get_object(bucket, "index/vectors.npy")))
+    with zipfile.ZipFile(io.BytesIO(store.get_object(bucket, "documents.zip"))) as z:
+        files = {name: z.read(name) for name in z.namelist()}
+    original_get = store.get_object
+    def get(bucket, key):
+        assert not key.startswith("raw/"), "补传不能下载旧原文件"
+        return original_get(bucket, key)
+    monkeypatch.setattr(store, "get_object", get)
+    parsed_names.clear(); encoded.clear()
+    app.prepare_session_resources("s1", [upload_file("c.pdf", b"new c")], store=store)
+    assert parsed_names == ["c.pdf"] and encoded == ["new c"]
+    after = json.loads(store.get_object(bucket, "index/index.json"))
+    assert after["chunks"][:2] == before["chunks"]
+    np.testing.assert_array_equal(np.load(io.BytesIO(store.get_object(bucket, "index/vectors.npy")))[:2], vectors)
+    with zipfile.ZipFile(io.BytesIO(store.get_object(bucket, "documents.zip"))) as z:
+        assert all(z.read(name) == content for name, content in files.items())
+    parsed_names.clear(); encoded.clear()
+    app.prepare_session_resources("s1", [upload_file("a.pdf", b"updated a"), upload_file("d.pdf", b"new d")],
+                                  [raw_ref(bucket, "c.pdf")], store=store)
+    assert parsed_names == ["a.pdf", "d.pdf"] and encoded == ["updated a", "new d"]
+    final = json.loads(store.get_object(bucket, "index/index.json"))
+    assert final["chunks"][0] == before["chunks"][1]
+    assert {chunk["text"] for chunk in final["chunks"]} == {"old b", "updated a", "new d"}
+    assert len({chunk["chunk_id"] for chunk in final["chunks"]}) == 3
+    assert sorted(store.list_objects(bucket, "raw/")) == ["raw/a.pdf", "raw/b.pdf", "raw/d.pdf"]
+
+
+def test_failed_incremental_embedding_keeps_all_objects_unchanged(app, store, parsed, monkeypatch, tmp_path):
+    import numpy as np
+    from document_service.document_resources import model
+    monkeypatch.setenv("DOCUMENT_RESOURCES_ROOT", str(tmp_path / "resources"))
+    monkeypatch.setattr(model, "get_embedder", lambda **kwargs: SimpleNamespace(
+        tokenize=lambda text: [(i, i + 1) for i in range(len(text))],
+        encode=lambda texts: np.ones((len(texts), 2), dtype=np.float32)))
+    app.prepare_session_resources("s1", [upload_file("a.pdf")], store=store)
+    before = {key: store.get_object("res_s1", key) for key in store.list_objects("res_s1", "")}
+    def fail(**kwargs):
+        raise RuntimeError("embedding failed")
+    monkeypatch.setattr(model, "get_embedder", fail)
+    with pytest.raises(RuntimeError, match="embedding failed"):
+        app.prepare_session_resources("s1", [upload_file("b.pdf")], store=store)
+    assert before == {key: store.get_object("res_s1", key) for key in store.list_objects("res_s1", "")}
+
+
+@pytest.mark.parametrize("first_empty", [False, True])
+def test_incremental_upload_handles_documents_without_chunks(app, store, monkeypatch, tmp_path, first_empty):
+    import io
+    import json
+    import numpy as np
+    from document_service.document_resources import model
+    monkeypatch.setenv("DOCUMENT_RESOURCES_ROOT", str(tmp_path / "resources"))
+    monkeypatch.setattr(app.processor, "process", lambda file: SimpleNamespace(
+        filename=file.filename, html="<div></div>" if file.filename == "empty.pdf" else "<p>正文</p>"))
+    monkeypatch.setattr(model, "get_embedder", lambda **kwargs: SimpleNamespace(
+        tokenize=lambda text: [(i, i + 1) for i in range(len(text))],
+        encode=lambda texts: np.ones((len(texts), 2), dtype=np.float32)))
+    names = ["empty.pdf", "text.pdf"] if first_empty else ["text.pdf", "empty.pdf"]
+    for name in names:
+        app.prepare_session_resources("s1", [upload_file(name)], store=store)
+    meta = json.loads(store.get_object("res_s1", "index/index.json"))
+    assert len(meta["chunks"]) == 1 and meta["dimension"] == 2
+    assert np.load(io.BytesIO(store.get_object("res_s1", "index/vectors.npy"))).shape == (1, 2)
+    refs = app.prepare_session_resources("s1", [], [raw_ref("res_s1", "text.pdf")], store=store)
+    assert raw_locations(refs) == ["s3://res_s1/raw/empty.pdf"]

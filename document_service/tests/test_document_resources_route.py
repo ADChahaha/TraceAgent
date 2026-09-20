@@ -241,3 +241,17 @@ def test_failed_upload_does_not_poison_session(resources, document_rpc, s3_store
     result = prepare(document_rpc, session_id, files=[pb.UploadedFile(filename="a.docx", content=_docx_bytes())])
     refs = list(result.resource_path)
     assert [ref.location.rsplit("/", 1)[1] for ref in refs if ref.type == "raw"] == ["a.docx"]
+
+
+@pytest.mark.asyncio
+async def test_server_warms_embedding_before_becoming_available(monkeypatch):
+    from types import SimpleNamespace
+    from document_service.main import create_server
+    calls = []
+    monkeypatch.setattr(embedding_model, "get_embedder", lambda: SimpleNamespace(
+        encode=lambda texts: calls.append(texts)))
+    server = await create_server(warmup=True)
+    try:
+        assert len(calls) == 1 and len(calls[0]) == 1
+    finally:
+        await server.stop(0)

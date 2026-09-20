@@ -4,27 +4,19 @@ document service 是独立的文档资源生产服务，不导入 agent 的问�
 
 ## 资源契约
 
-会话的物理资源落在一个固定桶 `res_<session_id>` 内，桶内 `raw/` 前缀对象是该会话文件的事实来源；`documents.zip`、`index/`、`manifest.json` 是 raw 的派生产物。`PrepareResources` 在上传时合并后全量重建，纯删除复用已有产物：
+会话资源落在固定桶 `res_<session_id>`：`raw/` 保存原文件，`documents.zip`、`index/` 和 `manifest.json` 保存处理产物。上传只处理新批次，问答使用会话全量资源引用。
 
 ```text
-PrepareResources(session_id, files: filename + bytes, remove_raw: raw 引用)
-  -> 校验 session_id，桶固定为 res_<session_id>
-  -> 纯删除：只列 raw 名称，按清单映射裁剪归档、分块和向量，校验发布后删 raw；
-     无剩余文件则清空产物并返回 []，未知目标幂等返回，不读取 raw 字节
-  -> 含上传请求从桶内读回 raw/* 作为现有文件集（桶是事实来源，调用方无需传全量）
-  -> 校验新文件（文件名非空且不含路径分隔符、内容非空）并按文件名覆盖合并
-  -> 校验 remove_raw（type 必须为 raw、location 必须属于本会话桶），
-     目标不存在则幂等跳过
-  -> 剩余为空：删除桶内同名 raw、documents.zip、manifest.json、index/*，返回空引用
-  -> 否则先全量解析：document_processor.process（PDF -> MinerU HTML，DOCX -> python-docx HTML），
-     解析失败时会话桶保持原状，坏文件不进入事实来源、不毒化后续重建
-  -> 解析通过后写桶：删除被移除的 raw、写入新上传的 raw
-  -> document_resources.publish_resources：HTML -> Markdown 文件树
-  -> 使用缓存 embedder 分块并生成 index/index.json + vectors.npy
-  -> 校验 manifest、向量维度和文档引用
-  -> 通过 traceagent_shared.object_store 在同一桶内覆盖 documents.zip、index、manifest
-  -> 返回 ResourceRef[]（documents/index + 全部剩余 raw）
+PrepareResources(session_id, files, remove_raw)
+  -> 校验会话、文件名和删除引用，只列 raw 名称
+  -> 上传：只解析新增或替换文件，再构建该批次的 Markdown 和 embedding
+  -> 沿用旧清单的模型和分块配置，保留未变文档的路径、分块及向量
+  -> 合并新产物，排除替换或删除的旧文档，校验后发布会话归档与索引
+  -> 发布成功后写新 raw、删目标 raw，返回全量 ResourceRef
+  -> backend 更新 DB；每轮问答从 DB 取本 session 全部资源引用交给 agent
 ```
+
+纯删除只裁剪已发布产物，不解析或调用模型；最后一个文件删除后清空产物。`main.run` 启动服务时在线程中加载默认 embedding 模型并执行一次短文本编码，完成后才监听并报告 SERVING；请求复用该进程缓存。模型预热失败会阻止服务就绪。`create_server` 的嵌入式测试入口默认不预热，生产 CLI 显式启用。
 
 上传与移除都返回更新后的全量引用；未变化的 raw 位置不变，backend 据此沿用旧尺寸并原子替换资源表。
 
@@ -34,16 +26,16 @@ PrepareResources(session_id, files: filename + bytes, remove_raw: raw 引用)
 
 - `document_processor` 只负责单文件 PDF/DOCX -> HTML，不拥有资源发布。
 - `document_resources.resources` 负责文档树构建、索引、删除裁剪和 S3-compatible 发布到指定桶，不管理 raw 增删。
-- `document_resources.application` 是会话层入口：维护桶内 raw 事实来源、应用上传与移除、驱动上传重建或纯删除裁剪。
+- `document_resources.application` 是会话层入口：维护桶内 raw 事实来源、应用上传与移除、驱动增量上传或纯删除裁剪。
 - `traceagent_shared` 只提供 ObjectStore/S3 语义，不理解 document 或 agent 业务。
 - backend 负责 session、权限和资源引用；document service 不直接暴露用户 HTTP API。
 - agent 只读取已发布资源，不重新解析或构建文档向量。
 
 ## 已知限制
 
-- 上传仍重新解析并 embedding 全部 raw；纯删除只读写归档和索引，不调用解析器和模型。仍有归档压缩与存储读写成本。
+- 仍按会话归档合并发布，存在归档读写、压缩和索引读写成本；未改成每个文件独立资源包。
 - 同一会话桶并发调用存在读改写竞争，依赖 backend 侧串行化。
-- 解析失败发生在任何写桶之前，会话桶保持原状；发布阶段失败没有远端回滚，可能留下新写入的 raw 对象——它们可正常解析，会在下一次成功调用时随桶内容合并自愈，短暂不一致但不会毒化。
+- 解析、embedding 和本地校验失败不写桶。逐对象发布及其后的 raw 写入失败没有原子回滚，可能留下不一致；索引损坏时拒绝增量处理，不回退全量重建。
 
 ## 删除复用与兼容
 

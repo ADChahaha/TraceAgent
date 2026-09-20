@@ -1,11 +1,8 @@
-"""会话资源入口：上传合并 raw 后全量重建，纯删除裁剪已发布的文档与向量。
+"""会话资源入口：只解析上传批次，复用已有文档与向量，处理成功后返回全量引用。
 
-输入 session_id、files 和 remove_raw；校验文件名及引用归属后固定使用
-res_<session_id> 桶。纯删除只列举 raw 名称，调用 remove_published_documents
-剔除目标文档和索引行，发布成功后删除 raw；最后一个文件直接清空产物。
-上传仍读回全部 raw、合并并先解析后发布；解析失败不改变桶。
-返回 documents/index 及剩余 raw 的全量 ResourceRef；空会话返回 []。
-构建或校验异常向上传递，发布仍逐对象执行，无远端回滚；同桶操作依赖调用方串行化。
+校验 session_id、文件名与删除引用后固定使用 res_<session_id> 桶。
+原文件只列名称，增量构建或裁剪发布成功后写入、删除 raw；解析和 embedding
+失败不改桶。逐对象发布和 raw 写入没有远端原子回滚；同桶由 backend 串行化。
 """
 
 from dataclasses import dataclass
@@ -36,7 +33,7 @@ def prepare_session_resources(
     remove_raw: list[dict] = (),
     store: ObjectStore | None = None,
 ) -> list[ResourceRef]:
-    """上传全量重建、纯删除复用已发布产物，返回剩余资源引用。"""
+    """上传仅处理新增或替换文件、删除裁剪已有产物，返回全量引用。"""
     bucket = _session_bucket(session_id)
     store = store if store is not None else build_s3_object_store()
     removed = _removed_names(remove_raw, bucket)
@@ -54,28 +51,27 @@ def prepare_session_resources(
                     ResourceRef(type="index", location=f"s3://{bucket}/index")]
         refs.extend(ResourceRef(type="raw", location=f"s3://{bucket}/raw/{name}") for name in sorted(remaining))
         return refs
-    raws = _read_raws(store, bucket)
-    if not uploads and not removed and not raws:
+    names = {key.removeprefix("raw/") for key in store.list_objects(bucket, "raw/")}
+    if not uploads and not removed:
         raise ValueError("files or remove_raw must be non-empty")
-    merged = dict(raws)
-    merged.update(uploads)
-    for name in removed:
-        merged.pop(name, None)
-    if not merged:
-        for name in removed:
+    remaining = (names | uploads.keys()) - removed
+    if not remaining:
+        for name in names & removed:
             store.delete_object(bucket, f"raw/{name}")
         _delete_published(store, bucket)
         return []
-    # 解析先于任何写桶操作：解析失败时会话桶保持原状，坏文件不会成为
-    # 事实来源毒化后续重建，也不会留下 remove_file 够不到的孤儿 raw。
-    documents = _parse_documents(merged)
-    for name in removed:
+    additions = {name: content for name, content in uploads.items() if name not in removed}
+    if additions:
+        documents = _parse_documents(additions)
+        refs = publish_resources(store, bucket, documents, incremental=bool(names), removed=removed)
+    else:
+        refs = remove_published_documents(store, bucket, removed)
+    # 解析、向量构建及校验成功发布后才写 raw，失败不会留下待处理原文件。
+    for name, content in additions.items():
+        store.put_object(bucket, f"raw/{name}", content)
+    for name in names & removed:
         store.delete_object(bucket, f"raw/{name}")
-    for name, content in uploads.items():
-        if name in merged:
-            store.put_object(bucket, f"raw/{name}", content)
-    refs = publish_resources(store, bucket, documents)
-    refs.extend(ResourceRef(type="raw", location=f"s3://{bucket}/raw/{name}") for name in sorted(merged))
+    refs.extend(ResourceRef(type="raw", location=f"s3://{bucket}/raw/{name}") for name in sorted(remaining))
     return refs
 
 
@@ -87,17 +83,6 @@ def _session_bucket(session_id: str) -> str:
     if "/" in session_id or "\\" in session_id or session_id in {".", ".."}:
         raise ValueError(f"invalid session_id: {session_id!r}")
     return f"res_{session_id}"
-
-
-def _read_raws(store: ObjectStore, bucket: str) -> dict[str, bytes]:
-    """读回桶内现有 raw 对象；读取端以桶内容为准，不依赖调用方传入全量文件。"""
-    raws = {}
-    for key in store.list_objects(bucket, "raw/"):
-        data = store.get_object(bucket, key)
-        name = key.removeprefix("raw/")
-        if data and name:
-            raws[name] = data
-    return raws
 
 
 def _validated_uploads(files) -> dict[str, bytes]:

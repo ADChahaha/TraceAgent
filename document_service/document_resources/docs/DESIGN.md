@@ -4,7 +4,11 @@
 
 ## 上传构建
 
-输入文件名与 bytes，以及可选 remove_raw。application 校验会话、文件名与引用归属，读回桶内 raw 后合并上传、排除删除目标。非空集合先调用 document_processor 解析成 HTML；解析失败不改变桶。随后写 raw，由 `resources.publish_resources` 生成 Markdown 树、按文档分块、调用缓存 embedder 生成归一化向量，校验后发布。上传仍对剩余全集重新解析与 embedding。
+输入文件名与 bytes，以及可选 remove_raw。application 校验会话、文件名与引用归属，只列举桶内 raw 名称确定剩余文件；仅上传且未被删除的批次交给 document_processor 解析成 HTML。
+
+首次上传直接构建；补传时 `resources.publish_resources(incremental=True)` 读入并校验既有归档、索引和清单。沿用已有模型、后端和分块配置，剔除被替换或删除文档的目录及向量行，只对新批次分块和 embedding，再拼接未变的旧向量。新文档目录从已有最大编号之后分配；未修改文档的路径、正文、chunk_id 与向量不变。空正文无向量的情况按实际非空索引维度合并。
+
+校验与发布成功后才写新 raw、删除目标 raw，并返回全部资源引用。backend 在处理完成后更新 DB；每轮 agent 调用从 DB 读取 session 全部资源引用。解析、embedding 或本地校验失败不改变桶；逐对象发布或后续 raw 写入失败仍没有远端回滚。已有产物损坏时拒绝补传，不静默重算。
 
 `documents.py` 负责 HTML 到编号目录与 Markdown；`index.py` 负责 tokenizer 分块及向量构建；`model.py` 按 model_id/backend 缓存模型，分块与编码复用同一个模型实例。生成包不导入 agent。
 
@@ -26,4 +30,4 @@ manifest 的 `document_roots` 映射原文件名到一级文档目录。旧清�
 - `manifest.json`：版本 1、模型、后端、分块配置、原文件列表及可选 document_roots。
 - `raw/<filename>`：原始文件，增删由 application 管理。
 
-模型及分块配置随产物固定；删除沿用旧配置，不受当前环境变量影响。`_validate_prepared` 检查临时产物的清单、向量维度、数值和文档引用；不提供消费端加载接口。上传和删除均同步等待发布完成，资源在会话问答完成或取消后仍保留。
+模型及分块配置随产物固定；删除沿用旧配置，不受当前环境变量影响。`_validate_prepared` 检查临时产物的清单、向量维度、数值和文档引用；不提供消费端加载接口。增量上传沿用旧配置；上传和删除均同步等待发布完成，资源在会话问答完成或取消后仍保留。
