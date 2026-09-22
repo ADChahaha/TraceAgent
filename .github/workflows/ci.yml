@@ -22,7 +22,7 @@ jobs:
       - name: Install agent with OCR dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ./agent_proto -e ./shared -e "agent[dev]" -e "document_service[dev]"
+          python -m pip install -e ./agent_proto -e ./shared -e ./storage -e "agent[dev,embeddings]" -e "document_service[dev,embeddings]" "PyYAML>=6,<7"
 
       - name: Verify OCR dependency imports
         env:
@@ -40,7 +40,7 @@ jobs:
           import openai
           import torch
           import transformers
-          from service.document_processor.pdf.converter import resolve_mineru_lang
+          from document_service.document_processor.pdf.converter import resolve_mineru_lang
 
           importlib.metadata.version("mineru")
           assert resolve_mineru_lang() == "japan"
@@ -55,7 +55,7 @@ jobs:
         env:
           PYTHONPATH: agent
         run: |
-          NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost python -m pytest agent/tests document_service/tests shared/tests -q
+          NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost python -m pytest agent/tests document_service/tests shared/tests .github/tests -q
 
   backend:
     name: Backend tests without real agent calls
@@ -73,7 +73,7 @@ jobs:
       - name: Install backend test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e "backend[dev]"
+          python -m pip install -e ./agent_proto -e ./shared -e "backend[dev]"
 
       - name: Run backend tests
         env:

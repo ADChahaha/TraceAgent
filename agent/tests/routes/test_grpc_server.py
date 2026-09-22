@@ -137,13 +137,26 @@ def test_cli_starts_server_and_health_command():
         process.communicate(timeout=10)
 
 
-def test_document_cli_starts_server_and_health_command():
+def test_document_cli_starts_server_and_health_command(monkeypatch, tmp_path):
     repository = Path(__file__).resolve().parents[3]
+    monkeypatch.setenv("HF_HOME", str(tmp_path / "empty-hub"))
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    bootstrap = """
+import runpy
+from unittest.mock import Mock, patch
+
+embedder = Mock()
+with patch('document_service.document_resources.model.get_embedder', return_value=embedder):
+    try:
+        runpy.run_module('document_service.main', run_name='__main__')
+    finally:
+        embedder.encode.assert_called_once()
+"""
     with socket.socket() as available:
         available.bind(("127.0.0.1", 0))
         port = available.getsockname()[1]
     target = f"127.0.0.1:{port}"
-    process = subprocess.Popen([sys.executable, "-m", "document_service.main", "--host", "127.0.0.1", "--port", str(port)],
+    process = subprocess.Popen([sys.executable, "-c", bootstrap, "--host", "127.0.0.1", "--port", str(port)],
                                cwd=repository, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         with grpc.insecure_channel(target) as channel:
@@ -154,4 +167,5 @@ def test_document_cli_starts_server_and_health_command():
         assert "SERVING" in result.stdout
     finally:
         process.terminate()
-        process.communicate(timeout=10)
+        stdout, stderr = process.communicate(timeout=10)
+        assert process.returncode == 0, (stdout + stderr).decode()

@@ -15,6 +15,6 @@
 - `test_blocking_preparation_keeps_control_rpcs_responsive`：单线程执行器忙于文档解析时，探活仍能响应。
 - `test_oversized_request_returns_resource_exhausted`：超过配置消息上限的请求由 gRPC 拒绝，不进入业务处理。
 - `test_cli_starts_server_and_health_command`：子进程启动真实服务，用 CLI 探活并确认退出码与状态文本。
-- `test_document_cli_starts_server_and_health_command`：独立 document service 子进程启动、监听和探活成功。
+- `test_document_cli_starts_server_and_health_command`：在空 Hugging Face 缓存和离线环境中，通过 runpy 执行真实 document service CLI 模块；仅替换 embedding 模型，验证启动时确实调用一次编码、真实监听和 CLI 探活成功，并正常退出，避免网络和模型下载影响服务生命周期测试。
 
 移除独立取消 RPC 后，文档解析阻塞场景继续通过标准 Health 验证事件循环可响应。
