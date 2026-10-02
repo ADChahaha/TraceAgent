@@ -4,19 +4,24 @@
     <strong>Evidence-grounded document QA - すべての回答を原文まで追跡できる。</strong>
   </p>
   <p align="center">
+    <code>FastAPI</code> · <code>LangGraph</code> · <code>Next.js</code> · <code>SSE</code>
+  </p>
+  <p align="center">
     <a href="README.md">中文</a> · <a href="#demo">Demo</a> · <a href="#quickstart">Quick Start</a> · <a href="LICENSE">MIT License</a>
   </p>
 </p>
 
 ---
 
-一般的な文書 QA は答えだけを返します。TraceAgent は答え + 証拠を返します。
+> **TraceAgent は文書への回答、原文の根拠、ツールによる調査の過程をひとつのワークスペースにまとめます。**
 
-モデルが文書の事実を回答するとき evidence link を付与し、クリックすると原文が開いて該当箇所がハイライトされます。自分の目で原文を確認できます。ブラウザのワークスペースには Agent Gate と表示されます。
+文書の事実に関する回答には数字の引用が付き、クリックすると原文が開いて該当箇所がハイライトされます。どの資料を調べ、どこを読み、どの段落を根拠にしたかを確認できます。ブラウザのワークスペースには Agent Gate と表示されます。
 
 <h2 id="demo">🎬 デモ</h2>
 
-<img src="docs/assets/demo-qa-evidence-review.png" alt="TraceAgent：左側に原文ハイライト、右側に文書 QA とツールの過程" width="100%">
+<p align="center">
+  <img src="docs/assets/demo-qa-evidence-review.png" alt="Agent Gate：左側に原文ハイライト、右側に文書 QA とツールの過程" width="100%">
+</p>
 <p align="center"><em>左：全文表示と引用ハイライト · 右：ツールの過程、回答と数字の引用</em></p>
 
 スクリーンショットは実際のローカル画面と既存の Orion サンプル会話です（2026-10-02 更新）。
@@ -39,43 +44,55 @@
 | | 機能 | 説明 |
 |---|---|---|
 | 💬 | **マルチターン文書 QA** | PDF / DOCX をアップロードして同じ文書群に継続して質問 |
-| 🔗 | **Evidence Link** | Markdown ブロックへのリンクをクリック可能な数字の引用として表示 |
-| 📖 | **原文 Review** | 引用クリックで左側に全文を表示し、対象の Markdown ブロックをハイライト |
+| 🔗 | **数字の引用** | Markdown ブロックへのリンクをクリック可能な数字の引用として表示 |
+| 📖 | **原文 Review** | 引用クリックで左側に全文を表示し、前後の章を残したまま対象ブロックをハイライト |
 | | **文書管理** | ファイルごとの処理状態、再試行、追加、ダウンロードと削除 |
 | | **会話の復元** | backend のデータベースから最近の会話と履歴を取得 |
-| 🧭 | **過程表示** | モデルが目次を見て、検索し、片段を読む過程を可視化 |
+| 🧭 | **過程表示** | モデルがディレクトリを調べ、キーワードを検索し、本文の一部を読む過程を表示 |
 | 🛑 | **生成キャンセル** | いつでも回答生成を中断、入力欄は編集可能なまま |
-| 📄 | **複数形式** | PDF（MinerU OCR）と DOCX（python-docx）に対応 |
+| 📄 | **複数形式** | PDF（MinerU OCR）と DOCX（python-docx）を HTML に変換し、Markdown 文書ツリーと embedding 索引を生成 |
 
 ## 🧠 仕組み
 
 ```mermaid
 flowchart LR
-    Upload["📄 文書アップロード"] --> Normalize["🔧 HTML → Markdown 文書ツリーと embedding 索引"]
-    Normalize --> Ask["💬 ユーザーが質問"]
-    Ask --> Agent["🤖 QA Agent がツールで文書を閲覧"]
-    Agent --> Answer["✅ 回答 + evidence link"]
-    Answer --> Review["📖 左側の全文表示と引用ハイライト"]
+    Upload["PDF / DOCX アップロード"]
+    Upload --> Backend["backend<br/>SQLite 永続化"]
+    Backend --> |"files"| Document["document_service"]
+    Document --> |"raw / documents.zip / index"| Storage["S3-compatible storage"]
+    Backend --> |"resource_refs + messages"| Agent["file_extraction_agent"]
+    Agent --> |"read resource_refs"| Storage
+    Agent --> |"ls / grep / read / search_embedding"| Agent
+    Agent --> |"gRPC events"| Backend
+    Backend --> |"SSE snapshot + events"| Frontend["frontend"]
+    Frontend --> |"数字の引用"| Review["全文表示と原文ハイライト"]
 ```
 
-TraceAgent は文書全体を prompt に詰め込まず、文書を読み取り専用の仮想リポジトリとして扱います。モデルは `ls` / `grep` / `read` / `search_embedding` の 4 つのツールで必要に応じて資料をたどり、人が資料を調べるように段階的に答えを見つけます。
+TraceAgent は文書を**読み取り専用の仮想リポジトリ**として扱います。モデルは `ls` / `grep` / `read` / `search_embedding` でディレクトリの閲覧、キーワード検索、本文の読み取り、意味の近い箇所の検索を行います。ツールの過程と回答は SSE でブラウザに逐次送信されます。
+
+ブラウザは Next.js のプロキシを通して backend にアクセスします。backend はアップロードを検証し、独立した document service でリソースを準備してから、リソース参照とメッセージ履歴を agent に渡します。SQLite は会話、リソース参照、ターン、完全なメッセージを保存します。ページの復元時にはスナップショットを取得し、実行中のターンがあれば更新を購読します。過程の差分イベントはメモリ内で配信し、履歴のツール活動は保存済みの呼び出しと結果から復元します。
 
 > 詳細なアーキテクチャは [`agent/docs/DESIGN.md`](agent/docs/DESIGN.md) を参照
 
 <h2 id="quickstart">⚡ Quick Start</h2>
 
+**1. 環境の作成**
+
 ```bash
-# 環境
 conda create -n agent-gate python=3.11 -y && conda activate agent-gate
 ```
 
-依存関係をインストールし、frontend をビルド：
+**2. 依存関係のインストール**
 
 ```bash
 ./scripts/install.sh
 ```
 
-document service は起動時に embedding モデルを読み込み、ウォームアップ後に待ち受けを開始します。初回は Hugging Face からのモデルダウンロードが必要です。
+インストールには storage サービスと既定の OpenVINO embedding 依存関係を含みます。document service は起動時に embedding モデルを読み込み、ウォームアップ後に待ち受けを開始します。初回は Hugging Face からのモデルダウンロードが必要です。
+
+公開モデルのダウンロードが 401 になり、匿名アクセスでは成功する場合、`.env` に `HF_HUB_DISABLE_IMPLICIT_TOKEN=1` を設定すると、ローカルに保存された Hugging Face token の自動送信を無効にできます。非公開モデルには有効な認証情報が必要です。
+
+**3. 環境変数の設定**
 
 リポジトリルートに `.env` を作成します。起動スクリプトが自動的に読み込みます。
 
@@ -94,11 +111,13 @@ FRONTEND_PORT=3000
 STORAGE_PORT=9000
 ```
 
-本番起動：
+**4. サービスの起動**
 
 ```bash
 ./scripts/start.sh
 ```
+
+storage / agent / document service / backend / frontend を起動します。
 
 ブラウザで http://127.0.0.1:3000 を開けば使えます。
 
@@ -111,7 +130,7 @@ STORAGE_PORT=9000
 
 現在は単一ユーザー向けのローカル構成です。backend は単一プロセスで動作し、テナント認証や旧 `qa_*` データの自動移行はありません。
 
-> 詳細な設定とトラブルシューティングは各パッケージの README を参照：[`agent/`](agent/README.md) · [`backend/`](backend/README.md) · [`frontend/`](frontend/docs/)
+> 詳細な設定と設計：[`agent/`](agent/README.md) · [`document_service/`](document_service/README.md) · [`backend/`](backend/README.md) · [`frontend/`](frontend/docs/DESIGN.md)
 
 ## 🗺️ プロジェクト構成
 
