@@ -1,56 +1,57 @@
 ---
 name: dreaming
 description: >-
-  Manual memory consolidation skill for this repository. Use only when the user
-  explicitly asks to run dreaming, consolidate or reflect on memory, or sync
-  recent session transcripts and memory/notes/ into memory/wiki/,
-  memory/preference/, and memory.md.
+  Manual cross-session knowledge consolidation and doc-gardening skill for this
+  repository. Use only when the user explicitly asks to run dreaming,
+  consolidate memory, or sync recent session transcripts and memory/notes/ into
+  ARCHITECTURE.md, docs/, and module DECISIONS.md files.
 ---
 
-# Dreaming（分层按需记忆整理）
+# Dreaming（跨会话知识沉淀与文档园艺）
 
-当用户显式要求执行 dreaming 或整理记忆时，按 Orient（按需） -> Gather Signal -> Consolidate & Prune（分层单源） -> Audit & Commit 对本仓库记忆做一次跨会话回顾、实证纠偏与结构瘦身。
+当用户显式要求执行 dreaming 或整理跨会话记忆时，按 Orient -> Gather Signal -> Reconcile & Update Docs -> Audit & Commit 扫描近期三端会话记录与 `memory/notes/`，核对真实源码后直接更新仓库的 Harness 文档体系，并清理过时与漂移内容。
 
-## 核心架构：四层按需查找（L0 -> L1 -> L2 -> L3）
+## 知识落位路由（单源去重）
 
-记忆维护遵守四层职责与唯一事实源（SSOT），不在顶层平铺细节或把长文压进单行：
+每条核实后的结论只落一个权威位置，其他页面只留简短指针，不复抄源码全文或重复规则：
 
-| 层级 | 对应文件 | 职责边界 | 硬预算（由 `dream_scan.py` 审计） |
-| --- | --- | --- | --- |
-| L0 顶层入口 | [memory.md](../../../memory.md) | 仅存全局锚点、核心边界与 L1 路由表，不直连 L2/L3 细节页 | `<= 1500` 字符 / `<= 35` 行 / 单行 `<= 200` 字符 |
-| L1 领域索引 | [preference/INDEX.md](../../../memory/preference/INDEX.md)、`memory/wiki/*-index.md` | 二级导航路由、域内总览与跨模块聚合；新增 L2 页挂到对应 L1 | `<= 2200` 字符 / `<= 45` 行 / 单行 `<= 220` 字符 |
-| L2 专题与偏好 | `memory/preference/*.md`、其他 `memory/wiki/**/*.md` | 单主题决策、核心边界、偏好与一手锚点，不复抄源码或 `docs/DESIGN.md` 全文 | `<= 2600` 字符 / `<= 65` 行 / 单行 `<= 260` 字符 |
-| L3 实证与明细 | `memory/wiki/experiments/*.md`、`*-experiments.md`、`*-details.md` | 评测口径、精简核心结果表、关键发现与原始实验脚本/报告锚点 | `<= 2400` 字符 / `<= 55` 行 / 单行 `<= 260` 字符 |
+| 知识类型 | 目标落点 | 说明 |
+| --- | --- | --- |
+| 顶层包边界、端口与单向分层 | [ARCHITECTURE.md](../../../ARCHITECTURE.md) | 仅在顶层服务边界或依赖方向变化时更新 |
+| 全仓设计与模块决策索引 | [docs/design-docs/index.md](../../../docs/design-docs/index.md) | 同步验证状态，确保所有模块 `DECISIONS.md` 均被收录 |
+| 跨包工程原则与协作写作品味 | [docs/design-docs/core-beliefs.md](../../../docs/design-docs/core-beliefs.md) | 跨任务通用的原则、沟通与文档习惯 |
+| 模块级架构与接口取舍 | 对应包模块的 `DECISIONS.md` | 按三要素（做了什么决定、为什么这么选、排除了哪些备选方案）记录，并挂入对应包 `docs/DESIGN.md` 与 `docs/design-docs/index.md` |
+| 用户视角产品行为与验收口径 | `docs/product-specs/` | 同步对外功能流程与验收边界，不写内部实现 |
+| 活动/归档计划与技术债 | `docs/exec-plans/`（`active/`、`completed/`、[tech-debt-tracker.md](../../../docs/exec-plans/tech-debt-tracker.md)） | 沉淀待修缺陷与限制；归档完结计划前确认 `Decision Log` 已逐条迁出 |
+| 本地命令、环境避坑与运维参考 | `docs/references/` | 如 [local-dev-and-testing.md](../../../docs/references/local-dev-and-testing.md) |
+| 会中草稿、归档与整理台账 | `memory/notes/`、`memory/archive/`、[memory/dream-log.md](../../../memory/dream-log.md) | 吸收后移出 `notes/`，`dream-log.md` 只留最近 2-3 次摘要 |
 
-### 反膨胀约束
+## 只读禁区与写作纪律
 
-- 单源去重（SSOT）：每条事实只落 1 个权威页，其他页只留简短指针。
-- 防止互链墙：跨模块共性聚合在对应 L1；L2/L3 只挂父页、配对页和少量强耦合直链，单行内部 `.md` 链接不超过 5 个。
-- 不压成长单行躲行数检查：正常分点分段书写，逼近预算时先删过期与重复内容，再下沉细节回原件指针或按子主题拆分。
-- 偏好去特例化：`memory/preference/` 只沉淀跨任务长期通用原则，绑死在单一服务的细节记入对应 `memory/wiki/` 子页。
-- 不改控制面与业务文件：过程中不修改 `AGENTS.md`、业务代码或各包设计文档；查不到来源的内容如实标明待核。
+- 不修改控制面与业务代码：过程中不改动 `AGENTS.md`，也不改动业务源码（`.py` / `.ts` / `.tsx` / `.proto` 等）。
+- 实证优先：更新任何文档前必须对照真实源码、`git log` 或测试核实，查不到来源的标注待核。
+- 平实文风：中文直接平实，不使用破折号、弯引号和装饰性符号，不堆砌粗体标签或规则腔套话；日期统一写 `YYYY-MM-DD`。
 
-## 执行流程（按需读取，不整库倾倒）
+## 执行流程
 
-1. Orient（只读 L0 + 动态区）：
-   - 先读 [memory.md](../../../memory.md)、[memory/dream-log.md](../../../memory/dream-log.md)（查看 `last_dream_at`）、`memory/notes/` 与 `docs/exec-plans/active/`。
-   - 不开局全量读取所有 `memory/wiki/` 与 `memory/preference/` 文件；等步骤 2 明确受影响主题后，再沿 `L0 -> L1 -> L2/L3` 按需打开目标页。
-2. Gather Signal（采集增量信号 + 架构体检）：
+1. Orient（按需定向）：
+   - 先读 [memory/dream-log.md](../../../memory/dream-log.md)（查看 `last_dream_at`）、`memory/notes/`、`docs/exec-plans/active/` 与 [docs/design-docs/index.md](../../../docs/design-docs/index.md)。
+   - 不开局全量读取全仓文档；待步骤 2 确定受影响主题后再按需打开目标文件。
+2. Gather Signal（采集增量信号 + 门禁体检）：
    - 在仓库根目录运行只读扫描脚本：`python3 memory/dream_scan.py`。
    - 需要展开某条助手长回复或检索关键词时，用 `--session <id> --turn <N>` 或 `--grep <pattern>`；积压较多时用 `--order oldest --since <T> --until <T>` 分批处理。
-   - 若扫描报告存在既有结构违规，本次整理一并修剪归位。
-3. Consolidate & Prune（先核对原件、再先剪后写）：
-   - 按本次涉及的主题沿 L1 打开待改的 L2/L3 与偏好页，对照源码、`git log` 或各包 `docs/DESIGN.md` 核实事实后再更新。
-   - 核查增量会话中用户拍板的决策是否已按三要素（做了什么决定、为什么这么选、排除了哪些备选方案）落盘：跨会话知识与偏好按单源补入 `memory/wiki/` 或 `memory/preference/`；若发现模块 `DECISIONS.md`、`docs/design-docs/` 或 `docs/exec-plans/` 漏记或待迁出，在整理摘要中标出（不改 `AGENTS.md` 和业务代码/文档）。
-   - 先清理过期、重复与超长单行，再按四层职责归并新结论、踩坑与 `memory/notes/`；相对日期统一改写为 `YYYY-MM-DD`。
-   - 仅当变化影响全局锚点或增删 L1 索引时才改动 L0 `memory.md`。
-4. Audit & Commit（程序化门禁验收）：
-   - 将已吸收的 `memory/notes/` 与早期 `dream-log` 条目移入 `memory/archive/`（`dream-log.md` 只留最近 2-3 次摘要）；若 `docs/exec-plans/active/` 有已完结计划，须先确认其 `Decision Log` 已逐条标注迁移落点（或确认为仅本次施工临时有效），未迁完的不移入 `docs/exec-plans/completed/`。
-   - 运行 `python3 memory/dream_scan.py --audit`，确认 6 项门禁全部清零且无异常：
+   - 若扫描报告存在既有门禁违规，本次整理一并修正。
+3. Reconcile & Update Docs（核对源码 -> 更新 OAI 文档与模块决策）：
+   - 核查增量会话中用户拍板的决策是否已按三要素落盘到对应模块 `DECISIONS.md`、`docs/design-docs/core-beliefs.md` 或 `docs/exec-plans/active/`，漏记的核实源码后直接补齐。
+   - 核对 `ARCHITECTURE.md`、`docs/design-docs/index.md`、`docs/product-specs/`、`docs/exec-plans/tech-debt-tracker.md` 与 `docs/references/` 是否有漂移或过期条目，先删过期与重复内容，再归并新结论与 `memory/notes/`。
+   - 检查 `docs/exec-plans/active/` 中已完结的计划：确认其 `Decision Log` 已逐条标注迁移落点或确认仅本次临时有效后，再移入 `docs/exec-plans/completed/`；未迁完的不归档。
+4. Audit & Commit（六项门禁验收与原子提交）：
+   - 将已吸收的 `memory/notes/` 笔记与早期 `dream-log` 条目移入 `memory/archive/`。
+   - 运行 `python3 memory/dream_scan.py --audit` 并执行 `conda run -n agent-gate python -m pytest memory/tests -q`，确认六项门禁全清零：
+     - `missing_required: []`
      - `broken: []`
-     - `budget_violations: []`
-     - `layer_violations: []`
-     - `crosslink_walls: []`
-     - `unreachable_files: []`
-     - `protected_sha256_prefix` 未变
-   - 全部通过后更新 [memory/dream-log.md](../../../memory/dream-log.md) 的 `last_dream_at` 与本次摘要，并做一次原子 `git commit`（仅暂存 `memory/`、`memory.md` 及相关技能改动）。
+     - `unindexed_decisions: []`
+     - `unmigrated_completed_decisions: []`
+     - `budget_and_style_violations: []`
+     - `protected_sha256_prefix`（`AGENTS.md`）未变
+   - 全部通过后更新 [memory/dream-log.md](../../../memory/dream-log.md) 的 `last_dream_at` 与本次摘要，并做一次原子 `git commit`（仅暂存受影响的文档、模块 `DECISIONS.md`、`memory/` 及相关技能，保留 `storage/data/` 等无关工作区目录）。

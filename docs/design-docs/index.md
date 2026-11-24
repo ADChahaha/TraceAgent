@@ -24,5 +24,5 @@
 
 ## 维护规则
 
-- 新增模块并引入 `DECISIONS.md` 时，必须同步挂入对应包 `docs/DESIGN.md` 与本页总目（由 `memory/tests/test_docs_harness.py` 机械校验）。
+- 新增模块并引入 `DECISIONS.md` 时，必须同步挂入对应包 `docs/DESIGN.md` 与本页总目（由 `python3 memory/dream_scan.py --audit` 与 `memory/tests/test_dream_scan.py` 机械校验）。
 - 仅记录已核实的长期设计与取舍；施工中的暂态方案与未完计划放 [docs/exec-plans/active/](../exec-plans/active/)。

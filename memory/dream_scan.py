@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""只读 Dreaming 信号扫描器、窄范围会话检索器与四层记忆架构门禁。"""
+"""只读 Dreaming 信号扫描器、窄范围会话检索器与 Harness 文档门禁。"""
 
 from __future__ import annotations
 
@@ -14,15 +14,23 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROTECTED_FILES = ["AGENTS.md"]
-
-LAYER_BUDGETS = {
-    "L0": {"max_chars": 1500, "max_lines": 35, "max_line_chars": 200},
-    "L1": {"max_chars": 2200, "max_lines": 45, "max_line_chars": 220},
-    "L2": {"max_chars": 2600, "max_lines": 65, "max_line_chars": 260},
-    "L3": {"max_chars": 2400, "max_lines": 55, "max_line_chars": 260},
-}
-
-MAX_INLINE_INTERNAL_LINKS_L2_L3 = 5
+IGNORED_DIR_PARTS = {".git", "node_modules", "build", ".next", ".pytest_cache", "__pycache__"}
+FORBIDDEN_STYLE_CHARS = ("\u2014", "\u201c", "\u201d", "\u2018", "\u2019")
+AGENTS_MAX_LINES = 80
+AGENTS_MAX_CHARS = 4000
+REQUIRED_HARNESS_FILES = (
+    "AGENTS.md",
+    "ARCHITECTURE.md",
+    "docs/design-docs/index.md",
+    "docs/design-docs/core-beliefs.md",
+    "docs/product-specs/index.md",
+    "docs/exec-plans/tech-debt-tracker.md",
+    "memory/dream-log.md",
+)
+REQUIRED_HARNESS_DIRS = (
+    "docs/exec-plans/active",
+    "docs/exec-plans/completed",
+)
 
 AGY_SPAWN_ID_RE = re.compile(
     r"(?:\\?\"conversationId\\?\":\s*\\?\"|\b(?:done|error)\s*\(|failed to run agent \\?\")"
@@ -445,91 +453,99 @@ def list_rel_md(subdir: Path) -> list[str]:
     return [str(p.relative_to(subdir)) for p in sorted(subdir.rglob("*.md"))] if subdir.exists() else []
 
 
-def classify_memory_tier(rel: str) -> str | None:
-    if rel == "memory.md":
-        return "L0"
-    if rel == "memory/preference/INDEX.md":
-        return "L1"
-    if rel.startswith("memory/wiki/") and rel.count("/") == 2 and rel.endswith("-index.md"):
-        return "L1"
-    if rel.startswith("memory/wiki/") and (
-        rel.startswith("memory/wiki/experiments/")
-        or rel.endswith("-experiments.md")
-        or rel.endswith("-details.md")
-    ):
-        return "L3"
-    if rel.startswith("memory/wiki/") or rel.startswith("memory/preference/"):
-        return "L2"
-    return None
+def iter_module_decisions(repo_root: Path) -> list[Path]:
+    return sorted(
+        p for p in repo_root.rglob("DECISIONS.md") if not (IGNORED_DIR_PARTS & set(p.parts))
+    )
 
 
-def _resolve_internal_md(src: Path, target: str, repo_root: Path) -> str | None:
-    if target.startswith(("http://", "https://", "/")):
-        return None
-    path_part, _, _ = target.partition("#")
-    p = (src.parent / urllib.parse.unquote(path_part)).resolve() if path_part else src.resolve()
-    try:
-        rel = p.relative_to(repo_root).as_posix()
-    except ValueError:
-        return None
-    if rel == "memory.md" or rel.startswith(("memory/wiki/", "memory/preference/")):
-        return rel
-    return None
+def find_unmigrated_completed_decisions(completed_dir: Path) -> list[str]:
+    """检查 docs/exec-plans/completed/ 中归档计划的决策记录是否均标注去向或临时有效。"""
+    link_re = re.compile(r"\[[^\]]+\]\(([^)\s]+)\)")
+    violations: list[str] = []
+    if not completed_dir.exists():
+        return violations
+    for plan in sorted(completed_dir.glob("*.md")):
+        in_decision_log = False
+        for lineno, raw_line in enumerate(plan.read_text(encoding="utf-8").splitlines(), 1):
+            stripped = raw_line.strip()
+            if stripped.startswith("## "):
+                in_decision_log = stripped.lower() in {"## decision log", "## 决策记录"}
+                continue
+            if not in_decision_log or not stripped.startswith("- "):
+                continue
+            has_disposition = (
+                "->" in stripped
+                or bool(link_re.search(stripped))
+                or "临时有效" in stripped
+                or "无需沉淀" in stripped
+            )
+            if not has_disposition:
+                violations.append(f"{plan.name}:{lineno}: {stripped}")
+    return violations
 
 
-def check_memory_integrity(repo_root: Path | None = None) -> dict:
+def check_docs_integrity(repo_root: Path | None = None) -> dict:
+    """校验仓库 Harness 文档骨架、链接、模块 DECISIONS.md 收录、归档决策迁出与风格预算。"""
     root = _resolve_repo_root(repo_root)
     memory_dir = root / "memory"
-    dream_log = memory_dir / "dream-log.md"
-    md_files = [root / "AGENTS.md", root / "memory.md", dream_log]
-    for sub in ("wiki", "preference", "notes", "tasks", "archive"):
+    docs_dir = root / "docs"
+    design_index = docs_dir / "design-docs" / "index.md"
+    active_plans_dir = docs_dir / "exec-plans" / "active"
+    completed_plans_dir = docs_dir / "exec-plans" / "completed"
+
+    missing_required: list[str] = []
+    for rel in REQUIRED_HARNESS_FILES:
+        if not (root / rel).is_file():
+            missing_required.append(rel)
+    for rel in REQUIRED_HARNESS_DIRS:
+        if not (root / rel).is_dir():
+            missing_required.append(rel + "/")
+
+    module_decisions_paths = iter_module_decisions(root)
+    module_decisions = [p.relative_to(root).as_posix() for p in module_decisions_paths]
+
+    md_set: set[Path] = set()
+    for fixed in (root / "AGENTS.md", root / "ARCHITECTURE.md", memory_dir / "dream-log.md"):
+        if fixed.is_file():
+            md_set.add(fixed)
+    if docs_dir.exists():
+        for p in docs_dir.rglob("*.md"):
+            if not (IGNORED_DIR_PARTS & set(p.parts)):
+                md_set.add(p)
+    for sub in ("notes", "archive"):
         d = memory_dir / sub
         if d.exists():
-            md_files += sorted(d.rglob("*.md"))
+            md_set.update(d.rglob("*.md"))
+    md_set.update(module_decisions_paths)
+    md_files = sorted(md_set)
+
     link_re = re.compile(r"\[[^\]]+\]\(([^)\s]+)\)")
     total_links = 0
-    broken = []
-    graph: dict[str, set[str]] = {}
-    active_tiered_files: set[str] = set()
-    tier_totals: dict[str, dict[str, int]] = {
-        t: {"files": 0, "chars": 0, "lines": 0} for t in ("L0", "L1", "L2", "L3")
-    }
-    budget_violations: list[dict] = []
-    layer_violations: list[tuple[str, str, str]] = []
-    crosslink_walls: list[tuple[str, int, int]] = []
+    broken: list[tuple[str, str, str]] = []
+    budget_and_style_violations: list[dict] = []
 
     for f in md_files:
-        if not f.exists():
-            continue
         rel = f.relative_to(root).as_posix()
         txt = f.read_text(encoding="utf-8")
         lines = txt.splitlines()
-        tier = classify_memory_tier(rel)
-        if tier is not None:
-            active_tiered_files.add(rel)
-            graph.setdefault(rel, set())
-            chars = len(txt)
-            nlines = len(lines)
-            max_line = max((len(line) for line in lines), default=0)
-            tier_totals[tier]["files"] += 1
-            tier_totals[tier]["chars"] += chars
-            tier_totals[tier]["lines"] += nlines
-            b = LAYER_BUDGETS[tier]
-            reasons = []
-            if chars > b["max_chars"]:
-                reasons.append(f"chars={chars}>{b['max_chars']}")
-            if nlines > b["max_lines"]:
-                reasons.append(f"lines={nlines}>{b['max_lines']}")
-            if max_line > b["max_line_chars"]:
-                reasons.append(f"max_line={max_line}>{b['max_line_chars']}")
-            if reasons:
-                budget_violations.append({"file": rel, "tier": tier, "reasons": reasons})
 
-        for line_no, line in enumerate(lines, 1):
-            inline_internal = 0
+        reasons: list[str] = []
+        if rel == "AGENTS.md":
+            if len(lines) > AGENTS_MAX_LINES:
+                reasons.append(f"lines={len(lines)}>{AGENTS_MAX_LINES}")
+            if len(txt) > AGENTS_MAX_CHARS:
+                reasons.append(f"chars={len(txt)}>{AGENTS_MAX_CHARS}")
+        bad_chars = [ch for ch in FORBIDDEN_STYLE_CHARS if ch in txt]
+        if bad_chars:
+            reasons.append(f"forbidden_chars={''.join(bad_chars)}")
+        if reasons:
+            budget_and_style_violations.append({"file": rel, "reasons": reasons})
+
+        for line in lines:
             for m in link_re.finditer(line):
                 target = m.group(1)
-                if target.startswith(("http://", "https://")):
+                if target.startswith(("http://", "https://", "mailto:")):
                     continue
                 total_links += 1
                 if target.startswith("/"):
@@ -547,87 +563,78 @@ def check_memory_integrity(repo_root: Path | None = None) -> dict:
                     if urllib.parse.unquote(frag) not in slugs:
                         broken.append((rel, target, "missing_anchor"))
 
-                target_rel = _resolve_internal_md(f, target, root)
-                if target_rel and tier is not None:
-                    graph[rel].add(target_rel)
-                    inline_internal += 1
-                    if tier == "L0" and classify_memory_tier(target_rel) != "L1" and target_rel != "memory.md":
-                        layer_violations.append((rel, target_rel, "L0_direct_link_to_non_L1"))
-
-            if tier in ("L2", "L3") and inline_internal > MAX_INLINE_INTERNAL_LINKS_L2_L3:
-                crosslink_walls.append((rel, line_no, inline_internal))
-
-    depths: dict[str, int] = {}
-    queue: list[str] = []
-    if "memory.md" in active_tiered_files:
-        depths["memory.md"] = 0
-        queue.append("memory.md")
-    while queue:
-        cur = queue.pop(0)
-        for nxt in sorted(graph.get(cur, set())):
-            if nxt not in depths:
-                depths[nxt] = depths[cur] + 1
-                queue.append(nxt)
-    unreachable_files = sorted(f for f in active_tiered_files if f not in depths)
-    max_depth = max(depths.values()) if depths else 0
-
-    mem_path = root / "memory.md"
-    if mem_path.exists():
-        mem_txt = mem_path.read_text(encoding="utf-8")
-        mem_lines = len(mem_txt.splitlines())
-        mem_chars = len(mem_txt)
+    unindexed_decisions: list[str] = []
+    if design_index.is_file():
+        indexed_targets: set[Path] = set()
+        for m in link_re.finditer(design_index.read_text(encoding="utf-8")):
+            href = m.group(1).split("#", 1)[0]
+            if not href or href.startswith(("http://", "https://", "mailto:", "/")):
+                continue
+            indexed_targets.add((design_index.parent / urllib.parse.unquote(href)).resolve())
+        unindexed_decisions = [
+            p.relative_to(root).as_posix()
+            for p in module_decisions_paths
+            if p.resolve() not in indexed_targets
+        ]
     else:
-        mem_lines = 0
-        mem_chars = 0
-    active_preferences = list_rel_md(memory_dir / "preference")
+        unindexed_decisions = list(module_decisions)
+
+    unmigrated_completed_decisions = find_unmigrated_completed_decisions(completed_plans_dir)
+
+    agents_path = root / "AGENTS.md"
+    if agents_path.is_file():
+        agents_txt = agents_path.read_text(encoding="utf-8")
+        agents_lines = len(agents_txt.splitlines())
+        agents_chars = len(agents_txt)
+    else:
+        agents_lines = 0
+        agents_chars = 0
+
+    active_exec_plans = list_rel_md(active_plans_dir)
+    completed_exec_plans = list_rel_md(completed_plans_dir)
     active_notes = list_rel_md(memory_dir / "notes")
-    tasks_dir = memory_dir / "tasks"
-    active_tasks = [p.name for p in sorted(tasks_dir.glob("*.md"))] if tasks_dir.exists() else []
     protected_hashes = {
         fn: hashlib.sha256((root / fn).read_bytes()).hexdigest()[:12]
         for fn in PROTECTED_FILES
         if (root / fn).exists()
     }
     return {
-        "memory_md_lines": mem_lines,
-        "memory_md_chars": mem_chars,
-        "tier_totals": tier_totals,
-        "total_active_chars": sum(v["chars"] for v in tier_totals.values()),
-        "total_active_files": sum(v["files"] for v in tier_totals.values()),
-        "max_depth": max_depth,
-        "budget_violations": budget_violations,
-        "layer_violations": layer_violations,
-        "crosslink_walls": crosslink_walls,
-        "unreachable_files": unreachable_files,
-        "active_preferences": active_preferences,
+        "agents_md_lines": agents_lines,
+        "agents_md_chars": agents_chars,
+        "docs_checked": len(md_files),
+        "module_decisions": module_decisions,
+        "active_exec_plans": active_exec_plans,
+        "completed_exec_plans": completed_exec_plans,
         "active_notes": active_notes,
-        "active_tasks": active_tasks,
         "total_links": total_links,
+        "missing_required": missing_required,
         "broken": broken,
+        "unindexed_decisions": unindexed_decisions,
+        "unmigrated_completed_decisions": unmigrated_completed_decisions,
+        "budget_and_style_violations": budget_and_style_violations,
         "protected_sha256_prefix": protected_hashes,
     }
 
 
 def _print_integrity_report(integrity: dict, verbose: bool = False) -> None:
-    print(f"- L0 `memory.md`: {integrity['memory_md_lines']} lines, {integrity['memory_md_chars']} chars")
-    tier_summary = " | ".join(f"{t}: {v['files']}f/{v['chars']}c" for t, v in integrity["tier_totals"].items())
+    print(f"- `AGENTS.md`: {integrity['agents_md_lines']} lines, {integrity['agents_md_chars']} chars")
     print(
-        f"- Active memory tiers ({integrity['total_active_files']} files, "
-        f"{integrity['total_active_chars']} chars, max_depth={integrity['max_depth']}): {tier_summary}"
+        f"- Knowledge docs checked: {integrity['docs_checked']} files "
+        f"(module `DECISIONS.md`: {len(integrity['module_decisions'])})"
     )
-    print(f"- Active preferences (`memory/preference/`): {integrity['active_preferences']}")
+    print(f"- Active exec plans (`docs/exec-plans/active/`): {integrity['active_exec_plans']}")
+    print(f"- Completed exec plans (`docs/exec-plans/completed/`): {integrity['completed_exec_plans']}")
     print(f"- Active notes (`memory/notes/`): {integrity['active_notes']}")
-    print(f"- Active tasks (`memory/tasks/`): {integrity['active_tasks']}")
+    print(f"- Missing required entries: {integrity['missing_required']}")
     print(f"- Links checked: {integrity['total_links']}, broken: {integrity['broken']}")
+    print(f"- Unindexed `DECISIONS.md`: {integrity['unindexed_decisions']}")
+    print(f"- Unmigrated completed decisions: {integrity['unmigrated_completed_decisions']}")
     print(
-        f"- Budget violations: {len(integrity['budget_violations'])}"
-        + (" []" if not integrity["budget_violations"] else "")
+        f"- Budget & style violations: {len(integrity['budget_and_style_violations'])}"
+        + (" []" if not integrity["budget_and_style_violations"] else "")
     )
-    for v in integrity["budget_violations"] if verbose or integrity["budget_violations"] else []:
-        print(f"  - [{v['tier']}] `{v['file']}`: {', '.join(v['reasons'])}")
-    print(f"- Layer violations (L0->L2/L3): {integrity['layer_violations']}")
-    print(f"- Crosslink walls (L2/L3 inline > {MAX_INLINE_INTERNAL_LINKS_L2_L3}): {integrity['crosslink_walls']}")
-    print(f"- Unreachable files from `memory.md`: {integrity['unreachable_files']}")
+    for v in integrity["budget_and_style_violations"] if verbose or integrity["budget_and_style_violations"] else []:
+        print(f"  - `{v['file']}`: {', '.join(v['reasons'])}")
     print(f"- Protected SHA-256 prefix: {integrity['protected_sha256_prefix']}")
 
 
@@ -789,14 +796,14 @@ def main() -> None:
     parser.add_argument("--all-turns", action="store_true", help="In --session mode, include mid-turn assistant commentary before tool calls")
     parser.add_argument("--grep", help="Narrow regex search over extracted session turns instead of full reads")
     parser.add_argument("--max-hits", type=int, default=25, help="Max matched turns in --grep mode (default: 25)")
-    parser.add_argument("--audit", action="store_true", help="Only run memory hierarchy, budget, link and reachability audit")
+    parser.add_argument("--audit", action="store_true", help="Only run Harness docs, DECISIONS index, link and style audit")
     args = parser.parse_args()
 
     repo_root = _resolve_repo_root(args.repo_root)
 
     if args.audit:
-        print("# Dream Memory Architecture Audit")
-        integrity = check_memory_integrity(repo_root)
+        print("# Dream Harness Docs Audit")
+        integrity = check_docs_integrity(repo_root)
         _print_integrity_report(integrity, verbose=True)
         return
 
@@ -831,7 +838,7 @@ def main() -> None:
 
     reply_chars = 180 if args.reply_chars is None else args.reply_chars
     print(f"# Dream Scan Report\n- Cutoff (`since`): {since_dt.isoformat()}" + (f" | `until`: {args.until}" if args.until else ""))
-    integrity = check_memory_integrity(repo_root)
+    integrity = check_docs_integrity(repo_root)
     _print_integrity_report(integrity, verbose=False)
 
     git_status, git_log = _read_git_summary(repo_root)
