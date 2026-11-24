@@ -18,6 +18,8 @@ Python 环境统一使用 Conda 的 `agent-gate`（Python 3.11）。各子包的
 
 ## 项目记忆
 
-- 跨会话背景和偏好放在 [memory.md](memory.md) 和 `memory/`：`preference/` 放协作偏好，`wiki/` 放项目知识，`notes/` 顺手记容易忘的踩坑或判断，`tasks/` 放未完事项，`archive/` 放归档。
-- 新会话先看 [memory.md](memory.md) 和 `memory/notes/`，其余按需打开，具体实现以源码和 `docs/DESIGN.md` 为准。
-- 平时有值得留下的坑或偏好顺手记进 `notes/` 或 `preference/`，需要整理时由用户触发 [dreaming](.agents/skills/dreaming/SKILL.md)。日常开发与 `dreaming` 不修改本文件。
+- 控制面与记忆面分离：本文件保存稳定开发规范，日常开发与 `dreaming` 不修改本文件。
+- 活跃记忆按四层按需组织：L0 [memory.md](memory.md) 只放全局锚点与一级领域路由（不直连 L2/L3）；L1 索引（[preference/INDEX.md](memory/preference/INDEX.md) 与 `memory/wiki/*-index.md`）负责二级路由和域内总览；L2 存放专题知识与用户偏好；L3（`memory/wiki/experiments/*.md`、`*-experiments.md`、`*-details.md`）存放精简实证与明细摘要。
+- 动态与归档目录：`memory/notes/` 放会中随手记下的轻量预判与踩坑（允许草稿态，留待 `dreaming` 核验后升格或归档），`memory/tasks/` 放未完成或阻塞事项，`memory/archive/` 放历史归档，[dream-log.md](memory/dream-log.md) 记录整理摘要与扫描水位线。
+- 启动按需读取：新会话先读 [memory.md](memory.md) 并查看 `memory/notes/`，其余 `preference/`、`wiki/` 与 `tasks/` 按当前任务沿 L1 索引逐层打开，不整库全读；具体实现细节以源码和各包 `docs/DESIGN.md` 为准。
+- 会中随手记与手动整理：对话中遇到跨会话会用到、不写就会丢的踩坑、阶段判断或偏好，顺手轻量记入 `memory/notes/` 或 `memory/preference/`，不打断主线且不抄源码流水账；跨会话回顾、纠偏与归并由用户显式触发 [dreaming](.agents/skills/dreaming/SKILL.md) 执行。
