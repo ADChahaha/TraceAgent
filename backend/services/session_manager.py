@@ -50,12 +50,19 @@ class SessionManager:
         self.commands = asyncio.Queue(maxsize=settings.session_command_limit)
         self.closed = self.closing = self.broken = False
         self.recovery_task = None
+        self._background_tasks: set[asyncio.Task] = set()
         self.last_activity = asyncio.get_running_loop().time()
         self.task = asyncio.create_task(self._run(), name=f"session:{self.session_id}")
 
     @property
     def active_turn_id(self):
         return self.session["active_turn_id"]
+
+    def _track_task(self, task):
+        if task is None or task.done():
+            return
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     def fail(self):
         """事务写失败时标记 manager 损坏：清空执行态让 idle 可通过，补发挂起的
@@ -64,6 +71,7 @@ class SessionManager:
         runtime, self.runtime = self.runtime, None
         if runtime is not None:
             runtime.cancel()
+            self._track_task(runtime.task)
         turn_id = self.active_turn_id
         self.session = {**self.session, "active_turn_id": None}
         if self.pending_cancel is not None:
@@ -73,7 +81,9 @@ class SessionManager:
         for subscription in self.subscribers.values():
             subscription.close()
         self.subscribers.clear()
-        self.recovery_task = asyncio.create_task(self._recover_active_turn(turn_id))
+        if self.recovery_task is None or self.recovery_task.done():
+            self.recovery_task = asyncio.create_task(self._recover_active_turn(turn_id))
+            self._track_task(self.recovery_task)
 
     async def _recover_active_turn(self, turn_id):
         """尽力收口：活跃轮标 failed、session 认领清空；数据库仍不可用时交给重启收口。"""
@@ -118,7 +128,7 @@ class SessionManager:
             command = await self.commands.get()
             self.last_activity = asyncio.get_running_loop().time()
             try:
-                if self.broken and command.name != "detach":
+                if self.broken and command.name not in {"detach", "stop"}:
                     raise BackendServiceError("会话存储异常，请恢复服务后重试")
                 result = await getattr(self, "_handle_" + command.name)(*command.args)
             except Exception as exc:
@@ -408,17 +418,26 @@ class SessionManager:
     def idle(self):
         return self.active_turn_id is None and self.runtime is None and not self.subscribers and self.commands.empty()
 
+    async def _drain_background_tasks(self):
+        """排干已脱离的 runtime 与收口任务，避免关闭数据库连接时仍有工作线程在读写。"""
+        while True:
+            runtime, self.runtime = self.runtime, None
+            if runtime is not None:
+                runtime.cancel()
+                self._track_task(runtime.task)
+            if not self._background_tasks:
+                return
+            await asyncio.gather(*list(self._background_tasks), return_exceptions=True)
+
     async def close(self):
         if self.closed:
             return
         self.closing = True
-        if self.runtime is not None and not self.broken:
-            self.runtime.cancel()
-            await self.runtime.wait_closed()
-        if self.recovery_task is not None:
-            await asyncio.gather(self.recovery_task, return_exceptions=True)
-        await self.commands.put(Command("stop", (), asyncio.get_running_loop().create_future()))
+        await self._drain_background_tasks()
+        if not self.task.done():
+            await self.commands.put(Command("stop", (), asyncio.get_running_loop().create_future()))
         await self.task
+        await self._drain_background_tasks()
 
     async def _handle_stop(self):
         self.closed = True

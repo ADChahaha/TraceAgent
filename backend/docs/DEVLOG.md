@@ -1,3 +1,10 @@
+## 2026-11-25 修复 SessionManager 损坏关闭段错误与测试空闲时钟假设
+
+- 故障收口：`SessionManager.fail()` 清空 `self.runtime` 时同时将脱离的 `runtime.task` 与 `recovery_task` 登记到 `_background_tasks`，`_run()` 对损坏状态下的 `stop` 命令放行执行 `_handle_stop()`，`close()` 在退出前排干全部后台任务，避免主线程 `database.close()` 与工作线程 SQLite 查询并发触发段错误（CI 曾报 exit code 139）。
+- 测试稳定：`backend/tests/test_session_manager.py` 将 4 处 `last_activity = 0` 改为基于当前单调时钟的 `expire_idle()`，修复新开机 Linux VM 单调时钟不足 60 秒导致的空闲回收误失败，并补充 `test_close_waits_for_detached_runtime_after_fail_before_db_close` 确定性回归测试。
+
+验证：`backend/tests`、`.github/tests`、`memory/tests` 共 117 项通过，关闭竞态相关用例 10 轮连续通过。
+
 ## 2026-11-25 显式拒绝内存数据库路径
 
 在 `backend/core/db.py` 新增 `validate_database_path`，于 `BackendSettings`、`ThreadLocalDatabase` 与 `connect_database` 入口统一拒绝 `:memory:`、空路径、`.`/`..`、目录路径以及 `file:` / `mode=memory` SQLite URI，直接抛 `ValueError`，避免静默启动后到后台工作线程才报缺表（详见 [backend/core/DECISIONS.md](../core/DECISIONS.md)）。

@@ -151,6 +151,11 @@ async def wait_for_condition(predicate, timeout=2):
         await asyncio.sleep(0.01)
 
 
+def expire_idle(manager, registry):
+    """按当前单调时钟把会话标为超过空闲阈值，不依赖宿主机开机时长。"""
+    manager.last_activity = asyncio.get_running_loop().time() - registry.settings.session_idle_seconds - 1
+
+
 async def finish(call, manager, turn_id, text="回答"):
     context = await manager.attach()
     await call.events.put({"type": "model_message.done", "seq": 1, "message_id": "m1", "content": text})
@@ -588,10 +593,56 @@ def test_tool_write_failure_rolls_back_group(tmp_path):
                 await next_type(context.subscription, "tool_completed")
             assert db.connect().execute("SELECT COUNT(*) FROM chat_messages").fetchone()[0] == 1
             assert manager.broken
-            # manager.fail 已取消 runtime；等它收尾后再关库，避免跨线程关闭在途连接。
-            if manager.runtime is not None:
-                await manager.runtime.wait_closed()
+            assert manager.runtime is None
         finally:
+            await registry.close()
+            db.close()
+    asyncio.run(scenario())
+
+
+def test_close_waits_for_detached_runtime_after_fail_before_db_close(tmp_path, monkeypatch):
+    """fail() 清空 manager.runtime 后，close() 仍须等待脱离的 runtime 写库线程结束，避免与 db.close() 竞争段错误。"""
+    async def scenario():
+        import threading
+        from backend.services.subscription import SubscriptionClosed
+
+        registry, db, agent = await setup(tmp_path)
+        entered = threading.Event()
+        release = threading.Event()
+        real_update = crud.update_turn_status_if_current
+
+        def slow_update(*args, **kwargs):
+            entered.set()
+            assert release.wait(2), "close() 阻塞时未能释放工作线程"
+            return real_update(*args, **kwargs)
+
+        try:
+            manager, context = await new_session_complete(registry, "问题")
+            call = await agent.created.get()
+            runtime = manager.runtime
+            await call.events.put({"type": "model_message.done", "seq": 1, "message_id": "tools", "content": "查询",
+                                   "tool_calls": [{"id": "a", "name": "read", "args_json": "{}"}]})
+            await next_type(context.subscription, "model_message.done")
+            db.connect().execute("CREATE TRIGGER reject_tool BEFORE INSERT ON chat_messages WHEN NEW.role='tool' BEGIN SELECT RAISE(ABORT, 'injected'); END")
+            db.connect().commit()
+            monkeypatch.setattr(crud, "update_turn_status_if_current", slow_update)
+
+            await call.events.put({"type": "tool_completed", "seq": 2, "tool_call_id": "a", "tool": "read", "result_json": "{}"})
+            with pytest.raises(SubscriptionClosed):
+                await next_type(context.subscription, "tool_completed")
+            assert manager.broken and manager.runtime is None
+
+            await asyncio.to_thread(entered.wait, 2)
+            assert entered.is_set()
+            closing = asyncio.create_task(registry.close())
+            await asyncio.sleep(0.05)
+            assert not closing.done(), "后台写库线程未结束前 close() 不应提前返回"
+            release.set()
+            await asyncio.wait_for(closing, 2)
+            assert runtime.done.is_set()
+            assert manager.closed
+        finally:
+            release.set()
             await registry.close()
             db.close()
     asyncio.run(scenario())
@@ -604,13 +655,13 @@ def test_idle_unload_and_cold_resume_do_not_keep_history_in_manager(tmp_path):
             manager, first = await new_session_complete(registry, "问题")
             call = await agent.created.get()
             await manager.detach(first.subscription.id)
-            manager.last_activity = 0
+            expire_idle(manager, registry)
             await registry.evict_idle()
             assert registry.entries[manager.session_id].manager is manager
             await finish(call, manager, first.turn_id)
             if manager.runtime is not None:
                 await manager.runtime.wait_closed()
-            manager.last_activity = 0
+            expire_idle(manager, registry)
             await registry.evict_idle()
             assert manager.session_id not in registry.entries
             loaded = await registry.get_or_create(manager.session_id)
@@ -677,7 +728,7 @@ def test_closing_entry_rejects_get_until_removed(tmp_path, monkeypatch):
             await finish(call, manager, context.turn_id)
             if manager.runtime is not None:
                 await manager.runtime.wait_closed()
-            manager.last_activity = 0
+            expire_idle(manager, registry)
             entered, release = asyncio.Event(), asyncio.Event()
             original_close = manager.close
 
@@ -789,7 +840,7 @@ def test_finish_write_failure_resolves_cancel_reclaims_and_recovers(tmp_path, mo
                 "SELECT active_turn_id FROM chat_sessions WHERE id=?", (manager.session_id,)).fetchone()[0] is None
             # close() 必须完成而不是挂在命令循环上。
             await asyncio.wait_for(manager.close(), 2)
-            manager.last_activity = 0
+            expire_idle(manager, registry)
             await registry.evict_idle()
             assert manager.session_id not in registry.entries
             reloaded = await registry.get_or_create(manager.session_id)

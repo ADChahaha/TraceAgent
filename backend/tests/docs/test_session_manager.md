@@ -18,6 +18,7 @@
 - `test_cancelled_caller_after_result_recycles_subscription`：handler 已写入结果、调用方恢复前被取消的窄窗口，订阅由同步守卫回收。
 - `test_tool_group_is_atomic_and_next_history_uses_original_ids`：同名工具按原调用 ID 配对，乱序成功/失败结果齐备后整组提交（runtime 自治写库）。
 - `test_tool_write_failure_rolls_back_group`：注入真实 SQLite 写入失败，assistant/tool 组整组回滚并关闭异常管理器订阅。
+- `test_close_waits_for_detached_runtime_after_fail_before_db_close`：验证 `fail()` 清空 `manager.runtime` 且脱离的 `TurnRuntime` 仍在后台工作线程收尾写库时，`registry.close()` 必须等待该线程退出后才返回，避免与 `db.close()` 竞争触发段错误。
 - `test_idle_unload_and_cold_resume_do_not_keep_history_in_manager`：无订阅的活跃任务不卸载，空闲后冷恢复可查询历史且不常驻历史缓存。
 - `test_startup_marks_orphan_execution_failed_without_restarting_agent`：启动时收口遗留活跃轮次，不重放模型执行。
 - `test_retry_marks_failed_attempt_and_terminal_clears_retry_state`：重试标记原模型尝试失败，终态不会留下仍在重试的展示项。
