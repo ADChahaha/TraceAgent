@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, cancelCompletion, openCompletion, openResume } from "@/lib/api";
+import { formatUserError } from "@/lib/error-messages";
 import { applySessionEvent, isTerminal } from "@/lib/session-state";
 import { consumeSessionStream } from "@/lib/session-stream";
 import { rememberSession } from "@/lib/session-store";
@@ -67,7 +68,7 @@ export function useSession(sessionId: string) {
         if (current() && (!receivedSnapshot || state.current?.state.active_turn_id)) throw new Error("Stream interrupted");
       } catch (cause) {
         if (!current()) return;
-        const message = cause instanceof Error ? cause.message : "Connection failed";
+        const message = formatUserError(cause, question === undefined ? "session" : "chat");
         setError(message);
         if (cause instanceof ApiError && [400, 404, 413, 422].includes(cause.status)) {
           locked.current = false;
@@ -119,7 +120,7 @@ export function useSession(sessionId: string) {
         if (!state.current.state.active_turn_id) { disconnect(); setConnection("idle"); }
       }
     } catch (cause) {
-      if (generation.current === version) setError(cause instanceof Error ? cause.message : "Failed to cancel");
+      if (generation.current === version) setError(formatUserError(cause, "chat"));
     } finally {
       cancelLock.current = false;
       setCancelling(false);

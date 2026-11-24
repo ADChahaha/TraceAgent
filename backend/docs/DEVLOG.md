@@ -1,3 +1,10 @@
+## 2026-11-25 对外 HTTP 与轮次错误脱敏为英文用户提示
+
+- 新增 [backend/services/user_errors.py](../services/user_errors.py)，由 [errors.py](../routes/errors.py)、[chat.py](../routes/chat.py) 与 [turn_runtime.py](../services/turn_runtime.py) 在对外出口统一把文档/问答 gRPC 错误、参数/配额/冲突/缺失错误以及模型超时/限流/断流映射为具体、可操作的英文提示，不再向浏览器响应体和 SSE 事件透出 `gRPC`、`ipv4:127.0.0.1`、端口号、Python 包名或 Pydantic 堆栈；原始异常通过服务端 `logging` 完整保留。
+- 同步更新 [backend/routes/DECISIONS.md](../routes/DECISIONS.md) 并新增 [test_user_errors.py](../tests/test_user_errors.py)。
+
+验证：`backend/tests`、`scripts/tests`、`.github/tests` 共 127 项通过；真实服务复现文档服务不可达与代理初始化报错时，HTTP 502 与 SQLite `chat_turns.error` 均为脱敏英文文案，服务端日志完整保留原始技术细节。
+
 ## 2026-11-25 修复 SessionManager 损坏关闭段错误与测试空闲时钟假设
 
 - 故障收口：`SessionManager.fail()` 清空 `self.runtime` 时同时将脱离的 `runtime.task` 与 `recovery_task` 登记到 `_background_tasks`，`_run()` 对损坏状态下的 `stop` 命令放行执行 `_handle_stop()`，`close()` 在退出前排干全部后台任务，避免主线程 `database.close()` 与工作线程 SQLite 查询并发触发段错误（CI 曾报 exit code 139）。

@@ -31,3 +31,9 @@
 - 决定：明暗主题通过单按钮切换并写入 `localStorage("agent-gate.theme")` 与 `html[data-theme]`，监听自定义事件与 `storage` 事件实现跨标签页同步；禁止在 Client Component 首帧 render 或 `useState` 初始化器中直接读取 `localStorage` 或 `window`，统一经 `useSyncExternalStore` 提供固定服务端快照（主题 `"light"`、窄屏 `false`）并由 `ThemeBootstrap` 挂载后同步。
 - 原因：避免 Next.js 服务端预渲染 HTML 与客户端首次水合状态不一致触发 Hydration failed 报错。
 - 排除：在初始 `useState` 中直接读 `localStorage` 或 `window.innerWidth`；使用多按钮或下拉菜单切换主题。
+
+## 6. 前端统一经 `error-messages.ts` 格式化展示错误并兜底拦截技术细节
+
+- 决定：新增 [error-messages.ts](error-messages.ts) 作为前端展示层统一错误出口，将网络异常（`Failed to fetch`、`backend unavailable`、`Stream interrupted`）和持久化系统码（`backend_restarted`、`storage_failure`）映射为清晰英文提示，并对历史会话或异常通道可能残留的底层技术串（`gRPC`、`ipv4:`、HTML 错误页、内部中文等）按场景兜底脱敏；文件上传失败提示在 `workspace.module.css` 保持错误高亮色。
+- 原因：配合后端边界脱敏形成双层防护，确保断网、服务重启或旧历史记录回放时用户始终看到具体、可读且不暴露内部实现的提示。
+- 排除：在各组件直接渲染 `error.message` 或 `turn.error` 原文；为每个报错弹窗单独散落硬编码兜底逻辑。

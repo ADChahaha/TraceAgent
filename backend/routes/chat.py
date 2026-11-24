@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from urllib.parse import quote
 
 from fastapi import APIRouter, Request, HTTPException, Query
@@ -17,6 +18,7 @@ from backend.services.session_history import build_snapshot
 from backend.services.subscription import SubscriptionClosed
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["chat"])
 
 
@@ -45,12 +47,12 @@ async def _read_files(request):
     """multipart -> [{"filename", "content"}]；文件字段、分块读取和大小限制在这里统一处理。"""
     settings = request.app.state.settings
     if not request.headers.get("content-type", "").startswith("multipart/form-data"):
-        raise HTTPException(status_code=422, detail="上传必须使用 multipart/form-data")
+        raise HTTPException(status_code=422, detail="Invalid upload request format.")
     files = []
     async with request.form(max_files=settings.upload_max_files, max_fields=8) as form:
         for key, value in form.multi_items():
             if not isinstance(value, UploadFile):
-                raise HTTPException(status_code=422, detail="未知的表单字段")
+                raise HTTPException(status_code=422, detail="Invalid upload request format.")
             if key not in {"file", "files"}:
                 raise ValidationError("未知的文件字段")
             content = bytearray()
@@ -59,7 +61,7 @@ async def _read_files(request):
             files.append({"filename": value.filename or "", "content": bytes(content)})
     total = sum(len(file["content"]) for file in files)
     if total > settings.upload_max_bytes:
-        raise HTTPException(status_code=413, detail="上传超过大小限制")
+        raise HTTPException(status_code=413, detail="This upload exceeds the size limit.")
     return files
 
 
@@ -196,7 +198,8 @@ async def completion(request: Request):
         context = await manager.create_completion(content=body.content, run_options=body.run_options)
         return await _response(request, manager, context)
     except (PydanticValidationError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        logger.debug("Invalid completion request payload: %s", exc)
+        raise HTTPException(status_code=422, detail="Invalid request body. Check your input and try again.") from exc
     except BackendServiceError as exc:
         raise_http_error(exc)
 

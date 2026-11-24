@@ -2,6 +2,7 @@
 
 import { useLayoutEffect, useRef } from "react";
 import { MarkdownEvidence } from "@/components/markdown-evidence";
+import { formatUserError } from "@/lib/error-messages";
 import type { SessionItem, SessionTurn } from "@/lib/session-types";
 
 export function Conversation({ turns, running, pending, onEvidence }: {
@@ -25,7 +26,7 @@ export function Conversation({ turns, running, pending, onEvidence }: {
           </details>
           : <Message key={group[0].id} item={group[0]} onEvidence={onEvidence} />)}
         {turn.status === "cancelled" && <div className="replay-agent-empty">Cancelled</div>}
-        {turn.status === "failed" && turn.error && <div role="alert" className="text-sm text-destructive">{turn.error}</div>}
+        {turn.status === "failed" && turn.error && <div role="alert" className="text-sm text-destructive">{formatUserError(turn.error, "chat")}</div>}
       </div>)}
       {pending && <div className="qa-message-turn is-user"><div className="qa-message-bubble whitespace-pre-wrap">{pending}</div></div>}
       {running && <div className="qa-thinking-turn" aria-label="Assistant is thinking"><div className="qa-thinking-bubble">Thinking<span className="qa-thinking-bounce" aria-hidden="true"><span /><span /><span /></span></div></div>}

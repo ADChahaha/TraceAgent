@@ -6,6 +6,7 @@ import { readWorkspaceDraft, saveWorkspaceDraft } from "@/lib/session-store";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { removeSessionFile } from "@/lib/api";
 import { documentKey } from "@/lib/document-files";
+import { formatUserError } from "@/lib/error-messages";
 import { useFileUploads } from "@/lib/use-file-uploads";
 import { useSession } from "@/lib/use-session";
 import { WorkspaceShell } from "@/components/session/workspace-shell";
@@ -72,7 +73,7 @@ function SessionWorkspace({ sessionId }: { sessionId: string }) {
       setSelection(null);
       session.refresh();
     } catch (cause) {
-      setFileError(cause instanceof Error ? cause.message : "File operation failed");
+      setFileError(formatUserError(cause, "remove"));
       session.refresh();
     } finally { fileLock.current = false; setFileBusy(false); }
   }

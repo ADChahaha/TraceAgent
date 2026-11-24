@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { FileText, Loader2, Plus, SendHorizonal, X } from "lucide-react";
 import { createSession, openCompletion } from "@/lib/api";
+import { formatUserError } from "@/lib/error-messages";
 import { consumeSessionStream } from "@/lib/session-stream";
 import { rememberSession } from "@/lib/session-store";
 import { DOCUMENT_ACCEPT } from "@/lib/document-files";
@@ -70,7 +71,7 @@ export function UploadWorkbench({ onCreated, onFilesReady }: { onCreated?: (sess
       if (!accepted) throw new Error("Connection interrupted. Open the session to check its status before resending.");
       if (!signal.aborted) onCreated?.(id);
     } catch (cause) {
-      if (!signal.aborted) setError(cause instanceof Error ? cause.message : "Failed to start session");
+      if (!signal.aborted) setError(formatUserError(cause, "chat"));
     } finally {
       lock.current = false;
       if (!signal.aborted) setSubmitting(false);

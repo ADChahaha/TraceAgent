@@ -9,11 +9,15 @@ refresh/publish/fail 是 manager 提供的回调通道（缓存同步、事件�
 import asyncio
 import copy
 import json
+import logging
 import uuid
 
 from backend.crud import crud
 from backend.services.time_utils import utc_now
 from backend.services.turn_view import TurnView
+from backend.services.user_errors import format_turn_error
+
+logger = logging.getLogger(__name__)
 
 
 class TurnRuntime:
@@ -66,11 +70,13 @@ class TurnRuntime:
                 if self.cancel_requested:
                     await self._finish("cancelled", "执行已取消")
                 else:
-                    await self._finish("failed", "agent 未返回终态便结束流")
+                    logger.warning("Turn %s ended stream without terminal event", self.turn_id)
+                    await self._finish("failed", format_turn_error("agent 未返回终态便结束流"))
         except asyncio.CancelledError:
             await self._finish("cancelled", "执行已取消")
         except Exception as exc:
-            await self._finish("failed", str(exc))
+            logger.warning("Turn %s failed (%s): %s", self.turn_id, type(exc).__name__, exc)
+            await self._finish("failed", format_turn_error(exc))
         finally:
             if self.call is not None:
                 self.call.cancel()
@@ -128,8 +134,12 @@ class TurnRuntime:
             await self._finish("completed")
             return False
         if kind in {"completion.failed", "completion.cancelled"}:
-            await self._finish("failed" if kind.endswith("failed") else "cancelled",
-                               event.get("error_message") or event.get("error"))
+            raw_error = event.get("error_message") or event.get("error")
+            if kind.endswith("failed"):
+                logger.warning("Turn %s received completion.failed: %s", self.turn_id, raw_error)
+                await self._finish("failed", format_turn_error(raw_error))
+            else:
+                await self._finish("cancelled", raw_error)
             return False
         ready = None
         if kind == "model_message.done":

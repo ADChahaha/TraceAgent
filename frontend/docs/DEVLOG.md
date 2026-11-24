@@ -1,6 +1,16 @@
 # Frontend Devlog
 
-last updated: 2026-10-02
+last updated: 2026-11-25
+
+## 2026-11-25
+
+### 统一前端用户态错误提示并修正文件报错样式
+
+- 新增 [error-messages.ts](../src/lib/error-messages.ts)，接入 `conversation.tsx`、`documents.tsx`、`source-reader.tsx`、`task-detail.tsx`、`upload-workbench.tsx`、`use-file-uploads.ts` 与 `use-session.ts`，将 `backend_restarted`、`storage_failure`、`backend unavailable`、`Failed to fetch` 与 `Stream interrupted` 转为可读英文提示，并兜底拦截历史会话或异常通道可能残留的底层技术串。
+- 在 [workspace.module.css](../src/components/session/workspace.module.css) 增加 `.fileName small[role="alert"] { color: var(--destructive); }`，修复上传失败提示被 `.fileName small` 覆盖为灰色的问题。
+- 同步更新 [frontend/src/lib/DECISIONS.md](../src/lib/DECISIONS.md) 并新增 [error-messages.test.tsx](../tests/error-messages.test.tsx)。
+
+验证：`pnpm --dir frontend test --runInBand`（14 套件 76 项通过，含英文文案门禁）、`pnpm --dir frontend lint`（0 警告）与 `pnpm --dir frontend build` 全部通过；真实浏览器复现文档服务不可达与模型初始化报错，界面分别以错误红显示清晰英文提示且无内部细节泄露。
 
 ## 2026-10-02
 

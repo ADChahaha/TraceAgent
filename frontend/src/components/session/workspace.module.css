@@ -67,6 +67,7 @@
 .fileIcon { display: grid; place-items: center; flex-shrink: 0; width: 42px; height: 47px; border-radius: 12px; background: var(--workspace-tint); color: var(--workspace-accent); }
 .fileName { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 13px; line-height: 1.5; }
 .fileName small { display: block; margin-top: 5px; color: var(--workspace-muted); font-size: 11px; }
+.fileName small[role="alert"] { color: var(--destructive); }
 .sourceEmpty { margin: 45px 25px; text-align: center; color: var(--workspace-muted); font-size: 14px; line-height: 1.6; }
 .sourceEmpty svg { margin: 0 auto 18px; color: var(--workspace-accent); }
 .sourceEmpty p { margin-bottom: 8px; color: var(--foreground); }

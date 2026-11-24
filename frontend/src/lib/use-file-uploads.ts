@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { removeSessionFile, uploadSessionFiles } from "@/lib/api";
 import { validateFiles } from "@/lib/document-files";
+import { formatUserError } from "@/lib/error-messages";
 import type { SessionResource } from "@/lib/session-types";
 
 export interface FileUpload {
@@ -43,7 +44,7 @@ export function useFileUploads(getSessionId: () => Promise<string>, onChanged?: 
           update(next.file, { status: "ready" });
           if (mounted.current) onChanged?.(result.resources);
         } catch (cause) {
-          update(next.file, { status: "failed", error: cause instanceof Error ? cause.message : "Processing failed" });
+          update(next.file, { status: "failed", error: formatUserError(cause, "upload") });
         }
       }
     } finally { working.current = false; }
@@ -78,7 +79,7 @@ export function useFileUploads(getSessionId: () => Promise<string>, onChanged?: 
       publish(current.current.filter((entry) => entry.file !== file));
       if (mounted.current) onChanged?.(result.resources);
     } catch (cause) {
-      update(file, { status: "ready", error: cause instanceof Error ? cause.message : "Failed to remove source" });
+      update(file, { status: "ready", error: formatUserError(cause, "remove") });
     } finally { working.current = false; void process(); }
   }
   return { items, error, add, retry, remove,

@@ -4,6 +4,7 @@ import { FileText, Plus, Search, X } from "lucide-react";
 import styles from "./workspace.module.css";
 import { useEffect, useRef, useState } from "react";
 import { listSessionDocuments, sessionFileUrl } from "@/lib/api";
+import { formatUserError } from "@/lib/error-messages";
 import type { FileUpload } from "@/lib/use-file-uploads";
 import { UploadStatus } from "./upload-status";
 import { DOCUMENT_ACCEPT } from "@/lib/document-files";
@@ -39,7 +40,7 @@ export function SessionDocuments({ sessionId, resources, disabled, selection, on
     if (!hasDocuments) return;
     listSessionDocuments(sessionId).then((value) => {
       if (!cancelled) { setEntries(value.documents); setListError(null); }
-    }).catch((error) => { if (!cancelled) setListError(error instanceof Error ? error.message : "Failed to list documents"); });
+    }).catch((error) => { if (!cancelled) setListError(formatUserError(error, "document")); });
     return () => { cancelled = true; };
   }, [sessionId, revision, hasDocuments]);
   const roots = [...new Set(entries.map((entry) => documentRoot(entry.key)))];

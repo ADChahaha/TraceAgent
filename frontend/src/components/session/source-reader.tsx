@@ -2,6 +2,7 @@
 
 import { createElement, useEffect, useRef, useState } from "react";
 import { readFullDocument } from "@/lib/api";
+import { formatUserError } from "@/lib/error-messages";
 import type { FullDocument } from "@/lib/session-types";
 import { MarkdownEvidence } from "@/components/markdown-evidence";
 import type { DocumentSelection } from "./documents";
@@ -22,7 +23,7 @@ export function SourceReader({ sessionId, root, revision, selection, onSelect }:
     readFullDocument(sessionId, root).then((document) => {
       if (!cancelled) setResult({ id: sessionId, root, revision, document });
     }).catch((cause) => {
-      if (!cancelled) setResult({ id: sessionId, root, revision, error: cause instanceof Error ? cause.message : "Failed to read document" });
+      if (!cancelled) setResult({ id: sessionId, root, revision, error: formatUserError(cause, "document") });
     });
     return () => { cancelled = true; };
   }, [sessionId, root, revision]);
