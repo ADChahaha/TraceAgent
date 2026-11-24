@@ -10,7 +10,7 @@
 
 ## 存储访问与 Workspace Payload
 
-- prepare 子进程经 `service/object_store`（boto3，endpoint 由 `S3_ENDPOINT_URL` 配置，默认 `http://localhost:9000`）访问 storage 服务。
+- prepare 子进程经共享包 `traceagent_shared.object_store`（boto3，endpoint 由 `S3_ENDPOINT_URL` 配置，默认 `http://localhost:9000`）访问 storage 服务。
 - `load_workspace_payload(resource_refs)` 按 `type` 解析 `documents` 与 `index` 的 `s3://<bucket>[/<key>]` 位置，拉取并校验 `documents.zip`、`manifest.json`、`index.json`、`vectors.npy`，序列化为 JSON payload（`documents_archive_b64` + `index`）。
 - 父进程从不访问对象存储，也不持有 `ObjectStore`、`DocumentFileTree` 或 `EmbeddingResources`；父进程只保存 payload，并在每次工具调用时全量下发给一次性工具子进程。
 - 只读工具子进程通过 `document_tree_from_payload(payload)` 从归档 bytes 重建 `ArchiveObjectStore` 与 `DocumentFileTree`，不访问 storage；索引的 `covered_files` 在 prepare 阶段已解析为 `documents/...` key。

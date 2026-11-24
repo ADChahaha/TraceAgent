@@ -9,7 +9,7 @@
 - 资源含文档树归档 `documents.zip`（成员为 `documents/...` 逻辑路径）、`index/`、`manifest.json` 及 `raw/<filename>` 原始文件。读取端把归档整包解到内存虚拟文件系统，模型只能浏览 `documents/`，索引引用保存相对路径。
 - manifest 固定 embedding 模型、后端和分块配置。问答加载已有索引，仅对 query 做 embedding，不重建文档向量。
 - 问答完成、失败、取消都不删除资源。首版不做内容去重、自动过期和删除 API；资源管理不依赖 `task_id`。
-- agent 通过 `service/object_store.S3ObjectStore`（boto3）访问 storage 服务，endpoint 由 `S3_ENDPOINT_URL` 配置，默认 `http://localhost:9000`。
+- agent 通过共享包 `traceagent_shared.object_store.S3ObjectStore`（boto3）访问 storage 服务，endpoint 由 `S3_ENDPOINT_URL` 配置，默认 `http://localhost:9000`。
 
 ## 问答运行时
 

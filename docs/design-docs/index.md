@@ -17,10 +17,11 @@
 | `shared` | [DESIGN.md](../../shared/docs/DESIGN.md) | [shared/traceagent_shared/DECISIONS.md](../../shared/traceagent_shared/DECISIONS.md) | 已验证（2026-11-24） |
 | `document_service` | [总设计](../../document_service/docs/DESIGN.md) / [API](../../document_service/docs/API.md) / [processor](../../document_service/document_processor/docs/DESIGN.md) / [resources](../../document_service/document_resources/docs/DESIGN.md) | [processor](../../document_service/document_processor/docs/DECISIONS.md) / [resources](../../document_service/document_resources/docs/DECISIONS.md) | 已验证（2026-11-24） |
 | `agent` | [总设计](../../agent/docs/DESIGN.md) / [API](../../agent/docs/API.md) / [问答内核](../../agent/service/file_extraction_agent/docs/DESIGN.md) | [file_extraction_agent](../../agent/service/file_extraction_agent/docs/DECISIONS.md) | 已验证（2026-11-24） |
-| `backend` | [DESIGN.md](../../backend/docs/DESIGN.md) / [SESSION_MANAGER.md](../../backend/docs/SESSION_MANAGER.md) / [API.md](../../backend/docs/API.md) / [table.md](../../backend/docs/table.md) | [services](../../backend/services/DECISIONS.md) / [crud](../../backend/crud/DECISIONS.md) | 已验证（2026-11-24，含待修缺陷见 [活动修复计划](../exec-plans/active/backend-bugs-2026-11-24.md)） |
+| `backend` | [DESIGN.md](../../backend/docs/DESIGN.md) / [SESSION_MANAGER.md](../../backend/docs/SESSION_MANAGER.md) / [API.md](../../backend/docs/API.md) / [table.md](../../backend/docs/table.md) | [core](../../backend/core/DECISIONS.md) / [routes](../../backend/routes/DECISIONS.md) / [services](../../backend/services/DECISIONS.md) / [crud](../../backend/crud/DECISIONS.md) | 已验证（2026-11-24，含待修缺陷见 [活动修复计划](../exec-plans/active/backend-bugs-2026-11-24.md)） |
 | `frontend` | [DESIGN.md](../../frontend/docs/DESIGN.md) | [lib](../../frontend/src/lib/DECISIONS.md) / [components](../../frontend/src/components/DECISIONS.md) | 已验证（2026-11-24） |
+| `scripts` | [local-dev-and-testing.md](../references/local-dev-and-testing.md) / [DEVLOG.md](../../scripts/docs/DEVLOG.md) | [scripts/docs/DECISIONS.md](../../scripts/docs/DECISIONS.md) | 已验证（2026-11-24） |
 | `memory` | [DESIGN.md](../../memory/docs/DESIGN.md) | [memory/docs/DECISIONS.md](../../memory/docs/DECISIONS.md) | 已验证（2026-11-24） |
-| `.github`（CI） | [DESIGN.md](../../.github/docs/DESIGN.md) | 无独立模块决策 | 已验证（2026-11-24） |
+| `.github`（CI） | [DESIGN.md](../../.github/docs/DESIGN.md) | [.github/docs/DECISIONS.md](../../.github/docs/DECISIONS.md) | 已验证（2026-11-24） |
 
 ## 维护规则
 

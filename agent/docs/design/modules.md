@@ -27,7 +27,7 @@
 | `service/file_extraction_agent/core/tools/embedding.py` | 清单配置和索引读取校验、payload 序列化与检索工具工厂 |
 | `service/file_extraction_agent/core/tools/worker.py` | 统一工具子进程入口：operation 分发 `prepare`/`ls`/`grep`/`read`/`search_embedding` |
 | `service/file_extraction_agent/core/tools/ov_embedder.py` | 纯 OpenVINO 查询编码器（tokenizer + IR + mean pooling + L2） |
-| `service/object_store.py` | `ObjectStore` 接口 + `S3ObjectStore`（boto3）+ Archive/Composite store + `s3://` URL 解析 |
+| `traceagent_shared.object_store`（`shared/`） | `ObjectStore` 接口 + `S3ObjectStore`（boto3）+ Archive/Composite store + `s3://` URL 解析 |
 
 ## 服务交接
 

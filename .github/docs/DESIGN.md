@@ -9,3 +9,5 @@ Agent job 安装本地协议、共享包、storage，以及 Agent 和 document s
 frontend 使用锁文件安装依赖并执行测试。生产启动检查复用 `scripts/install.sh` 和 `scripts/start.sh`，使用占位模型 API 配置启动服务，通过两个 gRPC Health 和 backend/frontend HTTP 探活确认就绪，退出时清理子进程。文档服务预热仍使用真实 embedding 模型，冷环境首次执行需要下载模型。
 
 普通 CLI 回归在子进程中替换 embedding 模型，并显式使用空缓存和离线模式；真实 CLI 模块、参数解析、模型预热调用和 gRPC 探活保持执行，保证服务生命周期测试不依赖模型仓库或本机凭据。
+
+相关：[DECISIONS.md](DECISIONS.md) / [DEVLOG.md](DEVLOG.md)
