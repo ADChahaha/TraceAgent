@@ -1,3 +1,9 @@
+## 2026-11-25 显式拒绝内存数据库路径
+
+在 `backend/core/db.py` 新增 `validate_database_path`，于 `BackendSettings`、`ThreadLocalDatabase` 与 `connect_database` 入口统一拒绝 `:memory:`、空路径、`.`/`..`、目录路径以及 `file:` / `mode=memory` SQLite URI，直接抛 `ValueError`，避免静默启动后到后台工作线程才报缺表（详见 [backend/core/DECISIONS.md](../core/DECISIONS.md)）。
+
+验证：`backend/tests`、`.github/tests`、`memory/tests`、`scripts/tests` 共 119 项全部通过；实测传 `BACKEND_DATABASE_PATH=:memory:` 在导入启动入口即被拦截，传临时 SQLite 文件路径可正常完成真实 `uvicorn` 进程启动并响应 `/healthz` 与 `/chat/sessions`。
+
 ## 2026-09-19 整篇文档阅读接口
 
 新增 documents/full：从本会话的 documents.zip 读取选中文档目录下全部 Markdown 块，按数字路径顺序排序，保留 key 和正文以支持前端整篇阅读及引用定位。目录或块 key 均可选中文档；无归档或文档返回 404，越界路径返回 422。聚合在 document_view 中完成，不逐段发起 gRPC 请求，不混入其他文档。

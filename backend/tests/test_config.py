@@ -4,9 +4,10 @@ from pathlib import Path
 import sqlite3
 
 from fastapi.testclient import TestClient
+import pytest
 
 from backend.core.config import BackendSettings
-from backend.core.db import initialize_database
+from backend.core.db import ThreadLocalDatabase, connect_database, initialize_database
 from backend.main import create_app
 
 
@@ -141,6 +142,51 @@ def test_database_initialization_creates_chat_schema_without_migrating_legacy_ta
 
     assert {"chat_sessions", "chat_resources", "chat_messages", "chat_turns"} <= table_names
     assert chat_session_columns == {"id", "status", "active_turn_id", "created_at", "updated_at"}
-    # 初始化只负责建当前 schema，不再清理或迁移旧表；旧库按“重建新库”处理。
+    # 初始化只负责建当前 schema，不再清理或迁移旧表；旧库按"重建新库"处理。
     assert "tasks" in table_names
     assert "extracted_fields" in table_names
+
+
+@pytest.mark.parametrize(
+    "invalid_path",
+    [
+        ":memory:",
+        " :MEMORY: ",
+        "",
+        "   ",
+        ".",
+        "file::memory:?cache=shared",
+        "file:traceagent?mode=memory",
+    ],
+)
+def test_backend_rejects_in_memory_and_invalid_database_paths(monkeypatch, invalid_path: str):
+    with pytest.raises(ValueError, match="不支持内存数据库"):
+        BackendSettings(database_path=Path(invalid_path))
+    with pytest.raises(ValueError, match="不支持内存数据库"):
+        ThreadLocalDatabase(invalid_path)
+    with pytest.raises(ValueError, match="不支持内存数据库"):
+        connect_database(invalid_path)
+
+    monkeypatch.setenv("BACKEND_DATABASE_PATH", invalid_path)
+    with pytest.raises(ValueError, match="不支持内存数据库"):
+        BackendSettings.from_env()
+
+
+def test_backend_rejects_directory_as_database_path(tmp_path: Path):
+    with pytest.raises(ValueError, match="不能是目录"):
+        BackendSettings(database_path=tmp_path)
+    with pytest.raises(ValueError, match="不能是目录"):
+        ThreadLocalDatabase(tmp_path)
+
+
+def test_backend_lifespan_recovers_and_serves_sessions_across_worker_threads(tmp_path: Path):
+    app = create_app(settings=BackendSettings(database_path=tmp_path / "lifespan.sqlite3"))
+
+    with TestClient(app) as client:
+        assert client.get("/healthz").json() == {"status": "ok"}
+        created = client.post("/chat/sessions")
+        assert created.status_code == 200
+        session_id = created.json()["session_id"]
+        listed = client.get("/chat/sessions")
+        assert listed.status_code == 200
+        assert [row["id"] for row in listed.json()["sessions"]] == [session_id]

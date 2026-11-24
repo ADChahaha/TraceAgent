@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from backend.core.db import validate_database_path
+
 
 @dataclass(slots=True)
 class BackendSettings:
@@ -26,7 +28,7 @@ class BackendSettings:
     upload_max_files: int = 20
 
     def __post_init__(self) -> None:
-        self.database_path = Path(self.database_path)
+        self.database_path = validate_database_path(self.database_path)
         for name in ("session_command_limit", "subscription_max_events", "subscription_max_bytes",
                      "snapshot_max_bytes", "session_idle_seconds", "sse_heartbeat_seconds",
                      "upload_max_bytes", "upload_max_files"):
@@ -35,8 +37,9 @@ class BackendSettings:
 
     @classmethod
     def from_env(cls) -> "BackendSettings":
-        database_path = Path(
-            os.getenv("BACKEND_DATABASE_PATH", "backend/backend.sqlite3")
+        raw_database_path = os.getenv("BACKEND_DATABASE_PATH")
+        database_path = validate_database_path(
+            "backend/backend.sqlite3" if raw_database_path is None else raw_database_path
         )
         return cls(
             database_path=database_path,

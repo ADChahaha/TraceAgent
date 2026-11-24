@@ -13,3 +13,9 @@
 - 决定：CI 执行测试统一使用包级目录 `python -m pytest agent/tests document_service/tests shared/tests .github/tests -q`，不逐个枚举包内子模块测试目录。
 - 原因：删除旧测试子目录（如 `agent/tests/route_policy_agent`）后，本机工作区可能因残留空目录继续通过，但 Git clean checkout 不保留空目录会立即导致 CI 报路径不存在。
 - 排除：在 CI 工作流中硬编码列出各子模块测试子目录路径。
+
+## 3. CI 禁止为 `backend` 配置 `:memory:`，冒烟检查使用临时 SQLite 文件并探活 `/chat/sessions`
+
+- 决定：`deployment-smoke` 使用 `/tmp/traceagent-ci-backend.sqlite3`（启动前先清理旧文件及 `-wal`/`-shm`），并在 `/healthz` 之后额外探活 `GET /chat/sessions`；`backend` 单测 job 移除无效的 `BACKEND_DATABASE_PATH: ":memory:"`；由 `.github/tests/test_ci.py` 机械校验所有 job 不再配置内存库路径。
+- 原因：`backend` 的 `ThreadLocalDatabase` 依赖普通文件库 + WAL 与按线程独立连接（详见 [backend/core/DECISIONS.md](../../backend/core/DECISIONS.md)），配置 `:memory:` 会导致启动崩溃；且 `/healthz` 不访问数据库，补探 `/chat/sessions` 可直接端到端验证建表与跨工作线程查询正常。
+- 排除：在 CI 中保留 `:memory:` 配置；仅探活 `/healthz` 而不校验 SQLite 查询路径。

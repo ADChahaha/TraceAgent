@@ -6,5 +6,6 @@
 - `test_install_includes_local_dependency_closure`：分别检查 backend 和 Agent job，要求已安装包声明的仓库内依赖也从本地安装，避免 pip 去公共索引寻找未发布包。
 - `test_agent_install_supports_storage_fixtures_and_embedding_startup`：要求 Agent job 安装测试夹具使用的 storage，以及查询编码器和文档 CLI 预热需要的 embeddings 扩展。
 - `test_ocr_smoke_imports_current_converter`：抽取 workflow 的转换器导入，在子进程实际执行并检查默认语言，捕获模块移动后残留的旧路径。
+- `test_ci_configures_file_backed_backend_database_and_checks_sessions`：扫描所有 job 与 step 的 `BACKEND_DATABASE_PATH` 环境变量及脚本赋值，禁止配置 `:memory:`、空路径或 SQLite URI，并验证 `deployment-smoke` 显式配置文件路径且探活 `/chat/sessions`。
 
 运行：激活 `agent-gate` 后，在仓库根目录执行 `python -m pytest .github/tests -q`。

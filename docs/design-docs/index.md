@@ -21,7 +21,7 @@
 | `frontend` | [DESIGN.md](../../frontend/docs/DESIGN.md) | [lib](../../frontend/src/lib/DECISIONS.md) / [components](../../frontend/src/components/DECISIONS.md) | 已验证（2026-11-24） |
 | `scripts` | [local-dev-and-testing.md](../references/local-dev-and-testing.md) / [DEVLOG.md](../../scripts/docs/DEVLOG.md) | [scripts/docs/DECISIONS.md](../../scripts/docs/DECISIONS.md) | 已验证（2026-11-24） |
 | `memory` | [DESIGN.md](../../memory/docs/DESIGN.md) | [memory/docs/DECISIONS.md](../../memory/docs/DECISIONS.md) | 已验证（2026-11-24） |
-| `.github`（CI） | [DESIGN.md](../../.github/docs/DESIGN.md) | [.github/docs/DECISIONS.md](../../.github/docs/DECISIONS.md) | 已验证（2026-11-24） |
+| `.github`（CI） | [DESIGN.md](../../.github/docs/DESIGN.md) | [.github/docs/DECISIONS.md](../../.github/docs/DECISIONS.md) | 已验证（2026-11-25） |
 
 ## 维护规则
 

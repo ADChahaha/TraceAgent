@@ -3,6 +3,7 @@
 import ast
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
@@ -66,3 +67,30 @@ def test_ocr_smoke_imports_current_converter():
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env,
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_ci_configures_file_backed_backend_database_and_checks_sessions():
+    configured: list[tuple[str, str]] = []
+    for job_name, job in JOBS.items():
+        if "BACKEND_DATABASE_PATH" in (job.get("env") or {}):
+            configured.append((f"{job_name}.env", str(job["env"]["BACKEND_DATABASE_PATH"])))
+        for step in job.get("steps", []):
+            step_label = f"{job_name}.{step.get('name', 'unnamed')}"
+            if "BACKEND_DATABASE_PATH" in (step.get("env") or {}):
+                configured.append((f"{step_label}.env", str(step["env"]["BACKEND_DATABASE_PATH"])))
+            for match in re.finditer(r"^\s*(?:export\s+)?BACKEND_DATABASE_PATH\s*=\s*(.+?)\s*$",
+                                     step.get("run", ""), re.MULTILINE):
+                configured.append((f"{step_label}.run", match.group(1).strip().strip("\"'")))
+
+    smoke_paths = [value for source, value in configured if source.startswith("deployment-smoke.")]
+    assert smoke_paths, "deployment-smoke 必须显式配置 BACKEND_DATABASE_PATH 文件路径"
+
+    for source, value in configured:
+        lowered = value.strip().lower()
+        assert lowered and lowered not in {".", "..", ":memory:"}, f"{source} 不能配置内存或空数据库路径: {value!r}"
+        assert not lowered.startswith("file:") and "mode=memory" not in lowered, (
+            f"{source} 不能配置 SQLite URI 或内存数据库: {value!r}"
+        )
+
+    smoke_run = "\n".join(step.get("run", "") for step in JOBS["deployment-smoke"]["steps"])
+    assert "http://127.0.0.1:8000/chat/sessions" in smoke_run, "deployment-smoke 必须探活 SQLite 查询接口 /chat/sessions"

@@ -1,5 +1,11 @@
 # CI 开发日志
 
+## 2026-11-25
+
+`deployment-smoke` 原先在临时 `.env` 中写入 `BACKEND_DATABASE_PATH=:memory:`，导致 `uvicorn backend.main:app` 启动恢复在工作线程打开独立空内存库并报 `no such table: chat_sessions`。现改为使用 runner 临时文件 `/tmp/traceagent-ci-backend.sqlite3`（启动前清理残留文件及 `-wal`/`-shm`），并在 `/healthz` 后增加 `/chat/sessions` 探活以直接覆盖 SQLite 跨线程查询；同时移除 `backend` 单测 job 中实际未生效的 `BACKEND_DATABASE_PATH: ":memory:"`，在 `.github/tests/test_ci.py` 补加配置门禁防止回退。
+
+验证：`backend/tests`、`.github/tests`、`memory/tests`、`scripts/tests` 共 119 项通过，`python3 memory/dream_scan.py --audit` 清零；本机以 CI 同款临时文件路径启动真实 `uvicorn backend.main:app` 进程，`/healthz` 返回 `{"status":"ok"}`、`/chat/sessions` 返回 `{"sessions":[]}`。
+
 ## 2026-09-22
 
 服务拆分后，backend job 仍只安装 `backend[dev]`，导致 pip 从公共索引寻找仓库内的 `traceagent-protocol` 并失败；OCR 检查仍导入已经移除的 `service.document_processor`。现补齐 backend 的本地共享包安装，转换器导入改为独立 document service 的路径。

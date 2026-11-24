@@ -78,7 +78,6 @@ jobs:
       - name: Run backend tests
         env:
           PYTHONPATH: .
-          BACKEND_DATABASE_PATH: ":memory:"
         run: NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost python -m pytest backend/tests -q
 
   frontend:
@@ -138,12 +137,13 @@ jobs:
 
       - name: Write CI runtime env
         run: |
+          rm -f /tmp/traceagent-ci-backend.sqlite3 /tmp/traceagent-ci-backend.sqlite3-wal /tmp/traceagent-ci-backend.sqlite3-shm
           cat > .env <<'ENV'
           BASE_URL=http://127.0.0.1:9/v1
           OPENAI_API_KEY=ci-placeholder
           MODEL=ci-placeholder-model
           MODEL_API_TRANSPORT=responses
-          BACKEND_DATABASE_PATH=:memory:
+          BACKEND_DATABASE_PATH=/tmp/traceagent-ci-backend.sqlite3
           AGENT_HOST=127.0.0.1
           AGENT_PORT=8001
           DOCUMENT_HOST=127.0.0.1
@@ -204,4 +204,5 @@ jobs:
             exit 1
           fi
           wait_for_url http://127.0.0.1:8000/healthz
+          wait_for_url http://127.0.0.1:8000/chat/sessions
           wait_for_url http://127.0.0.1:3000/

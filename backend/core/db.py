@@ -7,9 +7,28 @@ from pathlib import Path
 from backend.models.schema import SCHEMA_SQL
 
 
-def connect_database(database_path: Path) -> sqlite3.Connection:
-    database_path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(database_path, timeout=30.0, check_same_thread=False)
+def validate_database_path(database_path: Path | str) -> Path:
+    """校验 SQLite 路径为本地文件，显式拒绝内存库与目录路径。"""
+    raw = str(database_path).strip()
+    lowered = raw.lower()
+    if (
+        not raw
+        or raw in {".", ".."}
+        or lowered == ":memory:"
+        or lowered.startswith("file:")
+        or "mode=memory" in lowered
+    ):
+        raise ValueError("database_path 必须为本地 SQLite 文件路径，不支持内存数据库")
+    path = Path(raw)
+    if path.exists() and path.is_dir():
+        raise ValueError("database_path 必须为本地 SQLite 文件路径，不能是目录")
+    return path
+
+
+def connect_database(database_path: Path | str) -> sqlite3.Connection:
+    resolved_path = validate_database_path(database_path)
+    resolved_path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(resolved_path, timeout=30.0, check_same_thread=False)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA busy_timeout = 30000")
@@ -19,8 +38,8 @@ def connect_database(database_path: Path) -> sqlite3.Connection:
 class ThreadLocalDatabase:
     """为同一个 SQLite 文件给每个工作线程创建独立连接。"""
 
-    def __init__(self, database_path: Path):
-        self.database_path = Path(database_path)
+    def __init__(self, database_path: Path | str):
+        self.database_path = validate_database_path(database_path)
         self._local = threading.local()
         self._connections: list[sqlite3.Connection] = []
         self._connections_lock = threading.Lock()

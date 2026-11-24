@@ -28,3 +28,6 @@ initialize_database(connection)
 - `test_backend_registers_chat_completion_resume_cancel`：验证挂载三个会话执行接口，旧 `/tasks` 与 `/qa/tasks` 下线。因为 FastAPI 0.141 的 `include_router` 会生成 `_IncludedRouter`，测试用 `_route_paths` 递归展开 `path`、`routes` 和 `original_router.routes` 收集路径。
 - `test_backend_healthz_reports_ok`：验证 `/healthz` 返回 200 和 `{"status": "ok"}`。
 - `test_database_initialization_creates_chat_schema_without_migrating_legacy_tables`：先在内存库建旧 `tasks`/`extracted_fields` 表，再初始化；断言四张 Chat 表建出、`chat_sessions` 恰为新 schema 五列，且旧表仍保留（确认初始化不再清理或迁移旧库）。
+- `test_backend_rejects_in_memory_and_invalid_database_paths`：验证 `BackendSettings`、`BackendSettings.from_env()`、`ThreadLocalDatabase` 与 `connect_database` 对 `:memory:`、空白字符串、`.` 以及 `file:` / `mode=memory` URI 均立即抛出 `ValueError`。
+- `test_backend_rejects_directory_as_database_path`：验证传入已存在目录路径时立即抛出 `ValueError`。
+- `test_backend_lifespan_recovers_and_serves_sessions_across_worker_threads`：使用临时 SQLite 文件路径走完整 `lifespan`（主线程建表 + 工作线程启动恢复），随后验证 `/healthz`、`POST /chat/sessions` 与 `GET /chat/sessions` 跨工作线程读写正常。
