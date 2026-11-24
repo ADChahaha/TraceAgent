@@ -41,6 +41,7 @@ description: >-
    - 若扫描报告存在既有结构违规，本次整理一并修剪归位。
 3. Consolidate & Prune（先核对原件、再先剪后写）：
    - 按本次涉及的主题沿 L1 打开待改的 L2/L3 与偏好页，对照源码、`git log` 或各包 `docs/DESIGN.md` 核实事实后再更新。
+   - 核查增量会话中用户拍板的决策是否已按三要素（做了什么决定、为什么这么选、排除了哪些备选方案）落盘：跨会话知识与偏好按单源补入 `memory/wiki/` 或 `memory/preference/`；若发现活动任务单或子包 `docs/DESIGN.md` 漏记，在整理摘要中标出（不改 `AGENTS.md` 和业务设计文档）。
    - 先清理过期、重复与超长单行，再按四层职责归并新结论、踩坑与 `memory/notes/`；相对日期统一改写为 `YYYY-MM-DD`。
    - 仅当变化影响全局锚点或增删 L1 索引时才改动 L0 `memory.md`。
 4. Audit & Commit（程序化门禁验收）：

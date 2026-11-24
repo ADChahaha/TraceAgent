@@ -6,7 +6,7 @@
 
 | 适用场景 | 偏好文件 | 核心摘要 |
 | --- | --- | --- |
-| 沟通写法、四层记忆维护、长文档拆分与 Dreaming 提交 | [workspace-preferences.md](workspace-preferences.md) | 中文平实写法、保留四层结构与门禁但去规则腔、长文档拆分与原子提交 |
+| 沟通写法、验收与决策记录、四层记忆维护与 Dreaming 提交 | [workspace-preferences.md](workspace-preferences.md) | 中文平实写法、验收驱动与决策三要素、四层结构与门禁、长文档拆分与原子提交 |
 
 ## 维护边界
 
