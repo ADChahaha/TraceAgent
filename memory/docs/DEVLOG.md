@@ -12,3 +12,9 @@
 - 同步编写 `memory/docs/DESIGN.md`、`memory/tests/test_dream_scan.py` 与 `memory/tests/docs/test_dream_scan.md`。
 
 验证：在 `agent-gate` 环境中执行 `python -m pytest memory/tests -q` 全部 7 项通过；执行 `python3 memory/dream_scan.py --audit` 确认 6 项门禁清零；执行 `python3 memory/dream_scan.py --all --max-sessions 3` 验证三端真实日志扫描正常；并回归运行 `scripts/tests` 与 `.github/tests` 确认无影响。
+
+### 存量设计与接口文档分层重构
+
+按确认范围将全仓 10 份过长设计与接口文档（`agent/docs/DESIGN.md`、`agent/docs/API.md`、`agent/service/file_extraction_agent/docs/DESIGN.md`、`tools.md`、`backend/docs/DESIGN.md`、`SESSION_MANAGER.md`、`table.md`、`API.md`、`document_service/document_processor/docs/DESIGN.md`、`frontend/docs/DESIGN.md`）及 `memory/docs/DESIGN.md` 原地拆分为"轻量总览索引页 + 同级主题子文件"，保留全部原入口路径不断链，修正了 `file_extraction_agent/docs/DESIGN.md` 中失效的 `document_resources` 相对链接和 `document_processor` 路径笔误，并在 `memory/wiki/docs-map.md` 与 `architecture-index.md` 建立按需路由。
+
+验证：全量链接与单文件体量预算脚本检查 0 断链、0 违禁标点、索引/子文件体量合规；`python3 memory/dream_scan.py --audit` 6 项门禁清零；`memory/tests`、`scripts/tests` 与 `.github/tests` 全部通过。

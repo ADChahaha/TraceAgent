@@ -1,96 +1,18 @@
 # Backend 数据表
 
-持久化只有四张表：`chat_sessions`、`chat_resources`、`chat_turns`、`chat_messages`。过程事件（delta、tool_started 等）只存在于内存和订阅队列，不落库；页面恢复由 `chat_messages` 加 `chat_turns` 渲染历史轮，再加当前轮内存副本。`chat_messages` 设计为只保存可完整回传模型的稳定历史。普通完整消息单条提交；带工具调用的 assistant 与全部对应 tool 结果配齐后，在同一事务中一起提交。中断只丢弃尚未提交的组，不删除此前完整历史。
+持久化只有四张表：`chat_sessions`、`chat_resources`、`chat_turns`、`chat_messages`。过程事件（`delta`、`tool_started` 等）只存在于内存和订阅队列，不落库；页面恢复由 `chat_messages` 加 `chat_turns` 渲染历史轮，再合并当前轮内存副本。
 
-schema、CRUD 与 SessionManager 已接通，统一使用 `chat_*` 和 `session_id`。初始化只创建当前表，不迁移或删除旧 `qa_*` 表及数据。CRUD 写函数只执行语句、永不自行提交；事务边界统一在 `crud.transaction()`，单条和多条写入共用同一提交点。
+- `chat_messages` 只保存可完整回传模型的稳定历史：普通消息单条提交，带工具调用的 assistant 与全部对应 tool 结果配齐后同事务提交，中断只丢弃未提交组。
+- schema、CRUD 与 `SessionManager` 统一使用 `chat_*` 和 `session_id`；初始化不迁移也不删除旧 `qa_*` 表。
+- CRUD 写函数只执行语句、永不自行提交，事务提交边界统一在 `crud.transaction()`。
 
-## chat_sessions
+## 主题索引（按需打开）
 
-| 字段 | 类型 | 说明 |
+| 主题 | 子文档 | 涵盖内容 |
 | --- | --- | --- |
-| `id` | `TEXT PRIMARY KEY` | 会话 ID。 |
-| `status` | `TEXT NOT NULL` | session 粗粒度状态，例如 `processing`、`ready`、`running`、`failed`。 |
-| `active_turn_id` | `TEXT` | 当前活跃 turn 的辅助索引。不是数据库锁，也不是唯一并发事实来源。 |
-| `created_at` | `TEXT NOT NULL` | 创建时间。 |
-| `updated_at` | `TEXT NOT NULL` | 最近更新时间。 |
+| 四张表结构与数据库约束 | [table/schemas.md](table/schemas.md) | `chat_sessions`、`chat_resources`、`chat_turns`、`chat_messages` 字段定义与唯一/外键约束 |
+| 消息配对、中断与跨轮顺序 | [table/message-pairing.md](table/message-pairing.md) | 工具组原子配对流程、取消中断边界与跨轮读写串行顺序 |
 
-## chat_resources
+## 相关入口
 
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `id` | `TEXT PRIMARY KEY` | 资源记录 ID。 |
-| `session_id` | `TEXT NOT NULL` | 所属会话，外键指向 `chat_sessions(id)`。 |
-| `type` | `TEXT NOT NULL` | 资源类型，如 raw、documents、index（以 agent 返回引用为准）。 |
-| `location` | `TEXT NOT NULL` | 资源位置或产物内容，沿用当前 CRUD 的原样存取。 |
-| `created_at` | `TEXT NOT NULL` | 创建时间。 |
-
-`UNIQUE(session_id, type, location)` 防止同一会话内重复资源。
-
-## chat_messages
-
-一行保存一条完整模型输入消息，一组表示一次原子提交。用户消息、系统消息和无工具调用的完整 assistant 各自成组；有工具调用时，一组包含一条 assistant 及其全部 tool 结果。
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `id` | `TEXT PRIMARY KEY` | backend 消息 id，不与 agent 的 message_id 混用。 |
-| `session_id` | `TEXT NOT NULL` | 所属 session，外键指向 `chat_sessions(id)`。 |
-| `turn_id` | `TEXT` | 所属 turn，通过 `(session_id, turn_id)` 复合外键关联 chat_turns；仅 system 角色可为空。 |
-| `sequence` | `INTEGER NOT NULL` | 轮内消息顺序（per-turn seq），整组提交时分配；跨轮顺序由 chat_turns 创建顺序给出。 |
-| `group_id` | `TEXT NOT NULL` | 原子提交组标识；agent 组按 turn_id + message_id 稳定生成，重放不重复写入。 |
-| `group_index` | `INTEGER NOT NULL` | 组内顺序，从 0 开始；assistant 在前，tool 按原 tool_calls 顺序排列。 |
-| `role` | `TEXT NOT NULL` | user、system、assistant 或 tool。 |
-| `content` | `TEXT NOT NULL` | 完整正文；tool 为实际结果的 JSON 文本，允许模型正文为空。 |
-| `tool_calls_json` | `TEXT NOT NULL DEFAULT '[]'` | assistant 的完整工具调用列表，保留原始 ID、名称和参数；其他角色为空数组。 |
-| `tool_call_id` | `TEXT` | tool 对应的原始调用 ID；非 tool 消息为空。 |
-| `name` | `TEXT` | tool 名称，非 tool 消息为空。 |
-| `created_at` | `TEXT NOT NULL` | 创建时间。 |
-
-已实现的数据库约束：`UNIQUE(turn_id, sequence)`、`UNIQUE(turn_id, group_id, group_index)`，以及同组非空 tool_call_id 的唯一索引；sequence 大于 0，group_index 非负，group_id 非空。role 限定为表中四类；system 角色不允许（turn_id 非空）；tool 必须有非空调用 ID 和名称，其他角色的这两个字段必须为空。tool_calls_json 必须是合法 JSON 数组，非 assistant 只能为空数组。复合外键依赖 chat_turns(session_id, id) 唯一索引，防止消息关联其他 session 的 turn。消息唯一键在 turn 维度：活跃轮唯一保证同一 turn 只有一个写者（runtime），无需 session 级串行化消息写入。
-
-业务已接入：tool_calls_json 使用模型输入格式 `[{"id":"call-a","type":"function","function":{"name":"read","arguments":"{}"}}]`，从 agent 的 id/name/args_json 转换并保留原始 ID。manager 校验配对完整性，在同一事务写完整组；同轮重复消息或未知、重复工具结果按协议错误处理。数据库只校验数组结构及行级约束，不能替代业务校验。
-
-### 配对与提交
-
-```text
-backend 接收 agent event，并在 session manager 串行命令内检查本地状态
-  → 已取消或终态：丢弃迟到事件，不提交稳定消息
-  → model_message.started / delta：仅属于过程，不写 chat_messages
-  → model_message.done：以完整快照为准，不重复拼接 delta
-     ├─ 无 tool_calls：完整 assistant 作为单条组提交，无需等整轮 completion.completed
-     └─ 有 tool_calls：按本轮 message_id 暂存 assistant，等待全部结果
-  → tool_completed / tool_failed：按原始 tool_call_id 精确归入待提交组
-  → 校验调用 ID 非空且唯一、每个调用恰好有一个结果、没有未知 ID
-  → 全部配齐：同一短事务写 assistant + 全部 tool，分配稳定 sequence
-  → 下一轮 begin 命令只按 sequence 读取 chat_messages
-```
-
-tool_failed 是真实的完整工具结果，可以参与配对；tool_started 不算结果。不得按工具名或到达顺序猜测配对，不得生成替代 call ID。无效或冲突结果不提交该组；不能通过省略缺失工具调用让一组看起来完整。用户输入在请求受理时以独立完整消息提交，不要求与回答配对。
-
-### 中断边界
-
-取消与组提交共用同一 session manager 的串行命令循环。当前事件若已进入临界区且使整组配齐，可先完成整组事务；取消先提交本地状态后，后续事件不能再写入。事务失败则整组回滚，不留下单独 assistant 或部分 tool 行。
-
-例如 assistant 调用 A、B，只收到 A 就取消：assistant、A、B 这一组均不进入 chat_messages，不补造 B 的中断结果；此前已提交的用户消息和完整组保留。过程事件只在内存与订阅队列中，不落库，取消后自然消失。暂存配对数据在取消、失败或流关闭时丢弃；进程退出前未提交的组也不属于稳定历史。
-
-该表是中断后重建模型上下文的唯一持久化来源，不是取消后继续接受 agent 内容的通道；完成收尾不得把已经提交过的 assistant 再写一次。
-
-### 跨轮读取与提交顺序
-
-旧轮组提交、取消和新轮启动经同一 session manager 串行处理：旧轮最后一次合法事务提交 → 本地取消事务提交 → 新轮保存用户消息并读取 chat_messages 快照 → 锁外生成。新轮不能在旧轮仍可写消息时提前读取历史。
-
-sequence 在同一命令的写事务中为整组分配并插入；唯一约束仅负责防止重复，不代替事务。旧 worker 始终检查自身 turn_id，取消后即使后台计算仍运行也不能补写。完整交接流程见 [DESIGN.md](DESIGN.md)。
-
-
-## chat_turns
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `id` | `TEXT PRIMARY KEY` | turn id。 |
-| `session_id` | `TEXT NOT NULL` | 所属 session，外键指向 `chat_sessions(id)`。 |
-| `status` | `TEXT NOT NULL` | turn 状态，例如 `queued`、`in_progress`、`completed`、`cancelled`、`failed`。 |
-| `agent_completion_id` | `TEXT` | agent completion 关联 ID；取消依靠内存中的原 gRPC call，不能凭此 ID 重新接入执行。 |
-| `error` | `TEXT` | 终态错误说明，例如 `backend_restarted`；同一事务随终态写入，供恢复快照直接展示。 |
-| `created_at` | `TEXT NOT NULL` | 创建时间。 |
-| `updated_at` | `TEXT NOT NULL` | 最近更新时间。 |
-| `completed_at` | `TEXT` | 进入终态的时间。 |
-
+- Backend 顶层设计：[DESIGN.md](DESIGN.md) / SessionManager 架构：[SESSION_MANAGER.md](SESSION_MANAGER.md)
