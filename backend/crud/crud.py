@@ -59,6 +59,55 @@ def list_sessions(connection: sqlite3.Connection, *, limit: int) -> list[dict[st
     return [dict(row) for row in rows]
 
 
+def list_sessions_with_title_context(connection: sqlite3.Connection, *, limit: int) -> list[dict[str, Any]]:
+    """查询最近会话并附带首条用户提问与首个原始文件位置，供列表兜底派生标题。"""
+    rows = connection.execute(
+        """
+        SELECT s.*,
+               (
+                   SELECT m.content
+                   FROM chat_messages m
+                   JOIN chat_turns t ON t.id = m.turn_id
+                   WHERE m.session_id = s.id AND m.role = 'user'
+                   ORDER BY t.created_at, t.rowid, m.sequence ASC, m.rowid ASC
+                   LIMIT 1
+               ) AS first_user_message,
+               (
+                   SELECT r.location
+                   FROM chat_resources r
+                   WHERE r.session_id = s.id AND r.type = 'raw'
+                   ORDER BY r.created_at, r.rowid
+                   LIMIT 1
+               ) AS first_raw_location
+        FROM chat_sessions s
+        ORDER BY s.updated_at DESC, s.created_at DESC, s.rowid DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def set_session_title_if_empty(
+    connection: sqlite3.Connection,
+    *,
+    session_id: str,
+    title: str,
+) -> dict[str, Any] | None:
+    """仅当会话标题仍为空时条件写入标题，避免并发或重复覆盖已有标题。"""
+    cursor = connection.execute(
+        """
+        UPDATE chat_sessions
+        SET title = ?
+        WHERE id = ? AND (title IS NULL OR trim(title) = '')
+        """,
+        (title, session_id),
+    )
+    if cursor.rowcount == 0:
+        return None
+    return get_session(connection, session_id)
+
+
 def update_session(
     connection: sqlite3.Connection,
     *,

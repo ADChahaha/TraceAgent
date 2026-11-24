@@ -5,7 +5,8 @@
 ## `GET /chat/sessions?limit=100`
 
 - 从数据库按 `updated_at`、`created_at` 与插入顺序倒序返回最近会话：
-  `{"sessions":[{"id":"...","status":"ready","active_turn_id":null,"created_at":"...","updated_at":"..."}]}`
+  `{"sessions":[{"id":"...","title":"...","status":"ready","active_turn_id":null,"created_at":"...","updated_at":"..."}]}`
+- `title` 优先返回持久化的模型总结标题；未落库的旧会话或未提问会话由接口按首条用户问题、首个文件名或 `Untitled workspace` 自动派生，绝不返回 UUID。
 - `limit` 默认 100，允许 1-200，越界返回 422。不依赖浏览器缓存，也不加载会话执行器；打开具体会话使用 `/resume`。
 
 ## `POST /chat/completion`

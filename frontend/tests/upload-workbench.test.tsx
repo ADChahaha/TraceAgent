@@ -11,7 +11,9 @@ const complete = jest.mocked(api.openCompletion);
 
 beforeEach(() => {
   jest.resetAllMocks(); localStorage.clear();
-  jest.mocked(api.listSessions).mockResolvedValue({ sessions: [{ id: "s1", status: "ready", updated_at: "now", active_turn_id: null }] });
+  jest.mocked(api.listSessions).mockResolvedValue({
+    sessions: [{ id: "s1", title: "Contract Review", status: "ready", updated_at: "now", active_turn_id: null }],
+  });
   create.mockResolvedValue({ session_id: "s1" });
   upload.mockImplementation(async (_id, files) => ({ resources: [
     ...ready.state.resources, ...files.map((file) => ({ id: file.name, type: "raw" as const, location: `s3://bucket/raw/${file.name}` })),
@@ -38,7 +40,8 @@ it("按创建会话、上传、首问快照顺序执行，再跳转", async () =
   expect(create.mock.invocationCallOrder[0]).toBeLessThan(upload.mock.invocationCallOrder[0]);
   expect(upload.mock.invocationCallOrder[0]).toBeLessThan(complete.mock.invocationCallOrder[0]);
   await user.click(screen.getByRole("button", { name: "Open sidebar" }));
-  expect(await screen.findByText("s1")).toBeInTheDocument();
+  expect(await screen.findByText("Contract Review")).toBeInTheDocument();
+  expect(screen.queryByText("s1")).not.toBeInTheDocument();
 });
 
 it("上传失败不发首问，重试复用同一会话", async () => {

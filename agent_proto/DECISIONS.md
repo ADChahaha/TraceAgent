@@ -10,9 +10,9 @@
 
 ## 2. 按服务拆分 RPC，取消走原 `call.cancel()`
 
-- 决定：仅保留 `DocumentResourceService.PrepareResources`、`DocumentResourceService.ReadBlocks` 与 `AgentService.ChatCompletion`，探活统一用标准 gRPC Health；取消通过原 `ChatCompletion` gRPC `call.cancel()` 传播，`completion_id` 只作格式校验，不提供 `CancelCompletion`、`GetCompletion`、`GetCapabilities`。
-- 原因：避免服务侧维护全局活动 completion 注册表和跨请求状态，让每次调用无状态且易于取消收口。
-- 排除：保留独立取消 RPC 和按 `completion_id` 路由的活动任务表。
+- 决定：仅保留 `DocumentResourceService.PrepareResources`、`DocumentResourceService.ReadBlocks`、`AgentService.ChatCompletion` 与无状态标题总结 `AgentService.GenerateTitle`，探活统一用标准 gRPC Health；取消通过原 `ChatCompletion` gRPC `call.cancel()` 传播，`completion_id` 只作格式校验，不提供 `CancelCompletion`、`GetCompletion`、`GetCapabilities`。
+- 原因：避免服务侧维护全局活动 completion 注册表和跨请求状态，让每次调用无状态且易于取消收口；同时将标题模型推理放在 `agent` 侧，维持 `backend` 不直接调用模型的分层边界。
+- 排除：保留独立取消 RPC 和按 `completion_id` 路由的活动任务表；或在 `backend` 直接引入模型 SDK 生成会话标题。
 
 ## 3. 已删字段保留 `reserved`，资源只传 `resource_path`
 

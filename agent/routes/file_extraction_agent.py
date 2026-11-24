@@ -8,6 +8,7 @@ from typing import AsyncIterator
 import grpc
 from agent_proto import agent_pb2 as pb
 from service.file_extraction_agent import application
+from service.file_extraction_agent.core import title as title_module
 from service.file_extraction_agent.schemas import (
     CompletionEvent, DocumentQaMessage, ModelConfig, ResourceRef, RunOptions, Unset,
 )
@@ -98,3 +99,18 @@ async def create_chat_completion(request, context) -> AsyncIterator[pb.Completio
         await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
     except Exception as exc:
         await context.abort(grpc.StatusCode.INTERNAL, f"completion initialization failed: {exc}")
+
+
+async def generate_title(request, context) -> pb.GenerateTitleResponse:
+    try:
+        model_config = _options(request.model_config, ModelConfig) if request.HasField("model_config") else None
+        title = await title_module.generate_title(
+            question=request.question,
+            filenames=list(request.filenames),
+            model_config=model_config,
+        )
+        return pb.GenerateTitleResponse(title=title)
+    except ValueError as exc:
+        await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+    except Exception as exc:
+        await context.abort(grpc.StatusCode.INTERNAL, f"title generation failed: {exc}")

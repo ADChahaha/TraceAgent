@@ -5,6 +5,12 @@ const text = (value: unknown) => typeof value === "string" ? value : "";
 
 export function applySessionEvent(snapshot: SessionSnapshot, event: SessionEvent): SessionSnapshot {
   const { type, payload, turn_id: id } = event;
+  if (type === "session.updated") {
+    const title = text(payload.title).trim();
+    if (!title) return snapshot;
+    return { ...snapshot, state: { ...snapshot.state, title } };
+  }
+  if (!id) return snapshot;
   const existing = snapshot.state.turns.find((turn) => turn.id === id);
   if (existing && isTerminal(existing.status)) return snapshot;
   if (!existing && type !== "turn.started") return snapshot;

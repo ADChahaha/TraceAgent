@@ -70,6 +70,7 @@ def initialize_database(connection: sqlite3.Connection) -> None:
     connection.execute("PRAGMA journal_mode = WAL")
     for statement in SCHEMA_SQL:
         connection.execute(statement)
+    _ensure_column(connection, "chat_sessions", "title", "TEXT")
     _ensure_column(connection, "chat_resources", "size_bytes", "INTEGER NOT NULL DEFAULT 0")
     connection.commit()
 

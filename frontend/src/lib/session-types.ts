@@ -27,13 +27,14 @@ export interface SessionSnapshot {
   state: {
     status: string;
     active_turn_id: string | null;
+    title?: string;
     resources: SessionResource[];
     turns: SessionTurn[];
   };
 }
 
 export interface SessionEvent {
-  turn_id: string;
+  turn_id: string | null;
   type: string;
   payload: Record<string, unknown>;
 }

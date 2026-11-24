@@ -49,5 +49,13 @@ class AgentClient:
         )
         return CompletionCall(self.stub.ChatCompletion(request, timeout=self.timeout_seconds))
 
+    async def generate_title(self, *, question: str, filenames: list[str] | None = None, timeout_seconds: float = 15.0) -> str:
+        request = pb.GenerateTitleRequest(question=question, filenames=list(filenames or ()))
+        try:
+            response = await self.stub.GenerateTitle(request, timeout=timeout_seconds)
+        except grpc.RpcError as exc:
+            raise AgentServiceError(f"agent gRPC: {exc.code().name}: {exc.details()}") from exc
+        return response.title
+
     async def close(self):
         await self.channel.close()

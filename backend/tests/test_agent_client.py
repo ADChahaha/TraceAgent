@@ -63,3 +63,37 @@ def test_grpc_failure_maps_to_agent_service_error():
             await client.close()
             await server.stop(0)
     asyncio.run(scenario())
+
+
+def test_grpc_generate_title_roundtrip_and_error_mapping():
+    async def scenario():
+        seen = {}
+
+        class Service(rpc.AgentServiceServicer):
+            async def GenerateTitle(self, request, context):
+                seen["question"] = request.question
+                seen["filenames"] = list(request.filenames)
+                if request.question == "fail":
+                    await context.abort(grpc.StatusCode.INTERNAL, "model down")
+                return pb.GenerateTitleResponse(title="合同付款周期摘要")
+
+        server = grpc.aio.server()
+        rpc.add_AgentServiceServicer_to_server(Service(), server)
+        port = server.add_insecure_port("127.0.0.1:0")
+        await server.start()
+        client = AgentClient(target=f"127.0.0.1:{port}")
+        try:
+            title = await client.generate_title(
+                question="合同里的付款周期是什么？",
+                filenames=["contract.pdf"],
+                timeout_seconds=5.0,
+            )
+            assert title == "合同付款周期摘要"
+            assert seen == {"question": "合同里的付款周期是什么？", "filenames": ["contract.pdf"]}
+            with pytest.raises(AgentServiceError, match="model down"):
+                await client.generate_title(question="fail", timeout_seconds=5.0)
+        finally:
+            await client.close()
+            await server.stop(0)
+
+    asyncio.run(scenario())

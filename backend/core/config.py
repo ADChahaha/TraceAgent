@@ -24,6 +24,7 @@ class BackendSettings:
     agent_request_timeout_seconds: float = 1200.0
     document_request_timeout_seconds: float = 1200.0
     agent_cancel_timeout_seconds: float = 2.0
+    title_generation_timeout_seconds: float = 15.0
     agent_grpc_max_message_bytes: int = 64 * 1024 * 1024
     document_grpc_max_message_bytes: int = 64 * 1024 * 1024
     supported_file_types: tuple[str, ...] = ("pdf", "docx")
@@ -40,7 +41,7 @@ class BackendSettings:
         self.database_path = validate_database_path(self.database_path)
         for name in ("session_command_limit", "subscription_max_events", "subscription_max_bytes",
                      "snapshot_max_bytes", "session_idle_seconds", "sse_heartbeat_seconds",
-                     "upload_max_bytes", "upload_max_files"):
+                     "upload_max_bytes", "upload_max_files", "title_generation_timeout_seconds"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} 必须大于零")
 
@@ -63,6 +64,9 @@ class BackendSettings:
             ),
             agent_cancel_timeout_seconds=get_float(
                 config, "backend", "agent_service_cancel_timeout_seconds", "AGENT_SERVICE_CANCEL_TIMEOUT_SECONDS", 2.0
+            ),
+            title_generation_timeout_seconds=get_float(
+                config, "backend", "title_generation_timeout_seconds", "TITLE_GENERATION_TIMEOUT_SECONDS", 15.0
             ),
             agent_grpc_max_message_bytes=get_int(
                 config, "agent", "grpc_max_message_bytes", "AGENT_GRPC_MAX_MESSAGE_BYTES", DEFAULT_GRPC_MAX_MESSAGE_BYTES

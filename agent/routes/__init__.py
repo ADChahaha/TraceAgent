@@ -15,3 +15,8 @@ class AgentService(agent_pb2_grpc.AgentServiceServicer):
         ) as stream:
             async for event in stream:
                 yield event
+
+    async def GenerateTitle(self, request, context):
+        from routes import file_extraction_agent
+
+        return await file_extraction_agent.generate_title(request, context)

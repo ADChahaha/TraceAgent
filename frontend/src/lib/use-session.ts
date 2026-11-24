@@ -62,7 +62,13 @@ export function useSession(sessionId: string) {
           const done = !next.state.active_turn_id;
           setConnection(done ? "idle" : "live");
           setError(null);
-          if (frame.event === "session.snapshot" || done) rememberSession(sessionId, next);
+          if (
+            frame.event === "session.snapshot"
+            || done
+            || (frame.event === "session.event" && frame.data.type === "session.updated")
+          ) {
+            rememberSession(sessionId, next);
+          }
           return done;
         }, abort.signal);
         if (current() && (!receivedSnapshot || state.current?.state.active_turn_id)) throw new Error("Stream interrupted");

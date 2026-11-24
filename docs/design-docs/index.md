@@ -12,7 +12,7 @@
 
 | 顶层包 / 子系统 | 一手设计入口 | 模块级决策（`DECISIONS.md`） | 验证状态 |
 | --- | --- | --- | --- |
-| `agent_proto` | [DESIGN.md](../../agent_proto/docs/DESIGN.md) | [agent_proto/DECISIONS.md](../../agent_proto/DECISIONS.md) | 已验证（2026-11-24） |
+| `agent_proto` | [DESIGN.md](../../agent_proto/docs/DESIGN.md) | [agent_proto/DECISIONS.md](../../agent_proto/DECISIONS.md) | 已验证（2026-11-25） |
 | `storage` | [DESIGN.md](../../storage/docs/DESIGN.md) | [storage/core/DECISIONS.md](../../storage/core/DECISIONS.md) | 已验证（2026-11-25） |
 | `shared` | [DESIGN.md](../../shared/docs/DESIGN.md) | [shared/traceagent_shared/DECISIONS.md](../../shared/traceagent_shared/DECISIONS.md) | 已验证（2026-11-25） |
 | `document_service` | [总设计](../../document_service/docs/DESIGN.md) / [API](../../document_service/docs/API.md) / [processor](../../document_service/document_processor/docs/DESIGN.md) / [resources](../../document_service/document_resources/docs/DESIGN.md) | [processor](../../document_service/document_processor/docs/DECISIONS.md) / [resources](../../document_service/document_resources/docs/DECISIONS.md) | 已验证（2026-11-25） |

@@ -191,3 +191,19 @@ class CompletionEvent(_message.Message):
     max_attempts: int
     retry_delay_ms: int
     def __init__(self, type: _Optional[str] = ..., seq: _Optional[int] = ..., status: _Optional[str] = ..., content: _Optional[str] = ..., tool: _Optional[str] = ..., tool_call_id: _Optional[str] = ..., args_json: _Optional[str] = ..., result_json: _Optional[str] = ..., tool_calls: _Optional[_Iterable[_Union[ToolCall, _Mapping]]] = ..., tool_call_count: _Optional[int] = ..., is_final: _Optional[bool] = ..., stop_signal: _Optional[str] = ..., error: _Optional[str] = ..., error_message: _Optional[str] = ..., message_id: _Optional[str] = ..., delta: _Optional[str] = ..., attempt: _Optional[int] = ..., max_attempts: _Optional[int] = ..., retry_delay_ms: _Optional[int] = ...) -> None: ...
+
+class GenerateTitleRequest(_message.Message):
+    __slots__ = ("question", "filenames", "model_config")
+    QUESTION_FIELD_NUMBER: _ClassVar[int]
+    FILENAMES_FIELD_NUMBER: _ClassVar[int]
+    MODEL_CONFIG_FIELD_NUMBER: _ClassVar[int]
+    question: str
+    filenames: _containers.RepeatedScalarFieldContainer[str]
+    model_config: ModelConfig
+    def __init__(self, question: _Optional[str] = ..., filenames: _Optional[_Iterable[str]] = ..., model_config: _Optional[_Union[ModelConfig, _Mapping]] = ...) -> None: ...
+
+class GenerateTitleResponse(_message.Message):
+    __slots__ = ("title",)
+    TITLE_FIELD_NUMBER: _ClassVar[int]
+    title: str
+    def __init__(self, title: _Optional[str] = ...) -> None: ...

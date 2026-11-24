@@ -4,6 +4,7 @@ package traceagent.v1;
 // 文件准备与单轮问答共享资源契约，但可由两个独立 gRPC 服务进程部署。
 service AgentService {
   rpc ChatCompletion(ChatCompletionRequest) returns (stream CompletionEvent);
+  rpc GenerateTitle(GenerateTitleRequest) returns (GenerateTitleResponse);
 }
 
 service DocumentResourceService {
@@ -118,4 +119,15 @@ message CompletionEvent {
   optional uint32 attempt = 17;
   optional uint32 max_attempts = 18;
   optional uint32 retry_delay_ms = 19;
+}
+
+// 轻量无状态会话标题生成：由 agent 侧模型总结，严守 backend 不做模型推理的分层边界。
+message GenerateTitleRequest {
+  string question = 1;
+  repeated string filenames = 2;
+  ModelConfig model_config = 3;
+}
+
+message GenerateTitleResponse {
+  string title = 1;
 }

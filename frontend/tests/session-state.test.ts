@@ -44,3 +44,14 @@ it("旧轮终态不能清空新轮，新轮开始可追加", () => {
   expect(state.state.active_turn_id).toBe("t2");
   expect(state.state.turns).toHaveLength(2);
 });
+
+it("session.updated 更新会话标题且不干扰正在进行的活跃轮", () => {
+  const updated = applySessionEvent(initial, {
+    turn_id: null,
+    type: "session.updated",
+    payload: { title: "Contract Indemnity Review" },
+  });
+  expect(updated.state.title).toBe("Contract Indemnity Review");
+  expect(updated.state.active_turn_id).toBe("t");
+  expect(updated.state.turns).toEqual(initial.state.turns);
+});

@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 
 from backend.crud import crud
+from backend.services.session_title import filename_from_raw_location, resolve_session_title
 from backend.services.subscription import Subscription
 from backend.services.errors import BackendServiceError
 
@@ -62,7 +63,10 @@ async def build_snapshot(database, context):
         db = database.connect()
         active_id = context.current_turn["id"] if context.current_turn else None
         messages_by_turn = {}
+        first_user_message = None
         for row in crud.list_messages(db, context.session_id):
+            if first_user_message is None and row["role"] == "user":
+                first_user_message = row["content"]
             if row["turn_id"] is not None:
                 messages_by_turn.setdefault(row["turn_id"], []).append(row)
         turn_rows = {turn["id"]: turn for turn in crud.list_turns(db, context.session_id)}
@@ -78,9 +82,23 @@ async def build_snapshot(database, context):
                           "items": _render_items(messages_by_turn.get(turn["id"], []))})
         if context.current_turn:
             turns.append(copy.deepcopy(context.current_turn))
+            if first_user_message is None:
+                first_user_message = next(
+                    (item.get("text") for item in context.current_turn.get("items", []) if item.get("kind") == "user"),
+                    None,
+                )
+        first_filename = next(
+            (filename_from_raw_location(row["location"]) for row in context.resources if row["type"] == "raw"),
+            None,
+        )
+        title = resolve_session_title(
+            context.session,
+            first_user_message=first_user_message,
+            first_filename=first_filename,
+        )
         result = {"session_id": context.session_id, "state": {
             "status": context.session["status"], "active_turn_id": context.session["active_turn_id"],
-            "resources": context.resources, "turns": turns,
+            "title": title, "resources": context.resources, "turns": turns,
         }}
         if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > context.max_bytes:
             raise BackendServiceError("会话快照超过恢复预算")

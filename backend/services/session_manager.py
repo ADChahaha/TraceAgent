@@ -8,6 +8,7 @@ active_turn_id、订阅者、资源引用），turn 执行态全部在 TurnRunti
 import asyncio
 import copy
 import io
+import logging
 import math
 import sqlite3
 import uuid
@@ -19,11 +20,13 @@ from backend.crud import crud
 from backend.services.errors import BackendServiceError, ConflictError, NotFoundError, ValidationError
 from backend.services.document_view import full_document
 from backend.services.session_history import ResumeContext
+from backend.services.session_title import clean_session_title, fallback_session_title, filename_from_raw_location
 from backend.services.subscription import Subscription
 from backend.services.time_utils import utc_now
 from backend.services.turn_runtime import TurnRuntime
 from traceagent_shared.object_store import parse_resource_path
 
+logger = logging.getLogger(__name__)
 TERMINAL = {"completed", "cancelled", "failed"}
 
 
@@ -50,6 +53,8 @@ class SessionManager:
         self.commands = asyncio.Queue(maxsize=settings.session_command_limit)
         self.closed = self.closing = self.broken = False
         self.recovery_task = None
+        self._title_task: asyncio.Task | None = None
+        self._title_requested = bool((session.get("title") or "").strip())
         self._background_tasks: set[asyncio.Task] = set()
         self.last_activity = asyncio.get_running_loop().time()
         self.task = asyncio.create_task(self._run(), name=f"session:{self.session_id}")
@@ -72,6 +77,8 @@ class SessionManager:
         if runtime is not None:
             runtime.cancel()
             self._track_task(runtime.task)
+        if self._title_task is not None and not self._title_task.done():
+            self._title_task.cancel()
         turn_id = self.active_turn_id
         self.session = {**self.session, "active_turn_id": None}
         if self.pending_cancel is not None:
@@ -196,9 +203,81 @@ class SessionManager:
             lambda: [turn["id"] for turn in crud.list_turns(self.database.connect(), self.session_id)])
         subscription = Subscription(max_events=self.settings.subscription_max_events, max_bytes=self.settings.subscription_max_bytes)
         self.subscribers[subscription.id] = subscription
+        self._maybe_start_title_generation(content)
         return ResumeContext(self.session_id, turn_id, turn_ids, copy.deepcopy(self.session),
                              copy.deepcopy(self.resources), runtime.snapshot(), subscription,
                              self.settings.snapshot_max_bytes)
+
+    def _maybe_start_title_generation(self, question: str) -> None:
+        """首轮无标题时异步并发触发模型标题总结，不阻塞主问答 SSE 流。"""
+        if self._title_requested or (self.session.get("title") or "").strip():
+            return
+        self._title_requested = True
+        filenames = [
+            name
+            for row in self.resources
+            if row["type"] == "raw" and (name := filename_from_raw_location(row["location"]))
+        ]
+        self._title_task = asyncio.create_task(
+            self._generate_and_persist_title(question, filenames),
+            name=f"title:{self.session_id}",
+        )
+        self._track_task(self._title_task)
+
+    async def _generate_and_persist_title(self, question: str, filenames: list[str]) -> None:
+        title = ""
+        generator = getattr(self.agent_client, "generate_title", None)
+        if callable(generator):
+            try:
+                raw_title = await asyncio.wait_for(
+                    generator(
+                        question=question,
+                        filenames=filenames,
+                        timeout_seconds=self.settings.title_generation_timeout_seconds,
+                    ),
+                    timeout=self.settings.title_generation_timeout_seconds,
+                )
+                title = clean_session_title(raw_title)
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                logger.debug("Session title generation fell back for %s: %s", self.session_id, exc)
+        if not title:
+            title = fallback_session_title(
+                first_user_message=question,
+                first_filename=filenames[0] if filenames else None,
+            )
+        if self.closed or self.closing or self.broken:
+            return
+
+        def persist():
+            db = self.database.connect()
+            with crud.transaction(db):
+                return crud.set_session_title_if_empty(db, session_id=self.session_id, title=title)
+
+        loop = asyncio.get_running_loop()
+        db_future = loop.run_in_executor(None, persist)
+        try:
+            updated = await asyncio.shield(db_future)
+        except asyncio.CancelledError:
+            # 线程中的 SQLite 事务无法中途强杀，必须等线程退出后才允许关闭数据库连接。
+            while not db_future.done():
+                try:
+                    await asyncio.shield(db_future)
+                except BaseException:
+                    break
+            return
+        except Exception as exc:
+            logger.debug("Session title persistence skipped for %s: %s", self.session_id, exc)
+            return
+
+        if updated is None or self.closed or self.broken:
+            return
+        self.session = {**self.session, "title": updated["title"]}
+        await self.broadcast(
+            None,
+            {"turn_id": None, "type": "session.updated", "payload": {"title": updated["title"]}},
+        )
 
     def _refresh_state(self, session, resources):
         """runtime 写事务的缓存同步点：事务内快照直接成为 manager 的状态。"""
@@ -419,12 +498,14 @@ class SessionManager:
         return self.active_turn_id is None and self.runtime is None and not self.subscribers and self.commands.empty()
 
     async def _drain_background_tasks(self):
-        """排干已脱离的 runtime 与收口任务，避免关闭数据库连接时仍有工作线程在读写。"""
+        """排干已脱离的 runtime、标题生成与收口任务，避免关闭数据库连接时仍有工作线程在读写。"""
         while True:
             runtime, self.runtime = self.runtime, None
             if runtime is not None:
                 runtime.cancel()
                 self._track_task(runtime.task)
+            if self._title_task is not None and not self._title_task.done():
+                self._title_task.cancel()
             if not self._background_tasks:
                 return
             await asyncio.gather(*list(self._background_tasks), return_exceptions=True)

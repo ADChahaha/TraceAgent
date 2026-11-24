@@ -5,6 +5,7 @@
 ```text
 DocumentResourceService.PrepareResources(files) -> 解析与索引构建 -> resource_path([{type, location}])
 AgentService.ChatCompletion(resource_path + messages) -> 校验资源 -> 单轮执行 -> CompletionEvent 流
+AgentService.GenerateTitle(question, filenames) -> 复用 [title_model]/[model] -> 清洗后的简洁标题
 取消原 ChatCompletion call -> RPC 取消传播 -> handler 关闭本轮执行流
 ```
 

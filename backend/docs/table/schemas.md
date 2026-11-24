@@ -9,6 +9,7 @@
 | `id` | `TEXT PRIMARY KEY` | 会话 ID |
 | `status` | `TEXT NOT NULL` | 会话粗粒度状态（`processing`/`ready`/`running`/`failed`） |
 | `active_turn_id` | `TEXT` | 当前活跃 turn 辅助索引（非数据库锁或唯一并发事实来源） |
+| `title` | `TEXT` | 模型总结或降级生成的会话可读标题（可空；启动时对旧库自动幂等补列） |
 | `created_at` / `updated_at` | `TEXT NOT NULL` | 创建时间 / 最近更新时间 |
 
 ## `chat_resources`

@@ -7,6 +7,7 @@ SCHEMA_SQL = [
         id TEXT PRIMARY KEY,
         status TEXT NOT NULL,
         active_turn_id TEXT,
+        title TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     )

@@ -26,7 +26,7 @@ def create_turn(db, turn_id="turn-1", session_id="session-1", status="queued", n
 
 def test_create_session_writes_only_schema_columns(db):
     session = create_session(db)
-    assert set(session) == {"id", "status", "active_turn_id", "created_at", "updated_at"}
+    assert set(session) == {"id", "status", "active_turn_id", "title", "created_at", "updated_at"}
     assert session["id"] == "session-1"
     assert session["status"] == "processing"
     assert session["active_turn_id"] is None
