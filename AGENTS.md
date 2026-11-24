@@ -9,7 +9,7 @@
 - 产品规格（用户视角）：[docs/product-specs/index.md](docs/product-specs/index.md)
 - 执行计划与技术债：`docs/exec-plans/active/`（进行中） / `docs/exec-plans/completed/`（已归档） / [tech-debt-tracker.md](docs/exec-plans/tech-debt-tracker.md)
 - 本地运行与测试参考：[docs/references/local-dev-and-testing.md](docs/references/local-dev-and-testing.md)
-- 跨会话知识整理（Dreaming）：[dreaming](.agents/skills/dreaming/SKILL.md) / [dream-log.md](memory/dream-log.md) / `memory/notes/`
+- 仓库文档门禁：[check_docs.py](scripts/check_docs.py)
 
 ## 开发流程
 
@@ -24,8 +24,8 @@
 - 表达直接平实，避免破折号、弯引号和装饰性符号；注释只解释不直观的逻辑（详细写法品味见 [core-beliefs.md](docs/design-docs/core-beliefs.md)）。
 - 排查问题按实际读到的代码和现象说明位置与原因，原因不明时如实说明。
 
-## 跨会话维护与 Dreaming
+## 启动读取与本地记忆边界
 
-- 控制面只读：本文件保存稳定开发规范与总目录地图，日常开发与 `dreaming` 不修改本文件。
-- 启动按需读取：新会话先按需查看 `docs/exec-plans/active/` 与 `memory/notes/`，其余沿上方仓库知识地图按任务逐层打开，不整库全读；具体实现细节以源码和一手设计文档为准。
-- 会中暂记与手动整理：会中未立即归位的零散踩坑或阶段判断可先轻量记入 `memory/notes/`；跨会话回顾、纠偏与文档园艺由用户显式触发 [dreaming](.agents/skills/dreaming/SKILL.md) 执行，直接将核实后的知识同步进 `ARCHITECTURE.md`、`docs/` 与各模块 `DECISIONS.md`。
+- 控制面只读：本文件保存稳定开发规范与总目录地图，日常开发不修改本文件。
+- 启动按需读取：新会话先按需查看 `docs/exec-plans/active/`，其余沿上方仓库知识地图按任务逐层打开，不整库全读；具体实现细节以源码和一手设计文档为准。
+- 个人记忆与仓库知识分离：个人会中草稿、会话回顾流水与本地整理技能（`memory/`、`.agents/`）仅保留在本地并由 `.gitignore` 忽略，不提交公开仓库；经核实的架构、产品规格、技术债与模块 `DECISIONS.md` 直接落盘并提交 Git。

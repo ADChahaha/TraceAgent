@@ -5,7 +5,6 @@
 ## 待修缺陷（中高优先级）
 
 - `frontend` 尾随来源段截断风险：`splitTrailingSourcesSection`（[markdown-evidence.tsx](../../frontend/src/components/markdown-evidence.tsx) L155-L178）在 `citation` 模式下倒序命中 `Sources`/`References`/`来源`/`引用` 标题即无条件丢弃后续全部内容，未校验该节是否仅含引用链接列表，存在误删合法正文末尾小节风险。
-- `memory` Codex 归档扫描缺口：[dream_scan.py](../../memory/dream_scan.py) 的 `scan_codex` 当前仅扫描 `~/.codex/sessions/**/*.jsonl`，未覆盖 `~/.codex/archived_sessions/*.jsonl.zst` 与 `~/.codex/state_5.sqlite` + `thread_history_1.sqlite`，导致 Codex 归档会话无法被默认增量扫描拾取。
 
 ## 已知架构限制与待清理项（低优先级，按需立项）
 

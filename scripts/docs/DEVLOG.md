@@ -1,5 +1,11 @@
 # 脚本开发日志
 
+## 2026-11-25
+
+拆离公开仓库文档门禁与个人本地记忆：新增 [scripts/check_docs.py](../check_docs.py) 与 [scripts/tests/test_check_docs.py](../tests/test_check_docs.py) 承接仓库级文档骨架、断链与中文锚点、全仓模块 `DECISIONS.md` 总目收录、归档计划决策迁出与文风预算检查（扫描时显式忽略 `.gitignore` 里的 `memory/`、`.agents/`、`experiments/` 与 `storage/data/`）；将 `memory/` 与 `.agents/` 加入 `.gitignore` 并以 `git rm -r --cached` 退出 Git 追踪，本地个人文件完好保留。
+
+验证：`python3 scripts/check_docs.py` 清零（22 份知识文档、14 份模块 `DECISIONS.md`、111 条链接 0 断链）；`scripts/tests` 与 `.github/tests` 共 11 项全部通过。
+
 ## 2026-09-18
 
 安装脚本原先没有安装 storage 和 embeddings 扩展依赖，导致服务虽可探活，文档索引生成却缺少运行时。现统一安装 storage、agent[dev,embeddings] 和 document_service[dev,embeddings]。

@@ -13,6 +13,8 @@ __pycache__/
 tmp/
 backend/tmp/
 experiments/
+memory/
+.agents/
 *.sqlite3
 *.sqlite3-*
 agent/data/

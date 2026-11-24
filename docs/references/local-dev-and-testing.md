@@ -13,7 +13,7 @@
 ## 本地测试、打包与门禁命令
 
 - 仓库无根目录统一 `pyproject.toml`，各 Python 包独立声明依赖；代码直接 `import` 的库必须显式写入对应 `pyproject.toml`，不得依赖传递依赖（`agent` 由 `test_pyproject_dependencies.py` 校验）。`agent` 与 `document_service` 的 pytest 启用 `--import-mode=importlib` 避免同名测试模块冲突。
-- 文档门禁、脚本与 CI 测试：`conda run -n agent-gate python -m pytest memory/tests scripts/tests .github/tests -q`
+- 文档门禁、脚本与 CI 测试：`conda run -n agent-gate python -m pytest scripts/tests .github/tests -q`
 - 业务包本地回环测试（显式绕开系统代理）：
   `NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost conda run -n agent-gate python -m pytest <target_tests> -q`
 - 调整包目录或拆分模块后，须运行 `agent/tests/test_packaging.py` 与 `document_service/tests/test_packaging.py` 校验实际 wheel 打包完整。
@@ -24,10 +24,10 @@
 
 - 所有启停与测试命令统一从仓库根目录执行：`backend` 默认数据库为相对路径 `backend/backend.sqlite3`（对象存储在 `storage/data/`），若误在 `backend/` 子目录启动会连成嵌套空库 `backend/backend/backend.sqlite3`；执行清理或 Git 历史操作前先备份本地 `backend/backend.sqlite3`。
 - 使用 `pnpm --dir frontend dev` 本地开发联调时须访问 `http://localhost:3000`；访问 `http://127.0.0.1:3000` 会因 `allowedDevOrigins` 不匹配导致 HMR WebSocket 异常并卡在加载态（`scripts/start.sh` 跑生产构建 `pnpm start`，无 HMR 限制）。
-- `frontend/next-env.d.ts` 当前受 Git 跟踪，`next build` 与 `next dev` 会在开发/生产路径间自动改写该文件，提交前不要误暂存；同时保持 `storage/data/`、`*.sqlite3` 与 `experiments/` 未跟踪，公开仓库禁止提交真实业务 PDF/DOCX 与大体积演示视频（详见 [document_processor/docs/DECISIONS.md](../../document_service/document_processor/docs/DECISIONS.md)）。
+- `frontend/next-env.d.ts` 当前受 Git 跟踪，`next build` 与 `next dev` 会在开发/生产路径间自动改写该文件，提交前不要误暂存；同时保持 `memory/`、`.agents/`、`storage/data/`、`*.sqlite3` 与 `experiments/` 未跟踪，公开仓库禁止提交真实业务 PDF/DOCX 与大体积演示视频（详见 [document_processor/docs/DECISIONS.md](../../document_service/document_processor/docs/DECISIONS.md)）。
 - 根 README 演示效果优先使用仓库内静态截图（`docs/assets/*.png`），不使用仓库相对路径 `<video>` 标签或 `img.shields.io` 远程 SVG。本机长期复用的 `agent-gate` 环境中，`pip check` 可能报告历史遗留非主链路包（如 `marker-pdf`、`dedoc`）冲突，不阻断 5 服务运行。
 
-## 代理、模型端点与 Dreaming 扫描避坑
+## 代理、模型端点与文档门禁
 
 - 本机开启代理时，`curl` 调本地端口加 `--noproxy '*'`；调用模型 API 若报 `httpx.RemoteProtocolError` 或 `openai.APIConnectionError` 且堆栈经过 `httpcore/_sync/http_proxy.py`，用 `env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u http_proxy -u https_proxy -u all_proxy` 清代理直连重试。
 - Hugging Face 公开模型下载若因本机隐式 token 报 401，在根目录 `.env` 中设 `HF_HUB_DISABLE_IMPLICIT_TOKEN=1`。
@@ -38,4 +38,4 @@
   - 生产固定 `streaming=True`（部分端点非流式 tool call 会返回裸 SSE 字符串）。
   - 已移除 DeepSeek `thinking` / `reasoning_content` 专有适配，接入默认开启思考模式的 DeepSeek 端点会因未回传 `reasoning_content` 报 400。
   - 多上游轮询且无通道粘性的中转代理会导致 Prompt Cache 命中恒为 0。
-- 知识库审计与跨端会话扫描：`python3 memory/dream_scan.py --audit`（设计见 [memory/docs/DESIGN.md](../../memory/docs/DESIGN.md)，整理见 [dreaming/SKILL.md](../../.agents/skills/dreaming/SKILL.md)）；注意当前 `scan_codex` 仅扫描 `~/.codex/sessions/**/*.jsonl`，历史归档 Codex 线程位于 `~/.codex/archived_sessions/*.jsonl.zst` 与 `~/.codex/state_5.sqlite` + `thread_history_1.sqlite`。
+- 仓库知识文档门禁：`python3 scripts/check_docs.py`（校验必需骨架、链接锚点、模块 `DECISIONS.md` 收录、归档计划决策迁出与文风预算，回归测试见 `scripts/tests/test_check_docs.py`）。
