@@ -1,8 +1,8 @@
-# 问答事件流与重试规则
+# 问答事件流与重试
 
 返回 [Agent gRPC API](../API.md)。
 
-## 事件类型表
+## 事件类型
 
 路由直接消费 core 的类型化输出，逐条构造并 yield `CompletionEvent`，gRPC 自行分帧，不经过字典事件层。`seq` 从 1 连续递增，每条流绑定一个 completion，不重复携带 `completion_id`。
 
@@ -18,10 +18,10 @@
 | `tool_completed` / `tool_failed` | 对应调用的 `args_json`、`result_json` |
 | `completion.completed` / `completion.failed` | 正常或失败终态、`status`；失败携带 `error_message`。主动取消直接结束流，不发终态 |
 
-## 字段编码规则
+## 字段编码
 
-- `args_json`、`result_json` 及 `ToolCall.args_json` 用 JSON 字符串保留动态结构、大整数和 null；客户端用 `json.loads` 解码。
-- 其余固定字段使用 protobuf 类型，可选字段可用 `HasField` 判断。
+- `args_json`、`result_json` 及 `ToolCall.args_json` 用 JSON 字符串保留动态结构、大整数和 null，客户端用 `json.loads` 解码。
+- 其余固定字段使用 protobuf 类型，可选字段通过 `HasField` 判断。
 - 最终回答由 `is_final=true` 标记；工具调用 ID 用于配对，模型引用 `documents` 下的真实 Markdown key 路径。
 
 ## 重试与退避
@@ -32,9 +32,9 @@
 - 重试通知在等待结束前发出；第 5 次失败以 `completion.failed` 结束。
 - SDK 内层重试关闭；旧 `model_config.max_retries` / `MODEL_MAX_RETRIES` 暂保留解析但不再控制请求次数。
 
-## 消费端合并契约
+## 消费端处理方式
 
-- 按 `message_id` 追加 `delta`；收到 `done` 时用 `done.content` 替换/确认完整正文，不再追加。
-- 收到 `retrying` 时将关联旧消息标记失败；下一次 `started` 使用新 ID，正文不能拼接。
-- 失败尝试的部分文本只供展示，不作为完整 assistant 历史回传。取消或失败可能没有 `done`。
-- 旧 `model_message` 消费端必须升级到 `started`/`delta`/`done` 事件模型。
+- 按 `message_id` 追加 `delta`；收到 `done` 时用 `done.content` 替换并确认完整正文，不再追加。
+- 收到 `retrying` 时将关联旧消息标记失败；下一次 `started` 使用新 ID，不与旧正文拼接。
+- 失败尝试的部分文本只供展示，不作为完整 assistant 历史回传。取消或失败时可能没有 `done`。
+- 旧 `model_message` 事件已移除，消费端按 `started` / `delta` / `done` 模型处理。

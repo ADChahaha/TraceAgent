@@ -4,6 +4,6 @@ last_dream_at: 2026-11-24T17:15:00+08:00
 
 ---
 
-## 2026-11-24 初始化
+## 2026-11-24 初始化与去规则化
 
-从 `japan_director` 迁移 `memory/dream_scan.py`、`.agents/skills/dreaming/SKILL.md` 与四层记忆骨架到 `agent_gate`，完成仓库路径适配与精简收薄（[memory.md](../memory.md)、[preference/INDEX.md](preference/INDEX.md)、[wiki/project-index.md](wiki/project-index.md)），并同步精简了各包长设计与接口文档。
+从 `japan_director` 迁入 `memory/dream_scan.py`、`.agents/skills/dreaming/SKILL.md` 与项目记忆目录，随后去掉强制 L0-L3 预算、互链墙和空壳索引页（删除 `memory/preference/INDEX.md`、`memory/wiki/project-index.md`），由 [memory.md](../memory.md) 直接链接 [协作偏好](preference/workspace-preferences.md) 和 [服务入口](wiki/services.md)。

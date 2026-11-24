@@ -43,7 +43,7 @@ POST /cancel -> Registry.get 取得现有 manager（只操作已加载会话）
 | `document_client.py` | `DocumentResourceService` protobuf 与 `grpc.aio` 转换，只负责 `PrepareResources` |
 | `core/db.py`、`crud/crud.py` | 线程内连接、事务和参数化 SQL |
 
-## Registry 状态与关闭约束
+## Registry 生命周期与关闭
 
 - Registry 用每 session 的 Entry 状态协调 Manager 生命周期：不存在时当前请求取得创建权（`CREATING`），锁外完成加载后转 `READY`；`complete` 与 cold `resume` 共用该入口，`cancel` 只取现有 `READY` manager。
 - 后台执行由 `TurnRuntime.start` 创建；创建请求被显式取消时 abort 创建权，由创建方关闭未注册 manager。

@@ -16,7 +16,7 @@ tool_completed / tool_failed -> 按原 call_id 配对实际结果
 下一轮 begin -> 只读取 chat_messages，不拼接过程事件
 ```
 
-- 同名工具按 ID 独立匹配，结果乱序到达不改变稳定消息顺序；未知、重复或无实际结果的终态不得补造数据。
+- 同名工具按 ID 独立匹配，结果乱序到达不改变稳定消息顺序；未知、重复或无实际结果的终态不会补造数据。
 - 组提交与事件入库同事务，失败无半组或提前广播；取消、执行失败或不完整终结丢弃未配齐组，保留此前完整消息；`completion.completed` 只收口轮次，不重复保存 assistant。
 
 ## TurnView 与 Subscription
@@ -25,7 +25,7 @@ tool_completed / tool_failed -> 按原 call_id 配对实际结果
 - 每个页面一条 `Subscription` 由 manager 持有；`publish` 深拷贝事件且不等待消费，溢出仅关闭该慢连接并清空队列，不影响其他页面或执行；`receive` 等待通知后取队列，心跳超时取消等待不会偷走下一条事件。
 - 有界订阅不等于整个 session 固定内存上限：当前轮展示、工具配对与模型请求仍随当前工作量增长。
 
-## `GET /resume` 一致性协议
+## `GET /resume` 快照与增量衔接
 
 ```text
 GET /resume -> manager.attach（串行命令内）：

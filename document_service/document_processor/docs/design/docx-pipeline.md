@@ -1,4 +1,4 @@
-# DOCX 解析管线与输出约束
+# DOCX 解析与 HTML 输出
 
 返回 [Document Processor 设计](../DESIGN.md)。
 
@@ -20,7 +20,7 @@
   -> 生成带 CSS 的完整 HTML 文档，返回 ProcessResult(filename, html)
 ```
 
-## 标题与输出约束
+## 标题识别与输出说明
 
 - 刻意不根据字号、加粗或手工排版猜测标题；只有显式 Word heading 样式才会生成 heading block，无标题样式文档输出为扁平有序的 paragraph/table 列表。
 - DOCX 没有稳定的页码与 bbox，块 ID 只表达文档内顺序（如 `docx_b001`、`docx_b002`）。

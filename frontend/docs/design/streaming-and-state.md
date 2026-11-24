@@ -25,8 +25,8 @@ session.event -> session-state 按 turn/message/tool ID 合并更新
 合并语义与 backend `TurnView` 严格对齐：
 
 - `snapshot` 原样替换历史与当前轮。
-- `model_message.delta` 按 `message_id` 追加；`done` 用完整 `content` 替换，不可重复拼接。
+- `model_message.delta` 按 `message_id` 追加；`done` 用完整 `content` 替换，不再重复拼接。
 - `retry` 标记原尝试失败，新 `message_id` 独立展示。
 - 工具按 `tool_call_id` 更新同一条目，连续工具在 UI 折叠为过程组。
-- `turn.completed`/`failed`/`cancelled` 结束轮次并将未完成条目标为 `interrupted`；已结束轮次不接受迟到事件，旧轮终态不能清空新轮 ID。
+- `turn.completed`/`failed`/`cancelled` 结束轮次并将未完成条目标为 `interrupted`；已结束轮次忽略迟到事件，旧轮终态不会清空新轮 ID。
 - 主动取消调用 `POST /cancel` 同时传 `session_id` 与 `active_turn_id`，成功终态响应立即更新投影并释放订阅；关闭页面本身只断开订阅，不发取消。

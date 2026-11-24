@@ -29,11 +29,11 @@
 - 正常完成输出 `completion.completed`；普通执行异常输出 `completion.failed`；`CancelledError` / `GeneratorExit` 直接传播，不补发终态。
 - 生成器逐层关闭，工具 `finally` 清理子进程。资源参数错误在首事件前返回 `INVALID_ARGUMENT`。
 
-## 对外契约与迁移
+## 对外接口与迁移
 
 - 文档服务接口：`DocumentResourceService.PrepareResources`，一次发送多个 `filename`/`bytes`，返回资源定位数组（`documents.zip` 归档，不再内联返回 HTML），默认监听 `127.0.0.1:8002`。
 - agent 服务接口：`AgentService.ChatCompletion`，输入 `resource_refs`（`[{type, location}]`）+ `messages`，输出 `CompletionEvent` 服务端流，默认监听 `127.0.0.1:8001`。
 - 采用标准 gRPC Health 探活，两服务各自注册 Health 名称；不提供问答查询或能力查询 RPC。
 - 不再提供 FastAPI、HTTP 路由和 SSE；旧问答 `documents` 输入不保留。
 - backend 分别通过两个 gRPC client 连接两服务；取消通过原 gRPC call 定位执行，无需按 completion ID 路由。
-- 模型装配仅保存单一 provider 和调用方式，工具契约仅支持异步调用；取消沿 Task 传播，可见文本统一由 `messages.visible_text` 提取；已移除 DeepSeek 专用适配，统一使用标准 `ChatOpenAI`。
+- 模型装配保存单一 provider 和调用方式，工具采用异步调用；取消沿 Task 传播，可见文本统一由 `messages.visible_text` 提取；已移除 DeepSeek 专用适配，统一使用标准 `ChatOpenAI`。

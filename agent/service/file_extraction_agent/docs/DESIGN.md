@@ -11,14 +11,12 @@ resource_refs([{type, location}]) + messages + model_config / run_options
   -> application 归一化带 seq 的 CompletionEvent -> 路由编码 protobuf -> gRPC 流
 ```
 
-## 目录
+## 主题文档
 
-| 主题 | 文档 | 内容 |
-| --- | --- | --- |
-| 存储与请求 | [design/storage-and-request.md](design/storage-and-request.md) | 数据流、`CompletionEvent`/`JsonValue`、payload 存储与取消边界 |
-| 图状态与循环 | [design/graph-and-state.md](design/graph-and-state.md) | `QaState`、`run_qa_stream`、重试退避、`stream_mode`、`RunOptions` 与 6 文件分工 |
-| 模型与事件 | [design/events-and-model.md](design/events-and-model.md) | `ConfiguredChatModel`/`ChatOpenAI`、`visible_text`、模型事件与并行工具批次 |
-| 工具与部署 | [design/tools-and-deployment.md](design/tools-and-deployment.md) | 一次性 worker 进程、OpenVINO 基准、文档树引用与跨轮无状态边界 |
+- [存储与请求](design/storage-and-request.md)：数据流、`CompletionEvent`/`JsonValue`、payload 存储与取消边界
+- [图状态与循环](design/graph-and-state.md)：`QaState`、`run_qa_stream`、重试退避、`stream_mode`、`RunOptions` 与 6 文件分工
+- [模型与事件](design/events-and-model.md)：`ConfiguredChatModel`/`ChatOpenAI`、`visible_text`、模型事件与并行工具批次
+- [工具与部署](design/tools-and-deployment.md)：一次性 worker 进程、OpenVINO 基准、文档树引用与跨轮无状态边界
 
 同级：[tools.md](tools.md) / [STREAMING_AND_CANCELLATION.md](STREAMING_AND_CANCELLATION.md) / [agent_loop.md](agent_loop.md) / [flowchart.md](flowchart.md)
 相关：[agent API](../../../docs/API.md) / [资源设计](../../../../document_service/document_resources/docs/DESIGN.md)

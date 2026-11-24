@@ -29,7 +29,7 @@
 | `service/file_extraction_agent/core/tools/ov_embedder.py` | 纯 OpenVINO 查询编码器（tokenizer + IR + mean pooling + L2） |
 | `service/object_store.py` | `ObjectStore` 接口 + `S3ObjectStore`（boto3）+ Archive/Composite store + `s3://` URL 解析 |
 
-## 服务交接原则
+## 服务交接
 
 - 两个业务服务通过 `storage` 服务交接，互不通过 Python import 交接。
 - document service 只生成并发布资源；agent service 在 prepare 与工具子进程内经 `S3ObjectStore` 读取。

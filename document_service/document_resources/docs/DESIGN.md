@@ -20,7 +20,7 @@ manifest 的 `document_roots` 映射原文件名到一级文档目录。旧清�
 
 成功发布裁剪结果后 application 才删除目标 raw，返回 documents/index 及剩余 raw 的全量引用。构建或校验失败不写桶；发布中途失败仍可能留下部分产物，当前没有远端回滚或原子发布。同桶操作依赖 backend 串行化。
 
-## 存储契约
+## 对象布局
 
 通过共享 ObjectStore 写入独立 storage 服务，endpoint 由 `S3_ENDPOINT_URL` 配置。对象布局为：
 

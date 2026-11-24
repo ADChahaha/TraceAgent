@@ -2,7 +2,7 @@
 
 返回 [问答工具](../tools.md)。
 
-## 路径传递规则
+## 路径格式
 
 `PrepareResources` 返回 `s3://res_example/documents` 与 `s3://res_example/index`。工作区据此固定 bucket，工具传入的路径是桶内 `documents/...` key：
 
@@ -14,7 +14,7 @@ ls("") -> entries[].path = documents/0001-contract
   -> 回答引用 [1](documents/0001-contract/0001-section/0001-block.md)
 ```
 
-以下 key 和文本均为示例，实际调用须原样复制工具输出。禁止传入本机绝对路径或 `s3://` URL；引用 key 不是 HTTP 下载地址，展示端需结合资源定位解析。
+以下 key 和文本均为示例，实际调用直接复用工具返回的相对 key，不传本机绝对路径或 `s3://` URL；引用 key 不是 HTTP 下载地址，展示端结合资源定位解析。
 
 ## `ls(path="")`
 
@@ -40,7 +40,7 @@ ls("") -> entries[].path = documents/0001-contract
 
 - 空 `query` 返回 `{"ok":false,"errors":[{"code":"BAD_QUERY","message":"query is required"}]}`。
 - 无匹配时 `output` 为空字符串。
-- 当前 `scope` 越界会把错误文字放进 `output`，外层仍为 `ok:true`；调用方不能仅凭 `ok` 判断是否获得候选，且候选必须经 `read` 核实后再引用。
+- 当前 `scope` 越界会把错误文字放进 `output`，外层仍为 `ok:true`；调用方不只凭 `ok` 判断是否命中候选，候选经 `read` 核实后再引用。
 
 ## `read(path)`
 

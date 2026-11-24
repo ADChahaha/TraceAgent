@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""只读 Dreaming 信号扫描器、窄范围会话检索器与四层记忆架构门禁。"""
+"""只读 Dreaming 会话扫描器与记忆健康检查脚本。"""
 
 from __future__ import annotations
 
@@ -13,16 +13,9 @@ import urllib.parse
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PROTECTED_FILES = ["AGENTS.md", "agent/AGENTS.md"]
-
-LAYER_BUDGETS = {
-    "L0": {"max_chars": 1500, "max_lines": 35, "max_line_chars": 200},
-    "L1": {"max_chars": 2200, "max_lines": 45, "max_line_chars": 220},
-    "L2": {"max_chars": 2600, "max_lines": 65, "max_line_chars": 260},
-    "L3": {"max_chars": 2400, "max_lines": 55, "max_line_chars": 260},
-}
-
-MAX_INLINE_INTERNAL_LINKS_L2_L3 = 5
+PROTECTED_FILES = ["AGENTS.md"]
+ENTRY_MAX_CHARS = 2500
+PAGE_MAX_CHARS = 4500
 
 AGY_SPAWN_ID_RE = re.compile(
     r"(?:\\?\"conversationId\\?\":\s*\\?\"|\b(?:done|error)\s*\(|failed to run agent \\?\")"
@@ -445,22 +438,8 @@ def list_rel_md(subdir: Path) -> list[str]:
     return [str(p.relative_to(subdir)) for p in sorted(subdir.rglob("*.md"))] if subdir.exists() else []
 
 
-def classify_memory_tier(rel: str) -> str | None:
-    if rel == "memory.md":
-        return "L0"
-    if rel == "memory/preference/INDEX.md":
-        return "L1"
-    if rel.startswith("memory/wiki/") and rel.count("/") == 2 and rel.endswith("-index.md"):
-        return "L1"
-    if rel.startswith("memory/wiki/") and (
-        rel.startswith("memory/wiki/experiments/")
-        or rel.endswith("-experiments.md")
-        or rel.endswith("-details.md")
-    ):
-        return "L3"
-    if rel.startswith("memory/wiki/") or rel.startswith("memory/preference/"):
-        return "L2"
-    return None
+def _is_active_memory(rel: str) -> bool:
+    return rel == "memory.md" or rel.startswith(("memory/wiki/", "memory/preference/"))
 
 
 def _resolve_internal_md(src: Path, target: str, repo_root: Path) -> str | None:
@@ -472,7 +451,7 @@ def _resolve_internal_md(src: Path, target: str, repo_root: Path) -> str | None:
         rel = p.relative_to(repo_root).as_posix()
     except ValueError:
         return None
-    if rel == "memory.md" or rel.startswith(("memory/wiki/", "memory/preference/")):
+    if _is_active_memory(rel):
         return rel
     return None
 
@@ -490,13 +469,9 @@ def check_memory_integrity(repo_root: Path | None = None) -> dict:
     total_links = 0
     broken = []
     graph: dict[str, set[str]] = {}
-    active_tiered_files: set[str] = set()
-    tier_totals: dict[str, dict[str, int]] = {
-        t: {"files": 0, "chars": 0, "lines": 0} for t in ("L0", "L1", "L2", "L3")
-    }
-    budget_violations: list[dict] = []
-    layer_violations: list[tuple[str, str, str]] = []
-    crosslink_walls: list[tuple[str, int, int]] = []
+    active_files: set[str] = set()
+    total_active_chars = 0
+    oversized_files: list[dict] = []
 
     for f in md_files:
         if not f.exists():
@@ -504,29 +479,17 @@ def check_memory_integrity(repo_root: Path | None = None) -> dict:
         rel = f.relative_to(root).as_posix()
         txt = f.read_text(encoding="utf-8")
         lines = txt.splitlines()
-        tier = classify_memory_tier(rel)
-        if tier is not None:
-            active_tiered_files.add(rel)
+        is_active = _is_active_memory(rel)
+        if is_active:
+            active_files.add(rel)
             graph.setdefault(rel, set())
             chars = len(txt)
-            nlines = len(lines)
-            max_line = max((len(line) for line in lines), default=0)
-            tier_totals[tier]["files"] += 1
-            tier_totals[tier]["chars"] += chars
-            tier_totals[tier]["lines"] += nlines
-            b = LAYER_BUDGETS[tier]
-            reasons = []
-            if chars > b["max_chars"]:
-                reasons.append(f"chars={chars}>{b['max_chars']}")
-            if nlines > b["max_lines"]:
-                reasons.append(f"lines={nlines}>{b['max_lines']}")
-            if max_line > b["max_line_chars"]:
-                reasons.append(f"max_line={max_line}>{b['max_line_chars']}")
-            if reasons:
-                budget_violations.append({"file": rel, "tier": tier, "reasons": reasons})
+            total_active_chars += chars
+            limit = ENTRY_MAX_CHARS if rel == "memory.md" else PAGE_MAX_CHARS
+            if chars > limit:
+                oversized_files.append({"file": rel, "chars": chars, "max_chars": limit})
 
-        for line_no, line in enumerate(lines, 1):
-            inline_internal = 0
+        for line in lines:
             for m in link_re.finditer(line):
                 target = m.group(1)
                 if target.startswith(("http://", "https://")):
@@ -548,18 +511,12 @@ def check_memory_integrity(repo_root: Path | None = None) -> dict:
                         broken.append((rel, target, "missing_anchor"))
 
                 target_rel = _resolve_internal_md(f, target, root)
-                if target_rel and tier is not None:
+                if target_rel and is_active:
                     graph[rel].add(target_rel)
-                    inline_internal += 1
-                    if tier == "L0" and classify_memory_tier(target_rel) != "L1" and target_rel != "memory.md":
-                        layer_violations.append((rel, target_rel, "L0_direct_link_to_non_L1"))
-
-            if tier in ("L2", "L3") and inline_internal > MAX_INLINE_INTERNAL_LINKS_L2_L3:
-                crosslink_walls.append((rel, line_no, inline_internal))
 
     depths: dict[str, int] = {}
     queue: list[str] = []
-    if "memory.md" in active_tiered_files:
+    if "memory.md" in active_files:
         depths["memory.md"] = 0
         queue.append("memory.md")
     while queue:
@@ -568,7 +525,7 @@ def check_memory_integrity(repo_root: Path | None = None) -> dict:
             if nxt not in depths:
                 depths[nxt] = depths[cur] + 1
                 queue.append(nxt)
-    unreachable_files = sorted(f for f in active_tiered_files if f not in depths)
+    unreachable_files = sorted(f for f in active_files if f not in depths)
     max_depth = max(depths.values()) if depths else 0
 
     mem_path = root / "memory.md"
@@ -591,13 +548,10 @@ def check_memory_integrity(repo_root: Path | None = None) -> dict:
     return {
         "memory_md_lines": mem_lines,
         "memory_md_chars": mem_chars,
-        "tier_totals": tier_totals,
-        "total_active_chars": sum(v["chars"] for v in tier_totals.values()),
-        "total_active_files": sum(v["files"] for v in tier_totals.values()),
+        "total_active_chars": total_active_chars,
+        "total_active_files": len(active_files),
         "max_depth": max_depth,
-        "budget_violations": budget_violations,
-        "layer_violations": layer_violations,
-        "crosslink_walls": crosslink_walls,
+        "oversized_files": oversized_files,
         "unreachable_files": unreachable_files,
         "active_preferences": active_preferences,
         "active_notes": active_notes,
@@ -609,27 +563,22 @@ def check_memory_integrity(repo_root: Path | None = None) -> dict:
 
 
 def _print_integrity_report(integrity: dict, verbose: bool = False) -> None:
-    print(f"- L0 `memory.md`: {integrity['memory_md_lines']} lines, {integrity['memory_md_chars']} chars")
-    tier_summary = " | ".join(
-        f"{t}: {v['files']}f/{v['chars']}c" for t, v in integrity["tier_totals"].items()
-    )
+    print(f"- `memory.md`: {integrity['memory_md_lines']} lines, {integrity['memory_md_chars']} chars")
     print(
-        f"- Active memory tiers ({integrity['total_active_files']} files, "
-        f"{integrity['total_active_chars']} chars, max_depth={integrity['max_depth']}): {tier_summary}"
+        f"- Active memory: {integrity['total_active_files']} files, "
+        f"{integrity['total_active_chars']} chars (max_depth={integrity['max_depth']})"
     )
-    print(f"- Active preferences (`memory/preference/`): {integrity['active_preferences']}")
-    print(f"- Active notes (`memory/notes/`): {integrity['active_notes']}")
-    print(f"- Active tasks (`memory/tasks/`): {integrity['active_tasks']}")
+    print(f"- Preferences (`memory/preference/`): {integrity['active_preferences']}")
+    print(f"- Notes (`memory/notes/`): {integrity['active_notes']}")
+    print(f"- Tasks (`memory/tasks/`): {integrity['active_tasks']}")
     print(f"- Links checked: {integrity['total_links']}, broken: {integrity['broken']}")
     print(
-        f"- Budget violations: {len(integrity['budget_violations'])}"
-        + (" []" if not integrity["budget_violations"] else "")
+        f"- Oversized files: {len(integrity['oversized_files'])}"
+        + (" []" if not integrity["oversized_files"] else "")
     )
-    for v in integrity["budget_violations"] if verbose or integrity["budget_violations"] else []:
-        print(f"  - [{v['tier']}] `{v['file']}`: {', '.join(v['reasons'])}")
-    print(f"- Layer violations (L0->L2/L3): {integrity['layer_violations']}")
-    print(f"- Crosslink walls (L2/L3 inline > {MAX_INLINE_INTERNAL_LINKS_L2_L3}): {integrity['crosslink_walls']}")
-    print(f"- Unreachable files from `memory.md`: {integrity['unreachable_files']}")
+    for item in integrity["oversized_files"] if verbose or integrity["oversized_files"] else []:
+        print(f"  - `{item['file']}`: {item['chars']} chars > {item['max_chars']}")
+    print(f"- Unreachable files: {integrity['unreachable_files']}")
     print(f"- Protected SHA-256 prefix: {integrity['protected_sha256_prefix']}")
 
 
@@ -791,13 +740,13 @@ def main() -> None:
     parser.add_argument("--all-turns", action="store_true", help="In --session mode, include mid-turn assistant commentary before tool calls")
     parser.add_argument("--grep", help="Narrow regex search over extracted session turns instead of full reads")
     parser.add_argument("--max-hits", type=int, default=25, help="Max matched turns in --grep mode (default: 25)")
-    parser.add_argument("--audit", action="store_true", help="Only run memory hierarchy, budget, link and reachability audit")
+    parser.add_argument("--audit", action="store_true", help="Only run memory link, reachability and size check")
     args = parser.parse_args()
 
     repo_root = _resolve_repo_root(args.repo_root)
 
     if args.audit:
-        print("# Dream Memory Architecture Audit")
+        print("# Memory Audit")
         integrity = check_memory_integrity(repo_root)
         _print_integrity_report(integrity, verbose=True)
         return

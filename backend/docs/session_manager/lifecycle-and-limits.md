@@ -4,8 +4,8 @@
 
 ## 取消、卸载与重启收口
 
-- `cancel` 必须同时携带 `session_id` 与 `turn_id`。`Registry.get` 仅获取现有 `READY` manager，空闲已回收会话返回 404，不触发加载。
-- 取消后 runtime 不再接受新事件（`_on_event` 首查 `cancel_requested`），旧 call 迟到事件不能污染数据；即使 runtime 未执行首行即被取消，收口分支仍写终态并广播，不留悬挂句柄。取消不撤销在途写事务。
+- `cancel` 请求同时校验 `session_id` 与 `turn_id`。`Registry.get` 仅获取现有 `READY` manager，空闲已回收会话返回 404，不触发加载。
+- 取消后 runtime 不再接受新事件（`_on_event` 首查 `cancel_requested`），旧 call 迟到事件不会污染数据；即使 runtime 未执行首行即被取消，收口分支仍写终态并广播，不留悬挂句柄。取消不撤销在途写事务。
 - `detach` 只关闭对应订阅。manager 仅在无活跃轮、runtime、订阅及待处理命令时按空闲期限回收：entry 先置 `CLOSING`，锁外关闭后移除，期间请求收到冲突。冷加载只读会话摘要与资源，历史由 resume 按需查询。
 - 服务启动时将遗留活跃轮标为 `failed`（`error="backend_restarted"`），`processing` 会话标为 `failed`，其余遗留运行会话回到 `ready`；不自动重试 agent 或工具，页面恢复不等同于进程断点恢复。
 - Registry 不维护服务关闭标志，也不拒绝创建/加载；应用退出由 lifespan 调用 `close` 清理资源。

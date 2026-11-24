@@ -11,12 +11,10 @@ AgentService.ChatCompletion(resource_path + messages) -> 校验资源 -> 单轮�
 `resource_path` 为 `repeated ResourceRef`，每项 `{type, location}`，`location` 形如 `s3://<bucket>[/<key>]`。
 `type` 取值：`documents`（`documents.zip` 归档，成员为 Markdown 文件树）、`index`（embedding 索引）、`raw`（原始上传文件，每文件一项）。资源发布在独立 `storage` 服务上。
 
-## 目录
+## 主题文档
 
-| 主题 | 文档 | 内容 |
-| --- | --- | --- |
-| 准备与请求 | [api/prepare-and-request.md](api/prepare-and-request.md) | Python 示例、`PrepareResources` 契约、`ChatCompletion` 字段校验 |
-| 事件与重试 | [api/events-and-retry.md](api/events-and-retry.md) | `CompletionEvent` 类型、动态 JSON、5 次退避与 `Retry-After`、合并规则 |
-| 取消与错误 | [api/cancellation-and-errors.md](api/cancellation-and-errors.md) | `call.cancel()` 传播链、Health 探活、错误码与 deadline |
+- [准备与请求](api/prepare-and-request.md)：Python 示例、`PrepareResources` 行为、`ChatCompletion` 请求字段
+- [事件与重试](api/events-and-retry.md)：`CompletionEvent` 类型、动态 JSON、5 次退避与 `Retry-After`、消费端合并方式
+- [取消与错误](api/cancellation-and-errors.md)：`call.cancel()` 传播链、Health 探活、错误码与超时说明
 
 相关：[DESIGN.md](DESIGN.md) / [agent/README.md](../README.md)

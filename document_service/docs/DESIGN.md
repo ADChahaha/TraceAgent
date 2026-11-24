@@ -2,7 +2,7 @@
 
 document service 是独立的文档资源生产服务，不导入 agent 的问答业务包。它接收会话级资源准备请求，完成解析、结构化、分块、embedding 和对象存储发布；backend 保存返回的 `ResourceRef`，agent 只消费这些引用。
 
-## 资源契约
+## 资源流程
 
 会话资源落在固定桶 `res_<session_id>`：`raw/` 保存原文件，`documents.zip`、`index/` 和 `manifest.json` 保存处理产物。上传只处理新批次，问答使用会话全量资源引用。
 

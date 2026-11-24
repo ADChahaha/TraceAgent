@@ -36,8 +36,8 @@
 }
 ```
 
-## 错误与引用约束
+## 错误处理与引用
 
 - 空 `query` 返回与 `grep` 相同的 `BAD_QUERY` 错误结构。
 - 索引损坏、模型加载失败或向量维度不符时返回 `ok:false` 与 `errors`。
-- 单个 chunk 可能跨越多个 Markdown 文件，模型必须通过 `read` 核实对应 `covered_files` 正文后再引用。
+- 单个 chunk 可能跨越多个 Markdown 文件，模型通过 `read` 核实对应 `covered_files` 正文后再引用。

@@ -8,12 +8,10 @@
   -> 提交问题 POST /chat/completion -> SSE 增量更新 -> 点击数字引用打开原文高亮
 ```
 
-## 目录
+## 主题文档
 
-| 主题 | 文档 | 内容 |
-| --- | --- | --- |
-| 上传与会话 | [design/uploads-and-sessions.md](design/uploads-and-sessions.md) | 逐文件串行队列、删除与补传、自动跳转草稿交接、`workspace-list` 与轮询 |
-| 流式与状态 | [design/streaming-and-state.md](design/streaming-and-state.md) | `api.ts`、`session-stream.ts`、`use-session.ts` 重连代次、`session-state.ts` 合并与取消 |
-| 文档、布局与代理 | [design/documents-and-ui.md](design/documents-and-ui.md) | Sources/阅读视图、数字引用高亮、组件分工、响应式分栏、代理容量与测试 |
+- [上传与会话](design/uploads-and-sessions.md)：逐文件串行队列、删除与补传、自动跳转草稿交接、`workspace-list` 与轮询
+- [流式与状态](design/streaming-and-state.md)：`api.ts`、`session-stream.ts`、`use-session.ts` 重连代次、`session-state.ts` 合并与取消
+- [文档、布局与代理](design/documents-and-ui.md)：Sources/阅读视图、数字引用高亮、组件分工、响应式分栏、代理容量与测试
 
 相关：[backend API](../../backend/docs/API.md) / [backend 设计](../../backend/docs/DESIGN.md) / [README.md](../../README.md)

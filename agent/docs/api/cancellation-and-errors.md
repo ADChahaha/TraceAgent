@@ -35,7 +35,7 @@ finally:
 - agent 不提供问答查询接口；本轮进展与终态通过 `ChatCompletion` 事件流返回，历史查询由 backend 管理。
 - 标准 `grpc.health.v1.Health/Check`：agent 使用 `traceagent.v1.AgentService`，document service 使用 `traceagent.v1.DocumentResourceService`；服务名为空也返回 `SERVING`，仅用于进程探活，不检查模型可用性。
 
-## 错误映射与调用建议
+## 错误映射与调用注意
 
 | 情况 | 响应 |
 | --- | --- |
@@ -45,5 +45,5 @@ finally:
 | 消息超过配置上限 | `RESOURCE_EXHAUSTED` |
 | 客户端直接取消或 deadline 到期 | 客户端观察 `CANCELLED` / `DEADLINE_EXCEEDED` |
 
-- 每次 RPC 应设置符合 OCR、embedding 或问答耗时的 deadline。
-- 不要盲目重试资源准备或问答创建：响应丢失时服务端可能已执行，本版不提供持久幂等、事件重放、持久任务或新的资源生命周期。
+- 调用 RPC 时按 OCR、embedding 或问答实际耗时设置 deadline。
+- 本版不提供持久幂等、事件重放或持久任务；若响应丢失，服务端可能已经执行，重试资源准备或问答创建前需留意重复执行。

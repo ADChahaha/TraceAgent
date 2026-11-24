@@ -1,4 +1,4 @@
-# PDF MinerU 管线与 HTML 构建规则
+# PDF MinerU 解析与 HTML 构建
 
 返回 [Document Processor 设计](../DESIGN.md)。
 
@@ -13,7 +13,7 @@
 - `resolve_mineru_lang()`：读取 `DOCUMENT_PROCESSOR_MINERU_LANG`，默认 `japan`。
 - `build_mineru_env()`：设置保守运行时默认环境变量；`find_content_list_v2(...)` 定位 JSON 产物。
 
-## `pdf/html.py` 层级输出规则
+## `pdf/html.py` 结构映射
 
 - `build_html_from_content_list(...)` 输出带 CSS 壳（`<style>` 含 `dp-evidence-highlight` 等）的完整 HTML 文档，保留 `h1-h6`/`p`/`ul`/`ol`/`table` 骨架及块级 `id`/`data-page`/`data-bbox`。
 - 不再生成 `build_display_html_from_content_list`、`build_blocks_from_content_list`、`build_markdown_from_content_list` 或 `semantic_document`；引证粒度收敛到块级（paragraph/list/table）。

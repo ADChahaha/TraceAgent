@@ -1,4 +1,4 @@
-# Backend 数据表结构与约束
+# Backend 数据表结构
 
 返回 [Backend 数据表](../table.md)。
 
@@ -44,11 +44,11 @@
 | `session_id` / `turn_id` | `TEXT` | 归属 session 与复合外键 `(session_id, turn_id)` 指向 `chat_turns` |
 | `sequence` | `INTEGER NOT NULL` | 轮内顺序（per-turn seq，`> 0`）；跨轮顺序由 `chat_turns` 创建顺序给出 |
 | `group_id` / `group_index` | `TEXT` / `INTEGER` | 原子提交组标识（非空，按 `turn_id + message_id` 稳定生成）与组内序号（`>= 0`） |
-| `role` | `TEXT NOT NULL` | `user`/`system`/`assistant`/`tool`（当前约束要求 `turn_id` 非空，不支持 `system`） |
+| `role` | `TEXT NOT NULL` | `user`/`system`/`assistant`/`tool`（当前 `turn_id` 非空，不支持 `system`） |
 | `content` | `TEXT NOT NULL` | 完整正文；tool 为实际结果 JSON 文本，允许模型正文为空 |
-| `tool_calls_json` | `TEXT NOT NULL DEFAULT '[]'` | assistant 工具调用 JSON 数组（模型输入格式 `[{"id":...,"type":"function","function":{...}}]`）；非 assistant 必须为空数组 |
-| `tool_call_id` / `name` | `TEXT` | tool 对应原始调用 ID 与工具名（tool 必填，非 tool 必须为空） |
+| `tool_calls_json` | `TEXT NOT NULL DEFAULT '[]'` | assistant 工具调用 JSON 数组（模型输入格式 `[{"id":...,"type":"function","function":{...}}]`）；非 assistant 为空数组 |
+| `tool_call_id` / `name` | `TEXT` | tool 对应原始调用 ID 与工具名（tool 必填，非 tool 为空） |
 | `created_at` | `TEXT NOT NULL` | 创建时间 |
 
-- 数据库约束：`UNIQUE(turn_id, sequence)`、`UNIQUE(turn_id, group_id, group_index)`、同组非空 `tool_call_id` 唯一索引，以及 `chat_turns(session_id, id)` 唯一索引防跨会话关联。
-- 活跃轮唯一保证同一 turn 只有一个写者（runtime）；数据库只校验行级结构，不能替代业务配对校验。
+- 索引与唯一性：`UNIQUE(turn_id, sequence)`、`UNIQUE(turn_id, group_id, group_index)`、同组非空 `tool_call_id` 唯一索引，以及 `chat_turns(session_id, id)` 唯一索引（防止跨会话关联）。
+- 活跃轮唯一保证同一 turn 只有一个写者（runtime）；数据库只校验行级结构，业务配对仍在应用层完成。

@@ -16,12 +16,12 @@ ModelConfig 或环境变量
 - 生产配置固定 `streaming=True`，不自动降级，不再维护多模型候选列表。
 - SDK 内层 `max_retries` 固定为 0，避免与图内 5 次重试相乘；旧配置字段暂保留解析，不再控制 SDK 重试。
 - 已删除 `openai_models.py` 以及 DeepSeek 专用 `reasoning_content` 保存/回传和 `thinking` 参数注入；`reasoning_effort` 等通用参数按标准 SDK 传入。
-- 工具契约仅支持 `ainvoke`，不再声明同步工具。取消仅依赖 Task 与生成器关闭，不再传递 `should_stop` 回调。
+- 工具只通过 `ainvoke` 异步调用，不再保留同步接口。取消依赖 Task 与生成器关闭，不再传递 `should_stop` 回调。
 - `messages.visible_text` 统一处理增量与完整消息：字符串直接返回；列表只保留字符串与 `text` 块字符串，忽略隐藏推理、非文本块及无效 text 值。
 
 ## 模型与工具事件批次
 
-每条 gRPC 流绑定本轮请求，事件不重复携带 completion ID；`completion_id` 仅保留请求格式校验。`tool_call_id` 及模型 `tool_calls` 内的 ID 保留用于调用与结果配对。
+每条 gRPC 流绑定本轮请求，事件不重复携带 completion ID；`completion_id` 只做请求格式校验。`tool_call_id` 及模型 `tool_calls` 内的 ID 保留用于调用与结果配对。
 
 ```text
 模型节点调用 model_invocation._invoke_model_message
@@ -36,9 +36,10 @@ ModelConfig 或环境变量
   -> 整批完成后才将完整结果按原调用顺序写入图状态，供下一轮模型使用
 ```
 
-## 交付与终态不变式
+## 交付与终态行为
 
-- 对外模型事件为 `model_message.started`、`model_message.delta`、`model_message.done`，重试事件为 `model_request.retrying`。消费端按 `message_id` 追加 `delta`，收到 `done` 时以 `done.content` 确认或替换而不可再次追加；重试后新 ID 开启新正文。`done` 仅表示单条消息完成，整轮以 `completion.*` 终态为准。
-- 事件包装不维护 pending 配对字典。工具节点按调用 ID 保留已发布的完整 `ToolMessage`；执行器异常时仅为未发布项补失败结果再按原序写入历史，已发布结果不覆盖、不重复输出。
-- 合法 terminal stop signal、无 `tool_calls` 且可见正文非空时标记 `is_final=true`。无工具调用的空白或仅隐藏推理响应由 `messages` 校验拒绝，进入 5 次重试流程，不写入历史也不发布 `model_message.done`；工具调用仍允许空正文。
+- 对外模型事件为 `model_message.started`、`model_message.delta`、`model_message.done`，重试事件为 `model_request.retrying`。
+- 消费端按 `message_id` 追加 `delta`，收到 `done` 时用 `done.content` 替换确认而不再追加；重试后会分配新 ID 开启新正文。`done` 只表示单条消息结束，整轮以 `completion.*` 终态为准。
+- 事件包装不维护 pending 配对字典。工具节点按调用 ID 保留已发布的 `ToolMessage`；执行器异常时只为未发布项补失败结果再按原序写入历史，已发布结果不覆盖、不重复输出。
+- 收到合法 terminal stop signal、无 `tool_calls` 且可见正文非空时标记 `is_final=true`。无工具调用的空白或仅隐藏推理响应会被 `messages` 校验拒绝并进入 5 次重试，不写入历史也不发 `model_message.done`；带工具调用的响应仍允许空正文。
 - 图更新不重复输出历史消息或最后一条回答；普通模型失败在图内退避，第 5 次耗尽后通过 `ModelFailed` 以 `completion.failed` 收口。

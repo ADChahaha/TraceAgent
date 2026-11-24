@@ -47,9 +47,9 @@ with grpc.insecure_channel("127.0.0.1:8001", options=[
 
 服务端流 RPC，输入转换为 `DocumentQaMessage`、`RunOptions` 和 `ModelConfig`，由 handler 直接消费 `stream_completion`：
 
-- `completion_id`：1-128 位，以字母或数字开头，其余允许字母、数字、下划线、短横线；只保留格式校验，不再用于活动去重或取消查找。
-- `resource_path`：`repeated ResourceRef`，必须同时包含 `documents` 与 `index` 定位（同 bucket）；缺失、损坏、版本错误或引用越界均拒绝，不自动重建。
-- `messages`：非空，支持 `system`/`user`/`assistant`/`tool`，保留完整历史，不自动摘要或裁剪。`tool` 必须有 `tool_call_id`。
+- `completion_id`：1-128 位，以字母或数字开头，其余允许字母、数字、下划线、短横线；只做格式校验，不再用于活动去重或取消查找。
+- `resource_path`：`repeated ResourceRef`，同时包含同一 bucket 下的 `documents` 与 `index` 定位；缺失、损坏、版本错误或引用越界直接拒绝，不自动重建。
+- `messages`：非空，支持 `system`/`user`/`assistant`/`tool`，保留完整历史，不自动摘要或裁剪；`tool` 消息需要带 `tool_call_id`。
 - `QaMessage.tool_calls_json`：可选 JSON 数组，内容为原历史工具调用；`tool_call_id`、`name` 使用独立字段。
 - `run_options`：可选，只提供 `tool_execution_timeout`（默认 60 秒）；显式 0 不会被替换为默认值。已删除 `max_tool_calls`。
 - `model_config`：可选，未提供时沿用模型环境配置；嵌套配置优先于兼容的扁平字段（`base_url`/`api_key`/`openai_api_key`/`model`/`api_transport`/`temperature`/`top_p`/`top_k`）。

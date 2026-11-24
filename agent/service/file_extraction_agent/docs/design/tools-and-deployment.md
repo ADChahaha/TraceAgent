@@ -29,7 +29,7 @@ ls / grep / read / search_embedding
 - 查询编码只依赖 `openvino` + `tokenizers`，不导入 `torch`/`transformers`；文档索引构建仍在 document service 使用 `sentence-transformers`，问答不重建文档向量。
 - 本机实测基准（OpenVINO CPU、默认模型）：检索子进程每次启动约 2.3s、峰值内存约 420MB、稳态编码约 3ms/条（对比 `sentence-transformers` 包装启动约 21s）。当前采用每次调用单进程换取可 kill 取消语义与实现简洁，不引入常驻 worker，也不限制并发。
 
-## 四类工具与引用契约
+## 四类工具与引用格式
 
 - `ls(path="")`：逐层浏览归档 `documents/` 目录。
 - `grep(query, scope="", max_results=20)`：纯 Python 遍历 `.md` 做忽略大小写的字面匹配。
@@ -37,8 +37,8 @@ ls / grep / read / search_embedding
 - `search_embedding(query, top_k=5)`：纯 OpenVINO 编码 query 召回文本与 `covered_files`，无 `scope` 参数。
 - 完整输入输出与错误码示例见 [tools.md](../tools.md)。
 - Markdown 文件树由资源模块创建：文档标题作顶层目录后缀，h1-h6 按层级建目录，paragraph/list/table 分别落文件并使用数字前缀排序，合并表格展开为 Markdown；内部 `index`/`manifest` 不对浏览工具暴露。
-- 检索仅提供候选，事实须 `read` 核实后引用。过程消息用可读标签链接，最终回答用句尾数字引用如 `[1](documents/0001-contract/0001-section/0001-block.md)`，原样复制工具返回 key，不汇总末尾 Sources 区；非文档问题允许直接回答。
-- 资源定位与工具路径分两层：RPC `resource_path` 保存 `s3://res_example/documents` 与 `index`；工具内使用相对 `documents/...` key，不传本机绝对路径或完整 S3 URL，展示端需结合资源定位解析。
+- 检索只提供候选，模型通过 `read` 核实正文后再引用。过程消息用可读标签链接，最终回答用句尾数字引用如 `[1](documents/0001-contract/0001-section/0001-block.md)`，直接复用工具返回的 key，不在末尾汇总 Sources 区；非文档问题可直接回答。
+- 资源定位与工具路径分两层：RPC `resource_path` 保存 `s3://res_example/documents` 与 `index`；工具内使用相对 `documents/...` key，不传本机绝对路径或完整 S3 URL，展示端结合资源定位解析。
 
 ## 跨轮与部署边界
 

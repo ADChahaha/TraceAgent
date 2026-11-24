@@ -12,12 +12,10 @@ file_obj (+ 可选 file_type)
   -> ProcessResult(filename, html)
 ```
 
-## 目录
+## 主题文档
 
-| 主题 | 文档 | 内容 |
-| --- | --- | --- |
-| 入口与分流 | [design/entry-and-dispatch.md](design/entry-and-dispatch.md) | 目录树、`processor.py` 公开契约、共享校验函数与引擎隔离 |
-| PDF MinerU 管线 | [design/pdf-pipeline.md](design/pdf-pipeline.md) | `pdf/converter.py` 配置、`pdf/html.py` 标题降级、确定性 ID 与表格处理 |
-| DOCX 管线 | [design/docx-pipeline.md](design/docx-pipeline.md) | `docx/docx_processor.py` 原始顺序遍历、标题样式与 `docx_bNNN` 约束 |
+- [入口与分流](design/entry-and-dispatch.md)：目录树、`processor.py` 公开入口、共享校验函数与引擎分流
+- [PDF MinerU 管线](design/pdf-pipeline.md)：`pdf/converter.py` 配置、`pdf/html.py` 标题降级、确定性 ID 与表格处理
+- [DOCX 管线](design/docx-pipeline.md)：`docx/docx_processor.py` 原始顺序遍历、标题样式与 `docx_bNNN` 输出
 
 相关：[API.md](API.md) / [README.md](../README.md) / [document_service 设计](../../docs/DESIGN.md) / [document_resources 设计](../../document_resources/docs/DESIGN.md)

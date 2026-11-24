@@ -1,4 +1,4 @@
-"""测试 memory/dream_scan.py 的层级分类、架构门禁、跨端会话扫描与 CLI 模式。"""
+"""测试 memory/dream_scan.py 的健康检查、跨端会话扫描与 CLI 模式。"""
 
 from __future__ import annotations
 
@@ -28,105 +28,90 @@ def load_dream_scan():
 
 
 def create_minimal_memory_repo(root: Path) -> None:
-    (root / "AGENTS.md").write_text("# 规则\n\n入口见 [memory.md](memory.md)。\n", encoding="utf-8")
+    (root / "AGENTS.md").write_text("# 协作说明\n\n入口见 [memory.md](memory.md)。\n", encoding="utf-8")
     (root / "memory" / "preference").mkdir(parents=True)
-    (root / "memory" / "wiki" / "experiments").mkdir(parents=True)
+    (root / "memory" / "wiki").mkdir(parents=True)
     (root / "memory" / "notes").mkdir(parents=True)
     (root / "memory" / "tasks").mkdir(parents=True)
     (root / "memory" / "archive").mkdir(parents=True)
+    (root / "memory" / "docs").mkdir(parents=True)
+    (root / "memory" / "tests" / "docs").mkdir(parents=True)
+
     (root / "memory.md").write_text(
-        "# 记忆总入口\n\n"
-        "- [偏好索引](memory/preference/INDEX.md)\n"
-        "- [架构索引](memory/wiki/architecture-index.md)\n",
+        "# 项目记忆\n\n"
+        "- [协作偏好](memory/preference/workspace-preferences.md#沟通习惯)\n"
+        "- [服务概览](memory/wiki/services.md)\n",
         encoding="utf-8",
     )
     (root / "memory" / "dream-log.md").write_text(
         "# Dreaming 记录\n\nlast_dream_at: 2026-11-20T10:00:00+08:00\n",
         encoding="utf-8",
     )
-    (root / "memory" / "preference" / "INDEX.md").write_text(
-        "# 偏好索引\n\n- [工作区偏好](workspace-preferences.md#核心原则)\n",
-        encoding="utf-8",
-    )
     (root / "memory" / "preference" / "workspace-preferences.md").write_text(
-        "# 工作区偏好\n\n## 核心原则\n\n保持简洁。\n",
+        "# 协作偏好\n\n## 沟通习惯\n\n保持简洁。\n",
         encoding="utf-8",
     )
-    (root / "memory" / "wiki" / "architecture-index.md").write_text(
-        "# 架构索引\n\n- [服务概览](services-overview.md)\n",
+    (root / "memory" / "wiki" / "services.md").write_text(
+        "# 服务概览\n\n见 [部署细节](deploy-details.md)。\n",
         encoding="utf-8",
     )
-    (root / "memory" / "wiki" / "services-overview.md").write_text(
-        "# 服务概览\n\n见 [实验摘要](experiments/eval-summary.md)。\n",
+    (root / "memory" / "wiki" / "deploy-details.md").write_text(
+        "# 部署细节\n\n测试数据。\n",
         encoding="utf-8",
     )
-    (root / "memory" / "wiki" / "experiments" / "eval-summary.md").write_text(
-        "# 实验摘要\n\n测试数据。\n",
-        encoding="utf-8",
-    )
+    # 非活跃记忆目录不计入可达性图
+    (root / "memory" / "notes" / "draft.md").write_text("# 草稿\n", encoding="utf-8")
+    (root / "memory" / "tasks" / "todo.md").write_text("# 待办\n", encoding="utf-8")
+    (root / "memory" / "archive" / "old.md").write_text("# 归档\n", encoding="utf-8")
+    (root / "memory" / "docs" / "DESIGN.md").write_text("# 设计\n", encoding="utf-8")
+    (root / "memory" / "tests" / "docs" / "test_dream_scan.md").write_text("# 测试说明\n", encoding="utf-8")
 
 
-def test_classify_memory_tier_rules():
-    ds = load_dream_scan()
-    assert ds.classify_memory_tier("memory.md") == "L0"
-    assert ds.classify_memory_tier("memory/preference/INDEX.md") == "L1"
-    assert ds.classify_memory_tier("memory/wiki/architecture-index.md") == "L1"
-    assert ds.classify_memory_tier("memory/wiki/workspace-index.md") == "L1"
-    assert ds.classify_memory_tier("memory/preference/workspace-preferences.md") == "L2"
-    assert ds.classify_memory_tier("memory/wiki/services-overview.md") == "L2"
-    assert ds.classify_memory_tier("memory/wiki/services/agent.md") == "L2"
-    assert ds.classify_memory_tier("memory/wiki/experiments/peerqa.md") == "L3"
-    assert ds.classify_memory_tier("memory/wiki/agent-experiments.md") == "L3"
-    assert ds.classify_memory_tier("memory/wiki/backend-details.md") == "L3"
-    assert ds.classify_memory_tier("memory/notes/draft.md") is None
-    assert ds.classify_memory_tier("memory/tasks/todo.md") is None
-    assert ds.classify_memory_tier("memory/archive/old.md") is None
-    assert ds.classify_memory_tier("memory/docs/DESIGN.md") is None
-    assert ds.classify_memory_tier("memory/tests/docs/test_dream_scan.md") is None
-    assert ds.classify_memory_tier("memory/dream-log.md") is None
-
-
-def test_check_memory_integrity_clean_repo(tmp_path: Path):
+def test_check_memory_integrity_clean_repo_allows_direct_links(tmp_path: Path):
     ds = load_dream_scan()
     create_minimal_memory_repo(tmp_path)
 
     report = ds.check_memory_integrity(tmp_path)
 
     assert report["broken"] == []
-    assert report["budget_violations"] == []
-    assert report["layer_violations"] == []
-    assert report["crosslink_walls"] == []
+    assert report["oversized_files"] == []
     assert report["unreachable_files"] == []
-    assert report["max_depth"] == 3
-    assert report["total_active_files"] == 6
+    assert report["max_depth"] == 2
+    assert report["total_active_files"] == 4
+    assert "layer_violations" not in report
+    assert "crosslink_walls" not in report
     expected_hash = hashlib.sha256((tmp_path / "AGENTS.md").read_bytes()).hexdigest()[:12]
     assert report["protected_sha256_prefix"] == {"AGENTS.md": expected_hash}
 
 
-def test_check_memory_integrity_detects_all_violations(tmp_path: Path):
+def test_check_memory_integrity_detects_broken_oversized_and_unreachable(tmp_path: Path):
     ds = load_dream_scan()
     create_minimal_memory_repo(tmp_path)
 
-    # L0 直连 L2、断链、超长单行
+    # 断链、缺失中文标题锚点，以及超过入口体积上限
     (tmp_path / "memory.md").write_text(
-        "# 记忆总入口\n\n"
-        "- [偏好索引](memory/preference/INDEX.md)\n"
-        "- [架构索引](memory/wiki/architecture-index.md)\n"
-        "- [越层直连](memory/wiki/services-overview.md)\n"
+        "# 项目记忆\n\n"
+        "- [协作偏好](memory/preference/workspace-preferences.md)\n"
+        "- [服务概览](memory/wiki/services.md)\n"
         "- [缺失文件](memory/wiki/missing.md)\n"
         "- [缺失锚点](memory/preference/workspace-preferences.md#不存在标题)\n"
-        + "x" * 210
+        + "a" * (ds.ENTRY_MAX_CHARS + 20)
         + "\n",
         encoding="utf-8",
     )
-    # L2 互链墙（单行 > 5 个内部 md 链接）
-    (tmp_path / "memory" / "wiki" / "services-overview.md").write_text(
+    # 同一行多个内部链接不再被当作互链墙违规
+    (tmp_path / "memory" / "wiki" / "services.md").write_text(
         "# 服务概览\n\n"
-        "[a](architecture-index.md) [b](architecture-index.md) [c](architecture-index.md) "
-        "[d](architecture-index.md) [e](architecture-index.md) [f](experiments/eval-summary.md)\n",
+        "[a](deploy-details.md) [b](deploy-details.md) [c](deploy-details.md) "
+        "[d](deploy-details.md) [e](deploy-details.md) [f](deploy-details.md)\n",
         encoding="utf-8",
     )
-    # 不可达孤岛文件
+    # notes 中的断链仍应被检出
+    (tmp_path / "memory" / "notes" / "draft.md").write_text(
+        "# 草稿\n\n见 [坏链](../wiki/gone.md)。\n",
+        encoding="utf-8",
+    )
+    # 未从 memory.md 连出的孤岛文件
     (tmp_path / "memory" / "wiki" / "orphan.md").write_text("# 孤岛\n", encoding="utf-8")
 
     report = ds.check_memory_integrity(tmp_path)
@@ -137,9 +122,8 @@ def test_check_memory_integrity_detects_all_violations(tmp_path: Path):
         "memory/preference/workspace-preferences.md#不存在标题",
         "missing_anchor",
     ) in report["broken"]
-    assert ("memory.md", "memory/wiki/services-overview.md", "L0_direct_link_to_non_L1") in report["layer_violations"]
-    assert any(v["file"] == "memory.md" and any("max_line=" in r for r in v["reasons"]) for v in report["budget_violations"])
-    assert ("memory/wiki/services-overview.md", 3, 6) in report["crosslink_walls"]
+    assert ("memory/notes/draft.md", "../wiki/gone.md", "missing_file") in report["broken"]
+    assert any(item["file"] == "memory.md" for item in report["oversized_files"])
     assert report["unreachable_files"] == ["memory/wiki/orphan.md"]
 
 
@@ -340,11 +324,11 @@ def test_cli_audit_grep_and_session_turn_modes(tmp_path: Path):
     (claude_dir / "abc12345.jsonl").write_text(
         "\n".join(
             [
-                json.dumps({"type": "user", "message": {"content": "检查 Dreaming 门禁"}}),
+                json.dumps({"type": "user", "message": {"content": "检查 Dreaming 链接"}}),
                 json.dumps(
                     {
                         "type": "assistant",
-                        "message": {"content": [{"type": "text", "text": "门禁细节: " + "A" * 400}]},
+                        "message": {"content": [{"type": "text", "text": "细节: " + "A" * 400}]},
                     }
                 ),
             ]
@@ -364,10 +348,8 @@ def test_cli_audit_grep_and_session_turn_modes(tmp_path: Path):
     )
     assert "Links checked:" in audit_res.stdout
     assert "broken: []" in audit_res.stdout
-    assert "Budget violations: 0 []" in audit_res.stdout
-    assert "Layer violations (L0->L2/L3): []" in audit_res.stdout
-    assert "Crosslink walls (L2/L3 inline > 5): []" in audit_res.stdout
-    assert "Unreachable files from `memory.md`: []" in audit_res.stdout
+    assert "Oversized files: 0 []" in audit_res.stdout
+    assert "Unreachable files: []" in audit_res.stdout
 
     grep_res = subprocess.run(
         [sys.executable, str(SCRIPT_PATH), "--repo-root", str(tmp_path), "--all", "--grep", "Dreaming"],
@@ -376,7 +358,7 @@ def test_cli_audit_grep_and_session_turn_modes(tmp_path: Path):
         capture_output=True,
         text=True,
     )
-    assert "检查 Dreaming 门禁" in grep_res.stdout
+    assert "检查 Dreaming 链接" in grep_res.stdout
     assert "Hits returned: 1" in grep_res.stdout
 
     turn_res = subprocess.run(
@@ -394,9 +376,7 @@ def test_real_repository_memory_audit_is_clean():
     report = ds.check_memory_integrity(REPO_ROOT)
 
     assert report["broken"] == []
-    assert report["budget_violations"] == []
-    assert report["layer_violations"] == []
-    assert report["crosslink_walls"] == []
+    assert report["oversized_files"] == []
     assert report["unreachable_files"] == []
-    assert "AGENTS.md" in report["protected_sha256_prefix"]
-    assert report["total_active_files"] >= 4
+    assert list(report["protected_sha256_prefix"].keys()) == ["AGENTS.md"]
+    assert report["total_active_files"] >= 3

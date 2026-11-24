@@ -27,5 +27,6 @@ History.build_snapshot -> list_turns + list_messages -> 按 turn 分组渲染展
 - manager 只缓存当前 turn，终结后释放；SSE 在捕获的活跃轮终结时关闭，空闲会话仅发送一次快照。
 - 无活跃轮、执行句柄、订阅及待处理命令时才回收 manager：entry 先从 `READY` 置 `CLOSING`，锁外关闭后移除，期间该 session 请求收到冲突。
 - `cancel` 只操作已加载 manager，空闲已回收会话返回 404；backend 重启将遗留活跃轮标为 `failed`/`backend_restarted`，不重新执行 agent。
-- 数据库事务失败会回滚并将 manager 标记损坏、取消执行、清空执行态与缓存认领、补发挂起的 cancel、关闭订阅，并尽力将活跃轮收口为 `failed`（数据库仍不可用时交给重启收口）；损坏 manager 空闲后可被回收，重载即恢复，不支持在线原地重建。
+- 数据库事务失败会回滚并将 manager 标记损坏：取消当前执行、清空执行态与缓存认领、补发挂起的 cancel 并关闭订阅，同时尽力将活跃轮收口为 `failed`（数据库仍不可用时交给重启收口）。
+- 损坏的 manager 空闲后可被回收，下次访问重载即恢复，不做在线原地重建。
 - 当前部署使用单 backend 进程、单用户，无跨进程 owner 协调和租户鉴权；旧 task 路由已删除。
