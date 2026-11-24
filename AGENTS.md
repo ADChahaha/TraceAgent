@@ -48,3 +48,22 @@
 ## 6. 简要提醒
 
 先读设计和文件，先写测试，再写实现；同步文档，验证结果，创建原子 commit。
+
+## 7. 记忆系统与启动规则
+
+### 文件分工（控制面与记忆面分离）
+
+- **`AGENTS.md`（纯规则层，只读控制面）**：保存稳定的研发、文档、提交与启动规范；日常任务与 `dreaming` 均不修改本文件。
+- **[memory.md](memory.md)（L0 顶层入口）**：只放全局锚点、硬红线与各领域 L1 索引入口，指明"知道什么、去哪里找"，不堆放底层明细，也不把未经核实的猜测直接升格进顶层。
+- **`memory/wiki/`（分层领域 Wiki）**：按 `L1 领域索引 -> L2 专题页 -> L3 实证/明细摘要` 分层沉淀结构化知识，保持轻量与单源，保留仓内一手代码或 `docs/DESIGN.md` 锚点，随项目推进增量维护、去重与剪枝。
+- **`memory/preference/`（用户偏好）**：经 [INDEX.md](memory/preference/INDEX.md) 分主题存放沟通习惯、工作区维护与协作偏好；会中发现新偏好或变更时直接记录或更新，由 `dreaming` 定期去重与归档。
+- **`memory/notes/`（会中 Salient 笔记）**：对未来会话可能需要的轻量预判，平时对话中由模型自主判断重要度顺手记下或改写（允许草稿形态、记录未定假设/踩坑，必要时标注"已核实 / 待确认"）。因会中缺少事后全局视角，留待 `dreaming` 对照仓内代码、文档与日志核验纠偏后再升格进 `wiki/` 或 `memory.md`。
+- **`memory/tasks/`（单点活动笔记）**：只放尚未完成或阻塞中的任务笔记。
+- **`memory/archive/`、原始会话日志与 [memory/dream-log.md](memory/dream-log.md)**：底层历史归档与三端原始 transcript（通过 `memory/dream_scan.py` 读取），作为离线核验与纠偏的事实基准。
+
+### 启动读取与 Dreaming 维护
+
+1. **新会话启动与按需读取**：处理本仓库任务时，先读取 [memory.md](memory.md) 并留意 `memory/notes/` 是否有未合并笔记；其余 `memory/preference/`、`memory/wiki/` 与 `memory/tasks/` 均按当前任务需要沿各级索引按需读取，需要核实实现细节时直接回到源码与各包 `docs/DESIGN.md`，避免开局全量读取。
+2. **会中随手记（Salient）vs 手动 Dreaming**：
+   - **会中随手记**：当用户要求记住某事，或会话中出现未来跨会话会用到、不写下来就会丢失的关键判断/踩坑时，轻量创建或更新 `memory/notes/` 或 `memory/preference/`，不设死板触发清单，不打断当前主线，不复抄源码或设计文档里随处可查的内容。
+   - **手动 Dreaming**：平时不必每轮同步 `memory.md` 与 `memory/wiki/`；按阶段显式触发 [dreaming](.agents/skills/dreaming/SKILL.md) skill，回顾跨端 transcript 与一手文件，核对并修正 `notes/` 错漏、增量维护 `wiki/` 页面并校验 6 项架构门禁，将长期关键结论提炼进 `memory.md`，把已吸收或失效笔记归档至 `memory/archive/`。
