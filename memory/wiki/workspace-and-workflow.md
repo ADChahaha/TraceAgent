@@ -6,13 +6,15 @@
 
 | 路径 | 角色 | 说明 |
 | --- | --- | --- |
-| [AGENTS.md](../../AGENTS.md) | 只读控制面 | 开发流程、写法与启动规范，日常与 Dreaming 不修改 |
+| [AGENTS.md](../../AGENTS.md) | 只读控制面 | 总入口地图、开发流程、写法与启动规范，日常与 Dreaming 不修改 |
+| [ARCHITECTURE.md](../../ARCHITECTURE.md) | 顶层架构图 | 7 个顶层包领域地图、单向分层与关键架构不变量 |
+| `docs/` | 仓库知识库 | `design-docs/`（设计总目与工程原则）、`product-specs/`（产品规格）、`exec-plans/`（活动/归档计划与技术债台账） |
 | [memory.md](../../memory.md) | L0 顶层入口 | 全局锚点与 L1 路由，不直连 L2/L3 |
 | `memory/preference/` | 偏好区（L1 -> L2） | 经 [INDEX.md](../preference/INDEX.md) 路由跨会话通用偏好 |
 | `memory/wiki/` | 分层 Wiki | L1 `*-index.md`、L2 专题页与 L3 实证/明细页 |
-| `memory/notes/` | 临时笔记 | 会中预判、踩坑与跨模块阶段决策，Dreaming 吸收后归档 |
-| `memory/tasks/` | 活动任务 | 施工暂存单（验收标准与决策记录）与阻塞事项，长期决策迁出后再归档至 `memory/archive/` |
-| `memory/archive/` | 历史归档 | 完结任务、旧笔记与早期 `dream-log` |
+| `memory/notes/` | 临时笔记 | 会中预判、踩坑与跨模块阶段判断，Dreaming 吸收后归档 |
+| `memory/tasks/` | 兼容空目录 | 保留兼容审计脚本，工程执行计划统一放 `docs/exec-plans/active/` |
+| `memory/archive/` | 记忆归档 | 旧笔记与早期 `dream-log`（完结工程计划归档至 `docs/exec-plans/completed/`） |
 | [dream-log.md](../dream-log.md) | 整理台账 | 保留最近 2-3 次摘要与 `last_dream_at` 水位线 |
 | [dream_scan.py](../dream_scan.py) | 扫描与审计脚本 | 三端增量会话扫描、`--turn`/`--grep` 展开与 `--audit` 门禁 |
 | [dreaming/SKILL.md](../../.agents/skills/dreaming/SKILL.md) | 手动整理技能 | 四阶段整理流程与六项门禁定义 |

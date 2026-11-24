@@ -10,10 +10,10 @@
 
 ## 验收驱动与决策记录
 
-- 开发以用户确认的外部验收标准为锚点，代码实现面向增加、谨慎修改既有稳定逻辑；优先用外部行为测试与实测证据验收，跨服务、并发或高风险改动在自验后增加一次独立视角的只读核查。
+- 开发以用户确认的外部验收标准为锚点，代码实现面向增加、谨慎修改既有稳定逻辑（通用工程原则见 [core-beliefs.md](../../docs/design-docs/core-beliefs.md)）；优先用外部行为测试与实测证据验收，跨服务、并发或高风险改动在自验后增加一次独立视角的只读核查。
 - 对话中用户拍板的决策当轮即时落盘，固定写明三要素：做了什么决定、为什么这么选、排除了哪些备选方案。
-- 决策按"包 -> 具体模块"就近写入对应 `DECISIONS.md`（独立子模块自带 `docs/` 时放 `<module>/docs/DECISIONS.md`，其余放 `<pkg>/<module>/DECISIONS.md`，并在对应包 `docs/DESIGN.md` 挂链接）；跨包架构决策入 `memory/wiki/`，协作习惯入本目录，不另建全仓单一 `DECISIONS.md` 或 `docs/adr/`。
-- 复杂或跨会话任务复用 `memory/tasks/<topic>.md` 作施工暂存（目标与范围、验收标准、决策记录）；归档进 `memory/archive/` 前必须逐条迁出长期决策并标注去向（或确认仅本次临时有效），未迁完不归档。
+- 决策按"包 -> 具体模块"就近写入对应 `DECISIONS.md`（独立子模块自带 `docs/` 时放 `<module>/docs/DECISIONS.md`，其余放 `<pkg>/<module>/DECISIONS.md`，同步挂入对应包 `docs/DESIGN.md` 与 [design-docs/index.md](../../docs/design-docs/index.md)）；跨包原则入 `core-beliefs.md` 或 `memory/wiki/`，协作习惯入本目录。
+- 复杂或跨会话任务统一在 `docs/exec-plans/active/<topic>.md` 建立执行计划单（目标与范围、验收标准、进展与发现、`Decision Log`），技术债登记在 [tech-debt-tracker.md](../../docs/exec-plans/tech-debt-tracker.md)；归档至 `docs/exec-plans/completed/` 前必须逐条迁出长期决策并标明去向（或确认仅本次临时有效），未迁完不归档。
 
 ## 记忆架构与防膨胀
 

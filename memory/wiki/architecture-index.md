@@ -10,7 +10,8 @@
 
 ## 一手设计与接口入口
 
-- 总览与启停：[README.md](../../README.md)
+- 顶层架构与原则：[ARCHITECTURE.md](../../ARCHITECTURE.md) / [design-docs](../../docs/design-docs/index.md) / [core-beliefs](../../docs/design-docs/core-beliefs.md)
+- 产品规格与总览：[product-specs](../../docs/product-specs/index.md) / [README.md](../../README.md)
 - 协议与存储：[agent_proto](../../agent_proto/docs/DESIGN.md) / [storage](../../storage/docs/DESIGN.md) / [shared](../../shared/docs/DESIGN.md)
 - 文档与问答服务：[document_service](../../document_service/docs/DESIGN.md) / [agent](../../agent/docs/DESIGN.md) / [agent API](../../agent/docs/API.md)
 - 编排与前端：[backend](../../backend/docs/DESIGN.md) / [backend API](../../backend/docs/API.md) / [frontend](../../frontend/docs/DESIGN.md)

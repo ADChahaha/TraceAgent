@@ -1,5 +1,13 @@
 # 记忆与 Dreaming 开发日志
 
+## 2026-11-24（建立顶层 Harness 知识骨架与文档门禁测试）
+
+按用户确认引入 OpenAI Harness 风格顶层结构，同时保留各包一手 `docs/DESIGN.md`、模块级 `DECISIONS.md` 与 `memory/` 四层记忆系统（详见 [DECISIONS.md](DECISIONS.md) 第 3 条）：
+- 新建 [ARCHITECTURE.md](../../ARCHITECTURE.md)、[docs/design-docs/index.md](../../docs/design-docs/index.md)、[docs/design-docs/core-beliefs.md](../../docs/design-docs/core-beliefs.md)、[docs/product-specs/index.md](../../docs/product-specs/index.md)、[docs/product-specs/document-qa-workbench.md](../../docs/product-specs/document-qa-workbench.md) 与 [docs/exec-plans/tech-debt-tracker.md](../../docs/exec-plans/tech-debt-tracker.md)。
+- 将 `memory/tasks/backend-bugs-2026-11-24.md` 迁入 [docs/exec-plans/active/backend-bugs-2026-11-24.md](../../docs/exec-plans/active/backend-bugs-2026-11-24.md) 并补齐验收标准与 `Decision Log` 槽位；`memory/tasks/` 保留空目录兼容 `dream_scan.py`。
+- 同步更新 [AGENTS.md](../../AGENTS.md)、[memory.md](../../memory.md)、偏好/工作区/架构记忆页、[dream-log.md](../dream-log.md) 与 [SKILL.md](../../.agents/skills/dreaming/SKILL.md)。
+- 新增 [test_docs_harness.py](../tests/test_docs_harness.py) 与 [test_docs_harness.md](../tests/docs/test_docs_harness.md)，机械校验顶层知识文档链接、全仓 `DECISIONS.md` 总目收录及 `docs/exec-plans/completed/` 归档决策迁出标注。
+
 ## 2026-11-24（切换为验收驱动开发与模块级 `DECISIONS.md`）
 
 依据用户拍板的协作流程调整（参考 OpenAI Harness engineering / ExecPlans 与 Anthropic 长运行 Harness / Evals 实践），同步更新 [AGENTS.md](../../AGENTS.md)、[memory.md](../../memory.md)、[workspace-preferences.md](../preference/workspace-preferences.md)、[INDEX.md](../preference/INDEX.md)、[workspace-and-workflow.md](../wiki/workspace-and-workflow.md) 与 [SKILL.md](../../.agents/skills/dreaming/SKILL.md)，并将各包既有核心决策迁移到对应模块 `DECISIONS.md`（详见 [DECISIONS.md](DECISIONS.md)）：

@@ -9,7 +9,7 @@ last_dream_at: 2026-11-24T19:46:00+08:00
 扫描 `2026-11-24T17:15:00+08:00` 后的 3 个历史会话并逐行核对源码：
 - 偏好提纯：更新 [workspace-preferences.md](preference/workspace-preferences.md) 与 [INDEX.md](preference/INDEX.md)，去除对四层预算数字的复抄，明确"保留四层结构与六项门禁、但正文去规则腔与套话"及长文档分层规范。
 - 知识与工作区瘦身：修剪 [workspace-and-workflow.md](wiki/workspace-and-workflow.md) 重复说明并补充 `storage/data/` 保留提示；在 [services.md](wiki/services.md) 同步文档拆分提示与 `backend` 待修清单入口。
-- 待办沉淀：逐行核实 `backend/` 9 项未修缺陷（含 `:memory:` 启动崩溃、失败工具刷新误判、上传与活跃轮并发、取消收口与 SQLite 写事务放大等），单源落入 [backend-bugs-2026-11-24.md](tasks/backend-bugs-2026-11-24.md)。
+- 待办沉淀：逐行核实 `backend/` 9 项未修缺陷（含 `:memory:` 启动崩溃、失败工具刷新误判、上传与活跃轮并发、取消收口与 SQLite 写事务放大等），原落入 `memory/tasks/`，现已迁至 [backend-bugs-2026-11-24.md](../docs/exec-plans/active/backend-bugs-2026-11-24.md)。
 
 ## 2026-11-24 对齐 `japan_director` 四层记忆架构
 

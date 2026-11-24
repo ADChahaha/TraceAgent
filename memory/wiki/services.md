@@ -1,6 +1,6 @@
 # 服务边界与设计文档入口
 
-归属 [architecture-index.md](architecture-index.md)，记录 7 个顶层包的职责定位、默认端口、核心边界与一手文档锚点；各包长文档已按"索引页 + 同级主题子文件"拆分，改具体模块前沿对应索引按需打开子文件。
+归属 [architecture-index.md](architecture-index.md)，速查 7 个顶层包端口与一手文档锚点（顶层分层与依赖边界权威见 [ARCHITECTURE.md](../../ARCHITECTURE.md)，全仓设计与 `DECISIONS.md` 总目见 [design-docs/index.md](../../docs/design-docs/index.md)）。
 
 ## 顶层包与文档入口
 
@@ -19,4 +19,4 @@
 - `document_service` 与 `agent` 互不通过 Python import 交接，仅经 `storage` 共享会话桶 `res_<session_id>`（含 `raw/`、`documents.zip`、`index/`、`manifest.json`）。
 - 取消问答直接通过原 gRPC `call.cancel()` 传播，不提供独立取消 RPC。
 - `backend` 当前面向单用户本地单进程部署，数据库默认 `backend/backend.sqlite3`，不自动迁移旧 `qa_*` 表。
-- 2026-11-24 源码核实的 `backend` 待修缺陷（含 `:memory:` 启动失败、失败工具刷新误判、上传与活跃轮并发、取消收口等 9 项）跟踪在 [backend-bugs-2026-11-24.md](../tasks/backend-bugs-2026-11-24.md)。
+- 2026-11-24 源码核实的 `backend` 待修缺陷（9 项）跟踪在 [backend-bugs-2026-11-24.md](../../docs/exec-plans/active/backend-bugs-2026-11-24.md) 与 [tech-debt-tracker.md](../../docs/exec-plans/tech-debt-tracker.md)。

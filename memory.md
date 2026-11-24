@@ -19,5 +19,6 @@
 
 ## 动态区与底层一手资料
 
-- 活跃暂存：`memory/notes/`（会中预判、踩坑与阶段决策） / `memory/tasks/`（活动任务单与未完事项） / [dream-log.md](memory/dream-log.md)
-- 一手资料：[README.md](README.md) / [memory/docs/DESIGN.md](memory/docs/DESIGN.md) / `experiments/` / `memory/archive/`
+- 活跃暂存：`memory/notes/`（会中预判与踩坑） / `docs/exec-plans/active/`（活动执行计划） / [dream-log.md](memory/dream-log.md)
+- 一手架构与设计：[ARCHITECTURE.md](ARCHITECTURE.md) / [design-docs](docs/design-docs/index.md) / [README.md](README.md)
+- 产品与技术债：[product-specs](docs/product-specs/index.md) / [tech-debt](docs/exec-plans/tech-debt-tracker.md)
