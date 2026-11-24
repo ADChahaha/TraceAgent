@@ -1,6 +1,6 @@
 # 取消卸载、容量阈值与参考实现
 
-本页属 [SessionManager 架构](../SESSION_MANAGER.md)，汇总取消/回收/重启行为、`BackendSettings` 默认容量与设计参考。
+返回 [SessionManager 架构](../SESSION_MANAGER.md)。
 
 ## 取消、卸载与重启收口
 

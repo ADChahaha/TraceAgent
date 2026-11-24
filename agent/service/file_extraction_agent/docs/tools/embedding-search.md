@@ -1,6 +1,6 @@
 # 语义检索工具（`search_embedding`）
 
-本页属 [问答工具](../tools.md)，说明 `search_embedding(query, top_k=5)` 的执行路径、参数边界、结果结构与异常处理。
+返回 [问答工具](../tools.md)。
 
 ## 执行流程与参数
 

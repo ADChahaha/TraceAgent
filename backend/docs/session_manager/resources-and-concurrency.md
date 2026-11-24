@@ -1,6 +1,6 @@
 # 资源执行、两层串行与事务边界
 
-本页属 [SessionManager 架构](../SESSION_MANAGER.md)，说明文件资源编排、双层串行模型、故障损坏出口与取消中断语义。
+返回 [SessionManager 架构](../SESSION_MANAGER.md)。
 
 ## 资源准备与读路径
 
@@ -23,13 +23,13 @@ TurnRuntime.run（自治）
 
 ## 两层串行化与事务规则
 
-1. **manager 命令队列**：`create`/`cancel`/`attach`/`detach`/`upload`/`remove`/`replace_resources` 编码为 `Command(name, args, reply)` 进入有界 FIFO 队列，`_run` 为唯一消费者。输入与文件形状校验在入口完成，依赖状态的配额校验在队列内执行，消除并发上传读改写竞争。队列满直接拒绝；调用方协程取消不撤销已入队命令，无人接收的订阅由 `_run` 统一回收。
-2. **runtime 内部串行**：单任务顺序处理事件并顺序 `await` 每次写，无需应用层写锁；每次写经 `asyncio.to_thread` 独占线程池线程与 thread-local 连接，跨连接写竞争由 SQLite 文件锁与 `busy_timeout` 排队。
-3. **CRUD 与事务壳**：service 统一调用 CRUD，不直写 SQL；CRUD 写函数永不自行提交，`crud.transaction()` 统一执行 `BEGIN IMMEDIATE`、提交与异常回滚；提交成功后再更新 `TurnView` 与广播。
+1. manager 命令队列：`create`/`cancel`/`attach`/`detach`/`upload`/`remove`/`replace_resources` 编码为 `Command(name, args, reply)` 进入有界 FIFO 队列，`_run` 为唯一消费者。输入与文件形状校验在入口完成，依赖状态的配额校验在队列内执行，消除并发上传读改写竞争。队列满直接拒绝；调用方协程取消不撤销已入队命令，无人接收的订阅由 `_run` 统一回收。
+2. runtime 内部串行：单任务顺序处理事件并顺序 `await` 每次写，无需应用层写锁；每次写经 `asyncio.to_thread` 独占线程池线程与 thread-local 连接，跨连接写竞争由 SQLite 文件锁与 `busy_timeout` 排队。
+3. CRUD 与事务壳：service 统一调用 CRUD，不直写 SQL；CRUD 写函数永不自行提交，`crud.transaction()` 统一执行 `BEGIN IMMEDIATE`、提交与异常回滚；提交成功后再更新 `TurnView` 与广播。
 
-## 损坏出口与 Cancel 中断语义
+## 损坏出口与 Cancel 语义
 
-- **写失败出口（`manager.fail()`）**：标记损坏、清空 runtime 引用与缓存 `active_turn_id`（满足 idle 条件）、向挂起 `pending_cancel` 补发 `{"status": "failed"}` 并关闭清空订阅。
-- **尽力收口与恢复**：启动后台收口任务条件更新活跃轮为 `failed`/`storage_failure` 与清认领（由 `close()` 等待结束）；损坏 manager 拒绝除 `detach` 外命令，空闲后被 reaper 回收重载恢复（不支持在线原地重建；投影异常同理停止 manager）。
-- **Cancel 语义**：`_handle_cancel` 校验轮次后登记 `pending_cancel` 并调 `runtime.cancel()`；runtime 观察标志后自写 `cancelled` 终态并广播，manager 在广播终态时补发 cancel 响应；已终结轮次返回原终态。
+- 写失败出口（`manager.fail()`）：标记损坏、清空 runtime 引用与缓存 `active_turn_id`（满足 idle 条件）、向挂起 `pending_cancel` 补发 `{"status": "failed"}` 并关闭清空订阅。
+- 尽力收口与恢复：启动后台收口任务条件更新活跃轮为 `failed`/`storage_failure` 与清认领（由 `close()` 等待结束）；损坏 manager 拒绝除 `detach` 外命令，空闲后被 reaper 回收重载恢复（不支持在线原地重建；投影异常同理停止 manager）。
+- Cancel 语义：`_handle_cancel` 校验轮次后登记 `pending_cancel` 并调 `runtime.cancel()`；runtime 观察标志后自写 `cancelled` 终态并广播，manager 在广播终态时补发 cancel 响应；已终结轮次返回原终态。
 - 不同 session 可并发，但当前必须单 backend worker，进程内唯一 manager 不解决多进程 owner 问题。

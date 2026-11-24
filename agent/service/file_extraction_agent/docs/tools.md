@@ -13,13 +13,11 @@
 
 普通异常由 `run_tool` 转为 `{"ok":false,"errors":[{"message":"异常说明"}]}`；工具共享超时由 executor 处理。取消、超时或结束都会 kill 工具子进程，不等待其自然结束。
 
-## 主题索引（按需打开）
+## 目录
 
-| 主题 | 子文档 | 涵盖内容 |
+| 主题 | 文档 | 内容 |
 | --- | --- | --- |
-| 路径传递与只读文件工具 | [tools/file-tools.md](tools/file-tools.md) | bucket/`documents/...` key 规则及 `ls` / `grep` / `read` 接口、示例与错误码 |
-| 语义检索工具 | [tools/embedding-search.md](tools/embedding-search.md) | `search_embedding` 子进程流程、`top_k` 边界、结果结构与 `covered_files` 核实规则 |
+| 路径与文件工具 | [tools/file-tools.md](tools/file-tools.md) | `documents/...` key 规则及 `ls` / `grep` / `read` 示例与错误码 |
+| 语义检索 | [tools/embedding-search.md](tools/embedding-search.md) | `search_embedding` 流程、`top_k` 边界、结果结构与 `covered_files` 规则 |
 
-## 相关入口
-
-- 问答内核设计：[DESIGN.md](DESIGN.md) / 子进程与基准说明：[design/tools-and-deployment.md](design/tools-and-deployment.md)
+相关：[DESIGN.md](DESIGN.md) / [子进程与基准](design/tools-and-deployment.md)

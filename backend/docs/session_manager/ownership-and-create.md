@@ -1,6 +1,6 @@
 # 所有权划分与创建轮次
 
-本页属 [SessionManager 架构](../SESSION_MANAGER.md)，说明 manager 与 `TurnRuntime` 的职责隔离及 `POST /chat/completion` 建轮路径。
+返回 [SessionManager 架构](../SESSION_MANAGER.md)。
 
 ## 调用关系与所有权
 

@@ -1,6 +1,6 @@
 # PDF MinerU 管线与 HTML 构建规则
 
-本页属 [Document Processor 设计](../DESIGN.md)，说明 `pdf/` 子包的 MinerU 调用、HTML 层级过滤、确定性 ID 与表格处理。
+返回 [Document Processor 设计](../DESIGN.md)。
 
 ## `pdf/` 入口与 `pdf/converter.py`
 

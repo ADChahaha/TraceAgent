@@ -11,17 +11,14 @@ resource_refs([{type, location}]) + messages + model_config / run_options
   -> application 归一化带 seq 的 CompletionEvent -> 路由编码 protobuf -> gRPC 流
 ```
 
-## 主题索引（按需打开）
+## 目录
 
-| 主题 | 子文档 | 涵盖内容 |
+| 主题 | 文档 | 内容 |
 | --- | --- | --- |
-| 存储访问与请求内执行 | [design/storage-and-request.md](design/storage-and-request.md) | 完整数据流、`schemas.CompletionEvent`/`JsonValue`、payload 存储边界与取消边界 |
-| 图状态与循环职责 | [design/graph-and-state.md](design/graph-and-state.md) | `QaState`、`run_qa_stream`、重试退避、`stream_mode`、`RunOptions` 与 6 文件拆分 |
-| 模型装配与消息批次 | [design/events-and-model.md](design/events-and-model.md) | `ConfiguredChatModel`/`ChatOpenAI`、`visible_text`、模型事件与并行工具批次 |
-| 工具子进程与跨轮部署 | [design/tools-and-deployment.md](design/tools-and-deployment.md) | 一次性 worker 进程、OpenVINO 实测基准、文档树引用格式与无状态跨轮边界 |
+| 存储与请求 | [design/storage-and-request.md](design/storage-and-request.md) | 数据流、`CompletionEvent`/`JsonValue`、payload 存储与取消边界 |
+| 图状态与循环 | [design/graph-and-state.md](design/graph-and-state.md) | `QaState`、`run_qa_stream`、重试退避、`stream_mode`、`RunOptions` 与 6 文件分工 |
+| 模型与事件 | [design/events-and-model.md](design/events-and-model.md) | `ConfiguredChatModel`/`ChatOpenAI`、`visible_text`、模型事件与并行工具批次 |
+| 工具与部署 | [design/tools-and-deployment.md](design/tools-and-deployment.md) | 一次性 worker 进程、OpenVINO 基准、文档树引用与跨轮无状态边界 |
 
-## 同级专题与相关入口
-
-- 工具输入输出规范：[tools.md](tools.md) / 流式与取消细节：[STREAMING_AND_CANCELLATION.md](STREAMING_AND_CANCELLATION.md)
-- 执行链速览：[agent_loop.md](agent_loop.md) / 流程图：[flowchart.md](flowchart.md)
-- 上层接口与资源设计：[agent/docs/API.md](../../../docs/API.md) / [document_resources/docs/DESIGN.md](../../../../document_service/document_resources/docs/DESIGN.md)
+同级：[tools.md](tools.md) / [STREAMING_AND_CANCELLATION.md](STREAMING_AND_CANCELLATION.md) / [agent_loop.md](agent_loop.md) / [flowchart.md](flowchart.md)
+相关：[agent API](../../../docs/API.md) / [资源设计](../../../../document_service/document_resources/docs/DESIGN.md)

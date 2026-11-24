@@ -1,6 +1,6 @@
 # Agent 传输、部署与取消边界
 
-本页属 [Agent Service Design](../DESIGN.md)，说明双 gRPC 服务的启动运行模型、共享协议打包与取消语义。
+返回 [Agent Service Design](../DESIGN.md)。
 
 ## 安装与本地启动
 

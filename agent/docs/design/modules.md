@@ -1,6 +1,6 @@
 # Agent 模块边界
 
-本页属 [Agent Service Design](../DESIGN.md)，列出 `agent` 与相关文档准备模块的职责边界。
+返回 [Agent Service Design](../DESIGN.md)。
 
 ## 核心模块表
 

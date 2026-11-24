@@ -1,32 +1,28 @@
-# 记忆系统与 Dreaming 设计
+# 记忆与 Dreaming 脚本设计
 
-本模块为 `agent_gate` 提供项目内四层按需记忆系统与离线 Dreaming 整理工具，用于在不把细节堆入控制面规则的前提下，跨会话保留长期决策、协作偏好与工作区定位。
+`memory/dream_scan.py` 是一个只读脚本，做两件事：扫描本仓库在 Antigravity、Codex、Claude Code 三端的增量会话记录，以及校验 `memory/` 与 `memory.md` 的分层结构和链接完整性。
 
-项目将规则控制面与项目记忆面分离：`AGENTS.md` 只保存稳定规范，日常会话和 Dreaming 都不修改。
-活跃记忆按 `L0 -> L1 -> L2 -> L3` 分层存放，新会话只读 L0 入口和 `memory/notes/`，其余按任务沿索引逐层下钻。离线整理通过 `.agents/skills/dreaming/SKILL.md` 驱动，由只读脚本 `memory/dream_scan.py` 提供跨端会话扫描与六项程序化架构门禁。
+## 层级判定
 
-```text
-新会话启动 -> 读 L0 memory.md 与 memory/notes/ -> 沿 L1 索引按需进 L2/L3 -> 细节回代码与各包 docs/DESIGN.md
-手动 dreaming -> dream_scan.py 采集三端增量信号与体检 -> 先剪后写归并归档 -> --audit 六项清零 -> 更新 dream-log 并提交
-```
+- `L0`：`memory.md`（上限 1500 字 / 35 行 / 单行 200 字，只允许连向 L1）。
+- `L1`：`memory/preference/INDEX.md` 和 `memory/wiki/*-index.md`（2200 / 45 / 220）。
+- `L2`：`memory/preference/*.md` 和其他 `memory/wiki/**/*.md`（2600 / 65 / 260）。
+- `L3`：`memory/wiki/experiments/*.md`、`*-experiments.md`、`*-details.md`（2400 / 55 / 260）。
+- `notes/`、`tasks/`、`archive/`、`dream-log.md` 不计入预算和可达性图，但仍做断链校验；`memory/docs/` 与 `memory/tests/` 不参与记忆分层。
 
-## 目录与四层边界
+## 输入与模式
 
-| 层级 | 对应路径 | 职责边界 | 单文件预算 |
-| --- | --- | --- | --- |
-| L0 | `memory.md` | 全局锚点、L1 路由与动态区入口，禁止直连 L2/L3 | `<= 1500` 字 / `<= 35` 行 / 单行 `<= 200` |
-| L1 | `memory/preference/INDEX.md`、`memory/wiki/*-index.md` | 二级导航路由、状态总览与共享聚合 | `<= 2200` 字 / `<= 45` 行 / 单行 `<= 220` |
-| L2 | `memory/preference/*.md`、其他 `memory/wiki/**/*.md` | 单主题决策、偏好与仓内锚点，不复抄设计全文 | `<= 2600` 字 / `<= 65` 行 / 单行 `<= 260` |
-| L3 | `memory/wiki/experiments/*.md`、`*-experiments.md`、`*-details.md` | 评测口径、精简结果摘要与原始脚本锚点 | `<= 2400` 字 / `<= 55` 行 / 单行 `<= 260` |
+- 默认以脚本上两级目录为 `repo_root`（支持 `--repo-root` 覆盖），增量水位线从 `memory/dream-log.md` 读取 `last_dream_at`，缺失或无效时回退到当前 UTC 前 48 小时，可用 `--since`、`--until`、`--all` 覆盖。
+- 默认模式输出架构体检、git 概览和增量主会话（USER 全文保留，ASSISTANT 截断并附 `--turn` 展开命令）；`--audit` 只做体检；`--grep` 按正则搜索轮次片段；`--session` 配合 `--turn`/`--offset`/`--tail`/`--all-turns` 查看指定会话原文。
 
-非分层目录（`notes/`、`tasks/`、`archive/`、`dream-log.md`、`docs/`、`tests/`）不计入 L0-L3 预算；其中前四类参与断链检查。
+## 三端会话匹配与过滤
 
-## 主题索引（按需打开）
+- Antigravity：读 `~/.gemini/antigravity/brain/*/.system_generated/logs/transcript.jsonl`，按 `repo_root` 路径或目录名匹配；USER 被截断或进入 `--grep`/`--session` 时按需读同目录 `transcript_full.jsonl`；按父日志中的 `conversationId`（兼容转义与未转义引号）及无用户输入轮次过滤子代理。
+- Codex：读 `~/.codex/sessions/**/*.jsonl`，按 `session_meta.payload.cwd` 或文本中的仓库路径/目录名匹配，跳过系统注入文本和 `source.subagent`。
+- Claude Code：读 `~/.claude/projects/*/*.jsonl`，将目录名转小写并把 `_` 转为 `-`（如 `agent_gate` 匹配 `agent-gate`），过滤 `isSidechain`、`agent-*`、meta 消息与中断占位。
+- 仅传入 `--include-subagents` 或指定 `--session` 时包含子代理会话。
 
-| 主题 | 子文档 | 涵盖内容 |
-| --- | --- | --- |
-| 扫描器输入、三端匹配与六项门禁 | [design/scanner-and-audit.md](design/scanner-and-audit.md) | `dream_scan.py` 参数模式、三端日志匹配与子代理过滤、6 项门禁校验与异常降级 |
+## 六项门禁与降级
 
-## 相关入口
-
-- 整理技能：[SKILL.md](../../.agents/skills/dreaming/SKILL.md) / 开发日志：[DEVLOG.md](DEVLOG.md) / 测试说明：[test_dream_scan.md](../tests/docs/test_dream_scan.md)
+- 检查项：`broken`（相对/绝对路径与 `#anchor` 锚点）、`budget_violations`、`layer_violations`（L0 直连 L2/L3）、`crosslink_walls`（L2/L3 单行内部 `.md` 链接超 5 个）、`unreachable_files`（从 `memory.md` 做 BFS）、`protected_sha256_prefix`（`AGENTS.md` 与 `agent/AGENTS.md` 的 SHA-256 前 12 位）。
+- 异常与降级：无效 ISO 时间或正则直接报错退出；损坏的单条 JSONL 行跳过；非 git 目录降级为空 git 列表；缺少 `memory.md` 时 L0 记 0 并如实报告不可达文件。

@@ -1,6 +1,6 @@
 # 会话列表、问答提交、取消与边界
 
-本页属 [Backend API](../API.md)，定义会话目录、提交问答、取消轮次以及通用探活与失败边界。
+返回 [Backend API](../API.md)。
 
 ## `GET /chat/sessions?limit=100`
 

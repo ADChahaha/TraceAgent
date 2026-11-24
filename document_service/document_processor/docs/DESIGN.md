@@ -12,15 +12,12 @@ file_obj (+ 可选 file_type)
   -> ProcessResult(filename, html)
 ```
 
-## 主题索引（按需打开）
+## 目录
 
-| 主题 | 子文档 | 涵盖内容 |
+| 主题 | 文档 | 内容 |
 | --- | --- | --- |
-| 入口分流与目录结构 | [design/entry-and-dispatch.md](design/entry-and-dispatch.md) | 文件树、`processor.py` 公开契约、共享校验辅助函数与引擎硬隔离原则 |
-| PDF MinerU 管线与 HTML 规则 | [design/pdf-pipeline.md](design/pdf-pipeline.md) | `pdf/converter.py` CLI 配置、`pdf/html.py` 标题降级、确定性 block ID 与表格处理 |
-| DOCX 解析管线与输出约束 | [design/docx-pipeline.md](design/docx-pipeline.md) | `docx/docx_processor.py` 原始顺序遍历、标题样式识别与 `docx_bNNN` 约束 |
+| 入口与分流 | [design/entry-and-dispatch.md](design/entry-and-dispatch.md) | 目录树、`processor.py` 公开契约、共享校验函数与引擎隔离 |
+| PDF MinerU 管线 | [design/pdf-pipeline.md](design/pdf-pipeline.md) | `pdf/converter.py` 配置、`pdf/html.py` 标题降级、确定性 ID 与表格处理 |
+| DOCX 管线 | [design/docx-pipeline.md](design/docx-pipeline.md) | `docx/docx_processor.py` 原始顺序遍历、标题样式与 `docx_bNNN` 约束 |
 
-## 相关入口
-
-- 模块接口说明：[API.md](API.md) / 包说明：[README.md](../README.md)
-- 上层服务与资源设计：[document_service/docs/DESIGN.md](../../docs/DESIGN.md) / [document_resources/docs/DESIGN.md](../../document_resources/docs/DESIGN.md)
+相关：[API.md](API.md) / [README.md](../README.md) / [document_service 设计](../../docs/DESIGN.md) / [document_resources 设计](../../document_resources/docs/DESIGN.md)

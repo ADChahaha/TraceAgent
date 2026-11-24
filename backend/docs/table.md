@@ -6,13 +6,11 @@
 - schema、CRUD 与 `SessionManager` 统一使用 `chat_*` 和 `session_id`；初始化不迁移也不删除旧 `qa_*` 表。
 - CRUD 写函数只执行语句、永不自行提交，事务提交边界统一在 `crud.transaction()`。
 
-## 主题索引（按需打开）
+## 目录
 
-| 主题 | 子文档 | 涵盖内容 |
+| 主题 | 文档 | 内容 |
 | --- | --- | --- |
-| 四张表结构与数据库约束 | [table/schemas.md](table/schemas.md) | `chat_sessions`、`chat_resources`、`chat_turns`、`chat_messages` 字段定义与唯一/外键约束 |
-| 消息配对、中断与跨轮顺序 | [table/message-pairing.md](table/message-pairing.md) | 工具组原子配对流程、取消中断边界与跨轮读写串行顺序 |
+| 表结构与约束 | [table/schemas.md](table/schemas.md) | `chat_sessions`、`chat_resources`、`chat_turns`、`chat_messages` 字段与约束 |
+| 配对与中断顺序 | [table/message-pairing.md](table/message-pairing.md) | 工具组原子配对、取消中断边界与跨轮读写串行顺序 |
 
-## 相关入口
-
-- Backend 顶层设计：[DESIGN.md](DESIGN.md) / SessionManager 架构：[SESSION_MANAGER.md](SESSION_MANAGER.md)
+相关：[DESIGN.md](DESIGN.md) / [SESSION_MANAGER.md](SESSION_MANAGER.md)

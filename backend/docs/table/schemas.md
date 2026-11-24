@@ -1,6 +1,6 @@
 # Backend 数据表结构与约束
 
-本页属 [Backend 数据表](../table.md)，定义四张 SQLite 表的列结构、外键与数据库级唯一约束。
+返回 [Backend 数据表](../table.md)。
 
 ## `chat_sessions`
 

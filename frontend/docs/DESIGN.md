@@ -8,15 +8,12 @@
   -> 提交问题 POST /chat/completion -> SSE 增量更新 -> 点击数字引用打开原文高亮
 ```
 
-## 主题索引（按需打开）
+## 目录
 
-| 主题 | 子文档 | 涵盖内容 |
+| 主题 | 文档 | 内容 |
 | --- | --- | --- |
-| 上传队列、会话目录与轮询 | [design/uploads-and-sessions.md](design/uploads-and-sessions.md) | 逐文件串行队列、删除与补传规则、自动跳转草稿交接、`workspace-list` 与 5 秒轮询 |
-| 流式解析与状态合并 | [design/streaming-and-state.md](design/streaming-and-state.md) | `api.ts`、`session-stream.ts`、`use-session.ts` 重连代次、`session-state.ts` 合并与取消 |
-| 文件引用、组件布局与代理 | [design/documents-and-ui.md](design/documents-and-ui.md) | 互斥 Sources/阅读视图、数字引用高亮、组件职责表、响应式分栏、代理容量与测试命令 |
+| 上传与会话 | [design/uploads-and-sessions.md](design/uploads-and-sessions.md) | 逐文件串行队列、删除与补传、自动跳转草稿交接、`workspace-list` 与轮询 |
+| 流式与状态 | [design/streaming-and-state.md](design/streaming-and-state.md) | `api.ts`、`session-stream.ts`、`use-session.ts` 重连代次、`session-state.ts` 合并与取消 |
+| 文档、布局与代理 | [design/documents-and-ui.md](design/documents-and-ui.md) | Sources/阅读视图、数字引用高亮、组件分工、响应式分栏、代理容量与测试 |
 
-## 相关入口
-
-- Backend 接口契约：[backend/docs/API.md](../../backend/docs/API.md) / Backend 设计：[backend/docs/DESIGN.md](../../backend/docs/DESIGN.md)
-- 仓库启动说明：[README.md](../../README.md)
+相关：[backend API](../../backend/docs/API.md) / [backend 设计](../../backend/docs/DESIGN.md) / [README.md](../../README.md)

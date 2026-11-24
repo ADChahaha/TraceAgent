@@ -1,6 +1,6 @@
 # 资源生命周期、问答运行时与对外契约
 
-本页属 [Agent Service Design](../DESIGN.md)，记录对象存储资源契约、问答执行流和 gRPC 迁移边界。
+返回 [Agent Service Design](../DESIGN.md)。
 
 ## 资源生命周期
 

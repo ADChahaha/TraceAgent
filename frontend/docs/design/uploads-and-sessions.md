@@ -1,6 +1,6 @@
 # 上传队列、会话目录与状态同步
 
-本页属 [Frontend 设计](../DESIGN.md)，说明首页/详情页共享的逐文件上传队列、最近会话列表及空闲同步策略。
+返回 [Frontend 设计](../DESIGN.md)。
 
 ## 逐文件串行队列（`use-file-uploads.ts`）
 

@@ -1,6 +1,6 @@
 # 入口分流、共享辅助函数与目录布局
 
-本页属 [Document Processor 设计](../DESIGN.md)，说明模块目录、`processor.py` 唯一公开入口及类型分流契约。
+返回 [Document Processor 设计](../DESIGN.md)。
 
 ## 目录结构
 

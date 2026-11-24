@@ -1,6 +1,6 @@
 # 取消、探活与错误码
 
-本页属 [Agent gRPC API](../API.md)，说明 `ChatCompletion` 的取消方式、Health 探活与错误映射约定。
+返回 [Agent gRPC API](../API.md)。
 
 ## 取消与连接生命周期
 

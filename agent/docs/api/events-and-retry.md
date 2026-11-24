@@ -1,6 +1,6 @@
 # 问答事件流与重试规则
 
-本页属 [Agent gRPC API](../API.md)，定义 `CompletionEvent` 事件类型、重试退避算法和消费端状态合并契约。
+返回 [Agent gRPC API](../API.md)。
 
 ## 事件类型表
 

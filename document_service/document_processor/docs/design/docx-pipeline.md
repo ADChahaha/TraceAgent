@@ -1,6 +1,6 @@
 # DOCX 解析管线与输出约束
 
-本页属 [Document Processor 设计](../DESIGN.md)，说明 `docx/` 子包的原始顺序遍历与输出约定。
+返回 [Document Processor 设计](../DESIGN.md)。
 
 ## 执行流程
 

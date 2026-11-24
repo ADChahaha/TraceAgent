@@ -1,6 +1,6 @@
 # 图状态、重试退避与循环职责
 
-本页属 [文档问答执行设计](../DESIGN.md)，说明 `QaState`、LangGraph 重试节点、`stream_mode` 映射及 core 六文件职责。
+返回 [文档问答执行设计](../DESIGN.md)。
 
 ## 执行输入与 `QaState`
 

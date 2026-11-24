@@ -1,6 +1,6 @@
 # Backend 调用关系与模块边界
 
-本页属 [Backend 设计](../DESIGN.md)，记录核心 HTTP/SSE 调用链、模块职责表与 `SessionRegistry` 生命周期。
+返回 [Backend 设计](../DESIGN.md)。
 
 ## 核心调用关系
 

@@ -1,6 +1,6 @@
 # 文件下载与文档内容读取接口
 
-本页属 [Backend API](../API.md)，定义会话级原文件下载、文档目录与引用原文读取接口。所有路径均绑定本会话资源引用，跨会话不可达。
+返回 [Backend API](../API.md)。所有路径均绑定本会话资源引用，跨会话不可达。
 
 ## `GET /chat/sessions/{session_id}/blocks?key=...`
 

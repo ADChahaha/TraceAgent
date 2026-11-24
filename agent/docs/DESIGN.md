@@ -15,16 +15,12 @@ AgentService.ChatCompletion(resource_refs + messages)
   -> application.stream_execution 生成带 seq 的 CompletionEvent -> gRPC 流
 ```
 
-## 主题索引（按需打开）
+## 目录
 
-| 主题 | 子文档 | 涵盖内容 |
+| 主题 | 文档 | 内容 |
 | --- | --- | --- |
-| 模块边界与服务解耦 | [design/modules.md](design/modules.md) | 22 个核心文件职责表与 document/agent 经 storage 交接边界 |
-| 传输、部署与取消 | [design/deployment.md](design/deployment.md) | grpc.aio 启停、64 MiB 上限、共享协议 wheel、安装启动与取消传播 |
-| 资源生命周期、问答与契约 | [design/lifecycle-and-runtime.md](design/lifecycle-and-runtime.md) | `res_*` 桶结构、问答运行时流、对外 gRPC 契约与迁移说明 |
+| 模块边界 | [design/modules.md](design/modules.md) | 22 个核心文件职责与 storage 交接边界 |
+| 传输与部署 | [design/deployment.md](design/deployment.md) | grpc.aio 启停、64 MiB 上限、共享协议 wheel 与取消传播 |
+| 资源与运行时 | [design/lifecycle-and-runtime.md](design/lifecycle-and-runtime.md) | `res_*` 桶结构、问答运行时流、gRPC 契约与迁移 |
 
-## 相关入口
-
-- 接口示例与字段规范：[API.md](API.md)
-- 问答内核详细设计：[file_extraction_agent/docs/DESIGN.md](../service/file_extraction_agent/docs/DESIGN.md)
-- 文档资源设计：[document_resources/docs/DESIGN.md](../../document_service/document_resources/docs/DESIGN.md)
+相关：[API.md](API.md) / [问答内核设计](../service/file_extraction_agent/docs/DESIGN.md) / [文档资源设计](../../document_service/document_resources/docs/DESIGN.md)

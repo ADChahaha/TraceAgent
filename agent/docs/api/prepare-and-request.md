@@ -1,6 +1,6 @@
 # 资源准备与问答请求
 
-本页属 [Agent gRPC API](../API.md)，说明 `PrepareResources` 与 `ChatCompletion` 的调用示例和请求字段校验。
+返回 [Agent gRPC API](../API.md)。
 
 ## Python 调用示例
 

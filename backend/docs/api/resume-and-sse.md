@@ -1,6 +1,6 @@
 # 页面恢复与 SSE 事件协议
 
-本页属 [Backend API](../API.md)，说明 `GET /resume` 恢复语义与 SSE 帧格式。
+返回 [Backend API](../API.md)。
 
 ## `GET /resume?session_id=...`
 

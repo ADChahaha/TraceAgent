@@ -1,6 +1,6 @@
 # Backend 数据访问、事务与生命周期
 
-本页属 [Backend 设计](../DESIGN.md)，说明 CRUD 事务边界、四表模型、Manager 回收与故障收口规则。
+返回 [Backend 设计](../DESIGN.md)。
 
 ## 数据访问边界
 

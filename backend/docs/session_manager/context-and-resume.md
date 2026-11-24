@@ -1,6 +1,6 @@
 # 稳定上下文、TurnView 与 Resume 一致性
 
-本页属 [SessionManager 架构](../SESSION_MANAGER.md)，说明模型上下文配对提交、实时投影订阅以及 `GET /resume` 一致性边界。
+返回 [SessionManager 架构](../SESSION_MANAGER.md)。
 
 ## 稳定模型上下文
 
