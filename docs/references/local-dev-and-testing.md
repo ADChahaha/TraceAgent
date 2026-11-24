@@ -30,8 +30,8 @@
 ## 代理、模型端点与文档门禁
 
 - 本机开启代理时，`curl` 调本地端口加 `--noproxy '*'`；调用模型 API 若报 `httpx.RemoteProtocolError` 或 `openai.APIConnectionError` 且堆栈经过 `httpcore/_sync/http_proxy.py`，用 `env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u http_proxy -u https_proxy -u all_proxy` 清代理直连重试。
-- Hugging Face 公开模型下载若因本机隐式 token 报 401，在根目录 `.env` 中设 `HF_HUB_DISABLE_IMPLICIT_TOKEN=1`。
-- `agent` 配置优先级为 `agent/.env` < 当前工作目录 `.env` < 进程 `os.environ`；改 `.env` 未生效时先检查 shell 是否残留导出过的旧 `BASE_URL`/`MODEL`/`OPENAI_API_KEY`。
+- Hugging Face 公开模型下载若因本机隐式 token 报 401，在根目录 `config.toml` 的 `[huggingface]` 中设 `disable_implicit_token = true`（或显式设环境变量 `HF_HUB_DISABLE_IMPLICIT_TOKEN=1`）。
+- 全仓配置统一从仓库根目录 `config.toml` 读取（模板见 [config.example.toml](../../config.example.toml)，可通过 `TRACEAGENT_CONFIG` 指定路径），优先级为代码默认值 < `config.toml` < 进程 `os.environ`；运行态不再读取 `.env`；改 `config.toml` 未生效时先检查 shell 是否残留导出过的旧 `BASE_URL`/`MODEL`/`OPENAI_API_KEY`。
 - OpenAI 兼容端点接入：
   - `BASE_URL` 必须带完整 `/v1` 后缀，缺少时部分网关返回 HTML 页面。
   - 切新中转站前先做最小流式 tool-calling 探针（部分网关缺通道报 `503 model_not_found` 或触发 WAF `403`）。

@@ -8,7 +8,7 @@ from agent_proto import agent_pb2 as pb
 from langchain_core.messages import AIMessage, ToolMessage
 from tests.async_helpers import async_items
 from service.file_extraction_agent.core import model as model_module
-from service.file_extraction_agent.core.model import build_chat_model, normalize_model_config
+from service.file_extraction_agent.core.model import build_chat_model, load_title_model_config, normalize_model_config
 from service.file_extraction_agent import application as runtime_module
 from tests.async_helpers import wire_stream as stream_completion
 from service.file_extraction_agent.schemas import DocumentQaMessage, ModelConfig, RunOptions
@@ -157,30 +157,35 @@ async def test_route_outputs_protobuf_without_dictionary_boundary(tmp_path, monk
     ]
 
 
-def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
-    env_path = tmp_path / ".env"
-    env_path.write_text(
+def test_normalize_model_config_loads_config_toml_and_ignores_dotenv(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
         "\n".join(
             [
-                'BASE_URL="https://example.com/v1"',
-                'OPENAI_API_KEY="key"',
-                'MODEL="qa"',
-                'MODEL_API_TRANSPORT="chat_completions"',
-                'TEMPERATURE="0.1"',
-                'TOP_P="0.9"',
-                'TOP_K="40"',
-                'REASONING_EFFORT="high"',
-                'MODEL_MAX_RETRIES="8"',
-                'MODEL_REQUEST_TIMEOUT="120"',
+                "[model]",
+                'base_url = "https://example.com/v1"',
+                'api_key = "key"',
+                'model = "qa"',
+                'api_transport = "chat_completions"',
+                "temperature = 0.1",
+                "top_p = 0.9",
+                "top_k = 40",
+                'reasoning_effort = "high"',
+                "max_retries = 8",
+                "request_timeout = 120.0",
+                "",
+                "[title_model]",
+                'model = "qa-mini"',
+                "request_timeout = 12.0",
             ]
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(model_module, "_candidate_env_paths", lambda: [env_path])
-    missing_cwd = tmp_path / "missing"
-    missing_cwd.mkdir()
-    monkeypatch.chdir(missing_cwd)
+    (tmp_path / ".env").write_text('MODEL="should-not-be-read"\nOPENAI_API_KEY="bad"\n', encoding="utf-8")
+    monkeypatch.setenv("TRACEAGENT_CONFIG", str(config_path))
+    monkeypatch.chdir(tmp_path)
     for name in (
+        "PROVIDER",
         "BASE_URL",
         "API_KEY",
         "OPENAI_API_KEY",
@@ -192,8 +197,13 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
         "REASONING_EFFORT",
         "MODEL_MAX_RETRIES",
         "MODEL_REQUEST_TIMEOUT",
+        "TITLE_MODEL",
+        "TITLE_BASE_URL",
+        "TITLE_OPENAI_API_KEY",
+        "TITLE_MODEL_REQUEST_TIMEOUT",
     ):
         monkeypatch.delenv(name, raising=False)
+
     config = normalize_model_config(None)
     assert config.base_url == "https://example.com/v1"
     assert config.api_key == "key"
@@ -205,6 +215,15 @@ def test_normalize_model_config_loads_default_env_file(monkeypatch, tmp_path):
     assert config.reasoning_effort == "high"
     assert config.max_retries == 8
     assert config.request_timeout == 120.0
+
+    title_config = load_title_model_config()
+    assert title_config.model_name == "qa-mini"
+    assert title_config.request_timeout == 12.0
+    assert title_config.base_url == "https://example.com/v1"
+    assert title_config.api_key == "key"
+
+    monkeypatch.setenv("MODEL", "qa-from-env")
+    assert normalize_model_config(None).model_name == "qa-from-env"
 
 
 def test_build_chat_model_builds_responses_transport_by_default(monkeypatch):

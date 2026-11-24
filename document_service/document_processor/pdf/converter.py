@@ -10,6 +10,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from traceagent_shared.config import get_optional_str, get_str, load_config
+
 
 class MinerUConversionError(RuntimeError):
     """Raised when MinerU does not produce a usable content list."""
@@ -73,21 +75,26 @@ def convert_pdf_bytes_to_content_list(
 def resolve_mineru_executable() -> str:
     """Find the MinerU CLI executable."""
 
-    configured = os.getenv("MINERU_BIN")
+    config = load_config()
+    configured = get_optional_str(config, "document_service", "mineru_bin", "MINERU_BIN")
     if configured:
         return configured
     found = shutil.which("mineru")
     if found:
         return found
     raise MinerUConversionError(
-        "MinerU executable not found. Install mineru[core] or set MINERU_BIN."
+        "MinerU executable not found. Install mineru[core] or set MINERU_BIN / [document_service].mineru_bin."
     )
 
 
 def resolve_mineru_lang() -> str:
     """Resolve the MinerU OCR language code."""
 
-    return os.getenv("DOCUMENT_PROCESSOR_MINERU_LANG", "japan").strip() or "japan"
+    config = load_config()
+    return (
+        get_str(config, "document_service", "mineru_lang", "DOCUMENT_PROCESSOR_MINERU_LANG", "japan").strip()
+        or "japan"
+    )
 
 
 def build_mineru_env() -> dict[str, str]:

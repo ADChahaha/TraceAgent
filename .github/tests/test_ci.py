@@ -78,12 +78,22 @@ def test_ci_configures_file_backed_backend_database_and_checks_sessions():
             step_label = f"{job_name}.{step.get('name', 'unnamed')}"
             if "BACKEND_DATABASE_PATH" in (step.get("env") or {}):
                 configured.append((f"{step_label}.env", str(step["env"]["BACKEND_DATABASE_PATH"])))
+            run_script = step.get("run", "")
             for match in re.finditer(r"^\s*(?:export\s+)?BACKEND_DATABASE_PATH\s*=\s*(.+?)\s*$",
-                                     step.get("run", ""), re.MULTILINE):
+                                     run_script, re.MULTILINE):
                 configured.append((f"{step_label}.run", match.group(1).strip().strip("\"'")))
+            for toml_match in re.finditer(
+                r"cat\s*>\s*config\.toml\s*<<'?TOML'?\n(.*?)\n\s*TOML\b",
+                run_script,
+                re.DOTALL,
+            ):
+                parsed = tomllib.loads(toml_match.group(1))
+                backend_cfg = parsed.get("backend")
+                if isinstance(backend_cfg, dict) and "database_path" in backend_cfg:
+                    configured.append((f"{step_label}.config.toml", str(backend_cfg["database_path"])))
 
     smoke_paths = [value for source, value in configured if source.startswith("deployment-smoke.")]
-    assert smoke_paths, "deployment-smoke 必须显式配置 BACKEND_DATABASE_PATH 文件路径"
+    assert smoke_paths, "deployment-smoke 必须显式配置 backend.database_path 文件路径"
 
     for source, value in configured:
         lowered = value.strip().lower()

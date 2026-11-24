@@ -90,25 +90,39 @@ conda create -n agent-gate python=3.11 -y && conda activate agent-gate
 
 インストールには storage サービスと既定の OpenVINO embedding 依存関係を含みます。document service は起動時に embedding モデルを読み込み、ウォームアップ後に待ち受けを開始します。初回は Hugging Face からのモデルダウンロードが必要です。
 
-公開モデルのダウンロードが 401 になり、匿名アクセスでは成功する場合、`.env` に `HF_HUB_DISABLE_IMPLICIT_TOKEN=1` を設定すると、ローカルに保存された Hugging Face token の自動送信を無効にできます。非公開モデルには有効な認証情報が必要です。
+公開モデルのダウンロードが 401 になり、匿名アクセスでは成功する場合、`config.toml` の `[huggingface]` で `disable_implicit_token = true`（または環境変数 `HF_HUB_DISABLE_IMPLICIT_TOKEN=1`）を設定すると、ローカルに保存された Hugging Face token の自動送信を無効にできます。非公開モデルには有効な認証情報が必要です。
 
-**3. 環境変数の設定**
+**3. 設定ファイルの作成**
 
-リポジトリルートに `.env` を作成します。起動スクリプトが自動的に読み込みます。
+テンプレートからリポジトリルートに `config.toml` を作成し、モデル設定を記入します（起動スクリプトと各サービスが自動的に読み込み、同名の環境変数で上書き可能です）。
 
 ```bash
-BASE_URL="https://your-model-endpoint/v1"
-OPENAI_API_KEY="your-api-key"
-MODEL="your-model-name"
-MODEL_API_TRANSPORT="responses"
+cp config.example.toml config.toml
+```
 
-DOCUMENT_PROCESSOR_MINERU_LANG="japan"
+主な設定例：
 
-AGENT_PORT=8001
-DOCUMENT_PORT=8002
-BACKEND_PORT=8000
-FRONTEND_PORT=3000
-STORAGE_PORT=9000
+```toml
+[model]
+base_url = "https://your-model-endpoint/v1"
+api_key = "your-api-key"
+model = "your-model-name"
+api_transport = "responses"
+
+[document_service]
+mineru_lang = "japan"
+
+[agent]
+port = 8001
+
+[backend]
+port = 8000
+
+[frontend]
+port = 3000
+
+[storage]
+port = 9000
 ```
 
 **4. サービスの起動**
@@ -138,7 +152,7 @@ storage / agent / document service / backend / frontend を起動します。
 agent_proto/      共有 protobuf/gRPC 契約
 document_service/ 文書解析、Markdown 文書ツリー、embedding とリソース公開
 storage/          ローカル S3 互換 HTTP サービス
-shared/           object store クライアント
+shared/           object store クライアントと config.toml 設定ローダー
 agent/            QA Agent（LangGraph）
 backend/          SQLite：sessions / resources / turns / messages
 frontend/         文書管理、QA、ツールの過程と全文表示（Next.js）

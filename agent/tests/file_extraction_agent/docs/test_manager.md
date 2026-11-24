@@ -9,7 +9,7 @@
 - `test_startup_events_only_acknowledge_without_reading_documents`：启动确认不读取或遍历文档。
 - `test_stream_wraps_messages_and_pairs_same_name_calls`：同名工具按调用 ID 保留参数和成功失败结果。
 - `test_route_outputs_protobuf_without_dictionary_boundary`：路由所有事件直接返回 CompletionEvent，不再输出字典。
-- `test_normalize_model_config_loads_default_env_file`：从默认环境文件读取模型参数。
+- `test_normalize_model_config_loads_config_toml_and_ignores_dotenv`：从 `config.toml` 的 `[model]` 与 `[title_model]` 读取模型参数，忽略 `.env`，并验证环境变量覆盖。
 - `test_build_chat_model_builds_responses_transport_by_default`：默认构建 Responses 流式模型。
 - `test_build_chat_model_builds_chat_completions_transport_when_configured`：显式配置可选择 Chat Completions。
 - `test_build_chat_model_rejects_unknown_transport`：拒绝未知模型传输方式。

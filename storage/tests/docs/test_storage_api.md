@@ -35,3 +35,4 @@ S3 客户端能正常工作并按错误码分支。
 | `test_data_lands_under_data_root` | 数据实际落在数据根目录下的桶子目录中。 |
 | `test_dot_bucket_rejected_across_operations` | 桶名 `.` 在建桶、读、写、列、删上全部返回 400 InvalidBucketName，跨桶对象原样保留。 |
 | `test_dot_bucket_list_does_not_enumerate_other_buckets` | 以 `.` 列举返回 400，不得枚举其他桶的对象。 |
+| `test_create_app_loads_data_root_from_config_toml` | `create_app()` 未显式传参时直接从 `config.toml` 读取 `[storage].data_root`。 |

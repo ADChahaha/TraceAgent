@@ -3,11 +3,17 @@
 from concurrent.futures import ThreadPoolExecutor
 import argparse
 import asyncio
-import os
 import signal
 
 import grpc
 from grpc_health.v1 import health, health_pb2, health_pb2_grpc
+from traceagent_shared.config import (
+    DEFAULT_GRPC_MAX_MESSAGE_BYTES,
+    apply_runtime_env,
+    get_int,
+    get_str,
+    load_config,
+)
 
 from agent_proto import agent_pb2_grpc
 from routes import AgentService
@@ -30,14 +36,29 @@ async def create_server(*, max_message_bytes: int = 64 * 1024 * 1024) -> grpc.ai
 
 
 def main() -> int:
-    """CLI 参数/环境变量 → 启动服务或探活 → 信号触发停服；探活失败返回 1。"""
+    """CLI 参数/配置 → 启动服务或探活 → 信号触发停服；探活失败返回 1。"""
+    apply_runtime_env()
+    config = load_config()
     parser = argparse.ArgumentParser(description="Agent gRPC service")
-    parser.add_argument("--host", default=os.getenv("AGENT_HOST", "127.0.0.1"))
-    parser.add_argument("--port", type=int, default=int(os.getenv("AGENT_PORT", "8001")))
-    parser.add_argument("--workers", type=int, default=int(os.getenv("AGENT_GRPC_WORKERS", "16")),
-                        help="文档处理、初始化与工具内同步 I/O/计算的线程数，不限制活动 RPC 流数")
-    parser.add_argument("--max-message-bytes", type=int,
-                        default=int(os.getenv("AGENT_GRPC_MAX_MESSAGE_BYTES", str(64 * 1024 * 1024))))
+    parser.add_argument("--host", default=get_str(config, "agent", "host", "AGENT_HOST", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=get_int(config, "agent", "port", "AGENT_PORT", 8001))
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=get_int(config, "agent", "grpc_workers", "AGENT_GRPC_WORKERS", 16),
+        help="文档处理、初始化与工具内同步 I/O/计算的线程数，不限制活动 RPC 流数",
+    )
+    parser.add_argument(
+        "--max-message-bytes",
+        type=int,
+        default=get_int(
+            config,
+            "agent",
+            "grpc_max_message_bytes",
+            "AGENT_GRPC_MAX_MESSAGE_BYTES",
+            DEFAULT_GRPC_MAX_MESSAGE_BYTES,
+        ),
+    )
     parser.add_argument("--check-health", metavar="HOST:PORT")
     parser.add_argument("--timeout", type=float, default=5.0)
     args = parser.parse_args()

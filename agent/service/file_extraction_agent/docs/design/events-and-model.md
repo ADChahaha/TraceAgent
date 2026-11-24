@@ -13,7 +13,7 @@ ModelConfig 或环境变量
   -> model_invocation 按 use_stream 调用并校验完整消息
 ```
 
-- 生产配置固定 `streaming=True`，不自动降级，不再维护多模型候选列表；单次模型请求默认超时 `DEFAULT_MODEL_REQUEST_TIMEOUT_SECONDS = 8.0`（支持 `MODEL_REQUEST_TIMEOUT` 覆盖，不允无限等待），配置加载优先级为 `agent/.env` < 当前工作目录 `.env` < 进程 `os.environ`。
+- 生产配置固定 `streaming=True`，不自动降级，不再维护多模型候选列表；单次模型请求默认超时 `DEFAULT_MODEL_REQUEST_TIMEOUT_SECONDS = 8.0`（支持 `[model].request_timeout` 与 `MODEL_REQUEST_TIMEOUT` 覆盖，不允无限等待），配置加载优先级为 `config.toml` < 进程 `os.environ`，不再读取 `.env`。
 - SDK 内层 `max_retries` 固定为 0，避免与图内 5 次重试相乘；旧配置字段暂保留解析，不再控制 SDK 重试。
 - 已删除 `openai_models.py` 以及 DeepSeek 专用 `reasoning_content` 保存/回传和 `thinking` 参数注入；`reasoning_effort` 等通用参数按标准 SDK 传入。
 - 工具只通过 `ainvoke` 异步调用，不再保留同步接口。取消依赖 Task 与生成器关闭，不再传递 `should_stop` 回调。

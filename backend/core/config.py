@@ -1,8 +1,17 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
+
+from traceagent_shared.config import (
+    DEFAULT_GRPC_MAX_MESSAGE_BYTES,
+    get_float,
+    get_int,
+    get_raw_str,
+    load_config,
+    resolve_agent_target,
+    resolve_document_target,
+)
 
 from backend.core.db import validate_database_path
 
@@ -36,34 +45,33 @@ class BackendSettings:
                 raise ValueError(f"{name} 必须大于零")
 
     @classmethod
-    def from_env(cls) -> "BackendSettings":
-        raw_database_path = os.getenv("BACKEND_DATABASE_PATH")
-        database_path = validate_database_path(
-            "backend/backend.sqlite3" if raw_database_path is None else raw_database_path
+    def from_env(cls, config_path: str | Path | None = None) -> "BackendSettings":
+        config = load_config(config_path)
+        raw_database_path = get_raw_str(
+            config, "backend", "database_path", "BACKEND_DATABASE_PATH", "backend/backend.sqlite3"
         )
+        database_path = validate_database_path(raw_database_path)
         return cls(
             database_path=database_path,
-            agent_service_target=os.getenv(
-                "AGENT_SERVICE_TARGET",
-                "127.0.0.1:8001",
+            agent_service_target=resolve_agent_target(config),
+            document_service_target=resolve_document_target(config),
+            agent_request_timeout_seconds=get_float(
+                config, "backend", "agent_service_timeout_seconds", "AGENT_SERVICE_TIMEOUT_SECONDS", 1200.0
             ),
-            document_service_target=os.getenv(
-                "DOCUMENT_SERVICE_TARGET",
-                "127.0.0.1:8002",
+            document_request_timeout_seconds=get_float(
+                config, "backend", "document_service_timeout_seconds", "DOCUMENT_SERVICE_TIMEOUT_SECONDS", 1200.0
             ),
-            agent_request_timeout_seconds=float(
-                os.getenv("AGENT_SERVICE_TIMEOUT_SECONDS", "1200")
+            agent_cancel_timeout_seconds=get_float(
+                config, "backend", "agent_service_cancel_timeout_seconds", "AGENT_SERVICE_CANCEL_TIMEOUT_SECONDS", 2.0
             ),
-            document_request_timeout_seconds=float(
-                os.getenv("DOCUMENT_SERVICE_TIMEOUT_SECONDS", "1200")
+            agent_grpc_max_message_bytes=get_int(
+                config, "agent", "grpc_max_message_bytes", "AGENT_GRPC_MAX_MESSAGE_BYTES", DEFAULT_GRPC_MAX_MESSAGE_BYTES
             ),
-            agent_cancel_timeout_seconds=float(
-                os.getenv("AGENT_SERVICE_CANCEL_TIMEOUT_SECONDS", "2")
-            ),
-            agent_grpc_max_message_bytes=int(
-                os.getenv("AGENT_GRPC_MAX_MESSAGE_BYTES", str(64 * 1024 * 1024))
-            ),
-            document_grpc_max_message_bytes=int(
-                os.getenv("DOCUMENT_GRPC_MAX_MESSAGE_BYTES", str(64 * 1024 * 1024))
+            document_grpc_max_message_bytes=get_int(
+                config,
+                "document_service",
+                "grpc_max_message_bytes",
+                "DOCUMENT_GRPC_MAX_MESSAGE_BYTES",
+                DEFAULT_GRPC_MAX_MESSAGE_BYTES,
             ),
         )

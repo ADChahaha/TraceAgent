@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import shutil
 import uuid
 import zipfile
@@ -27,6 +26,7 @@ from pathlib import Path
 
 import numpy as np
 
+from traceagent_shared.config import get_int, get_optional_str, get_str, load_config
 from traceagent_shared.object_store import ObjectStore, ResourceRef
 from document_service.document_resources import model
 from document_service.document_resources.documents import materialize_tree, order_key
@@ -35,7 +35,9 @@ from document_service.document_resources.index import Chunk, build_index
 
 
 def resources_root() -> Path:
-    return Path(os.getenv("DOCUMENT_RESOURCES_ROOT", str(Path(__file__).resolve().parents[2] / "data" / "resources"))).resolve()
+    config = load_config()
+    configured = get_optional_str(config, "document_service", "resources_root", "DOCUMENT_RESOURCES_ROOT")
+    return Path(configured or (Path(__file__).resolve().parents[2] / "data" / "resources")).resolve()
 
 
 def publish_resources(
@@ -56,10 +58,27 @@ def publish_resources(
     try:
         previous = _load_published(store, bucket, temporary) if incremental else None
         roots = _document_roots(previous, temporary) if previous else {}
-        model_id = previous["embedding_model"] if previous else os.getenv("EMBEDDING_MODEL", model.DEFAULT_EMBEDDING_MODEL)
-        backend = previous["embedding_backend"] if previous else os.getenv("EMBEDDING_BACKEND", "openvino")
-        chunk_size = previous["chunk_size"] if previous else int(os.getenv("EMBEDDING_CHUNK_SIZE", "256"))
-        overlap = previous["overlap"] if previous else int(os.getenv("EMBEDDING_CHUNK_OVERLAP", "32"))
+        config = load_config() if not previous else {}
+        model_id = (
+            previous["embedding_model"]
+            if previous
+            else get_str(config, "document_service", "embedding_model", "EMBEDDING_MODEL", model.DEFAULT_EMBEDDING_MODEL)
+        )
+        backend = (
+            previous["embedding_backend"]
+            if previous
+            else get_str(config, "document_service", "embedding_backend", "EMBEDDING_BACKEND", "openvino")
+        )
+        chunk_size = (
+            previous["chunk_size"]
+            if previous
+            else get_int(config, "document_service", "embedding_chunk_size", "EMBEDDING_CHUNK_SIZE", 256)
+        )
+        overlap = (
+            previous["overlap"]
+            if previous
+            else get_int(config, "document_service", "embedding_chunk_overlap", "EMBEDDING_CHUNK_OVERLAP", 32)
+        )
         replaced = removed | {doc.filename for doc in documents}
         removed_roots = {root for name, root in roots.items() if name in replaced}
         old_meta = json.loads((temporary / "index/index.json").read_text()) if previous else None

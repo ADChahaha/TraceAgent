@@ -81,6 +81,61 @@ def test_backend_settings_loads_agent_cancel_timeout_from_env(monkeypatch, tmp_p
     assert settings.agent_cancel_timeout_seconds == 0.5
 
 
+def test_backend_settings_loads_from_config_toml_and_allows_env_override(monkeypatch, tmp_path: Path):
+    db_path = tmp_path / "from-toml.sqlite3"
+    cfg_path = tmp_path / "config.toml"
+    cfg_path.write_text(
+        f"""
+[agent]
+host = "127.0.0.1"
+port = 18001
+grpc_max_message_bytes = 2097152
+
+[document_service]
+host = "127.0.0.1"
+port = 18002
+grpc_max_message_bytes = 3145728
+
+[backend]
+database_path = "{db_path}"
+agent_service_timeout_seconds = 600.0
+document_service_timeout_seconds = 700.0
+agent_service_cancel_timeout_seconds = 3.5
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TRACEAGENT_CONFIG", str(cfg_path))
+    for name in (
+        "BACKEND_DATABASE_PATH",
+        "AGENT_HOST",
+        "AGENT_PORT",
+        "AGENT_SERVICE_TARGET",
+        "DOCUMENT_HOST",
+        "DOCUMENT_PORT",
+        "DOCUMENT_SERVICE_TARGET",
+        "AGENT_SERVICE_TIMEOUT_SECONDS",
+        "DOCUMENT_SERVICE_TIMEOUT_SECONDS",
+        "AGENT_SERVICE_CANCEL_TIMEOUT_SECONDS",
+        "AGENT_GRPC_MAX_MESSAGE_BYTES",
+        "DOCUMENT_GRPC_MAX_MESSAGE_BYTES",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    settings = BackendSettings.from_env()
+    assert settings.database_path == db_path
+    assert settings.agent_service_target == "127.0.0.1:18001"
+    assert settings.document_service_target == "127.0.0.1:18002"
+    assert settings.agent_request_timeout_seconds == 600.0
+    assert settings.document_request_timeout_seconds == 700.0
+    assert settings.agent_cancel_timeout_seconds == 3.5
+    assert settings.agent_grpc_max_message_bytes == 2097152
+    assert settings.document_grpc_max_message_bytes == 3145728
+
+    monkeypatch.setenv("AGENT_SERVICE_TARGET", "override-agent:50051")
+    overridden = BackendSettings.from_env()
+    assert overridden.agent_service_target == "override-agent:50051"
+
+
 def test_backend_registers_chat_completion_resume_cancel(tmp_path: Path):
     app = create_app(settings=BackendSettings(database_path=tmp_path / "backend.sqlite3"))
     registered_paths = _route_paths(app.routes)

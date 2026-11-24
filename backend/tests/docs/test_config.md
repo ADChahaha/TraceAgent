@@ -24,6 +24,7 @@ initialize_database(connection)
 - `test_backend_settings_loads_agent_target_from_env`：验证 `AGENT_SERVICE_TARGET` 会覆盖默认 gRPC target。
 - `test_backend_settings_loads_agent_grpc_message_limit_from_env`：验证 `AGENT_GRPC_MAX_MESSAGE_BYTES` 会覆盖默认 gRPC 消息上限。
 - `test_backend_settings_loads_agent_cancel_timeout_from_env`：验证 `AGENT_SERVICE_CANCEL_TIMEOUT_SECONDS` 会覆盖后台 best-effort agent cancel 的短超时。
+- `test_backend_settings_loads_from_config_toml_and_allows_env_override`：验证直接从 `config.toml` 加载 `[backend]`、`[agent]`、`[document_service]` 配置与自动目标地址推导，且显式环境变量优先覆盖。
 - `test_backend_settings_loads_document_service_configuration`：验证 document service 的 gRPC 地址、超时和消息上限可由环境变量覆盖。
 - `test_backend_registers_chat_completion_resume_cancel`：验证挂载三个会话执行接口，旧 `/tasks` 与 `/qa/tasks` 下线。因为 FastAPI 0.141 的 `include_router` 会生成 `_IncludedRouter`，测试用 `_route_paths` 递归展开 `path`、`routes` 和 `original_router.routes` 收集路径。
 - `test_backend_healthz_reports_ok`：验证 `/healthz` 返回 200 和 `{"status": "ok"}`。

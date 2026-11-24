@@ -135,24 +135,33 @@ jobs:
       - name: Install production dependencies and build
         run: ./scripts/install.sh
 
-      - name: Write CI runtime env
+      - name: Write CI runtime config
         run: |
           rm -f /tmp/traceagent-ci-backend.sqlite3 /tmp/traceagent-ci-backend.sqlite3-wal /tmp/traceagent-ci-backend.sqlite3-shm
-          cat > .env <<'ENV'
-          BASE_URL=http://127.0.0.1:9/v1
-          OPENAI_API_KEY=ci-placeholder
-          MODEL=ci-placeholder-model
-          MODEL_API_TRANSPORT=responses
-          BACKEND_DATABASE_PATH=/tmp/traceagent-ci-backend.sqlite3
-          AGENT_HOST=127.0.0.1
-          AGENT_PORT=8001
-          DOCUMENT_HOST=127.0.0.1
-          DOCUMENT_PORT=8002
-          BACKEND_HOST=127.0.0.1
-          BACKEND_PORT=8000
-          FRONTEND_HOST=127.0.0.1
-          FRONTEND_PORT=3000
-          ENV
+          cat > config.toml <<'TOML'
+          [model]
+          base_url = "http://127.0.0.1:9/v1"
+          api_key = "ci-placeholder"
+          model = "ci-placeholder-model"
+          api_transport = "responses"
+
+          [backend]
+          host = "127.0.0.1"
+          port = 8000
+          database_path = "/tmp/traceagent-ci-backend.sqlite3"
+
+          [agent]
+          host = "127.0.0.1"
+          port = 8001
+
+          [document_service]
+          host = "127.0.0.1"
+          port = 8002
+
+          [frontend]
+          host = "127.0.0.1"
+          port = 3000
+          TOML
 
       - name: Start production services
         run: |

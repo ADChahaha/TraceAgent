@@ -29,8 +29,9 @@ embedder.tokenize(text)
 
 from __future__ import annotations
 
-import os
 from typing import Any, Callable, Sequence
+
+from traceagent_shared.config import get_str, load_config
 
 DEFAULT_EMBEDDING_MODEL = "hotchpotch/bekko-embedding-v1-a8m"
 
@@ -53,8 +54,12 @@ def get_embedder(
 ) -> EmbeddingModel:
     """Get a lazily-constructed embedding model, cached per (model_id, backend)."""
 
-    model_id = model_id or os.getenv("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
-    backend = backend or os.getenv("EMBEDDING_BACKEND", "openvino")
+    if not model_id or not backend:
+        config = load_config()
+        model_id = model_id or get_str(
+            config, "document_service", "embedding_model", "EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL
+        )
+        backend = backend or get_str(config, "document_service", "embedding_backend", "EMBEDDING_BACKEND", "openvino")
     key = (model_id, backend)
     cached = _backend_cache.get(key)
     if cached is not None:

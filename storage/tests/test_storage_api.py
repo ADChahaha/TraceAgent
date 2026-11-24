@@ -149,3 +149,20 @@ def test_dot_bucket_list_does_not_enumerate_other_buckets(s3):
     with pytest.raises(urllib.error.HTTPError) as error:
         http("GET", f"{s3.endpoint}/./{bucket}?list-type=2")
     assert error.value.code == 400
+
+
+def test_create_app_loads_data_root_from_config_toml(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+    from storage.main import create_app
+
+    target_root = tmp_path / "toml-storage-root"
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(f'[storage]\ndata_root = "{target_root}"\n', encoding="utf-8")
+    monkeypatch.setenv("TRACEAGENT_CONFIG", str(cfg))
+    monkeypatch.delenv("STORAGE_DATA_ROOT", raising=False)
+
+    app = create_app()
+    with TestClient(app) as client:
+        assert client.put("/cfg-bucket").status_code == 200
+        assert client.put("/cfg-bucket/hello.txt", content=b"ok").status_code == 200
+    assert (target_root / "cfg-bucket" / "hello.txt").read_bytes() == b"ok"

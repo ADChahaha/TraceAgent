@@ -1,0 +1,80 @@
+# TraceAgent 运行配置文件模板
+# 复制为根目录 config.toml 并填入真实模型凭据后，运行 ./scripts/start.sh 启动服务。
+# 同名进程环境变量优先级高于本文件，可通过 TRACEAGENT_CONFIG 指定配置文件路径。
+
+[model]
+provider = "openai"
+base_url = "https://api.openai.com/v1"
+api_key = "replace-with-your-api-key"
+model = "gpt-5.4-mini"
+# 可选值: "responses" 或 "chat_completions"
+api_transport = "responses"
+temperature = 0.0
+request_timeout = 30.0
+max_retries = 0
+# top_p = 1.0
+# top_k = 40
+# reasoning_effort = "medium"
+
+[title_model]
+# 会话标题总结模型配置；省略或留空的字段自动回退复用 [model] 的对应配置。
+# provider = "openai"
+# base_url = "https://api.openai.com/v1"
+# api_key = "replace-with-your-api-key"
+# model = "gpt-5.4-nano"
+# api_transport = "responses"
+# temperature = 0.0
+# request_timeout = 8.0
+
+[storage]
+host = "127.0.0.1"
+port = 9000
+# 留空时默认使用 storage/data
+data_root = ""
+# 留空时 scripts/start.sh 自动启动本地 storage；使用外部 S3/MinIO 时填写完整 URL
+endpoint_url = ""
+access_key = "minioadmin"
+secret_key = "minioadmin"
+bucket_prefix = ""
+
+[agent]
+host = "127.0.0.1"
+port = 8001
+grpc_workers = 16
+grpc_max_message_bytes = 67108864
+
+[document_service]
+host = "127.0.0.1"
+port = 8002
+grpc_workers = 16
+grpc_max_message_bytes = 67108864
+# 留空时默认使用 document_service/data/resources
+resources_root = ""
+# 留空时从当前 PATH 自动定位 mineru
+mineru_bin = ""
+mineru_lang = "japan"
+embedding_model = "hotchpotch/bekko-embedding-v1-a8m"
+embedding_backend = "openvino"
+embedding_chunk_size = 256
+embedding_chunk_overlap = 32
+
+[backend]
+host = "127.0.0.1"
+port = 8000
+database_path = "backend/backend.sqlite3"
+# 留空时自动推导为 [agent].host:[agent].port 与 [document_service].host:[document_service].port
+agent_service_target = ""
+document_service_target = ""
+agent_service_timeout_seconds = 1200.0
+document_service_timeout_seconds = 1200.0
+agent_service_cancel_timeout_seconds = 2.0
+
+[frontend]
+host = "127.0.0.1"
+port = 3000
+# 留空时自动推导为 http://[backend].host:[backend].port
+backend_base_url = ""
+
+[huggingface]
+# 本机保存的 Hugging Face token 导致公开模型 401 时设为 true
+disable_implicit_token = false

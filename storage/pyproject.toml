@@ -9,6 +9,7 @@ description = "本地 S3 兼容对象存储服务。"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115,<1",
+    "traceagent-shared==0.1.0",
     "uvicorn>=0.30,<1",
 ]
 

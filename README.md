@@ -90,25 +90,39 @@ conda create -n agent-gate python=3.11 -y && conda activate agent-gate
 
 安装包含 storage 服务及默认 OpenVINO embedding 依赖。document service 启动时会加载并预热 embedding 模型，首次加载需要从 Hugging Face 下载；预热成功后才开始监听。
 
-若公开模型下载返回 401，而匿名访问正常，可在 `.env` 设置 `HF_HUB_DISABLE_IMPLICIT_TOKEN=1`，避免自动发送本机已有的 Hugging Face token；需要访问私有模型时应使用有效凭据。
+若公开模型下载返回 401，而匿名访问正常，可在 `config.toml` 的 `[huggingface]` 中设置 `disable_implicit_token = true`（或环境变量 `HF_HUB_DISABLE_IMPLICIT_TOKEN=1`），避免自动发送本机已有的 Hugging Face token；需要访问私有模型时应使用有效凭据。
 
-**3. 配置环境变量**
+**3. 创建配置文件**
 
-在仓库根目录创建 `.env`，启动脚本会自动读取：
+从模板复制生成根目录 `config.toml` 并填入模型配置（启动脚本与各服务会自动读取，同名进程环境变量可覆盖文件值）：
 
 ```bash
-BASE_URL="https://your-model-endpoint/v1"
-OPENAI_API_KEY="your-api-key"
-MODEL="your-model-name"
-MODEL_API_TRANSPORT="responses"
+cp config.example.toml config.toml
+```
 
-DOCUMENT_PROCESSOR_MINERU_LANG="japan"
+核心配置示例：
 
-AGENT_PORT=8001
-DOCUMENT_PORT=8002
-BACKEND_PORT=8000
-FRONTEND_PORT=3000
-STORAGE_PORT=9000
+```toml
+[model]
+base_url = "https://your-model-endpoint/v1"
+api_key = "your-api-key"
+model = "your-model-name"
+api_transport = "responses"
+
+[document_service]
+mineru_lang = "japan"
+
+[agent]
+port = 8001
+
+[backend]
+port = 8000
+
+[frontend]
+port = 3000
+
+[storage]
+port = 9000
 ```
 
 **4. 启动服务**
@@ -117,7 +131,7 @@ STORAGE_PORT=9000
 ./scripts/start.sh            # 启动 storage / agent / document service / backend / frontend
 ```
 
-默认先启动本地 storage，数据保存在 `storage/data`，可用 `STORAGE_DATA_ROOT` 改目录。若使用已有 S3 兼容服务，在 `.env` 配置 `S3_ENDPOINT_URL`，脚本会复用该地址并跳过本地 storage。退出脚本时会停止本次启动的服务。
+默认先启动本地 storage，数据保存在 `storage/data`，可在 `config.toml` 的 `[storage].data_root`（或 `STORAGE_DATA_ROOT`）修改。若使用已有 S3 兼容服务，在 `[storage].endpoint_url`（或 `S3_ENDPOINT_URL`）配置地址，脚本会复用该地址并跳过本地 storage。退出脚本时会停止本次启动的服务。
 
 打开 http://127.0.0.1:3000 即可使用。
 
@@ -136,7 +150,7 @@ STORAGE_PORT=9000
 agent_proto/      共享协议 - agent 与 document service 的 protobuf/gRPC 契约
 document_service/ 文档服务 - PDF/DOCX 解析、Markdown 文档树、embedding 和资源发布
 storage/          对象存储 - 本地 S3 兼容 HTTP 服务
-shared/           共享基础设施 - object store 客户端
+shared/           共享基础设施 - object store 客户端与 config.toml 配置加载器
 agent/            AI 能力层 - QA Agent（LangGraph 驱动）
 backend/          持久化与编排 - sessions / resources / turns / messages（SQLite）
 frontend/         浏览器工作台 - 来源管理、QA stream、工具过程与原文阅读（Next.js）

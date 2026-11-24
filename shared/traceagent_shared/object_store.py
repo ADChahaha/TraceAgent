@@ -10,13 +10,14 @@ S3ObjectStore：通过 boto3 访问 storage 服务（或任何 S3 兼容 endpoin
 from __future__ import annotations
 
 import io
-import os
 import zipfile
 from dataclasses import dataclass
 from typing import Protocol
 
 import boto3
 from botocore.handlers import add_expect_header
+
+from traceagent_shared.config import get_optional_str, get_str, load_config, resolve_storage_endpoint
 
 
 @dataclass(frozen=True)
@@ -42,11 +43,12 @@ class S3ObjectStore:
     """boto3 实现的 S3 兼容对象存储客户端。"""
 
     def __init__(self, *, endpoint_url: str | None = None, bucket_prefix: str = "") -> None:
+        config = load_config()
         self._client = boto3.client(
             "s3",
             endpoint_url=endpoint_url,
-            aws_access_key_id=os.getenv("S3_ACCESS_KEY", "minioadmin"),
-            aws_secret_access_key=os.getenv("S3_SECRET_KEY", "minioadmin"),
+            aws_access_key_id=get_str(config, "storage", "access_key", "S3_ACCESS_KEY", "minioadmin"),
+            aws_secret_access_key=get_str(config, "storage", "secret_key", "S3_SECRET_KEY", "minioadmin"),
             region_name="us-east-1",
         )
         # 写入内容已是 bytes，直接发送，避免兼容端点的 100 Continue 超时等待。
@@ -169,14 +171,15 @@ class CompositeObjectStore:
 
 
 def build_s3_object_store() -> S3ObjectStore:
-    """按环境变量构造默认 S3ObjectStore。
+    """按 config.toml 与环境变量构造默认 S3ObjectStore。
 
-    S3_ENDPOINT_URL：storage 服务地址，默认 http://localhost:9000
-    S3_BUCKET_PREFIX：可选桶名前缀。
+    S3_ENDPOINT_URL / [storage].endpoint_url：storage 服务地址，缺省推导为本地 storage 地址。
+    S3_BUCKET_PREFIX / [storage].bucket_prefix：可选桶名前缀。
     """
+    config = load_config()
     return S3ObjectStore(
-        endpoint_url=os.getenv("S3_ENDPOINT_URL", "http://localhost:9000"),
-        bucket_prefix=os.getenv("S3_BUCKET_PREFIX", ""),
+        endpoint_url=resolve_storage_endpoint(config),
+        bucket_prefix=get_optional_str(config, "storage", "bucket_prefix", "S3_BUCKET_PREFIX") or "",
     )
 
 

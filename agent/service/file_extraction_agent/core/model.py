@@ -6,12 +6,20 @@ Responses/Chat Completions 由 use_responses_api 选择，生产调用固定流�
 
 from __future__ import annotations
 
-import os
 from collections.abc import Sequence
 from pathlib import Path
 from typing import TypedDict
 
 from pydantic import SecretStr
+from traceagent_shared.config import (
+    get_float,
+    get_int,
+    get_optional_float,
+    get_optional_int,
+    get_optional_str,
+    get_str,
+    load_config,
+)
 
 from service.file_extraction_agent.core.contracts import BoundModel, ChatModel, JsonObject, Tool
 
@@ -106,68 +114,51 @@ def _normalize_api_transport(value: str | None) -> str:
     raise ValueError("MODEL_API_TRANSPORT must be responses or chat_completions")
 
 
-def _model_config_from_env() -> ModelConfig:
-    values: dict[str, str] = {}
-    for path in _candidate_env_paths():
-        values.update(_read_env_file(path))
-    values.update(os.environ)
-    model = values.get("MODEL", "")
+def _model_config_from_env(config_path: str | Path | None = None) -> ModelConfig:
+    config = load_config(config_path)
     return ModelConfig(
-        provider=values.get("PROVIDER", "openai"),
-        base_url=values.get("BASE_URL") or None,
-        api_key=values.get("OPENAI_API_KEY") or None,
-        model_name=model,
-        api_transport=_normalize_api_transport(values.get("MODEL_API_TRANSPORT")),
-        temperature=_float_env(values.get("TEMPERATURE"), 0.0),
-        top_p=_optional_float_env(values.get("TOP_P")),
-        top_k=_optional_int_env(values.get("TOP_K")),
-        reasoning_effort=values.get("REASONING_EFFORT") or None,
-        max_retries=_int_env(values.get("MODEL_MAX_RETRIES"), 0),
-        request_timeout=_optional_float_env(values.get("MODEL_REQUEST_TIMEOUT"))
+        provider=get_str(config, "model", "provider", "PROVIDER", "openai"),
+        base_url=get_optional_str(config, "model", "base_url", "BASE_URL"),
+        api_key=get_optional_str(config, "model", "api_key", "OPENAI_API_KEY"),
+        model_name=get_optional_str(config, "model", "model", "MODEL") or "",
+        api_transport=_normalize_api_transport(
+            get_optional_str(config, "model", "api_transport", "MODEL_API_TRANSPORT")
+        ),
+        temperature=get_float(config, "model", "temperature", "TEMPERATURE", 0.0),
+        top_p=get_optional_float(config, "model", "top_p", "TOP_P"),
+        top_k=get_optional_int(config, "model", "top_k", "TOP_K"),
+        reasoning_effort=get_optional_str(config, "model", "reasoning_effort", "REASONING_EFFORT"),
+        max_retries=get_int(config, "model", "max_retries", "MODEL_MAX_RETRIES", 0),
+        request_timeout=get_optional_float(config, "model", "request_timeout", "MODEL_REQUEST_TIMEOUT")
         or DEFAULT_MODEL_REQUEST_TIMEOUT_SECONDS,
     )
 
 
-def _candidate_env_paths() -> list[Path]:
-    package_env = Path(__file__).resolve().parents[3] / ".env"
-    cwd_env = Path.cwd() / ".env"
-    if cwd_env == package_env:
-        return [package_env]
-    return [package_env, cwd_env]
-
-
-def _read_env_file(path: Path) -> dict[str, str]:
-    if not path.exists():
-        return {}
-    values: dict[str, str] = {}
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        values[key.strip()] = value.strip().strip('"').strip("'")
-    return values
-
-
-def _float_env(value: str | None, default: float) -> float:
-    if value in {None, ""}:
-        return default
-    return float(value)
-
-
-def _optional_float_env(value: str | None) -> float | None:
-    if value in {None, ""}:
-        return None
-    return float(value)
-
-
-def _optional_int_env(value: str | None) -> int | None:
-    if value in {None, ""}:
-        return None
-    return int(value)
-
-
-def _int_env(value: str | None, default: int) -> int:
-    if value in {None, ""}:
-        return default
-    return int(value)
+def load_title_model_config(config_path: str | Path | None = None) -> ModelConfig:
+    """读取 `[title_model]` 配置，任意未配置项自动回退复用 `[model]`。"""
+    config = load_config(config_path)
+    base = _model_config_from_env(config_path)
+    return ModelConfig(
+        provider=get_str(config, "title_model", "provider", "TITLE_PROVIDER", base.provider),
+        base_url=get_optional_str(config, "title_model", "base_url", "TITLE_BASE_URL", base.base_url),
+        api_key=get_optional_str(config, "title_model", "api_key", "TITLE_OPENAI_API_KEY", base.api_key),
+        model_name=get_optional_str(config, "title_model", "model", "TITLE_MODEL", base.model_name) or "",
+        api_transport=_normalize_api_transport(
+            get_optional_str(config, "title_model", "api_transport", "TITLE_MODEL_API_TRANSPORT", base.api_transport)
+        ),
+        temperature=get_float(config, "title_model", "temperature", "TITLE_TEMPERATURE", base.temperature),
+        top_p=get_optional_float(config, "title_model", "top_p", "TITLE_TOP_P", base.top_p),
+        top_k=get_optional_int(config, "title_model", "top_k", "TITLE_TOP_K", base.top_k),
+        reasoning_effort=get_optional_str(
+            config, "title_model", "reasoning_effort", "TITLE_REASONING_EFFORT", base.reasoning_effort
+        ),
+        max_retries=get_int(config, "title_model", "max_retries", "TITLE_MODEL_MAX_RETRIES", base.max_retries),
+        request_timeout=get_optional_float(
+            config,
+            "title_model",
+            "request_timeout",
+            "TITLE_MODEL_REQUEST_TIMEOUT",
+            base.request_timeout,
+        )
+        or DEFAULT_MODEL_REQUEST_TIMEOUT_SECONDS,
+    )

@@ -10,12 +10,12 @@ XML Error 结构），使 boto3 等标准客户端可直接访问并按错误码
 from __future__ import annotations
 
 import hashlib
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from xml.sax.saxutils import escape
 
 from fastapi import FastAPI, Request, Response
+from traceagent_shared.config import get_optional_str, load_config
 
 from storage.core.object_store import DirectoryObjectStore, InvalidBucketName, InvalidKey
 
@@ -67,7 +67,12 @@ def _list_xml(bucket: str, prefix: str, keys: list[str]) -> bytes:
 
 
 def create_app(data_root: str | Path | None = None) -> FastAPI:
-    root = Path(data_root or os.getenv("STORAGE_DATA_ROOT", str(Path(__file__).resolve().parent / "data"))).resolve()
+    if data_root is None:
+        config = load_config()
+        configured = get_optional_str(config, "storage", "data_root", "STORAGE_DATA_ROOT")
+        root = Path(configured or (Path(__file__).resolve().parent / "data")).resolve()
+    else:
+        root = Path(data_root).resolve()
     root.mkdir(parents=True, exist_ok=True)
     store = DirectoryObjectStore(root)
     app = FastAPI(title="storage", version="0.1.0")

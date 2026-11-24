@@ -10,7 +10,7 @@
 
 ## 2. 统一标准 `ChatOpenAI`，显式配置与有限超时，移除厂商特化分支
 
-- 决定：模型装配统一使用标准 `ChatOpenAI`，生产固定 `streaming=True`（不自动降级），SDK 内层 `max_retries=0`（重试统一由图内 5 次退避控制）；环境变量显式使用 `MODEL`、`OPENAI_API_KEY`、`BASE_URL`、`MODEL_API_TRANSPORT`（仅允许 `responses` 默认或 `chat_completions`，拒绝 `auto`）与 `MODEL_REQUEST_TIMEOUT`（默认 `8.0` 秒，不允许无限等待），优先级 `agent/.env` < 当前目录 `.env` < 进程 `os.environ`；已移除 DeepSeek 专用 `reasoning_content` / `thinking` 适配与多模型候选列表。
+- 决定：模型装配统一使用标准 `ChatOpenAI`，生产固定 `streaming=True`（不自动降级），SDK 内层 `max_retries=0`（重试统一由图内 5 次退避控制）；配置从 `config.toml` 的 `[model]`（以及 `[title_model]` 回退 `[model]`）加载，并允许显式进程环境变量 `MODEL`、`OPENAI_API_KEY`、`BASE_URL`、`MODEL_API_TRANSPORT`（仅允许 `responses` 默认或 `chat_completions`，拒绝 `auto`）与 `MODEL_REQUEST_TIMEOUT`（默认 `8.0` 秒，不允许无限等待）覆盖，不再读取 `.env`；已移除 DeepSeek 专用 `reasoning_content` / `thinking` 适配与多模型候选列表。
 - 原因：防止内外层重试相乘、跨协议静默切换与上游卡死长期挂起协程，降低厂商特化分支维护成本。
 - 排除：回退读取通用 `API_KEY` 或为 `MODEL` 设硬编码默认值；支持 `MODEL_API_TRANSPORT=auto`；允许无限请求超时；保留多模型自动回退候选列表或厂商定制补丁。
 

@@ -2,11 +2,11 @@
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ENV_FILE="${ENV_FILE:-"$ROOT_DIR/.env"}"
+CONFIG_FILE="${CONFIG_FILE:-${TRACEAGENT_CONFIG:-"$ROOT_DIR/config.toml"}}"
 
-if [[ ! -f "$ENV_FILE" ]]; then
-  echo "Missing env file: $ENV_FILE"
-  echo "Create .env in the repository root, then run ./scripts/start.sh again."
+if [[ ! -f "$CONFIG_FILE" ]]; then
+  echo "Missing config file: $CONFIG_FILE"
+  echo "Copy config.example.toml to config.toml in the repository root, then run ./scripts/start.sh again."
   exit 1
 fi
 
@@ -20,10 +20,8 @@ if ! command -v pnpm >/dev/null 2>&1; then
   exit 1
 fi
 
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
+config_exports="$(python -m traceagent_shared.config --shell-exports "$CONFIG_FILE")"
+eval "$config_exports"
 
 AGENT_HOST="${AGENT_HOST:-127.0.0.1}"
 AGENT_PORT="${AGENT_PORT:-8001}"
