@@ -12,7 +12,7 @@
 
 按用户确认引入 OpenAI Harness 风格顶层结构，同时保留各包一手 `docs/DESIGN.md`、模块级 `DECISIONS.md` 与 `memory/` 四层记忆系统（详见 [DECISIONS.md](DECISIONS.md) 第 3 条）：
 - 新建 [ARCHITECTURE.md](../../ARCHITECTURE.md)、[docs/design-docs/index.md](../../docs/design-docs/index.md)、[docs/design-docs/core-beliefs.md](../../docs/design-docs/core-beliefs.md)、[docs/product-specs/index.md](../../docs/product-specs/index.md)、[docs/product-specs/document-qa-workbench.md](../../docs/product-specs/document-qa-workbench.md) 与 [docs/exec-plans/tech-debt-tracker.md](../../docs/exec-plans/tech-debt-tracker.md)。
-- 将 `memory/tasks/backend-bugs-2026-11-24.md` 迁入 [docs/exec-plans/active/backend-bugs-2026-11-24.md](../../docs/exec-plans/active/backend-bugs-2026-11-24.md) 并补齐验收标准与 `Decision Log` 槽位；`memory/tasks/` 保留空目录兼容 `dream_scan.py`。
+- 将 `memory/tasks/backend-bugs-2026-11-24.md` 迁入 `docs/exec-plans/active/backend-bugs-2026-11-24.md`（后于 2026-11-25 经确认不影响用户使用而撤下）并补齐验收标准与 `Decision Log` 槽位；`memory/tasks/` 保留空目录兼容 `dream_scan.py`。
 - 同步更新 [AGENTS.md](../../AGENTS.md)、`memory.md`、偏好/工作区/架构记忆页、[dream-log.md](../dream-log.md) 与 [SKILL.md](../../.agents/skills/dreaming/SKILL.md)。
 - 新增 `test_docs_harness.py` 与 `test_docs_harness.md`（后于同日合并进 [dream_scan.py](../dream_scan.py) 与 [test_dream_scan.py](../tests/test_dream_scan.py)），机械校验顶层知识文档链接、全仓 `DECISIONS.md` 总目收录及 `docs/exec-plans/completed/` 归档决策迁出标注。
 
