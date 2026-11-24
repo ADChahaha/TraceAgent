@@ -11,4 +11,4 @@
 - [表结构与索引](table/schemas.md)：`chat_sessions`、`chat_resources`、`chat_turns`、`chat_messages` 字段与唯一索引
 - [配对与中断顺序](table/message-pairing.md)：工具组原子配对、取消中断边界与跨轮读写串行顺序
 
-相关：[DESIGN.md](DESIGN.md) / [SESSION_MANAGER.md](SESSION_MANAGER.md)
+相关：[crud 决策](../crud/DECISIONS.md) / [DESIGN.md](DESIGN.md) / [SESSION_MANAGER.md](SESSION_MANAGER.md)

@@ -11,7 +11,7 @@
 | `memory/preference/` | 偏好区（L1 -> L2） | 经 [INDEX.md](../preference/INDEX.md) 路由跨会话通用偏好 |
 | `memory/wiki/` | 分层 Wiki | L1 `*-index.md`、L2 专题页与 L3 实证/明细页 |
 | `memory/notes/` | 临时笔记 | 会中预判、踩坑与跨模块阶段决策，Dreaming 吸收后归档 |
-| `memory/tasks/` | 活动任务 | 活动任务单（验收标准与决策记录）与阻塞事项，完结后移入 `memory/archive/` |
+| `memory/tasks/` | 活动任务 | 施工暂存单（验收标准与决策记录）与阻塞事项，长期决策迁出后再归档至 `memory/archive/` |
 | `memory/archive/` | 历史归档 | 完结任务、旧笔记与早期 `dream-log` |
 | [dream-log.md](../dream-log.md) | 整理台账 | 保留最近 2-3 次摘要与 `last_dream_at` 水位线 |
 | [dream_scan.py](../dream_scan.py) | 扫描与审计脚本 | 三端增量会话扫描、`--turn`/`--grep` 展开与 `--audit` 门禁 |

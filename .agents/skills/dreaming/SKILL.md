@@ -41,11 +41,11 @@ description: >-
    - 若扫描报告存在既有结构违规，本次整理一并修剪归位。
 3. Consolidate & Prune（先核对原件、再先剪后写）：
    - 按本次涉及的主题沿 L1 打开待改的 L2/L3 与偏好页，对照源码、`git log` 或各包 `docs/DESIGN.md` 核实事实后再更新。
-   - 核查增量会话中用户拍板的决策是否已按三要素（做了什么决定、为什么这么选、排除了哪些备选方案）落盘：跨会话知识与偏好按单源补入 `memory/wiki/` 或 `memory/preference/`；若发现活动任务单或子包 `docs/DESIGN.md` 漏记，在整理摘要中标出（不改 `AGENTS.md` 和业务设计文档）。
+   - 核查增量会话中用户拍板的决策是否已按三要素（做了什么决定、为什么这么选、排除了哪些备选方案）落盘：跨会话知识与偏好按单源补入 `memory/wiki/` 或 `memory/preference/`；若发现模块 `DECISIONS.md` 漏记，在整理摘要中标出（不改 `AGENTS.md` 和业务代码/文档）。
    - 先清理过期、重复与超长单行，再按四层职责归并新结论、踩坑与 `memory/notes/`；相对日期统一改写为 `YYYY-MM-DD`。
    - 仅当变化影响全局锚点或增删 L1 索引时才改动 L0 `memory.md`。
 4. Audit & Commit（程序化门禁验收）：
-   - 将已吸收的 `memory/notes/`、完结任务及早期 `dream-log` 条目移入 `memory/archive/`（`dream-log.md` 只留最近 2-3 次摘要）。
+   - 将已吸收的 `memory/notes/`、完结任务及早期 `dream-log` 条目移入 `memory/archive/`（`dream-log.md` 只留最近 2-3 次摘要）；归档任务单前须确认其决策记录已逐条标注迁移落点（如对应模块 `DECISIONS.md`、测试或记忆页）或确认为仅本次施工临时有效，未迁完的不归档。
    - 运行 `python3 memory/dream_scan.py --audit`，确认 6 项门禁全部清零且无异常：
      - `broken: []`
      - `budget_violations: []`

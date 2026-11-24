@@ -32,3 +32,5 @@
 6. `protected_sha256_prefix`：输出受保护只读规则文件（`AGENTS.md`）的 SHA-256 前 12 位，用于核对控制面未被修改。
 
 异常与降级：无效 ISO 时间或正则直接报错退出；损坏的单条 JSONL 行跳过；非 git 目录降级为空 git 列表；缺少 `memory.md` 时 L0 记 0 并如实报告不可达文件。
+
+相关：[DECISIONS.md](DECISIONS.md) / [DEVLOG.md](DEVLOG.md)

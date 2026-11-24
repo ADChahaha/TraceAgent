@@ -31,3 +31,5 @@ manifest 的 `document_roots` 映射原文件名到一级文档目录。旧清�
 - `raw/<filename>`：原始文件，增删由 application 管理。
 
 模型及分块配置随产物固定；删除沿用旧配置，不受当前环境变量影响。`_validate_prepared` 检查临时产物的清单、向量维度、数值和文档引用；不提供消费端加载接口。增量上传沿用旧配置；上传和删除均同步等待发布完成，资源在会话问答完成或取消后仍保留。
+
+相关：[DECISIONS.md](DECISIONS.md) / [document_service 设计](../../docs/DESIGN.md)

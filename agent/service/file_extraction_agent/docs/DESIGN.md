@@ -18,5 +18,5 @@ resource_refs([{type, location}]) + messages + model_config / run_options
 - [模型与事件](design/events-and-model.md)：`ConfiguredChatModel`/`ChatOpenAI`、`visible_text`、模型事件与并行工具批次
 - [工具与部署](design/tools-and-deployment.md)：一次性 worker 进程、OpenVINO 基准、文档树引用与跨轮无状态边界
 
-同级：[tools.md](tools.md) / [STREAMING_AND_CANCELLATION.md](STREAMING_AND_CANCELLATION.md) / [agent_loop.md](agent_loop.md) / [flowchart.md](flowchart.md)
+同级：[DECISIONS.md](DECISIONS.md) / [tools.md](tools.md) / [STREAMING_AND_CANCELLATION.md](STREAMING_AND_CANCELLATION.md) / [agent_loop.md](agent_loop.md) / [flowchart.md](flowchart.md)
 相关：[agent API](../../../docs/API.md) / [资源设计](../../../../document_service/document_resources/docs/DESIGN.md)

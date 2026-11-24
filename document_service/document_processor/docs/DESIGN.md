@@ -18,4 +18,4 @@ file_obj (+ 可选 file_type)
 - [PDF MinerU 管线](design/pdf-pipeline.md)：`pdf/converter.py` 配置、`pdf/html.py` 标题降级、确定性 ID 与表格处理
 - [DOCX 管线](design/docx-pipeline.md)：`docx/docx_processor.py` 原始顺序遍历、标题样式与 `docx_bNNN` 输出
 
-相关：[API.md](API.md) / [README.md](../README.md) / [document_service 设计](../../docs/DESIGN.md) / [document_resources 设计](../../document_resources/docs/DESIGN.md)
+相关：[DECISIONS.md](DECISIONS.md) / [API.md](API.md) / [README.md](../README.md) / [document_service 设计](../../docs/DESIGN.md) / [document_resources 设计](../../document_resources/docs/DESIGN.md)

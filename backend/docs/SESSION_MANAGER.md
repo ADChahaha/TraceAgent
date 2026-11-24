@@ -9,4 +9,4 @@
 - [上下文与 Resume](session_manager/context-and-resume.md)：消息配对提交、`TurnView`/`Subscription`、`GET /resume` 冻结轮次一致性
 - [取消容量与参考](session_manager/lifecycle-and-limits.md)：取消/回收/重启收口、`BackendSettings` 默认阈值、测试覆盖与 Codex 参考
 
-相关：[DESIGN.md](DESIGN.md) / [API.md](API.md) / [table.md](table.md)
+相关：[services 决策](../services/DECISIONS.md) / [DESIGN.md](DESIGN.md) / [API.md](API.md) / [table.md](table.md)

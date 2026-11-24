@@ -23,3 +23,5 @@ agent_proto/agent.proto
 - PrepareResourcesResponse 删除 `documents` 字段（编号 2）并保留为 reserved，同时移除 `Document` 消息：文档树改为以 `documents.zip` 归档对象发布，调用方只拿 resource_path，不再内联接收 HTML。
 
 取消通过原 ChatCompletion call.cancel() 传播；删除 CompletionRequest/CompletionResponse。completion_id 保留格式约束，不再承担活动去重或取消路由。
+
+相关：[DECISIONS.md](../DECISIONS.md)

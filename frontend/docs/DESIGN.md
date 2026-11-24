@@ -14,4 +14,4 @@
 - [流式与状态](design/streaming-and-state.md)：`api.ts`、`session-stream.ts`、`use-session.ts` 重连代次、`session-state.ts` 合并与取消
 - [文档、布局与代理](design/documents-and-ui.md)：Sources/阅读视图、数字引用高亮、组件分工、响应式分栏、代理容量与测试
 
-相关：[backend API](../../backend/docs/API.md) / [backend 设计](../../backend/docs/DESIGN.md) / [README.md](../../README.md)
+相关：[lib 决策](../src/lib/DECISIONS.md) / [components 决策](../src/components/DECISIONS.md) / [backend API](../../backend/docs/API.md) / [backend 设计](../../backend/docs/DESIGN.md) / [README.md](../../README.md)

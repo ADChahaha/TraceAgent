@@ -58,3 +58,5 @@ GET    /healthz                   -> 探活
 
 - 首版只实现对象存取，不做版本、副本、配额、加密。
 - 单机本地目录，无跨节点共享。
+
+相关：[core/DECISIONS.md](../core/DECISIONS.md)

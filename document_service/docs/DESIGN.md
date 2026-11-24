@@ -40,3 +40,5 @@ PrepareResources(session_id, files, remove_raw)
 ## 删除复用与兼容
 
 manifest 新增 `document_roots`，将原文件名映射到文档一级目录。旧清单按 documents 原始顺序和三位数字前缀恢复映射，首次删除后保存映射；连续删除不重新编号。剩余 Markdown 路径、chunk_id、covered_files 及向量行保持不变，历史引用仍可定位。索引和映射无效时拒绝删除，不静默重算；校验全部在写桶之前，发布成功后才删除原文件。逐对象发布的中途故障仍不具备原子回滚。
+
+相关：[document_processor 决策](../document_processor/docs/DECISIONS.md) / [document_resources 决策](../document_resources/docs/DECISIONS.md)

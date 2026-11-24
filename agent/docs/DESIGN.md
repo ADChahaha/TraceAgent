@@ -19,4 +19,4 @@ AgentService.ChatCompletion(resource_refs + messages)
 - [传输与部署](design/deployment.md)：`grpc.aio` 启停、64 MiB 消息上限、共享协议 wheel 与取消传播
 - [资源与运行时](design/lifecycle-and-runtime.md)：`res_*` 桶结构、问答运行时流、gRPC 接口与迁移变化
 
-相关：[API.md](API.md) / [问答内核设计](../service/file_extraction_agent/docs/DESIGN.md) / [文档资源设计](../../document_service/document_resources/docs/DESIGN.md)
+相关：[API.md](API.md) / [问答内核设计](../service/file_extraction_agent/docs/DESIGN.md) / [问答内核决策](../service/file_extraction_agent/docs/DECISIONS.md) / [文档资源设计](../../document_service/document_resources/docs/DESIGN.md)
