@@ -6,7 +6,6 @@ import logging
 from urllib.parse import quote
 
 from fastapi import APIRouter, Request, HTTPException, Query
-from backend.crud import crud
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError as PydanticValidationError
 from starlette.background import BackgroundTask
@@ -14,8 +13,8 @@ from starlette.datastructures import UploadFile
 
 from backend.routes.errors import raise_http_error
 from backend.services.errors import BackendServiceError, ValidationError
+from backend.services.session_catalog import list_recent_sessions
 from backend.services.session_history import build_snapshot
-from backend.services.session_title import filename_from_raw_location, resolve_session_title
 from backend.services.subscription import SubscriptionClosed
 
 
@@ -26,21 +25,7 @@ router = APIRouter(tags=["chat"])
 @router.get("/chat/sessions")
 async def list_sessions(request: Request, limit: int = Query(default=100, ge=1, le=200)):
     """从持久化数据库列出最近会话，所有标签页和浏览器共享相同目录。"""
-    def read():
-        rows = crud.list_sessions_with_title_context(request.app.state.database.connect(), limit=limit)
-        sessions = []
-        for row in rows:
-            first_user_message = row.pop("first_user_message", None)
-            first_raw_location = row.pop("first_raw_location", None)
-            row["title"] = resolve_session_title(
-                row,
-                first_user_message=first_user_message,
-                first_filename=filename_from_raw_location(first_raw_location),
-            )
-            sessions.append(row)
-        return sessions
-
-    return {"sessions": await asyncio.to_thread(read)}
+    return {"sessions": await list_recent_sessions(request.app.state.database, limit=limit)}
 
 
 class CompletionInput(BaseModel):

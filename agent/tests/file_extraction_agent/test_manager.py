@@ -1,17 +1,16 @@
-"""请求内事件转换和模型配置验证；旧注册表生命周期由 RPC 测试替代。"""
-from tests.async_helpers import wire_stream
+"""请求内事件转换与 protobuf 编码验证；模型配置加载独立在 test_model_config.py。"""
 
-from routes.file_extraction_agent import encode_completion_event
-import pytest
+from __future__ import annotations
+
 import json
+
 from agent_proto import agent_pb2 as pb
 from langchain_core.messages import AIMessage, ToolMessage
-from tests.async_helpers import async_items
-from service.file_extraction_agent.core import model as model_module
-from service.file_extraction_agent.core.model import build_chat_model, load_title_model_config, normalize_model_config
+from routes.file_extraction_agent import encode_completion_event
 from service.file_extraction_agent import application as runtime_module
-from tests.async_helpers import wire_stream as stream_completion
-from service.file_extraction_agent.schemas import DocumentQaMessage, ModelConfig, RunOptions
+from service.file_extraction_agent.schemas import DocumentQaMessage
+from tests.async_helpers import async_items, wire_stream
+
 
 async def test_runtime_yields_event_objects_with_sequence(resource_path, monkeypatch):
     """路由直接输出带编号的 protobuf 事件。"""
@@ -19,35 +18,33 @@ async def test_runtime_yields_event_objects_with_sequence(resource_path, monkeyp
         runtime_module,
         "run_qa_stream",
         lambda **kwargs: async_items(
-            [
-                AIMessage(content="你好\n世界", response_metadata={"finish_reason": "stop"}),
-            ]
+            [AIMessage(content="你好\n世界", response_metadata={"finish_reason": "stop"})]
         ),
     )
-    runtime = stream_completion(resource_path, object(), [DocumentQaMessage(role="user", content="问题")])
+    runtime = wire_stream(resource_path, object(), [DocumentQaMessage(role="user", content="问题")])
     assert [item async for item in runtime] == [
         pb.CompletionEvent(type="completion.created", status="in_progress", seq=1),
         pb.CompletionEvent(type="source_indexed", tool="source_index", result_json='{"ok":true}', seq=2),
-        pb.CompletionEvent(type="model_message.done", message_id="", content="你好\n世界",
-                           tool_call_count=0, is_final=True, stop_signal="stop", seq=3),
+        pb.CompletionEvent(
+            type="model_message.done",
+            message_id="",
+            content="你好\n世界",
+            tool_call_count=0,
+            is_final=True,
+            stop_signal="stop",
+            seq=3,
+        ),
         pb.CompletionEvent(type="completion.completed", status="completed", seq=4),
     ]
 
 
 async def test_route_streams_without_manager(resource_path, monkeypatch):
-    from service.file_extraction_agent import application as route
-
     monkeypatch.setattr(
-        route,
+        runtime_module,
         "run_qa_stream",
-        lambda **kwargs: async_items(
-            [AIMessage(content="回答", response_metadata={"finish_reason": "stop"})]
-        ),
+        lambda **kwargs: async_items([AIMessage(content="回答", response_metadata={"finish_reason": "stop"})]),
     )
-    runtime = wire_stream(
-        resource_path, object(), [DocumentQaMessage(role="user", content="问题")]
-    )
-    events = [item async for item in runtime]
+    events = [item async for item in wire_stream(resource_path, object(), [DocumentQaMessage(role="user", content="问题")])]
     assert [event.type for event in events] == [
         "completion.created",
         "source_indexed",
@@ -81,8 +78,6 @@ async def test_startup_events_only_acknowledge_without_reading_documents(resourc
 
 
 async def test_stream_wraps_messages_and_pairs_same_name_calls(tmp_path, monkeypatch, resource_path):
-    from langchain_core.messages import AIMessage, ToolMessage
-
     model_messages = [
         AIMessage(
             content="读取",
@@ -110,7 +105,11 @@ async def test_stream_wraps_messages_and_pairs_same_name_calls(tmp_path, monkeyp
         ],
         AIMessage(content="答案", response_metadata={"finish_reason": "stop"}),
     ]
-    monkeypatch.setattr(runtime_module, "run_qa_stream", lambda *args, **kwargs: async_items([m for item in model_messages for m in (item if isinstance(item, list) else [item])]))
+    monkeypatch.setattr(
+        runtime_module,
+        "run_qa_stream",
+        lambda *args, **kwargs: async_items([m for item in model_messages for m in (item if isinstance(item, list) else [item])]),
+    )
     events = [
         item
         async for item in wire_stream(
@@ -139,9 +138,7 @@ async def test_route_outputs_protobuf_without_dictionary_boundary(tmp_path, monk
     monkeypatch.setattr(
         runtime_module,
         "run_qa_stream",
-        lambda *args, **kwargs: async_items(
-            [AIMessage(content="完成", response_metadata={"finish_reason": "stop"})]
-        ),
+        lambda *args, **kwargs: async_items([AIMessage(content="完成", response_metadata={"finish_reason": "stop"})]),
     )
     events = [
         item
@@ -151,158 +148,13 @@ async def test_route_outputs_protobuf_without_dictionary_boundary(tmp_path, monk
             qa_model=object(),
         )
     ]
-    assert all((isinstance(event, pb.CompletionEvent) for event in events))
+    assert all(isinstance(event, pb.CompletionEvent) for event in events)
     assert [event.type for event in events] == [
-        "completion.created", "source_indexed", "model_message.done", "completion.completed",
+        "completion.created",
+        "source_indexed",
+        "model_message.done",
+        "completion.completed",
     ]
-
-
-def test_normalize_model_config_loads_config_toml_and_ignores_dotenv(monkeypatch, tmp_path):
-    config_path = tmp_path / "config.toml"
-    config_path.write_text(
-        "\n".join(
-            [
-                "[model]",
-                'base_url = "https://example.com/v1"',
-                'api_key = "key"',
-                'model = "qa"',
-                'api_transport = "chat_completions"',
-                "temperature = 0.1",
-                "top_p = 0.9",
-                "top_k = 40",
-                'reasoning_effort = "high"',
-                "max_retries = 8",
-                "request_timeout = 120.0",
-                "",
-                "[title_model]",
-                'model = "qa-mini"',
-                "request_timeout = 12.0",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    (tmp_path / ".env").write_text('MODEL="should-not-be-read"\nOPENAI_API_KEY="bad"\n', encoding="utf-8")
-    monkeypatch.setenv("TRACEAGENT_CONFIG", str(config_path))
-    monkeypatch.chdir(tmp_path)
-    for name in (
-        "PROVIDER",
-        "BASE_URL",
-        "API_KEY",
-        "OPENAI_API_KEY",
-        "MODEL",
-        "MODEL_API_TRANSPORT",
-        "TEMPERATURE",
-        "TOP_P",
-        "TOP_K",
-        "REASONING_EFFORT",
-        "MODEL_MAX_RETRIES",
-        "MODEL_REQUEST_TIMEOUT",
-        "TITLE_MODEL",
-        "TITLE_BASE_URL",
-        "TITLE_OPENAI_API_KEY",
-        "TITLE_MODEL_REQUEST_TIMEOUT",
-    ):
-        monkeypatch.delenv(name, raising=False)
-
-    config = normalize_model_config(None)
-    assert config.base_url == "https://example.com/v1"
-    assert config.api_key == "key"
-    assert config.model_name == "qa"
-    assert config.api_transport == "chat_completions"
-    assert config.temperature == 0.1
-    assert config.top_p == 0.9
-    assert config.top_k == 40
-    assert config.reasoning_effort == "high"
-    assert config.max_retries == 8
-    assert config.request_timeout == 120.0
-
-    title_config = load_title_model_config()
-    assert title_config.model_name == "qa-mini"
-    assert title_config.request_timeout == 12.0
-    assert title_config.base_url == "https://example.com/v1"
-    assert title_config.api_key == "key"
-
-    # [title_model] 中显式留空字段也应回退复用 [model]
-    empty_title_cfg = tmp_path / "empty-title.toml"
-    empty_title_cfg.write_text(
-        "\n".join(
-            [
-                "[model]",
-                'base_url = "https://example.com/v1"',
-                'api_key = "key"',
-                'model = "qa"',
-                'api_transport = "chat_completions"',
-                "",
-                "[title_model]",
-                'base_url = ""',
-                'api_key = ""',
-                'model = ""',
-                'api_transport = ""',
-            ]
-        ),
-        encoding="utf-8",
-    )
-    fallback_title = load_title_model_config(empty_title_cfg)
-    assert fallback_title.base_url == "https://example.com/v1"
-    assert fallback_title.api_key == "key"
-    assert fallback_title.model_name == "qa"
-    assert fallback_title.api_transport == "chat_completions"
-
-    monkeypatch.setenv("MODEL", "qa-from-env")
-    assert normalize_model_config(None).model_name == "qa-from-env"
-
-
-def test_build_chat_model_builds_responses_transport_by_default(monkeypatch):
-    captured = []
-
-    class FakeChatOpenAI:
-
-        def __init__(self, **kwargs):
-            captured.append(kwargs)
-
-    monkeypatch.setattr(model_module, "_chat_model_class", lambda: FakeChatOpenAI)
-    model = build_chat_model(
-        ModelConfig(base_url="https://example.com/v1", api_key="key", model_name="qa"), "qa"
-    )
-    assert model.use_stream is True
-    assert isinstance(model.model, FakeChatOpenAI)
-    assert [kwargs["use_responses_api"] for kwargs in captured] == [True]
-    assert [kwargs["streaming"] for kwargs in captured] == [True]
-    assert [kwargs["timeout"] for kwargs in captured] == [8.0]
-
-
-def test_build_chat_model_builds_chat_completions_transport_when_configured(monkeypatch):
-    captured = []
-
-    class FakeChatOpenAI:
-
-        def __init__(self, **kwargs):
-            captured.append(kwargs)
-
-    monkeypatch.setattr(model_module, "_chat_model_class", lambda: FakeChatOpenAI)
-    model = build_chat_model(
-        ModelConfig(
-            base_url="https://example.com/v1",
-            api_key="key",
-            model_name="qa",
-            api_transport="chat_completions",
-        ),
-        "qa",
-    )
-    assert model.use_stream is True
-    assert isinstance(model.model, FakeChatOpenAI)
-    assert [kwargs["use_responses_api"] for kwargs in captured] == [False]
-    assert [kwargs["streaming"] for kwargs in captured] == [True]
-
-
-def test_build_chat_model_rejects_unknown_transport():
-    with pytest.raises(ValueError, match="MODEL_API_TRANSPORT"):
-        build_chat_model(ModelConfig(model_name="qa", api_transport="auto"), "qa")
-
-
-def test_normalize_model_config_rejects_untyped_dict_input():
-    with pytest.raises(TypeError, match="unexpected model config type"):
-        normalize_model_config({"model": "qa"})
 
 
 def test_qa_records_text_from_responses_api_content_blocks(tmp_path):
@@ -334,8 +186,10 @@ def test_qa_records_model_message_content_and_tool_calls_without_reasoning(tmp_p
     )
     event = encode_completion_event(runtime_module._model_message_event(message))
     assert event == pb.CompletionEvent(
-        message_id="", type="model_message.done",
-        content="I will inspect the root listing while calling a tool.", tool_call_count=1,
+        message_id="",
+        type="model_message.done",
+        content="I will inspect the root listing while calling a tool.",
+        tool_call_count=1,
         tool_calls=[pb.ToolCall(id="call-1", name="ls", args_json='{"path":""}')],
         is_final=False,
     )

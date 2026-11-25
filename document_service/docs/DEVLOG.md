@@ -1,5 +1,14 @@
 # Document Service Devlog
 
+## 2026-11-25
+
+### 依赖倒置边界收口与 300 行模块化拆分
+
+- 依赖倒置改造：新增 `document_resources/protocols.py` 定义 `ObjectStoreFactory`、`TextEmbedder` 与 `DocumentParser` 抽象协议；`application.py`、`reader.py` 与 `routes.py` 不再直接导入或调用 `build_s3_object_store`，统一由装配根 `document_service/main.py` 构造并向 `DocumentResourceService` 注入 `store_factory`。
+- 300 行模块化拆分：将 `document_processor/pdf/html.py` 拆分为 `html.py`、`html_blocks.py` 与 `html_tables.py`；将 `document_resources/documents.py` 拆分为 `documents.py` 与 `html_tree.py`；将 `test_resource_application.py` 与 `test_mineru_html.py` 分别按测试主题拆分，保持全部对外导出与测试覆盖不变。
+
+验证：`document_service/tests` 73 项全部通过（含 `test_packaging.py`），`python3 scripts/check_architecture.py` 0 违规。
+
 ## 2026-09-20
 
 ### 补传只处理新文件并在启动时预热模型

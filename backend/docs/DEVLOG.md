@@ -1,3 +1,10 @@
+## 2026-11-25 依赖倒置（DIP）边界收口与 300 行模块化拆分
+
+- 依赖倒置与分层收口：新增 [protocols.py](../services/protocols.py) 定义 `DatabaseProtocol`、`AgentGateway` 与 `DocumentGateway` 抽象协议；新增 [session_catalog.py](../services/session_catalog.py) 承接 `GET /chat/sessions` 查询，消除 `routes/chat.py` 跳过 `services` 直连 `crud` 的跨层违规；`SessionManager` 移除内部局部 `build_s3_object_store()` 具体构造，改由装配根 [main.py](../main.py) 统一注入 `ObjectStore`。
+- 300 行模块化拆分：将 `session_manager.py` 拆分为 `session_manager.py`、`session_resource_mixin.py`、`session_files.py` 与 `session_title_worker.py`（同时清除重复定义的 `_handle_detach`）；将 `crud/crud.py` 按表职责拆分为 `sessions.py`、`resources.py`、`turns.py` 与兼容聚合入口 `crud.py`；将 `test_session_manager.py` 拆分为 `session_fakes.py`、`test_session_manager.py`、`test_session_manager_cancel.py` 与 `test_session_manager_recovery.py`。
+
+验证：`backend/tests` 全量 124 项通过，`python3 scripts/check_architecture.py` 0 违规。
+
 ## 2026-11-25 对外 HTTP 与轮次错误脱敏为英文用户提示
 
 - 新增 [backend/services/user_errors.py](../services/user_errors.py)，由 [errors.py](../routes/errors.py)、[chat.py](../routes/chat.py) 与 [turn_runtime.py](../services/turn_runtime.py) 在对外出口统一把文档/问答 gRPC 错误、参数/配额/冲突/缺失错误以及模型超时/限流/断流映射为具体、可操作的英文提示，不再向浏览器响应体和 SSE 事件透出 `gRPC`、`ipv4:127.0.0.1`、端口号、Python 包名或 Pydantic 堆栈；原始异常通过服务端 `logging` 完整保留。

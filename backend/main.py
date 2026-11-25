@@ -4,6 +4,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from traceagent_shared.object_store import build_s3_object_store
+
 from backend.core.config import BackendSettings
 from backend.core.db import ThreadLocalDatabase, initialize_database
 from backend.routes import capabilities_router, chat_router
@@ -36,12 +38,13 @@ def create_app(
             timeout_seconds=settings.document_request_timeout_seconds,
             max_message_bytes=settings.document_grpc_max_message_bytes,
         )
+        resolved_object_store = object_store if object_store is not None else build_s3_object_store()
         registry = SessionRegistry(
             database=database,
             settings=settings,
             agent_client=resolved_agent_client,
             document_client=resolved_document_client,
-            object_store=object_store,
+            object_store=resolved_object_store,
         )
         app.state.database = database
         app.state.agent_client = resolved_agent_client

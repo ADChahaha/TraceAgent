@@ -32,16 +32,17 @@ POST /cancel -> Registry.get 取得现有 manager（只操作已加载会话）
 
 | 文件 | 职责 |
 | --- | --- |
-| `routes/chat.py` | 核心 HTTP/SSE 接口、输入校验、快照与流输出、断开时 detach |
-| `session_registry.py` | Manager 的 `CREATING`/`READY`/`CLOSING` 状态机、加载权归属、回收和关闭 |
-| `session_manager.py` | 串行命令、事务协调、稳定消息配对和状态转换 |
-| `turn_runtime.py` | `AgentService` gRPC 消费，向 manager 汇报事件及收尾 |
-| `turn_view.py` | 当前轮展示投影，历史恢复复用同一逻辑 |
-| `subscription.py` | 每连接独立有界队列，溢出只关闭慢连接 |
-| `session_history.py` | 读取 `chat_messages` 与 `chat_turns` 渲染历史轮，不常驻 manager |
-| `agent_client.py` | `AgentService` protobuf 与 `grpc.aio` 转换，只负责 `ChatCompletion` |
-| `document_client.py` | `DocumentResourceService` protobuf 与 `grpc.aio` 转换，只负责 `PrepareResources` |
-| `core/db.py`、`crud/crud.py` | 线程内连接、事务和参数化 SQL |
+| `routes/chat.py` | 核心 HTTP/SSE 接口、输入校验、快照与流输出、断开时 detach（禁止直连 `crud`） |
+| `services/protocols.py` | 依赖倒置抽象协议（`DatabaseProtocol`、`AgentGateway`、`DocumentGateway`） |
+| `services/session_catalog.py` | 最近会话目录查询与标题兜底派生 |
+| `services/session_registry.py` | Manager 的 `CREATING`/`READY`/`CLOSING` 状态机、加载权归属、回收和关闭 |
+| `services/session_manager.py`、`session_resource_mixin.py`、`session_files.py`、`session_title_worker.py` | 串行命令、文件上传/读取通道、异步标题生成、故障收口与状态转换 |
+| `services/turn_runtime.py` | 经 `AgentGateway` 消费 gRPC 流，向 manager 汇报事件及收尾 |
+| `services/turn_view.py` | 当前轮展示投影，历史恢复复用同一逻辑 |
+| `services/subscription.py` | 每连接独立有界队列，溢出只关闭慢连接 |
+| `services/session_history.py` | 读取 `chat_messages` 与 `chat_turns` 渲染历史轮，不常驻 manager |
+| `services/agent_client.py`、`document_client.py` | 具体 gRPC 传输适配器（仅由 `main.py` 装配根注入） |
+| `core/db.py`、`crud/{crud,sessions,resources,turns}.py` | 线程内连接、显式写事务和分表参数化 SQL |
 
 ## Registry 生命周期与关闭
 

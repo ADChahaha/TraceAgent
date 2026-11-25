@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from io import BytesIO
 from typing import Any
 
-from traceagent_shared.object_store import ObjectStore, ResourceRef, build_s3_object_store, parse_resource_path
+from traceagent_shared.object_store import ObjectStore, ResourceRef, parse_resource_path
 from document_service.document_processor import processor
 from document_service.document_resources.resources import publish_resources, remove_published_documents
 from document_service.document_resources.schemas import InputDocument, UploadedFile
@@ -34,8 +34,9 @@ def prepare_session_resources(
     store: ObjectStore | None = None,
 ) -> list[ResourceRef]:
     """上传仅处理新增或替换文件、删除裁剪已有产物，返回全量引用。"""
+    if store is None:
+        raise ValueError("store is required")
     bucket = _session_bucket(session_id)
-    store = store if store is not None else build_s3_object_store()
     removed = _removed_names(remove_raw, bucket)
     uploads = _validated_uploads(files)
     if removed and not uploads:

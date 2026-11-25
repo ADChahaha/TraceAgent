@@ -15,6 +15,8 @@ from traceagent_shared.config import (
     load_config,
 )
 
+from traceagent_shared.object_store import build_s3_object_store
+
 from agent_proto import agent_pb2_grpc
 from document_service.routes import DocumentResourceService
 from document_service.document_resources import model
@@ -30,7 +32,10 @@ async def create_server(*, max_message_bytes: int = 64 * 1024 * 1024, warmup: bo
         ("grpc.max_receive_message_length", max_message_bytes),
         ("grpc.max_send_message_length", max_message_bytes),
     ])
-    agent_pb2_grpc.add_DocumentResourceServiceServicer_to_server(DocumentResourceService(), server)
+    agent_pb2_grpc.add_DocumentResourceServiceServicer_to_server(
+        DocumentResourceService(store_factory=build_s3_object_store),
+        server,
+    )
     probe = health.aio.HealthServicer()
     await probe.set("", health_pb2.HealthCheckResponse.SERVING)
     await probe.set("traceagent.v1.DocumentResourceService", health_pb2.HealthCheckResponse.SERVING)
