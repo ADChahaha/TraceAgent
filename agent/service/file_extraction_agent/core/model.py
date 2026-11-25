@@ -114,8 +114,7 @@ def _normalize_api_transport(value: str | None) -> str:
     raise ValueError("MODEL_API_TRANSPORT must be responses or chat_completions")
 
 
-def _model_config_from_env(config_path: str | Path | None = None) -> ModelConfig:
-    config = load_config(config_path)
+def _model_config_from_dict(config: dict) -> ModelConfig:
     return ModelConfig(
         provider=get_str(config, "model", "provider", "PROVIDER", "openai"),
         base_url=get_optional_str(config, "model", "base_url", "BASE_URL"),
@@ -134,23 +133,29 @@ def _model_config_from_env(config_path: str | Path | None = None) -> ModelConfig
     )
 
 
+def _model_config_from_env(config_path: str | Path | None = None) -> ModelConfig:
+    return _model_config_from_dict(load_config(config_path))
+
+
 def load_title_model_config(config_path: str | Path | None = None) -> ModelConfig:
-    """读取 `[title_model]` 配置，任意未配置项自动回退复用 `[model]`。"""
+    """读取 `[title_model]` 配置，省略或留空的字段自动回退复用 `[model]`。"""
     config = load_config(config_path)
-    base = _model_config_from_env(config_path)
+    base = _model_config_from_dict(config)
     return ModelConfig(
         provider=get_str(config, "title_model", "provider", "TITLE_PROVIDER", base.provider),
-        base_url=get_optional_str(config, "title_model", "base_url", "TITLE_BASE_URL", base.base_url),
-        api_key=get_optional_str(config, "title_model", "api_key", "TITLE_OPENAI_API_KEY", base.api_key),
-        model_name=get_optional_str(config, "title_model", "model", "TITLE_MODEL", base.model_name) or "",
+        base_url=get_optional_str(config, "title_model", "base_url", "TITLE_BASE_URL") or base.base_url,
+        api_key=get_optional_str(config, "title_model", "api_key", "TITLE_OPENAI_API_KEY") or base.api_key,
+        model_name=get_optional_str(config, "title_model", "model", "TITLE_MODEL") or base.model_name,
         api_transport=_normalize_api_transport(
-            get_optional_str(config, "title_model", "api_transport", "TITLE_MODEL_API_TRANSPORT", base.api_transport)
+            get_optional_str(config, "title_model", "api_transport", "TITLE_MODEL_API_TRANSPORT")
+            or base.api_transport
         ),
         temperature=get_float(config, "title_model", "temperature", "TITLE_TEMPERATURE", base.temperature),
         top_p=get_optional_float(config, "title_model", "top_p", "TITLE_TOP_P", base.top_p),
         top_k=get_optional_int(config, "title_model", "top_k", "TITLE_TOP_K", base.top_k),
-        reasoning_effort=get_optional_str(
-            config, "title_model", "reasoning_effort", "TITLE_REASONING_EFFORT", base.reasoning_effort
+        reasoning_effort=(
+            get_optional_str(config, "title_model", "reasoning_effort", "TITLE_REASONING_EFFORT")
+            or base.reasoning_effort
         ),
         max_retries=get_int(config, "title_model", "max_retries", "TITLE_MODEL_MAX_RETRIES", base.max_retries),
         request_timeout=get_optional_float(

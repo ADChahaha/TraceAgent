@@ -217,3 +217,17 @@ def test_legacy_sessions_without_title_derive_readable_fallbacks_never_uuid(tmp_
         for sid, expected_title in rows.items():
             snapshot = payloads(client.get("/resume", params={"session_id": sid}))[0]
             assert snapshot["state"]["title"] == expected_title
+
+
+def test_clean_title_preserves_internal_quotes_and_refresh_state_keeps_persisted_title():
+    from backend.services.session_title import clean_session_title
+    from backend.services.session_manager import SessionManager
+
+    assert clean_session_title("《采购合同》违约条款。") == "《采购合同》违约条款"
+    assert clean_session_title('Review of "Section 9".') == 'Review of "Section 9"'
+    assert clean_session_title('"Wrapped Title."') == "Wrapped Title"
+
+    dummy = object.__new__(SessionManager)
+    dummy.session = {"id": "s1", "title": "Persisted Model Title", "status": "ready"}
+    merged = dummy._merge_session_state({"id": "s1", "title": None, "status": "ready"})
+    assert merged["title"] == "Persisted Model Title"

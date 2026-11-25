@@ -260,11 +260,13 @@ class SessionManager:
         try:
             updated = await asyncio.shield(db_future)
         except asyncio.CancelledError:
-            # 线程中的 SQLite 事务无法中途强杀，必须等线程退出后才允许关闭数据库连接。
+            # 线程中的 SQLite 事务无法中途强杀，二次取消仍须等到线程退出后才允许关闭数据库连接。
             while not db_future.done():
                 try:
                     await asyncio.shield(db_future)
-                except BaseException:
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
                     break
             return
         except Exception as exc:
@@ -279,9 +281,17 @@ class SessionManager:
             {"turn_id": None, "type": "session.updated", "payload": {"title": updated["title"]}},
         )
 
+    def _merge_session_state(self, session):
+        """合并数据库读回的 session 快照：标题属一次写入语义，不被较早的并发读覆写为空。"""
+        existing_title = (self.session.get("title") or "").strip() if self.session else ""
+        incoming_title = (session.get("title") or "").strip() if session else ""
+        if existing_title and not incoming_title:
+            return {**session, "title": existing_title}
+        return session
+
     def _refresh_state(self, session, resources):
         """runtime 写事务的缓存同步点：事务内快照直接成为 manager 的状态。"""
-        self.session, self.resources = session, resources
+        self.session, self.resources = self._merge_session_state(session), resources
 
     async def _runtime_publish(self, event):
         """runtime 广播通道：事务提交后逐事件转发。"""
@@ -294,7 +304,8 @@ class SessionManager:
                 result = operation(db, events)
                 return result, crud.get_session(db, self.session_id), crud.list_resources(db, self.session_id)
 
-        result, self.session, self.resources = await asyncio.to_thread(execute)
+        result, session, self.resources = await asyncio.to_thread(execute)
+        self.session = self._merge_session_state(session)
         try:
             for event in events:
                 await self.broadcast(event["turn_id"], event)

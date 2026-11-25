@@ -37,7 +37,11 @@ STORAGE_PORT="${STORAGE_PORT:-9000}"
 START_LOCAL_STORAGE=false
 if [[ -z "${S3_ENDPOINT_URL:-}" ]]; then
   START_LOCAL_STORAGE=true
-  S3_ENDPOINT_URL="http://${STORAGE_HOST}:${STORAGE_PORT}"
+  if [[ "$STORAGE_HOST" == *:* && "$STORAGE_HOST" != \[*\] ]]; then
+    S3_ENDPOINT_URL="http://[${STORAGE_HOST}]:${STORAGE_PORT}"
+  else
+    S3_ENDPOINT_URL="http://${STORAGE_HOST}:${STORAGE_PORT}"
+  fi
 fi
 export S3_ENDPOINT_URL
 

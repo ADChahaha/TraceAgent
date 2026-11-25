@@ -19,6 +19,9 @@ from service.file_extraction_agent.core.title import build_title_messages, gener
         ("标题：**《2026年采购合同付款条款》**。", "2026年采购合同付款条款"),
         ("\n# - `Quarterly Revenue Summary`\nSecond line ignored", "Quarterly Revenue Summary"),
         ("「請求書の支払期限と振込先」", "請求書の支払期限と振込先"),
+        ("《采购合同》违约条款。", "《采购合同》违约条款"),
+        ('Review of "Section 9".', 'Review of "Section 9"'),
+        ("分析《劳动合同法》", "分析《劳动合同法》"),
         ("   \n  ", ""),
     ],
 )

@@ -9,7 +9,28 @@ DEFAULT_SESSION_TITLE = "Untitled workspace"
 MAX_SESSION_TITLE_LENGTH = 60
 FALLBACK_QUESTION_MAX_LENGTH = 48
 
-_WRAPPING_QUOTES = "\"'`“”‘’「」『』《》"
+_WRAPPING_PAIRS = (
+    ('"', '"'),
+    ("'", "'"),
+    ("`", "`"),
+    ("“", "”"),
+    ("‘", "’"),
+    ("「", "」"),
+    ("『", "』"),
+    ("《", "》"),
+)
+
+
+def _strip_wrapping_pairs(text: str) -> str:
+    """仅剥离首尾成对包装符，避免误削局部书名号或引号。"""
+    changed = True
+    while changed and text:
+        changed = False
+        for left, right in _WRAPPING_PAIRS:
+            if len(text) >= len(left) + len(right) and text.startswith(left) and text.endswith(right):
+                text = text[len(left) : len(text) - len(right)].strip()
+                changed = True
+    return text
 
 
 def clean_session_title(raw: str | None, *, max_length: int = MAX_SESSION_TITLE_LENGTH) -> str:
@@ -20,8 +41,11 @@ def clean_session_title(raw: str | None, *, max_length: int = MAX_SESSION_TITLE_
     if not line:
         return ""
     text = line.replace("**", "").replace("__", "").replace("`", "")
-    text = re.sub(r"\s+", " ", text).strip(_WRAPPING_QUOTES + " ")
-    text = text.rstrip("。.!！:：;；").strip(_WRAPPING_QUOTES + " ")
+    text = re.sub(r"\s+", " ", text).strip()
+    text = _strip_wrapping_pairs(text)
+    text = text.rstrip("。.!！:：;；").strip()
+    text = _strip_wrapping_pairs(text)
+    text = text.rstrip("。.!！:：;；").strip()
     if len(text) > max_length:
         truncated = text[:max_length].rstrip()
         if " " in truncated and len(truncated.rsplit(" ", 1)[0]) >= max_length // 2:

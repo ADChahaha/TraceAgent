@@ -222,6 +222,32 @@ def test_normalize_model_config_loads_config_toml_and_ignores_dotenv(monkeypatch
     assert title_config.base_url == "https://example.com/v1"
     assert title_config.api_key == "key"
 
+    # [title_model] 中显式留空字段也应回退复用 [model]
+    empty_title_cfg = tmp_path / "empty-title.toml"
+    empty_title_cfg.write_text(
+        "\n".join(
+            [
+                "[model]",
+                'base_url = "https://example.com/v1"',
+                'api_key = "key"',
+                'model = "qa"',
+                'api_transport = "chat_completions"',
+                "",
+                "[title_model]",
+                'base_url = ""',
+                'api_key = ""',
+                'model = ""',
+                'api_transport = ""',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fallback_title = load_title_model_config(empty_title_cfg)
+    assert fallback_title.base_url == "https://example.com/v1"
+    assert fallback_title.api_key == "key"
+    assert fallback_title.model_name == "qa"
+    assert fallback_title.api_transport == "chat_completions"
+
     monkeypatch.setenv("MODEL", "qa-from-env")
     assert normalize_model_config(None).model_name == "qa-from-env"
 

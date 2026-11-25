@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from contextlib import aclosing
 from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -42,6 +43,18 @@ _WRAPPING_PAIRS = (
 )
 
 
+def _strip_wrapping_pairs(text: str) -> str:
+    """仅剥离首尾成对包裹的引号、书名号或 Markdown 强调符，避免破坏内部配对符号。"""
+    changed = True
+    while changed and text:
+        changed = False
+        for left, right in _WRAPPING_PAIRS:
+            if len(text) >= len(left) + len(right) and text.startswith(left) and text.endswith(right):
+                text = text[len(left) : len(text) - len(right)].strip()
+                changed = True
+    return text
+
+
 def sanitize_title(raw: str, *, max_length: int = MAX_TITLE_LENGTH) -> str:
     """将模型原始输出清洗为单行、无引号与 Markdown 装饰的安全长度标题。"""
     if not isinstance(raw, str):
@@ -57,16 +70,11 @@ def sanitize_title(raw: str, *, max_length: int = MAX_TITLE_LENGTH) -> str:
 
     text = _PREFIX_RE.sub("", line).strip()
     text = text.replace("**", "").replace("__", "").replace("`", "")
-    changed = True
-    while changed and text:
-        changed = False
-        for left, right in _WRAPPING_PAIRS:
-            if len(text) >= len(left) + len(right) and text.startswith(left) and text.endswith(right):
-                text = text[len(left) : len(text) - len(right)].strip()
-                changed = True
+    text = _strip_wrapping_pairs(text)
     text = re.sub(r"\s+", " ", text).strip()
-    text = text.rstrip("。.!！:：;；")
-    text = text.strip("\"'`“”‘’「」『』《》 ")
+    text = text.rstrip("。.!！:：;；").strip()
+    text = _strip_wrapping_pairs(text)
+    text = text.rstrip("。.!！:：;；").strip()
     if len(text) > max_length:
         truncated = text[:max_length].rstrip()
         if " " in truncated and len(truncated.rsplit(" ", 1)[0]) >= max_length // 2:
@@ -116,10 +124,11 @@ async def generate_title(
 
     if hasattr(runnable, "astream"):
         parts: list[str] = []
-        async for chunk in runnable.astream(messages):
-            chunk_text = visible_text(getattr(chunk, "content", ""))
-            if chunk_text:
-                parts.append(chunk_text)
+        async with aclosing(runnable.astream(messages)) as stream:
+            async for chunk in stream:
+                chunk_text = visible_text(getattr(chunk, "content", ""))
+                if chunk_text:
+                    parts.append(chunk_text)
         raw_text = "".join(parts)
     else:
         response = await runnable.ainvoke(messages)
