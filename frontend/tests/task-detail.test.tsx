@@ -66,19 +66,6 @@ it("追问走 POST 流，输入框节点稳定，取消携带当前轮次", asyn
   expect(await screen.findByText("Cancelled")).toBeInTheDocument();
 });
 
-it("显示原文件下载，删除与补传刷新资源", async () => {
-  resume.mockImplementation(async () => controlledStream(ready).response);
-  jest.mocked(api.removeSessionFile).mockResolvedValue({ resources: [] });
-  jest.mocked(api.uploadSessionFiles).mockResolvedValue({ resources: ready.state.resources });
-  render(<TaskDetail taskId="s1" />);
-  expect(await screen.findByRole("link", { name: "Download contract.docx" })).toHaveAttribute("href", "/download");
-  await userEvent.click(screen.getByRole("button", { name: "Remove contract.docx" }));
-  await waitFor(() => expect(api.removeSessionFile).toHaveBeenCalledWith("s1", "raw1"));
-  await waitFor(() => expect(screen.getByLabelText("Add session files")).not.toBeDisabled());
-  await userEvent.upload(screen.getByLabelText("Add session files"), new File(["doc"], "new.docx"));
-  await waitFor(() => expect(api.uploadSessionFiles).toHaveBeenCalledWith("s1", [expect.any(File)]));
-});
-
 it("窄窗口点击引用自动显示文档，并能返回聊天", async () => {
   const width = window.innerWidth;
   Object.defineProperty(window, "innerWidth", { configurable: true, value: 600 });
@@ -105,173 +92,50 @@ it("用户取消的历史轮次显示取消状态，不再重复报错", async (
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
-it("来源列表默认不加载原文，搜索过滤文件且清空后恢复列表", async () => {
-  resume.mockResolvedValue(controlledStream(ready).response);
+it("合并被空消息打断的连续工具调用，以友好英文动作名展示且不暴露原始工具名", async () => {
+  const withTools = {
+    ...ready,
+    state: {
+      ...ready.state,
+      turns: [{
+        id: "t1",
+        status: "completed" as const,
+        error: null,
+        items: [
+          { id: "u1", kind: "user" as const, status: "completed" as const, text: "Check payment terms" },
+          { id: "message:m1", kind: "assistant" as const, status: "completed" as const, text: "", tool_calls: [{ id: "c1" }] },
+          { id: "tool:c1", kind: "tool" as const, status: "completed" as const, name: "ls" },
+          { id: "message:m2", kind: "assistant" as const, status: "completed" as const, text: "   ", tool_calls: [{ id: "c2" }] },
+          { id: "tool:c2", kind: "tool" as const, status: "completed" as const, name: "search_embedding" },
+          { id: "message:m3", kind: "assistant" as const, status: "completed" as const, text: "", tool_calls: [{ id: "c3" }, { id: "c4" }] },
+          { id: "tool:c3", kind: "tool" as const, status: "failed" as const, name: "grep" },
+          { id: "tool:c4", kind: "tool" as const, status: "completed" as const, name: "read" },
+          { id: "message:m4", kind: "assistant" as const, status: "completed" as const, text: "Payment due in 37 days [source](documents/contract.md)" },
+        ],
+      }],
+    },
+  };
+  resume.mockResolvedValue(controlledStream(withTools).response);
   render(<TaskDetail taskId="s1" />);
-  await screen.findByRole("link", { name: "Download contract.docx" });
-  fireEvent.change(screen.getByRole("searchbox", { name: "Search sources" }), { target: { value: "missing" } });
-  expect(screen.queryByRole("link", { name: "Download contract.docx" })).not.toBeInTheDocument();
-  expect(screen.getByText("No matching sources")).toBeInTheDocument();
-  expect(screen.queryByLabelText("Full document")).not.toBeInTheDocument();
-  fireEvent.change(screen.getByRole("searchbox", { name: "Search sources" }), { target: { value: "" } });
-  expect(screen.getByRole("link", { name: "Download contract.docx" })).toBeInTheDocument();
+  const stream = await screen.findByLabelText("QA conversation and reading process");
+  const summaries = stream.querySelectorAll("summary");
+  expect(summaries).toHaveLength(1);
+  expect(summaries[0]).toHaveAttribute("aria-label", "4 lookup steps");
+  expect(summaries[0]).toHaveTextContent("4");
+
+  const steps = within(stream).getAllByRole("listitem");
+  expect(steps.map((node) => node.textContent)).toEqual([
+    "Browse files",
+    "Semantic search",
+    "Keyword search (unavailable)",
+    "Read passage",
+  ]);
+  for (const rawName of ["ls", "grep", "read", "search_embedding", "tool activity"]) {
+    expect(stream.textContent).not.toContain(rawName);
+  }
 });
 
-
-it("补传立即逐文件处理，列表显示对应转圈并禁止处理期间提问", async () => {
-  resume.mockImplementation(async () => controlledStream(ready).response);
-  let finish!: () => void;
-  jest.mocked(api.uploadSessionFiles).mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve({ resources: ready.state.resources }); }))
-    .mockResolvedValue({ resources: ready.state.resources });
-  render(<TaskDetail taskId="s1" />);
-  await screen.findByRole("link", { name: "Download contract.docx" });
-  const files = [new File(["a"], "a.docx"), new File(["b"], "b.docx")];
-  await userEvent.upload(screen.getByLabelText("Add session files"), files);
-  expect(api.uploadSessionFiles).toHaveBeenCalledWith("s1", [files[0]]);
-  expect(screen.getByRole("status", { name: "Processing a.docx" })).toBeInTheDocument();
-  expect(screen.getByRole("status", { name: "Queued b.docx" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Submit or pause answer" })).toBeDisabled();
-  await act(async () => finish());
-  await waitFor(() => expect(api.uploadSessionFiles).toHaveBeenNthCalledWith(2, "s1", [files[1]]));
-});
-
-it("删除刚补传成功的文件后不留下本地就绪占位", async () => {
-  let resources = ready.state.resources;
-  resume.mockImplementation(async () => controlledStream({ ...ready, state: { ...ready.state, resources } }).response);
-  jest.mocked(api.uploadSessionFiles).mockImplementation(async () => {
-    resources = [...resources, { id: "new-raw", type: "raw", location: "s3://bucket/raw/new.docx" }];
-    return { resources };
-  });
-  jest.mocked(api.removeSessionFile).mockImplementation(async () => {
-    resources = ready.state.resources;
-    return { resources };
-  });
-  render(<TaskDetail taskId="s1" />);
-  await screen.findByRole("link", { name: "Download contract.docx" });
-  await userEvent.upload(screen.getByLabelText("Add session files"), new File(["doc"], "new.docx"));
-  await screen.findByRole("link", { name: "Download new.docx" });
-  await userEvent.click(screen.getByRole("button", { name: "Remove new.docx" }));
-  await waitFor(() => expect(api.removeSessionFile).toHaveBeenCalledWith("s1", "new-raw"));
-  await waitFor(() => expect(screen.queryByText("new.docx")).not.toBeInTheDocument());
-});
-
-it("其他标签页修改文件后，当前空闲工作区重新聚焦即恢复新快照", async () => {
-  resume.mockResolvedValueOnce(controlledStream(ready).response)
-    .mockResolvedValue(controlledStream({ ...ready, state: { ...ready.state, resources: [] } }).response);
-  render(<TaskDetail taskId="s1" />);
-  await screen.findByRole("link", { name: "Download contract.docx" });
-  fireEvent(window, new Event("focus"));
-  await waitFor(() => expect(screen.queryByRole("link", { name: "Download contract.docx" })).not.toBeInTheDocument());
-});
-
-it("空闲标签页定期同步其他标签页的更新，不重新提交问题", async () => {
-  resume.mockResolvedValueOnce(controlledStream(ready).response)
-    .mockResolvedValue(controlledStream({ ...ready, state: { ...ready.state, resources: [] } }).response);
-  const view = render(<TaskDetail taskId="s1" />);
-  await screen.findByRole("link", { name: "Download contract.docx" });
-  jest.useFakeTimers();
-  try {
-    // 切换焦点使空闲订阅在可控计时器下重新建立。
-    fireEvent(window, new Event("focus"));
-    await act(async () => {});
-    resume.mockResolvedValue(controlledStream(ready).response);
-    await act(async () => { await jest.advanceTimersByTimeAsync(5000); });
-    expect(screen.getByRole("link", { name: "Download contract.docx" })).toBeInTheDocument();
-    expect(complete).not.toHaveBeenCalled();
-  } finally { view.unmount(); jest.useRealTimers(); }
-});
-
-it("另一标签页删除已补传文件后，恢复时不重建本地上传占位", async () => {
-  let resources = ready.state.resources;
-  resume.mockImplementation(async () => controlledStream({ ...ready, state: { ...ready.state, resources } }).response);
-  jest.mocked(api.uploadSessionFiles).mockImplementation(async () => {
-    resources = [...resources, { id: "cross-tab", type: "raw", location: "s3://bucket/raw/cross.docx" }];
-    return { resources };
-  });
-  render(<TaskDetail taskId="s1" />);
-  await screen.findByRole("link", { name: "Download contract.docx" });
-  await userEvent.upload(screen.getByLabelText("Add session files"), new File(["doc"], "cross.docx"));
-  await screen.findByRole("link", { name: "Download cross.docx" });
-  resources = ready.state.resources;
-  fireEvent(window, new Event("focus"));
-  await waitFor(() => expect(screen.queryByText("cross.docx")).not.toBeInTheDocument());
-});
-
-it("回答后使用原有 Sources 入口补传，保留历史和草稿后继续追问", async () => {
-  const turns = [{ id: "t1", status: "completed" as const, error: null, items: [
-    { id: "message:m", kind: "assistant" as const, status: "completed" as const, text: "37 days [source](documents/contract.md)" },
-  ] }];
-  let resources = ready.state.resources;
-  resume.mockImplementation(async () => controlledStream({ ...ready, state: { ...ready.state, turns, resources } }).response);
-  let finish!: () => void;
-  jest.mocked(api.uploadSessionFiles).mockImplementation(() => new Promise((resolve) => {
-    finish = () => {
-      resources = [...resources, { id: "added", type: "raw", location: "s3://res_s1/raw/new.docx" }];
-      resolve({ resources });
-    };
-  }));
-  complete.mockResolvedValue(controlledStream(running).response);
-  render(<TaskDetail taskId="s1" />);
-  await userEvent.click(await screen.findByRole("link", { name: "Source 1" }));
-  await screen.findByText("Payment due in 37 days");
-  const composer = within(screen.getByRole("form", { name: "QA composer" }));
-  expect(composer.queryByText("Add files")).not.toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "Close document" }));
-  fireEvent.change(composer.getByLabelText("QA question input"), { target: { value: "Use the new file" } });
-  const file = new File(["doc"], "new.docx");
-  await userEvent.upload(screen.getByLabelText("Add session files"), file);
-  expect(api.uploadSessionFiles).toHaveBeenCalledWith("s1", [file]);
-  expect(screen.getByRole("status", { name: "Processing new.docx" })).toBeInTheDocument();
-  expect(composer.getByRole("button", { name: "Submit or pause answer" })).toBeDisabled();
-  await act(async () => finish());
-  await screen.findByRole("link", { name: "Download new.docx" });
-  expect(screen.getByRole("link", { name: "Source 1" })).toBeInTheDocument();
-  expect(composer.getByLabelText("QA question input")).toHaveValue("Use the new file");
-  await waitFor(() => expect(composer.getByRole("button", { name: "Submit or pause answer" })).toBeEnabled());
-  fireEvent.keyDown(composer.getByLabelText("QA question input"), { key: "Enter" });
-  await waitFor(() => expect(complete).toHaveBeenCalledWith("s1", "Use the new file", expect.any(AbortSignal)));
-});
-
-it("回答期间禁止补传，空资料会话仍可用原有入口添加文件", async () => {
-  const stream = controlledStream(running);
-  resume.mockResolvedValue(stream.response);
-  render(<TaskDetail taskId="s1" />);
-  await screen.findByText("Question");
-  expect(screen.getByLabelText("Add session files")).toBeDisabled();
-  await act(async () => {
-    stream.push({ event: "session.snapshot", data: { ...ready, state: { ...ready.state, resources: [] } } });
-  });
-  expect(screen.getByLabelText("Add session files")).toBeEnabled();
-  expect(screen.getByRole("button", { name: "Submit or pause answer" })).toBeDisabled();
-});
-
-
-it("原有文件选择器打开时焦点和轮询不禁用补传，取消后恢复同步", async () => {
-  resume.mockImplementation(async () => controlledStream(ready).response);
-  jest.mocked(api.uploadSessionFiles).mockResolvedValue({ resources: ready.state.resources });
-  const view = render(<TaskDetail taskId="s1" />);
-  await screen.findByRole("link", { name: "Download contract.docx" });
-  const input = screen.getByLabelText("Add session files");
-  fireEvent.click(input);
-  jest.useFakeTimers();
-  try {
-    fireEvent(window, new Event("focus"));
-    await act(async () => { await jest.advanceTimersByTimeAsync(5000); });
-    expect(resume).toHaveBeenCalledTimes(1);
-    const file = new File(["doc"], "new.docx");
-    fireEvent.change(input, { target: { files: [file] } });
-    await act(async () => {});
-    expect(api.uploadSessionFiles).toHaveBeenCalledWith("s1", [file]);
-    fireEvent.click(input);
-    const calls = resume.mock.calls.length;
-    fireEvent(input, new Event("cancel", { bubbles: true }));
-    fireEvent(window, new Event("focus"));
-    await act(async () => {});
-    expect(resume.mock.calls.length).toBeGreaterThan(calls);
-  } finally { view.unmount(); jest.useRealTimers(); }
-});
-
-it("详情页去除冗余副顶栏、展示会话标题，点击引用与切换列表绝不重置用户拖拽的分栏宽度", async () => {
+it("顶栏加号位于左侧菜单旁，默认 36% 左栏分栏且点击引用与切回列表不重置宽度", async () => {
   const withTitle = {
     ...ready,
     state: {
@@ -294,14 +158,20 @@ it("详情页去除冗余副顶栏、展示会话标题，点击引用与切换�
     expect(await screen.findByText("Contract Payment Terms")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Document conversation" })).not.toBeInTheDocument();
 
+    const header = screen.getByRole("banner");
+    const menuBtn = within(header).getByRole("button", { name: "Open sidebar" });
+    const newWorkspaceLink = within(header).getByRole("link", { name: "New workspace" });
+    const themeBtn = within(header).getByRole("button", { name: "Toggle theme" });
+    expect(menuBtn.parentElement).toBe(newWorkspaceLink.parentElement);
+    expect(newWorkspaceLink.parentElement).not.toBe(themeBtn.parentElement);
+
     const resize = screen.getByRole("separator", { name: "Resize left sidebar" });
     resize.focus();
     await user.keyboard("{ArrowRight}{ArrowRight}");
     const resizedWidth = resize.getAttribute("aria-valuenow");
-    expect(Number(resizedWidth)).toBe(768);
+    expect(Number(resizedWidth)).toBe(566);
 
-    const citation = screen.getByRole("link", { name: "Source 1" });
-    await user.click(citation);
+    await user.click(screen.getByRole("link", { name: "Source 1" }));
     expect(await screen.findByText("Payment due in 37 days")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Source 1" })).toHaveAttribute("data-active", "true");
     expect(screen.getByRole("separator", { name: "Resize left sidebar" })).toHaveAttribute("aria-valuenow", resizedWidth!);

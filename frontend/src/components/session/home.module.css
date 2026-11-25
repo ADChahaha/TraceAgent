@@ -1,0 +1,105 @@
+.home {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 24px 20px 64px;
+}
+.homeCenter {
+  width: 100%;
+  max-width: 680px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+}
+.homeTitle {
+  font-size: clamp(28px, 3.2vw, 36px);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  color: var(--ws-fg);
+  line-height: 1.15;
+}
+.firstComposer {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px 12px;
+  border: 1px solid var(--ws-bubble-border);
+  border-radius: 16px;
+  background: var(--ws-elevated-bg);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+  transition: border-color 140ms ease;
+}
+.firstComposer:focus-within { border-color: var(--ws-accent); }
+.inlineFileList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--ws-line);
+}
+.inlineFileRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--ws-left-bg);
+  font-size: 12.5px;
+}
+.inlineFileRow svg { flex-shrink: 0; color: var(--ws-muted); }
+.inlineFileName { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--ws-fg); }
+.inlineFileName small { display: block; font-size: 11.5px; margin-top: 2px; }
+.inlineFileName small[role="alert"] { color: var(--destructive); }
+.homeTextarea {
+  min-height: 60px;
+  resize: none;
+  border: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  font-size: 14.5px;
+  line-height: 1.55;
+  padding: 2px 0;
+  color: var(--ws-fg);
+}
+.homeTextarea:focus-visible { outline: none !important; }
+.composerBar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.composerBarLeft { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.attachBtn {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  color: var(--ws-muted);
+  transition: background 140ms ease, color 140ms ease;
+}
+.attachBtn:hover { background: var(--ws-hover); color: var(--ws-fg); }
+.composerHint { font-size: 12px; color: var(--ws-subtle); }
+.sendBtn {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--ws-accent);
+  color: #ffffff;
+  flex-shrink: 0;
+  transition: background 140ms ease;
+}
+.sendBtn:hover { background: var(--ws-accent-hover); }
+.workspaceLink { font-size: 12px; color: var(--ws-accent); text-decoration: underline; align-self: flex-start; }
+.rowIconAction {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  color: var(--ws-subtle);
+  transition: background 120ms ease, color 120ms ease;
+}
+.rowIconAction:hover { background: var(--ws-line); color: var(--ws-fg); }

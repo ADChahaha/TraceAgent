@@ -13,7 +13,7 @@ import { UploadStatus } from "@/components/session/upload-status";
 import { WorkspaceShell } from "@/components/session/workspace-shell";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import styles from "@/components/session/workspace.module.css";
+import styles from "@/components/session/home.module.css";
 
 export function UploadWorkbench({ onCreated, onFilesReady }: {
   onCreated?: (sessionId: string) => void;

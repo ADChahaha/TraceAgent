@@ -53,6 +53,9 @@ export function WorkspaceShell({ sessionId, sessionTitle, status, children, revi
         <button type="button" className={styles.iconBtn} aria-label={open ? "Close sidebar" : "Open sidebar"} aria-expanded={open} title="Recent workspaces" onClick={() => setOpen(!open)}>
           <Menu size={16} strokeWidth={1.75} />
         </button>
+        <Link href="/" className={styles.iconBtn} aria-label="New workspace" title="New workspace">
+          <Plus size={16} strokeWidth={1.85} />
+        </Link>
         <Link href="/" className={styles.brandLink}>
           <BookOpen size={15} strokeWidth={1.9} />
           <span>TraceAgent</span>
@@ -68,9 +71,6 @@ export function WorkspaceShell({ sessionId, sessionTitle, status, children, revi
         <button type="button" className={styles.iconBtn} aria-label="Toggle theme" title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} onClick={() => applyStoredTheme(theme === "dark" ? "light" : "dark")}>
           {theme === "dark" ? <Moon size={15} strokeWidth={1.75} /> : <Sun size={15} strokeWidth={1.75} />}
         </button>
-        <Link href="/" className={styles.iconBtn} aria-label="New workspace" title="New workspace">
-          <Plus size={16} strokeWidth={1.85} />
-        </Link>
       </div>
     </header>
     {open && <>

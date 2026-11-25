@@ -4,6 +4,14 @@ last updated: 2026-11-25
 
 ## 2026-11-25
 
+### 默认 36%/64% 分栏、顶栏左侧新建、`trace-mini` 工具折叠与前端死代码彻底清理
+
+- 默认分栏与顶栏布局：详情页默认分栏从 50%/50% 调整为左文件 36% / 右 Agent 对话 64%（`workspace.module.css` 与 `sidebar-resize.tsx`），让右侧对话区明显更宽敞，且继续保留自由拖拽与切引用不重置宽度；顶栏 `+`（New workspace）移至左侧紧邻最近会话菜单按钮，右侧仅留状态、窄屏切换与主题切换按钮。
+- Tool 过程折叠重设计：修复 `conversation.tsx` 中 `groupItems` 被空文本 `assistant` 消息打断导致连续工具调用堆叠为多行 `1 tool activity` 的问题；还原 `trace-mini` 单条紧凑折叠入口（放大镜图标 + 步骤数 + 箭头），新增 [tool-labels.ts](../src/lib/tool-labels.ts) 将工具名映射为友好英文动作名（`Browse files`、`Read passage`、`Keyword search`、`Semantic search`），不再展示 `ls`/`grep`/`read`/`search_embedding` 原始函数名，保留稳定 key 与失败工具中性配色。
+- 死代码清理与 300 行达标：彻底删除未接入生产路由的 `replay-review.tsx`（2518 行）、`outline-panel.tsx`、`task-store.ts`、`types.ts`、`json.ts`、空目录 `src/app/experiments/` 与 `globals.css` 中的旧 replay 死样式；将 `workspace.module.css` 拆分为 `workspace.module.css`、`home.module.css`、`sources.module.css` 与 `conversation.module.css`；将 `DocumentSelection` 迁入 `session-types.ts` 消除 `documents.tsx <-> source-reader.tsx` 循环引用；拆分 `task-detail.test.tsx` 并更新 `theme.test.ts`。
+
+验证：`pnpm --dir frontend test --runInBand`（15 套件 70 项通过）、`pnpm --dir frontend lint`（0 警告）、`pnpm --dir frontend build` 与 `python3 scripts/check_architecture.py`（0 违规）全部通过；真实本地服务 + 真实浏览器（1440×900）实测 16 次真实工具调用会话：左栏 518.4px（36.0%）/ 右栏 920.6px（63.9%）、`+` 在顶栏左上菜单旁、16 步合并为单个 `🔍 16 >` 折叠条且展开仅显示友好英文动作名、点击引用与切换 Dark 模式白纸文档宽度不变。
+
 ### TraceAgent 视觉与排版重设计、可读会话标题展示与滚动/分栏修复
 
 - 品牌与页面去噪：元数据与顶栏统一更新为 `TraceAgent`；顶栏收敛为 44px 极简图标栏并展示当前会话可读标题；删除废弃的 `workspace-overview.tsx` 与首页左侧空栏，改为单聚焦居中舞台、一体化输入框与行内文件队列；删除详情页冗余的 `Document conversation` 副顶栏，左侧文件列表改为图标化展示并支持直接点击文件名打开阅读。

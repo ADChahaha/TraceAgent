@@ -19,12 +19,12 @@
 | `upload-workbench.tsx` | TraceAgent 单聚焦居中首页、一体化输入框、回形针附件入口、行内逐文件状态与自动跳转 |
 | `use-file-uploads.ts`、`session/upload-status.tsx` | 单文件串行上传队列、重试/删除与来源行状态 |
 | `task-detail.tsx` | 组合会话 hook、文件操作、会话标题透传与证据选择（无冗余副顶栏） |
-| `session/workspace-shell.tsx` | 44px 极简顶栏（TraceAgent 品牌、当前会话标题、主题切换与新建）、最近会话抽屉、自由拖拽来源分栏 |
-| `session/conversation.tsx`、`composer.tsx`、`documents.tsx`、`source-reader.tsx` | 对话流与低存在感工具折叠行、输入与发送/暂停、来源列表与白纸原文阅读器 |
-| `session-types.ts`、`session-state.ts`、`session-stream.ts`、`use-session.ts` | 类型定义、纯状态合并（含 `session.updated`）、SSE 解析与连接生命周期 |
+| `session/workspace-shell.tsx` | 44px 极简顶栏（左侧最近会话抽屉、`+` 新建、TraceAgent 品牌与当前会话标题，右侧状态与主题切换）、最近会话抽屉、自由拖拽来源分栏 |
+| `session/conversation.tsx`、`composer.tsx`、`documents.tsx`、`source-reader.tsx` | 对话流与合并式 `trace-mini` 极简工具折叠行（经 `lib/tool-labels.ts` 映射友好英文动作名）、输入与发送/暂停、来源列表与白纸原文阅读器 |
+| `session-types.ts`、`session-state.ts`、`session-stream.ts`、`use-session.ts`、`tool-labels.ts` | 纯类型定义（含 `DocumentSelection`）、纯状态合并、SSE 解析、连接生命周期与工具英文动作名映射 |
 
-- 首页采用单聚焦居中舞台（无左侧空栏与快捷提示卡）；详情页宽屏采用无缝 1px 分割线的左右双栏（默认约对半展开，允许自由拖拽至宽范围，且点击引用或切回 Sources 列表绝不重置用户拖拽后的宽度）；色彩对齐中性色阶（Light 左 `#FAFAFA` / 分割线 `#E6E6E6` / 右 `#FFFFFF` / 钢蓝 `#3978C8`，Dark 顶栏与左栏 `#141414` / 右对话 `#181818` / 气泡与输入 `#222222` / 钢蓝 `#4E8EE0`）。
-- 拖动条显式设为 `inline-flex`；800px 以下切换 Documents/Chat（点引用自动进原文）；最近会话抽屉展示可读会话标题并支持遮罩和 Escape 关闭，动效遵循 `prefers-reduced-motion`。旧 replay 组件未接入当前链路。
+- 首页采用单聚焦居中舞台（无左侧空栏与快捷提示卡）；详情页宽屏采用无缝 1px 分割线的左右双栏（默认左文件 36% / 右对话 64%，允许自由拖拽至宽范围，且点击引用或切回 Sources 列表绝不重置用户拖拽后的宽度）；色彩对齐中性色阶（Light 左 `#FAFAFA` / 分割线 `#E6E6E6` / 右 `#FFFFFF` / 钢蓝 `#3978C8`，Dark 顶栏与左栏 `#141414` / 右对话 `#181818` / 气泡与输入 `#222222` / 钢蓝 `#4E8EE0`）；样式拆分为 `workspace.module.css`、`home.module.css`、`sources.module.css` 与 `conversation.module.css`。
+- 拖动条显式设为 `inline-flex`；800px 以下切换 Documents/Chat（点引用自动进原文）；最近会话抽屉展示可读会话标题并支持遮罩和 Escape 关闭，动效遵循 `prefers-reduced-motion`。历史未接入的旧 replay 组件与死样式已彻底删除。
 
 ## 代理与验证
 

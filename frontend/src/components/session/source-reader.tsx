@@ -3,10 +3,9 @@
 import { createElement, useEffect, useRef, useState } from "react";
 import { readFullDocument } from "@/lib/api";
 import { formatUserError } from "@/lib/error-messages";
-import type { FullDocument } from "@/lib/session-types";
+import type { DocumentSelection, FullDocument } from "@/lib/session-types";
 import { MarkdownEvidence } from "@/components/markdown-evidence";
-import type { DocumentSelection } from "./documents";
-import styles from "./workspace.module.css";
+import styles from "./sources.module.css";
 
 export function documentRoot(key: string) { return key.split("/").slice(0, 2).join("/"); }
 export function documentLabel(key: string) {

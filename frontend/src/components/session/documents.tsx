@@ -1,7 +1,7 @@
 "use client";
 
 import { Download, FileText, Plus, Search, Trash2, X } from "lucide-react";
-import styles from "./workspace.module.css";
+import styles from "./sources.module.css";
 import { useEffect, useRef, useState } from "react";
 import { listSessionDocuments, sessionFileUrl } from "@/lib/api";
 import { formatUserError } from "@/lib/error-messages";
@@ -9,9 +9,7 @@ import type { FileUpload } from "@/lib/use-file-uploads";
 import { UploadStatus } from "./upload-status";
 import { DOCUMENT_ACCEPT } from "@/lib/document-files";
 import { SourceReader, documentRoot, documentLabel } from "./source-reader";
-import type { DocumentEntry, SessionResource } from "@/lib/session-types";
-
-export interface DocumentSelection { key: string; block: boolean; version: number }
+import type { DocumentEntry, DocumentSelection, SessionResource } from "@/lib/session-types";
 
 export function SessionDocuments({ sessionId, resources, disabled, selection, onSelect, onUpload, onRemove, uploads = [], mutating = false, onRetry, onDismiss, onClose, onFilePickerChange }: {
   uploads?: FileUpload[]; mutating?: boolean; onRetry?: (file: File) => void; onDismiss?: (file: File) => void;

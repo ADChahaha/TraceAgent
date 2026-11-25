@@ -10,7 +10,8 @@ import { useSession } from "@/lib/use-session";
 import { WorkspaceShell } from "@/components/session/workspace-shell";
 import { Conversation } from "@/components/session/conversation";
 import { SessionComposer } from "@/components/session/composer";
-import { SessionDocuments, type DocumentSelection } from "@/components/session/documents";
+import type { DocumentSelection } from "@/lib/session-types";
+import { SessionDocuments } from "@/components/session/documents";
 
 export function TaskDetail({ taskId }: { taskId: string }) {
   return <SessionWorkspace key={taskId} sessionId={taskId} />;

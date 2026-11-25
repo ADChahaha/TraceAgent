@@ -1,11 +1,12 @@
 "use client";
 
 import { useLayoutEffect, useRef } from "react";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Search } from "lucide-react";
 import { MarkdownEvidence } from "@/components/markdown-evidence";
 import { formatUserError } from "@/lib/error-messages";
 import type { SessionItem, SessionTurn } from "@/lib/session-types";
-import styles from "./workspace.module.css";
+import { formatToolAction } from "@/lib/tool-labels";
+import styles from "./conversation.module.css";
 
 export function Conversation({ turns, running, pending, activeEvidenceKey, onEvidence }: {
   turns: SessionTurn[];
@@ -26,12 +27,7 @@ export function Conversation({ turns, running, pending, activeEvidenceKey, onEvi
     <div className="replay-agent-centered-content space-y-5">
       {turns.map((turn) => <div key={turn.id} className="space-y-3" aria-label={`Turn ${turn.id}`}>
         {groupItems(turn.items).map((group) => group[0].kind === "tool"
-          ? <details key={group[0].id} className={styles.toolGroup}>
-            <summary><ChevronRight size={13} strokeWidth={1.8} />{group.length} tool {group.length === 1 ? "activity" : "activities"}</summary>
-            <div className={styles.toolItems}>
-              {group.map((item) => <div key={item.id} className={styles.toolItem} aria-label={`tool ${item.name}`}>{item.name}: {item.status}</div>)}
-            </div>
-          </details>
+          ? <ToolTrace key={group[0].id} items={group} />
           : <Message key={group[0].id} item={group[0]} activeEvidenceKey={activeEvidenceKey} onEvidence={onEvidence} />)}
         {turn.status === "cancelled" && <div className="replay-agent-empty">Cancelled</div>}
         {turn.status === "failed" && turn.error && <div role="alert" className="text-sm text-destructive">{formatUserError(turn.error, "chat")}</div>}
@@ -43,13 +39,33 @@ export function Conversation({ turns, running, pending, activeEvidenceKey, onEvi
   </div>;
 }
 
+function ToolTrace({ items }: { items: SessionItem[] }) {
+  const anyRunning = items.some((item) => item.status === "running");
+  const summaryLabel = `${items.length} lookup ${items.length === 1 ? "step" : "steps"}`;
+  return <details className={styles.toolTrace} data-running={anyRunning ? "true" : "false"}>
+    <summary className={styles.toolTraceSummary} aria-label={summaryLabel} title={summaryLabel}>
+      <Search size={13} strokeWidth={1.8} className={styles.toolTraceIcon} aria-hidden="true" />
+      <span className={styles.toolTraceCount}>{items.length}</span>
+      <ChevronRight size={12} strokeWidth={2} className={styles.toolTraceChevron} aria-hidden="true" />
+    </summary>
+    <div className={styles.toolTraceBody}>
+      <div className={styles.toolTraceFlow} role="list" aria-label="Lookup steps">
+        {items.map((item) => {
+          const label = formatToolAction(item.name, item.status);
+          return <span key={item.id} role="listitem" className={styles.toolTraceStep} data-status={item.status}>{label}</span>;
+        })}
+      </div>
+    </div>
+  </details>;
+}
+
 function Message({ item, activeEvidenceKey, onEvidence }: {
   item: SessionItem;
   activeEvidenceKey?: string | null;
   onEvidence: (uri: string, label: string) => void;
 }) {
   if (item.kind === "retry") return <div className="text-xs text-muted-foreground">Retrying model request (attempt {String(item.detail?.attempt ?? "")})</div>;
-  if (!item.text) return null;
+  if (!item.text?.trim()) return null;
   const citation = item.kind === "assistant" && item.status === "completed" && !item.tool_calls?.length;
   return <div className={`replay-agent-turn qa-message-turn is-${item.kind}`}>
     <div className="qa-message-bubble">
@@ -63,6 +79,8 @@ function Message({ item, activeEvidenceKey, onEvidence }: {
 function groupItems(items: SessionItem[]) {
   const groups: SessionItem[][] = [];
   for (const item of items) {
+    // 跳过只有 tool_calls 而无可见正文的消息，避免把连续多批工具调用切碎成多行。
+    if (item.kind !== "tool" && item.kind !== "retry" && !item.text?.trim()) continue;
     const last = groups.at(-1);
     if (item.kind === "tool" && last?.[0].kind === "tool") last.push(item);
     else groups.push([item]);
