@@ -2,35 +2,31 @@
 
 # TraceAgent
 
-**文書 QA のすべての結論を、ワンクリックで原文へ。**
+**Evidence-grounded Document QA**
 
-PDF / DOCX に対応したローカル文書 QA ワークスペース。段落単位の引用ハイライト、確認できる調査ステップ、ダークモードでも白紙で読める原文ビューを備えています。
+PDF / DOCX に対応したローカル文書 QA ワークスペース。段落単位の引用ハイライト、確認できる検索ステップ、ダークモードでも白紙で読める原文ビューを備えています。
 
-[中文](README.md) · [クイックスタート](#クイックスタート) · [アーキテクチャ](ARCHITECTURE.md) · [MIT License](LICENSE)
+[中文](README.md) · [クイックスタート](#クイックスタート) · [アーキテクチャ](#アーキテクチャ) · [MIT License](LICENSE)
 
 </div>
 
-![TraceAgent 原文ハイライトと調査ステップ](docs/assets/demo-qa-evidence-review.png)
+![TraceAgent 原文ハイライトと検索ステップ](docs/assets/demo-qa-evidence-review.png)
 
-## なぜ TraceAgent か
+## 特徴
 
-LLM に長い文書を読ませたとき、いちばん時間がかかるのは質問ではなく裏取りです。その記述はどのページにあるのか、文脈を切り取っていないか、他の添付ファイルも見ているのか。
-
-TraceAgent は「質問」と「検証」をひとつの分割画面にまとめました。
-
-- **番号付き引用をクリックして、そのまま原文の該当箇所へ**。左側に全文と前後の文脈を保ったまま対象段落をハイライトします。ダークモードでも原文エリアは白背景・黒文字を維持し、長時間でも読みやすくしています。
-- **断片を詰め込むのではなく、人のように文書をたどる**。PDF と DOCX を構造化された文書ツリーとベクトル索引に変換し、モデルが必要に応じて一覧確認・キーワード検索・意味検索・本文読み取りを行います。調査の履歴は回答上部に折りたたまれ、いつでも展開して検証できます。
-- **そのまま使えるローカルのマルチターン環境**。追加質問、ファイルの追加・削除、生成の途中キャンセル、セッションタイトルの自動生成に対応。履歴と索引はローカルの SQLite とオブジェクトストレージに残り、リロードしても続きから再開できます。
+- **段落単位の引用トレース**：回答内の番号付き引用をクリックすると、左側に全文を開いて対象段落をハイライトします。ダークモードでも原文エリアは白背景・黒文字を維持します。
+- **構造化文書探索**：PDF（MinerU）と DOCX（python-docx）を Markdown 文書ツリーと OpenVINO ベクトル索引に変換します。Agent が必要に応じて一覧取得・キーワード検索・意味検索・本文読み取りを行い、手順は回答上部に折りたたんでいつでも展開できます。
+- **ローカル永続ワークスペース**：マルチターン質問、文書の追加・削除、生成中のキャンセル、セッションタイトルの自動生成に対応。履歴と索引はローカルの SQLite と S3 互換オブジェクトストレージに保存され、リロード後も復元できます。
 
 <table>
   <tr>
     <td width="50%">
       <img src="docs/assets/demo-home-workspace.png" alt="TraceAgent ホーム画面" width="100%" />
-      <p align="center">シンプルなホーム画面：PDF / DOCX を選んでそのまま質問</p>
+      <p align="center">ホーム画面と文書アップロード</p>
     </td>
     <td width="50%">
       <img src="docs/assets/demo-qa-workspace.png" alt="TraceAgent ダークモード" width="100%" />
-      <p align="center">ダークモード：ファイル管理と折りたたまれた調査ステップ</p>
+      <p align="center">ダークモードとファイル管理</p>
     </td>
   </tr>
 </table>
@@ -64,7 +60,7 @@ api_transport = "responses"
 ./scripts/start.sh
 ```
 
-ローカルのオブジェクトストレージ、文書処理、Agent、バックエンド、フロントエンドがまとめて起動し、`Ctrl+C` で一括停止します。
+ローカルのオブジェクトストレージ、文書サービス、Agent、バックエンド、フロントエンドが一括起動し、`Ctrl+C` で停止します。
 
 <details>
 <summary>主な設定と初回起動の補足（タイトル用モデル・PDF 言語・外部 S3・HF 401）</summary>
@@ -76,9 +72,7 @@ api_transport = "responses"
 
 </details>
 
-## アーキテクチャ概要
-
-文書解析、探索 Agent、永続化、UI を独立サービスに分け、gRPC 契約とオブジェクトストレージで疎結合につないでいます。
+## アーキテクチャ
 
 ```mermaid
 flowchart LR
@@ -99,7 +93,7 @@ backend/           セッション管理、SQLite 永続化と SSE ストリー�
 frontend/          Next.js デュアルテーマ閲覧・QA ワークスペース
 ```
 
-詳細ドキュメント：[全体アーキテクチャ](ARCHITECTURE.md) · [Agent](agent/README.md) · [文書サービス](document_service/README.md) · [バックエンド](backend/README.md) · [フロントエンド設計](frontend/docs/DESIGN.md)
+詳細ドキュメント：[ARCHITECTURE.md](ARCHITECTURE.md) · [agent](agent/README.md) · [document_service](document_service/README.md) · [backend](backend/README.md) · [frontend](frontend/docs/DESIGN.md)
 
 ## License
 

@@ -2,35 +2,31 @@
 
 # TraceAgent
 
-**让文档问答的每一句结论，都能点回原文。**
+**Evidence-grounded Document QA**
 
-本地运行的 PDF / DOCX 文档问答工作台，支持段落级引用定位、可核对的工具查阅轨迹与深色模式白纸阅读。
+本地运行的 PDF / DOCX 文档问答工作台，支持段落级引用定位、可回溯的检索过程与深色模式白纸阅读。
 
-[日本語](README.ja.md) · [快速开始](#快速开始) · [架构设计](ARCHITECTURE.md) · [MIT License](LICENSE)
+[日本語](README.ja.md) · [快速开始](#快速开始) · [架构](#架构) · [MIT License](LICENSE)
 
 </div>
 
-![TraceAgent 原文引用高亮与工具查阅过程](docs/assets/demo-qa-evidence-review.png)
+![TraceAgent 原文引用高亮与检索过程](docs/assets/demo-qa-evidence-review.png)
 
-## 为什么做 TraceAgent
+## 特性
 
-用大模型读长文档时，最耗时间的往往不是提问，而是核对答案：这句话出自哪一页、上下文有没有断章取义、模型到底有没有翻过附件里的其他文件。
-
-TraceAgent 把「问答」和「查证」放进同一个分栏界面：
-
-- **点开数字引用，直接落到原文那一段**。左侧保留完整上下文并高亮目标段落，不把文档切碎成孤立片段；切到深色模式时，原文纸面依然保持白底黑字，像在暗处摊开一页纸。
-- **像人一样翻文档，而不是盲塞切片**。上传的 PDF 和 DOCX 会整理成带目录结构的文档树与向量索引，模型按需列目录、搜关键词、语义检索、读片段；查阅轨迹收在回答上方，点开就能复查每一步。
-- **完整的本地多轮工作台**。支持连续追问、补传和删除文件、中途取消生成、自动总结会话标题，刷新或换标签页都能从本地 SQLite 恢复完整历史。
+- **段落级引用回溯**：点击回答中的数字引用，左侧打开完整原文并定位高亮目标段落；深色模式下文档纸面保持白底黑字。
+- **结构化文档检索**：PDF（MinerU）与 DOCX（python-docx）解析为 Markdown 目录树和 OpenVINO 向量索引，Agent 按需浏览目录、搜索关键词、语义检索并读取片段，查阅步骤折叠在回答上方可随时展开。
+- **本地持久化工作台**：支持多轮追问、文档补传与删除、生成中随时取消、后台自动生成会话标题；会话与文档索引存于本地 SQLite 和 S3 兼容对象存储，刷新或重新打开即可恢复。
 
 <table>
   <tr>
     <td width="50%">
       <img src="docs/assets/demo-home-workspace.png" alt="TraceAgent 首页" width="100%" />
-      <p align="center">极简首页：选择 PDF / DOCX 即可开问</p>
+      <p align="center">首页上传与提问</p>
     </td>
     <td width="50%">
       <img src="docs/assets/demo-qa-workspace.png" alt="TraceAgent 深色模式" width="100%" />
-      <p align="center">深色模式：来源管理与可折叠查阅轨迹</p>
+      <p align="center">深色模式与来源管理</p>
     </td>
   </tr>
 </table>
@@ -48,7 +44,7 @@ conda create -n agent-gate python=3.11 -y && conda activate agent-gate
 cp config.example.toml config.toml
 ```
 
-打开 `config.toml`，填入任意 OpenAI 兼容接口（`api_transport` 支持 `responses` 或 `chat_completions`）：
+在 `config.toml` 中配置任意 OpenAI 兼容接口（`api_transport` 支持 `responses` 或 `chat_completions`）：
 
 ```toml
 [model]
@@ -58,13 +54,13 @@ model = "your-model-name"
 api_transport = "responses"
 ```
 
-启动全部服务并打开 http://127.0.0.1:3000：
+启动全部服务后访问 http://127.0.0.1:3000：
 
 ```bash
 ./scripts/start.sh
 ```
 
-脚本会一起拉起本地对象存储、文档处理、Agent、后端和前端，按 `Ctrl+C` 一键停止。
+脚本会同时启动本地对象存储、文档服务、Agent、后端和前端，按 `Ctrl+C` 一键停止。
 
 <details>
 <summary>常用配置与首次启动说明（标题模型、PDF 语言、外部 S3、HF 401）</summary>
@@ -76,9 +72,7 @@ api_transport = "responses"
 
 </details>
 
-## 架构一览
-
-TraceAgent 将解析、检索、持久化与界面拆成独立服务，通过 gRPC 契约与对象存储解耦：
+## 架构
 
 ```mermaid
 flowchart LR
@@ -99,7 +93,7 @@ backend/           会话编排、SQLite 持久化与 SSE 流式推送
 frontend/          Next.js 双主题阅读与问答工作台
 ```
 
-深入了解：[顶层架构](ARCHITECTURE.md) · [Agent](agent/README.md) · [文档服务](document_service/README.md) · [后端](backend/README.md) · [前端设计](frontend/docs/DESIGN.md)
+详细文档：[ARCHITECTURE.md](ARCHITECTURE.md) · [agent](agent/README.md) · [document_service](document_service/README.md) · [backend](backend/README.md) · [frontend](frontend/docs/DESIGN.md)
 
 ## License
 
