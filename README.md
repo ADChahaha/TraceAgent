@@ -1,106 +1,42 @@
-<p align="center">
-  <h1 align="center">TraceAgent</h1>
-  <p align="center">
-    <strong>Evidence-grounded Document QA - 让每个回答都能追溯到原文</strong>
-  </p>
-  <p align="center">
-    <code>FastAPI</code> · <code>LangGraph</code> · <code>Next.js</code> · <code>SSE</code>
-  </p>
-  <p align="center">
-    <a href="README.ja.md">日本語</a> · <a href="#demo">Demo</a> · <a href="#quickstart">Quick Start</a> · <a href="LICENSE">MIT License</a>
-  </p>
-</p>
+# TraceAgent
 
----
+[日本語](README.ja.md)
 
-> **TraceAgent 将文档回答、原文证据和工具查阅过程放在同一个工作台。**
+本地运行的文档问答工作台。上传 PDF 或 DOCX 后，模型一边翻目录、搜正文、读片段，一边给出带数字引用的回答；点任意引用，左侧会直接打开原文并定位到对应段落。
 
-模型回答文档事实时附带数字引用，点击即可打开原文并高亮对应内容。你可以核对它查阅了什么、读了哪里，以及结论由哪一段支撑。
+![原文阅读与引用定位](docs/assets/demo-qa-evidence-review.png)
 
-<h2 id="demo">🎬 Demo</h2>
+## 用起来是什么样
 
-<p align="center">
-  <img src="docs/assets/demo-qa-evidence-review.png" alt="TraceAgent：左侧白纸原文引用高亮，右侧对话区与展开的工具查阅步骤" width="100%">
-</p>
-<p align="center"><em>左：白纸全文阅读与钢蓝柔光引用高亮 · 右：折叠工具过程、回答与数字引用</em></p>
+- 回答里的每个数字引用都对应文档中的具体段落，点击会在左侧展开原文并高亮。切到深色模式时，原文阅读区依然保持白底黑字，长时间看文档不费眼。
+- 模型翻目录、搜正文、读片段的过程收在回答上方的折叠栏里，想核对时点开看，平时不干扰阅读；生成中随时可以取消。
+- 同一个会话里可以继续追问、补传、下载或删除文件。会话历史和文档索引保存在本地 SQLite 和对象存储里，刷新页面或下次打开还能接着聊。
 
-截图来自本地实际运行的 TraceAgent 工作台与虚构示例文档 Orion（不含任何个人信息），更新于 2026-11-25。
+首页上传入口与深色模式：
 
-<table>
-<tr>
-<td width="50%">
-<img src="docs/assets/demo-home-workspace.png" alt="TraceAgent 单聚焦首页文档上传与首问入口" width="100%">
-<p align="center"><em>首页：单聚焦文档上传与首问入口</em></p>
-</td>
-<td width="50%">
-<img src="docs/assets/demo-qa-workspace.png" alt="TraceAgent Dark 模式来源管理与中性炭黑对话区" width="100%">
-<p align="center"><em>Dark 模式：来源管理、紧凑工具过程与中性炭黑对话区</em></p>
-</td>
-</tr>
-</table>
+![首页上传入口](docs/assets/demo-home-workspace.png)
 
-## ✨ 核心亮点
+![深色模式与文件列表](docs/assets/demo-qa-workspace.png)
 
-| &nbsp; | 功能 | 说明 |
-|:---:|---|---|
-| 💬 | **多轮文档 QA** | 上传 PDF / DOCX，默认左 36% 文件栏 / 右 64% 对话区，围绕同一批文档连续追问 |
-| 🔗 | **数字引用** | 回答中的文档链接绑定 Markdown 块，显示为可点击的数字引用 |
-| 📖 | **白纸原文 Review** | 点击引用在左侧打开 `#FAFAFA` 白纸全文，以钢蓝柔光块高亮目标段（Dark 模式下纸面恒定白纸黑字），自由拖拽分栏且不重置宽度 |
-| 📁 | **来源管理** | 逐文件显示处理状态，支持失败重试、补传、下载与删除 |
-| 🗂️ | **会话恢复与自动标题** | 首轮提问后异步生成可读会话标题，最近会话存后端 SQLite，刷新或打开链接可完整恢复 |
-| 🧭 | **紧凑过程可见** | 连续工具调用合并为单个低噪折叠入口，展开后以可读英文动作名展示查阅轨迹，不暴露底层函数名 |
-| 🛑 | **可取消生成** | 随时取消当前回答，后端立即终止 agent 循环 |
-| 📄 | **多格式** | PDF（MinerU OCR）与 DOCX（python-docx）解析为 HTML，再生成 Markdown 文件树与 embedding 索引 |
+## 快速开始
 
-## 🧠 工作原理
+需要 Python 3.11 和 pnpm。
 
-```mermaid
-flowchart LR
-    Upload["📄 上传 PDF / DOCX"]
-    Upload --> Backend["🗃️ backend<br/>SQLite 持久化"]
-    Backend --> |"files"| Document["📚 document_service"]
-    Document --> |"raw · documents.zip · index"| Storage["🪣 S3-compatible storage"]
-    Backend --> |"resource_refs + messages"| Agent["🤖 file_extraction_agent"]
-    Agent --> |"read resource_refs"| Storage
-    Agent --> |"ls · grep · read · search_embedding"| Agent
-    Agent --> |"gRPC events"| Backend
-    Backend --> |"SSE snapshot + events"| Frontend["🖥️ frontend"]
-    Frontend --> |"数字引用"| Review["📖 全文阅读与原文高亮"]
-```
-
-TraceAgent 将文档映射为**只读虚拟仓库**。模型通过 `ls` / `grep` / `read` / `search_embedding` 浏览目录、搜索关键词、读取正文或检索语义相近的片段，工具过程和回答通过 SSE 实时推送到前端。
-
-浏览器通过 Next.js 代理访问 backend。backend 校验上传文件，通过独立 document service 准备资源，再将资源引用和消息历史交给 agent 执行问答。SQLite 保存会话、资源引用、轮次和完整消息；恢复页面时先读取快照，再订阅活跃轮次。过程增量只在内存中广播，历史工具活动由已保存的工具调用和结果恢复。
-
-> 详细架构分层见 [`ARCHITECTURE.md`](ARCHITECTURE.md)，Agent 设计见 [`agent/docs/DESIGN.md`](agent/docs/DESIGN.md)
-
-<h2 id="quickstart">⚡ Quick Start</h2>
-
-**1. 创建环境**
+1. 创建环境并安装依赖（包含 Python 依赖与前端构建）：
 
 ```bash
-conda create -n agent-gate python=3.11 -y && conda activate agent-gate
+conda create -n agent-gate python=3.11 -y
+conda activate agent-gate
+./scripts/install.sh
 ```
 
-**2. 安装依赖**
-
-```bash
-./scripts/install.sh          # 安装 Python 包 + 构建前端
-```
-
-安装包含 storage 服务及默认 OpenVINO embedding 依赖。document service 启动时会加载并预热 embedding 模型，首次加载需要从 Hugging Face 下载；预热成功后才开始监听。
-
-若公开模型下载返回 401，而匿名访问正常，可在 `config.toml` 的 `[huggingface]` 中设置 `disable_implicit_token = true`（或环境变量 `HF_HUB_DISABLE_IMPLICIT_TOKEN=1`），避免自动发送本机已有的 Hugging Face token；需要访问私有模型时应使用有效凭据。
-
-**3. 创建配置文件**
-
-从模板复制生成根目录 `config.toml` 并填入模型配置（启动脚本与各服务会自动读取，同名进程环境变量可覆盖文件值）：
+2. 从模板生成配置文件并填入你的模型地址、Key 和模型名：
 
 ```bash
 cp config.example.toml config.toml
 ```
 
-核心配置示例：
+最简配置只需要改 `config.toml` 的 `[model]` 段（支持 OpenAI 兼容接口，`api_transport` 可选 `responses` 或 `chat_completions`）：
 
 ```toml
 [model]
@@ -108,54 +44,40 @@ base_url = "https://your-model-endpoint/v1"
 api_key = "your-api-key"
 model = "your-model-name"
 api_transport = "responses"
-
-[document_service]
-mineru_lang = "japan"
-
-[agent]
-port = 8001
-
-[backend]
-port = 8000
-
-[frontend]
-port = 3000
-
-[storage]
-port = 9000
 ```
 
-**4. 启动服务**
+如果想用另一个更轻量的模型生成会话标题，可以单独填写 `[title_model]`，留空则自动复用 `[model]`。所有配置项也都可以用同名环境变量覆盖。
+
+3. 启动全部服务：
 
 ```bash
-./scripts/start.sh            # 启动 storage / agent / document service / backend / frontend
+./scripts/start.sh
 ```
 
-默认先启动本地 storage，数据保存在 `storage/data`，可在 `config.toml` 的 `[storage].data_root`（或 `STORAGE_DATA_ROOT`）修改。若使用已有 S3 兼容服务，在 `[storage].endpoint_url`（或 `S3_ENDPOINT_URL`）配置地址，脚本会复用该地址并跳过本地 storage。退出脚本时会停止本次启动的服务。
+启动后打开 http://127.0.0.1:3000。脚本会一并拉起本地对象存储、文档服务、Agent、后端和前端，按 `Ctrl+C` 会全部停止。
 
-打开 http://127.0.0.1:3000 即可使用。
+### 几个实用说明
 
-1. 点击首页输入框左下角回形针选择 PDF 或 DOCX，文件即进入行内串行处理队列。单次选择最多 20 个文件、合计 32 MiB，空文件不支持。
-2. 文件全部处理完成后自动进入 `/tasks/{session_id}`（默认左 36% 文件栏 / 右 64% 对话区）。输入问题并发送，系统在后台异步总结可读会话标题并实时更新顶栏与最近会话目录；顶栏左上 `+` 可随时开启新会话。
-3. 点击回答中的数字引用，在左侧白纸阅读器查看全文与钢蓝柔光高亮块（自由拖拽中间分割线调整宽度）；关闭阅读器可回到 Sources，通过 `+` 补传文档。
-4. 点击左上角菜单打开 Recent workspaces，或再次打开会话链接，恢复同一后端数据库中的文件与历史。
+- 首次启动时，`document_service` 会从 Hugging Face 下载并预热 OpenVINO embedding 模型，预热完成后才开始提供服务。如果本机留有旧的 HF token 导致拉公开模型报 401，把 `config.toml` 里 `[huggingface]` 下的 `disable_implicit_token` 改成 `true`。
+- PDF 默认用 MinerU 解析，识别语言可在 `[document_service].mineru_lang` 里改。
+- 对象存储默认起在本地 `storage/data`，已有 MinIO 或其他 S3 服务的话，在 `[storage].endpoint_url` 填地址即可直接复用。会话默认存在 `backend/backend.sqlite3`，面向单人本地使用，没有登录鉴权。
 
-默认数据库为 `backend/backend.sqlite3`，可在 `config.toml` 的 `[backend].database_path`（或 `BACKEND_DATABASE_PATH`）配置。当前面向单用户本地运行，backend 使用单进程；没有租户鉴权，旧 `qa_*` 数据不自动迁移。
+## 工作方式与目录
 
-> 详细配置和设计：[`agent/`](agent/README.md) · [`document_service/`](document_service/README.md) · [`backend/`](backend/README.md) · [`frontend/`](frontend/docs/DESIGN.md)
+上传的 PDF（MinerU）和 DOCX（python-docx）会先由 `document_service` 转成 HTML、Markdown 目录树和向量索引，存到对象存储里。提问时，`agent` 把这些文件当成只读目录来查（列目录、关键词搜索、读片段、语义检索），流式结果经 `backend` 落库后推给前端展示。
 
-## 🗺️ 项目结构
-
-```
-agent_proto/      共享协议 - agent 与 document service 的 protobuf/gRPC 契约
-document_service/ 文档服务 - PDF/DOCX 解析、Markdown 文档树、embedding 和资源发布
-storage/          对象存储 - 本地 S3 兼容 HTTP 服务
-shared/           共享基础设施 - object store 客户端与 config.toml 配置加载器
-agent/            AI 能力层 - QA Agent（LangGraph 驱动）
-backend/          持久化与编排 - sessions / resources / turns / messages（SQLite）
-frontend/         浏览器工作台 - 来源管理、QA stream、工具过程与原文阅读（Next.js）
+```text
+agent_proto/       gRPC / protobuf 协议定义
+storage/           本地 S3 兼容对象存储
+shared/            对象存储客户端与 config.toml 读取
+document_service/  PDF / DOCX 解析、Markdown 树与向量索引构建
+agent/             基于 LangGraph 的文档问答 Agent
+backend/           FastAPI + SQLite 会话编排、持久化和 SSE 推送
+frontend/          Next.js 工作台界面
 ```
 
-## 📄 License
+更多架构与开发说明见 [ARCHITECTURE.md](ARCHITECTURE.md)，各模块细节见 [agent](agent/README.md)、[document_service](document_service/README.md)、[backend](backend/README.md) 与 [frontend/docs/DESIGN.md](frontend/docs/DESIGN.md)。
+
+## License
 
 [MIT](LICENSE)
