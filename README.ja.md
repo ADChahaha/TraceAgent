@@ -1,42 +1,54 @@
+<div align="center">
+
 # TraceAgent
 
-[中文](README.md)
+**文書 QA のすべての結論を、ワンクリックで原文へ。**
 
-ローカルで動く文書 QA ワークスペースです。PDF や DOCX をアップロードすると、モデルが目次をたどり本文を検索して、番号付きの引用を添えて回答します。引用をクリックすると、左側に原文が開いて該当箇所がハイライトされます。
+PDF / DOCX に対応したローカル文書 QA ワークスペース。段落単位の引用ハイライト、確認できる調査ステップ、ダークモードでも白紙で読める原文ビューを備えています。
 
-![原文表示と引用ハイライト](docs/assets/demo-qa-evidence-review.png)
+[中文](README.md) · [クイックスタート](#クイックスタート) · [アーキテクチャ](ARCHITECTURE.md) · [MIT License](LICENSE)
 
-## できること
+</div>
 
-- 回答内の番号付き引用は文書中の具体的な段落に紐づいています。クリックすると左側に全文が開き、該当箇所へスクロールしてハイライトします。ダークモードでも原文エリアは白背景のまま保ち、読みやすさを維持します。
-- モデルがどのファイルを開き、何を探したかは回答上部の折りたたみ欄にまとまります。必要なときだけ開いて確認でき、生成中でもいつでも中断できます。
-- 同じセッションで追加質問やファイルの追加・ダウンロード・削除ができます。履歴と文書インデックスはローカルの SQLite とオブジェクトストレージに保存されるため、リロードしても続きから再開できます。
+![TraceAgent 原文ハイライトと調査ステップ](docs/assets/demo-qa-evidence-review.png)
 
-ホーム画面とダークモード：
+## なぜ TraceAgent か
 
-![ホーム画面](docs/assets/demo-home-workspace.png)
+LLM に長い文書を読ませたとき、いちばん時間がかかるのは質問ではなく裏取りです。その記述はどのページにあるのか、文脈を切り取っていないか、他の添付ファイルも見ているのか。
 
-![ダークモードとファイル一覧](docs/assets/demo-qa-workspace.png)
+TraceAgent は「質問」と「検証」をひとつの分割画面にまとめました。
+
+- **番号付き引用をクリックして、そのまま原文の該当箇所へ**。左側に全文と前後の文脈を保ったまま対象段落をハイライトします。ダークモードでも原文エリアは白背景・黒文字を維持し、長時間でも読みやすくしています。
+- **断片を詰め込むのではなく、人のように文書をたどる**。PDF と DOCX を構造化された文書ツリーとベクトル索引に変換し、モデルが必要に応じて一覧確認・キーワード検索・意味検索・本文読み取りを行います。調査の履歴は回答上部に折りたたまれ、いつでも展開して検証できます。
+- **そのまま使えるローカルのマルチターン環境**。追加質問、ファイルの追加・削除、生成の途中キャンセル、セッションタイトルの自動生成に対応。履歴と索引はローカルの SQLite とオブジェクトストレージに残り、リロードしても続きから再開できます。
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="docs/assets/demo-home-workspace.png" alt="TraceAgent ホーム画面" width="100%" />
+      <p align="center">シンプルなホーム画面：PDF / DOCX を選んでそのまま質問</p>
+    </td>
+    <td width="50%">
+      <img src="docs/assets/demo-qa-workspace.png" alt="TraceAgent ダークモード" width="100%" />
+      <p align="center">ダークモード：ファイル管理と折りたたまれた調査ステップ</p>
+    </td>
+  </tr>
+</table>
 
 ## クイックスタート
 
-Python 3.11 と pnpm が必要です。
-
-1. 環境を作って依存関係をインストールします（Python パッケージとフロントエンドのビルドを含みます）：
+必要な環境：Python 3.11、pnpm。
 
 ```bash
-conda create -n agent-gate python=3.11 -y
-conda activate agent-gate
+# 1. 環境作成とインストール（Python パッケージ + フロントエンドビルド）
+conda create -n agent-gate python=3.11 -y && conda activate agent-gate
 ./scripts/install.sh
-```
 
-2. テンプレートから `config.toml` を作成し、モデルの接続先と API キーを記入します：
-
-```bash
+# 2. 設定テンプレートをコピーしてモデル情報を記入
 cp config.example.toml config.toml
 ```
 
-最小構成では `[model]` だけ設定すれば動きます（OpenAI 互換 API に対応、`api_transport` は `responses` または `chat_completions`）：
+`config.toml` に任意の OpenAI 互換エンドポイントを設定します（`api_transport` は `responses` または `chat_completions`）：
 
 ```toml
 [model]
@@ -46,37 +58,48 @@ model = "your-model-name"
 api_transport = "responses"
 ```
 
-セッションタイトルの自動生成に別の軽量モデルを使いたい場合は `[title_model]` に記入します。空のままにすると `[model]` の設定をそのまま使います。各項目は同名の環境変数でも上書きできます。
-
-3. サービスを起動します：
+全サービスを起動して http://127.0.0.1:3000 を開きます：
 
 ```bash
 ./scripts/start.sh
 ```
 
-起動したら http://127.0.0.1:3000 を開きます。ローカルのオブジェクトストレージ、文書処理、Agent、バックエンド、フロントエンドがまとめて起動し、`Ctrl+C` で一括停止します。
+ローカルのオブジェクトストレージ、文書処理、Agent、バックエンド、フロントエンドがまとめて起動し、`Ctrl+C` で一括停止します。
 
-### 補足
+<details>
+<summary>主な設定と初回起動の補足（タイトル用モデル・PDF 言語・外部 S3・HF 401）</summary>
 
-- 初回起動時、`document_service` は Hugging Face から OpenVINO 用の embedding モデルを取得してウォームアップします。ローカルに残っている HF token が原因で公開モデルの取得が 401 になる場合は、`config.toml` の `[huggingface]` で `disable_implicit_token = true` を設定してください。
-- PDF は MinerU で解析します。対象言語は `[document_service].mineru_lang` で変更できます。
-- オブジェクトストレージは既定でローカルの `storage/data` を使います。既存の MinIO や S3 を使う場合は `[storage].endpoint_url` を指定してください。会話履歴は `backend/backend.sqlite3` に保存されます。単一ユーザーのローカル利用を前提としており、認証機能はありません。
+- **タイトル生成用モデル**：`config.toml` の `[title_model]` を設定すると、軽量な別モデルでセッションタイトルを非同期生成できます。未設定時は `[model]` を共用します。各項目は同名の環境変数でも上書き可能です。
+- **初回起動時の embedding モデル取得**：`document_service` は起動時に Hugging Face から OpenVINO 用 embedding モデルを取得しウォームアップします。ローカルに残った HF token で公開モデルが 401 になる場合は `[huggingface].disable_implicit_token = true` を設定してください。
+- **PDF の解析言語**：PDF は MinerU で解析します。言語は `[document_service].mineru_lang` で変更できます。
+- **ストレージと DB**：オブジェクトストレージは既定でローカルの `storage/data` に保存されます。既存の MinIO や S3 を使う場合は `[storage].endpoint_url` を指定してください。会話履歴は `backend/backend.sqlite3` に保存されます（単一ユーザーのローカル利用向け・認証なし）。
 
-## 仕組みと構成
+</details>
 
-アップロードされた PDF（MinerU）と DOCX（python-docx）は `document_service` で HTML、Markdown の文書ツリー、embedding インデックスに変換され、オブジェクトストレージに保存されます。質問を受けると `agent` がそのツリーを読み取り専用のフォルダのように探索し（一覧取得・キーワード検索・本文読み取り・意味検索）、ストリーミング結果を `backend` 経由で保存しながらフロントエンドへ送ります。
+## アーキテクチャ概要
 
-```text
-agent_proto/       gRPC / protobuf 定義
-storage/           ローカル S3 互換オブジェクトストレージ
-shared/            オブジェクトストレージクライアントと config.toml ローダー
-document_service/  PDF / DOCX 解析、Markdown ツリーと embedding 構築
-agent/             LangGraph ベースの文書 QA Agent
-backend/           FastAPI + SQLite によるセッション管理・永続化・SSE 配信
-frontend/          Next.js ワークスペース UI
+文書解析、探索 Agent、永続化、UI を独立サービスに分け、gRPC 契約とオブジェクトストレージで疎結合につないでいます。
+
+```mermaid
+flowchart LR
+    UI["Next.js ワークスペース"] <-->|"HTTP / SSE"| Backend["backend (FastAPI + SQLite)"]
+    Backend -->|"PrepareResources (gRPC)"| Doc["document_service (MinerU / python-docx / OpenVINO)"]
+    Doc -->|"raw / documents.zip / index"| S3["storage (S3 互換)"]
+    Backend <-->|"ChatCompletion / GenerateTitle (gRPC)"| Agent["agent (LangGraph)"]
+    Agent -->|"必要に応じてツリーと索引を参照"| S3
 ```
 
-アーキテクチャ全体は [ARCHITECTURE.md](ARCHITECTURE.md)、各パッケージの詳細は [agent](agent/README.md)・[document_service](document_service/README.md)・[backend](backend/README.md)・[frontend/docs/DESIGN.md](frontend/docs/DESIGN.md) を参照してください。
+```text
+agent_proto/       共有 protobuf / gRPC 契約
+storage/           ローカル S3 互換オブジェクトストレージ
+shared/            オブジェクトストレージクライアントと config.toml ローダー
+document_service/  PDF / DOCX 解析、Markdown ツリーとベクトル索引の構築
+agent/             LangGraph ベースの文書 QA・タイトル生成サービス
+backend/           セッション管理、SQLite 永続化と SSE ストリーミング
+frontend/          Next.js デュアルテーマ閲覧・QA ワークスペース
+```
+
+詳細ドキュメント：[全体アーキテクチャ](ARCHITECTURE.md) · [Agent](agent/README.md) · [文書サービス](document_service/README.md) · [バックエンド](backend/README.md) · [フロントエンド設計](frontend/docs/DESIGN.md)
 
 ## License
 
