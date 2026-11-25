@@ -20,23 +20,40 @@ beforeEach(() => {
     : [{ key: first, text: "Introduction" }, { key: target, text: "**Budget:** 48,000" }, { key: last, text: "- First item\n- Last item" }] }));
 });
 
-it("显示整份文档，引用只高亮目标段落并滚动，不重新请求或替换上下文", async () => {
+it("显示整份文档，引用只操作左栏滚动容器且目标可见时不重复拉扯，不调用 scrollIntoView", async () => {
+  const scrollTo = jest.fn();
   const view = render(<SessionDocuments {...props} selection={{ key: "documents/001-contract", block: false, version: 1 }} />);
   await screen.findByText("Introduction");
+  const container = screen.getByLabelText("Source content") as HTMLDivElement;
+  container.scrollTo = scrollTo;
+  Object.defineProperty(container, "clientHeight", { configurable: true, value: 400 });
+  container.getBoundingClientRect = () => ({ top: 100, bottom: 500, left: 0, right: 400, width: 400, height: 400, x: 0, y: 100, toJSON: () => ({}) });
+
+  const budgetBlock = screen.getByText("Budget:").closest("[data-source-key]") as HTMLElement;
+  const lastBlock = screen.getByText("Last item").closest("[data-source-key]") as HTMLElement;
+  budgetBlock.getBoundingClientRect = () => ({ top: 720, bottom: 780, left: 0, right: 380, width: 380, height: 60, x: 0, y: 720, toJSON: () => ({}) });
+  lastBlock.getBoundingClientRect = () => ({ top: 220, bottom: 280, left: 0, right: 380, width: 380, height: 60, x: 0, y: 220, toJSON: () => ({}) });
+
   expect(screen.getByText("Budget:")).toHaveProperty("tagName", "STRONG");
   expect(screen.getByText("Last item").closest("li")).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Terms" })).toBeInTheDocument();
   expect(screen.getAllByRole("option")).toHaveLength(2);
+
   view.rerender(<SessionDocuments {...props} selection={{ key: target, block: true, version: 1 }} />);
-  await waitFor(() => expect(screen.getByText("Budget:").closest("[data-source-key]")).toHaveAttribute("data-evidence-selected", "true"));
-  expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+  await waitFor(() => expect(budgetBlock).toHaveAttribute("data-evidence-selected", "true"));
+  expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+  expect(scrollTo).toHaveBeenCalledTimes(1);
+  expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ top: expect.any(Number) }));
   expect(screen.getByText("Introduction")).toBeInTheDocument();
   expect(screen.getByText("Last item")).toBeInTheDocument();
   expect(api.readFullDocument).toHaveBeenCalledTimes(1);
   expect(api.readSessionBlock).not.toHaveBeenCalled();
+
+  // 目标块已在可视区域内时不重复触发容器滚动
   view.rerender(<SessionDocuments {...props} resources={[...ready.state.resources]} selection={{ key: last, block: true, version: 2 }} />);
-  expect(screen.getByText("Budget:").closest("[data-source-key]")).toHaveAttribute("data-evidence-selected", "false");
-  expect(screen.getByText("Last item").closest("[data-source-key]")).toHaveAttribute("data-evidence-selected", "true");
+  expect(budgetBlock).toHaveAttribute("data-evidence-selected", "false");
+  expect(lastBlock).toHaveAttribute("data-evidence-selected", "true");
+  expect(scrollTo).toHaveBeenCalledTimes(1);
   expect(api.readFullDocument).toHaveBeenCalledTimes(1);
 });
 

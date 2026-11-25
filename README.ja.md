@@ -135,12 +135,12 @@ storage / agent / document service / backend / frontend を起動します。
 
 ブラウザで http://127.0.0.1:3000 を開けば使えます。
 
-1. Add source / Add sources で PDF または DOCX を選ぶと、ファイルを順番に処理します。1 回の選択は最大 20 ファイル、合計 32 MiB。空ファイルには対応しません。
-2. 処理完了後は `/tasks/{session_id}` に移動します。質問を入力して送信してください。要約や詳細のボタンは編集可能な質問を入力するだけです。
-3. 回答の数字の引用をクリックすると左側に全文とハイライトを表示します。閉じると Sources に戻り、Add files で文書を追加できます。
+1. ホーム入力欄左下のクリップボタンから PDF または DOCX を選ぶと、入力欄内のキューで順番に処理します。1 回の選択は最大 20 ファイル、合計 32 MiB。空ファイルには対応しません。
+2. 処理完了後は `/tasks/{session_id}` に自動遷移します。質問を送信すると回答と並行してモデルがセッションタイトルを自動生成し、トップバーと履歴ドロワーに反映します。
+3. 回答の数字の引用をクリックすると左側の白紙リーダーに全文とハイライトを表示します（境界線をドラッグして幅を調整可能）。閉じると Sources に戻り、`+` から文書を追加できます。
 4. 左上のメニューの Recent workspaces、または会話 URL から文書と履歴を復元できます。
 
-既定のデータベースは `backend/backend.sqlite3`、ローカル storage は `storage/data` です。`BACKEND_DATABASE_PATH` と `STORAGE_DATA_ROOT` で変更できます。`S3_ENDPOINT_URL` を設定すると外部 S3 互換サービスを利用し、ローカル storage の起動を省略します。終了時はスクリプトが起動したサービスを停止します。
+既定のデータベースは `backend/backend.sqlite3`、ローカル storage は `storage/data` です。`config.toml` の `[backend].database_path` / `[storage].data_root`（または同名環境変数）で変更できます。`[storage].endpoint_url`（または `S3_ENDPOINT_URL`）を設定すると外部 S3 互換サービスを利用し、ローカル storage の起動を省略します。終了時はスクリプトが起動したサービスを停止します。
 
 現在は単一ユーザー向けのローカル構成です。backend は単一プロセスで動作し、テナント認証や旧 `qa_*` データの自動移行はありません。
 

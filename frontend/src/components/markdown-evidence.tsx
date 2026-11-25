@@ -10,6 +10,7 @@ interface MarkdownEvidenceProps {
   className?: string;
   onOpenEvidence?: (uri: string, label: string) => void;
   evidencePlacement?: "inline" | "citation";
+  activeEvidenceKey?: string | null;
 }
 
 type MarkdownChildrenProps = {
@@ -24,7 +25,7 @@ type MarkdownBlock = {
   body: string;
 };
 
-export function MarkdownEvidence({ markdown, className, onOpenEvidence, evidencePlacement = "inline" }: MarkdownEvidenceProps) {
+export function MarkdownEvidence({ markdown, className, onOpenEvidence, evidencePlacement = "inline", activeEvidenceKey = null }: MarkdownEvidenceProps) {
   const preparedMarkdown = prepareMarkdown(markdown, evidencePlacement);
   return (
     <div className={className ?? "space-y-3 text-sm leading-6 text-foreground"}>
@@ -32,7 +33,7 @@ export function MarkdownEvidence({ markdown, className, onOpenEvidence, evidence
         <React.Fragment key={`${block.body}-${index}`}>
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
-            components={markdownComponents(onOpenEvidence, evidencePlacement)}
+            components={markdownComponents(onOpenEvidence, evidencePlacement, activeEvidenceKey)}
             transformLinkUri={transformMarkdownUrl}
           >
             {block.body}
@@ -43,7 +44,11 @@ export function MarkdownEvidence({ markdown, className, onOpenEvidence, evidence
   );
 }
 
-function markdownComponents(onOpenEvidence?: (uri: string, label: string) => void, evidencePlacement: "inline" | "citation" = "inline") {
+function markdownComponents(
+  onOpenEvidence?: (uri: string, label: string) => void,
+  evidencePlacement: "inline" | "citation" = "inline",
+  activeEvidenceKey: string | null = null,
+) {
   const shouldRenderCitationMarkers = evidencePlacement === "citation";
   const citationNumbers = new Map<number | string, number>();
 
@@ -91,11 +96,14 @@ function markdownComponents(onOpenEvidence?: (uri: string, label: string) => voi
           if (!citationNumbers.has(position)) citationNumbers.set(position, citationNumbers.size + 1);
           const citationNumber = String(citationNumbers.get(position));
           const citationLabel = `Source ${citationNumber}`;
+          const targetKey = documentKey(safeHref);
+          const isActive = Boolean(activeEvidenceKey && targetKey && activeEvidenceKey === targetKey);
           return (
             <a
               href={safeHref}
               aria-label={citationLabel}
               className="replay-evidence-citation-marker"
+              data-active={isActive ? "true" : "false"}
               title={citationLabel}
               onClick={
                 onOpenEvidence

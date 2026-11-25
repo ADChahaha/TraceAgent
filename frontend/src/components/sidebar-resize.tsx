@@ -2,17 +2,19 @@
 
 import * as React from "react";
 
-const LEFT_PANEL_MIN_WIDTH = 176;
-const LEFT_PANEL_MAX_WIDTH = 360;
-const LEFT_PANEL_KEY_STEP = 16;
-export const DEFAULT_LEFT_PANEL_WIDTH = 224;
+export const LEFT_PANEL_MIN_WIDTH = 220;
+export const LEFT_PANEL_MAX_WIDTH = 1200;
+const RIGHT_PANE_MIN_WIDTH = 320;
+const LEFT_PANEL_KEY_STEP = 24;
+export const DEFAULT_LEFT_PANEL_WIDTH = 560;
 const RIGHT_PANEL_MIN_WIDTH = 480;
 const RIGHT_PANEL_MAX_WIDTH = 960;
 const RIGHT_PANEL_KEY_STEP = 16;
 export const DEFAULT_RIGHT_PANEL_WIDTH = 560;
 
 export function useLeftSidebarResize() {
-  const [leftPanelWidth, setLeftPanelWidth] = React.useState(DEFAULT_LEFT_PANEL_WIDTH);
+  // null means default ~50% split via CSS until the user drags or adjusts with keyboard.
+  const [leftPanelWidth, setLeftPanelWidth] = React.useState<number | null>(null);
 
   const startLeftPanelResize = React.useCallback(
     (event: React.PointerEvent<HTMLButtonElement>) => {
@@ -22,7 +24,9 @@ export function useLeftSidebarResize() {
       if (startX === null) {
         return;
       }
-      const startWidth = leftPanelWidth;
+      const previousPane = handle.previousElementSibling;
+      const measuredWidth = previousPane ? Math.round(previousPane.getBoundingClientRect().width) : 0;
+      const startWidth = leftPanelWidth ?? (measuredWidth >= LEFT_PANEL_MIN_WIDTH ? measuredWidth : resolveDefaultSplitWidth());
       const pointerId = event.pointerId;
 
       const updateWidth = (clientX: number) => {
@@ -69,6 +73,7 @@ export function useLeftSidebarResize() {
   );
 
   const resizeLeftPanelByKeyboard = React.useCallback((event: React.KeyboardEvent<HTMLButtonElement>) => {
+    const maxWidth = resolveDynamicMaxWidth();
     if (event.key === "Home") {
       event.preventDefault();
       setLeftPanelWidth(LEFT_PANEL_MIN_WIDTH);
@@ -76,7 +81,7 @@ export function useLeftSidebarResize() {
     }
     if (event.key === "End") {
       event.preventDefault();
-      setLeftPanelWidth(LEFT_PANEL_MAX_WIDTH);
+      setLeftPanelWidth(maxWidth);
       return;
     }
     const delta = event.key === "ArrowLeft" ? -LEFT_PANEL_KEY_STEP : event.key === "ArrowRight" ? LEFT_PANEL_KEY_STEP : 0;
@@ -84,7 +89,7 @@ export function useLeftSidebarResize() {
       return;
     }
     event.preventDefault();
-    setLeftPanelWidth((current) => clampLeftPanelWidth(current + delta));
+    setLeftPanelWidth((current) => clampLeftPanelWidth((current ?? resolveDefaultSplitWidth()) + delta));
   }, []);
 
   return {
@@ -182,7 +187,7 @@ export function LeftSidebarResizeHandle({
   onPointerDown,
   onKeyDown,
 }: {
-  width: number;
+  width: number | null;
   onPointerDown: (event: React.PointerEvent<HTMLButtonElement>) => void;
   onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>) => void;
 }) {
@@ -194,9 +199,9 @@ export function LeftSidebarResizeHandle({
       aria-orientation="vertical"
       aria-valuemin={LEFT_PANEL_MIN_WIDTH}
       aria-valuemax={LEFT_PANEL_MAX_WIDTH}
-      aria-valuenow={width}
+      aria-valuenow={width ?? DEFAULT_LEFT_PANEL_WIDTH}
       className="replay-panel-resize-handle"
-      title="Resize left sidebar"
+      title="Drag to resize panels"
       onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}
     >
@@ -233,12 +238,26 @@ export function RightSidebarResizeHandle({
   );
 }
 
+function resolveDynamicMaxWidth(): number {
+  if (typeof window === "undefined" || !Number.isFinite(window.innerWidth) || window.innerWidth <= 0) {
+    return LEFT_PANEL_MAX_WIDTH;
+  }
+  return Math.min(LEFT_PANEL_MAX_WIDTH, Math.max(LEFT_PANEL_MIN_WIDTH, window.innerWidth - RIGHT_PANE_MIN_WIDTH));
+}
+
+function resolveDefaultSplitWidth(): number {
+  if (typeof window === "undefined" || !Number.isFinite(window.innerWidth) || window.innerWidth <= 0) {
+    return DEFAULT_LEFT_PANEL_WIDTH;
+  }
+  return clampLeftPanelWidth(Math.round(window.innerWidth * 0.5));
+}
+
 function clampLeftPanelWidth(width: number): number {
-  return Math.min(LEFT_PANEL_MAX_WIDTH, Math.max(LEFT_PANEL_MIN_WIDTH, width));
+  return Math.min(resolveDynamicMaxWidth(), Math.max(LEFT_PANEL_MIN_WIDTH, Math.round(width)));
 }
 
 function clampRightPanelWidth(width: number): number {
-  return Math.min(RIGHT_PANEL_MAX_WIDTH, Math.max(RIGHT_PANEL_MIN_WIDTH, width));
+  return Math.min(RIGHT_PANEL_MAX_WIDTH, Math.max(RIGHT_PANEL_MIN_WIDTH, Math.round(width)));
 }
 
 function readClientX(event: Pick<MouseEvent, "clientX">): number | null {

@@ -270,3 +270,46 @@ it("原有文件选择器打开时焦点和轮询不禁用补传，取消后恢�
     expect(resume.mock.calls.length).toBeGreaterThan(calls);
   } finally { view.unmount(); jest.useRealTimers(); }
 });
+
+it("详情页去除冗余副顶栏、展示会话标题，点击引用与切换列表绝不重置用户拖拽的分栏宽度", async () => {
+  const withTitle = {
+    ...ready,
+    state: {
+      ...ready.state,
+      title: "Contract Payment Terms",
+      turns: [{
+        id: "t1",
+        status: "completed" as const,
+        error: null,
+        items: [{ id: "message:m", kind: "assistant" as const, status: "completed" as const, text: "37 days [source](documents/contract.md)" }],
+      }],
+    },
+  };
+  const originalWidth = window.innerWidth;
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
+  try {
+    resume.mockResolvedValue(controlledStream(withTitle).response);
+    const user = userEvent.setup();
+    render(<TaskDetail taskId="s1" />);
+    expect(await screen.findByText("Contract Payment Terms")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Document conversation" })).not.toBeInTheDocument();
+
+    const resize = screen.getByRole("separator", { name: "Resize left sidebar" });
+    resize.focus();
+    await user.keyboard("{ArrowRight}{ArrowRight}");
+    const resizedWidth = resize.getAttribute("aria-valuenow");
+    expect(Number(resizedWidth)).toBe(768);
+
+    const citation = screen.getByRole("link", { name: "Source 1" });
+    await user.click(citation);
+    expect(await screen.findByText("Payment due in 37 days")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Source 1" })).toHaveAttribute("data-active", "true");
+    expect(screen.getByRole("separator", { name: "Resize left sidebar" })).toHaveAttribute("aria-valuenow", resizedWidth!);
+
+    await user.click(screen.getByRole("button", { name: "Close document" }));
+    expect(screen.getByLabelText("Sources list")).toBeInTheDocument();
+    expect(screen.getByRole("separator", { name: "Resize left sidebar" })).toHaveAttribute("aria-valuenow", resizedWidth!);
+  } finally {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: originalWidth });
+  }
+});

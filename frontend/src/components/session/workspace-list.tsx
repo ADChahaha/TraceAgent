@@ -32,7 +32,7 @@ export function WorkspaceList({ sessionId, onSelect }: { sessionId?: string; onS
     {error && <p role="alert">{error}</p>}
     {!loading && !error && sessions.length === 0 && <p>No workspaces yet.</p>}
     {sessions.map((session) => <Link key={session.id} href={`/tasks/${encodeURIComponent(session.id)}`} onClick={onSelect} aria-current={session.id === sessionId ? "page" : undefined}>
-      <BookOpen size={18} /><span>{session.title?.trim() || "Untitled workspace"}<small>{session.active_turn_id ? "running" : session.status}</small></span>
+      <BookOpen size={15} strokeWidth={1.75} /><span>{session.title?.trim() || "Untitled workspace"}<small>{session.active_turn_id ? "running" : session.status}</small></span>
     </Link>)}
   </nav>;
 }

@@ -4,6 +4,15 @@ last updated: 2026-11-25
 
 ## 2026-11-25
 
+### TraceAgent 视觉与排版重设计、可读会话标题展示与滚动/分栏修复
+
+- 品牌与页面去噪：元数据与顶栏统一更新为 `TraceAgent`；顶栏收敛为 44px 极简图标栏并展示当前会话可读标题；删除废弃的 `workspace-overview.tsx` 与首页左侧空栏，改为单聚焦居中舞台、一体化输入框与行内文件队列；删除详情页冗余的 `Document conversation` 副顶栏，左侧文件列表改为图标化展示并支持直接点击文件名打开阅读。
+- 双主题中性色阶与白纸原文：Light 模式对齐左 `#FAFAFA` / 1px `#E6E6E6` / 右 `#FFFFFF` / 钢蓝 `#3978C8`；Dark 模式对齐顶栏与左栏 `#141414` / 右对话 `#181818` / 气泡与输入框 `#222222` / 钢蓝 `#4E8EE0`，同时左侧打开的原始文档纸面恒定保持 `#FAFAFA` 白纸黑字配 8px 暗槽。
+- 引用高亮、局部滚动与自由分栏：原文高亮改为钢蓝柔光块（`rgba(57, 120, 200, 0.13)` + 3px 直竖条无弯钩），激活数字引用同步高亮；`source-reader.tsx` 改用左侧容器 `scrollTo` 替代 `scrollIntoView`（目标可见时不重复拉扯）；`sidebar-resize.tsx` 放宽拖拽范围并默认对半展开，点击引用与关闭阅读器不再重置宽度。
+- 会话标题接线：消费后端 `GET /chat/sessions`、`GET /resume` 的 `title` 字段与 `session.updated` SSE 事件，最近会话抽屉与顶栏展示模型总结或兜底派生的可读标题，告别 UUID。
+
+验证：`pnpm --dir frontend test --runInBand`（14 套件 78 项通过，含英文文案门禁）、`pnpm --dir frontend lint`（0 警告）与 `pnpm --dir frontend build` 全部通过；结合真实 5 服务全栈与真实浏览器（1440x900）完成 Light/Dark 首页、旧库迁移抽屉标题、上传自动跳转、真实问答与异步模型标题生成、拖拽分栏不重置、钢蓝柔光高亮与局部滚动及 Dark 模式白纸文档核验。
+
 ### 统一前端用户态错误提示并修正文件报错样式
 
 - 新增 [error-messages.ts](../src/lib/error-messages.ts)，接入 `conversation.tsx`、`documents.tsx`、`source-reader.tsx`、`task-detail.tsx`、`upload-workbench.tsx`、`use-file-uploads.ts` 与 `use-session.ts`，将 `backend_restarted`、`storage_failure`、`backend unavailable`、`Failed to fetch` 与 `Stream interrupted` 转为可读英文提示，并兜底拦截历史会话或异常通道可能残留的底层技术串。

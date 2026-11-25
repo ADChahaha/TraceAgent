@@ -5,8 +5,8 @@ import { ThemeBootstrap } from "@/components/theme-bootstrap";
 import { Toaster } from "@/components/ui/sonner";
 
 export const metadata: Metadata = {
-  title: "Agent Gate",
-  description: "Document QA workspace with traceable agent evidence"
+  title: "TraceAgent",
+  description: "Document QA workspace with traceable evidence"
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

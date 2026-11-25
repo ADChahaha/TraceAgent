@@ -1,7 +1,5 @@
 "use client";
 
-import { BookOpen } from "lucide-react";
-import styles from "@/components/session/workspace.module.css";
 import { readWorkspaceDraft, saveWorkspaceDraft } from "@/lib/session-store";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { removeSessionFile } from "@/lib/api";
@@ -33,7 +31,7 @@ function SessionWorkspace({ sessionId }: { sessionId: string }) {
   const uploads = useFileUploads(async () => sessionId, () => { setSelection(null); session.refresh(); });
 
   useEffect(() => {
-    // 服务端快照接管已完成文件，避免其他标签页删除后本地占位再次出现。
+    // Let server snapshot take over completed files so removals from another tab do not leave stale rows.
     for (const item of uploads.items) {
       if (item.status === "ready" && resources.some((resource) => resource.type === "raw" && resource.location.split("/").at(-1) === item.file.name)) uploads.forget(item.file.name);
     }
@@ -82,17 +80,29 @@ function SessionWorkspace({ sessionId }: { sessionId: string }) {
     disabled={fileBusy || session.running || unavailable} mutating={uploads.busy} uploads={uploads.items} onRetry={uploads.retry} onDismiss={(file) => void uploads.remove(file)} selection={selection}
     onSelect={(key) => openEvidence(key, false)} onClose={() => setSelection(null)} onUpload={addFiles} onFilePickerChange={(open) => { filePickerOpen.current = open; }}
     onRemove={(id) => void removeFile(id)} /> : undefined;
+
   return <main className="task-detail-fullscreen-shell" aria-label="Task detail workspace">
-    <WorkspaceShell sessionId={sessionId} status={fileBusy || uploads.busy ? "Updating documents" : session.connection} review={review} reviewRequest={(selection?.version ?? 0) + sourceRequest}>
+    <WorkspaceShell
+      sessionId={sessionId}
+      sessionTitle={session.snapshot?.state.title}
+      status={fileBusy || uploads.busy ? "Updating documents" : session.connection}
+      review={review}
+      reviewRequest={(selection?.version ?? 0) + sourceRequest}
+    >
       <section className="replay-agent-panel-slot" aria-label="Agent workspace" data-agent-content-mode="centered">
         <div className="replay-agent-panel">
-          <header className={styles.sessionHeading}><BookOpen size={25} /><div><h1>Document conversation</h1><p>{resources.filter((resource) => resource.type === "raw").length} sources · Answers grounded in your documents</p></div></header>
           {(session.error || fileError || uploads.error) && <div role="alert" className="border-b p-3 text-sm text-destructive">
             {fileError ?? uploads.error ?? session.error}
             {session.connection === "reconnecting" ? <span> Reconnecting...</span> : session.error && <button onClick={() => session.refresh()} className="ml-2 underline">Reconnect</button>}
           </div>}
           {!session.snapshot && <p className="p-4 text-sm text-muted-foreground">Loading session...</p>}
-          <Conversation turns={session.snapshot?.state.turns ?? []} running={session.running} pending={session.pending} onEvidence={(uri) => openEvidence(uri)} />
+          <Conversation
+            turns={session.snapshot?.state.turns ?? []}
+            running={session.running}
+            pending={session.pending}
+            activeEvidenceKey={selection?.block ? selection.key : null}
+            onEvidence={(uri) => openEvidence(uri)}
+          />
           <SessionComposer initialDraft={initialDraft} running={session.running} canCancel={Boolean(session.snapshot?.state.active_turn_id)} cancelling={session.cancelling}
             disabled={unavailable || fileBusy || uploads.busy || uploads.items.some((item) => item.status === "failed") || !resources.some((resource) => resource.type === "documents")}
             onSend={(content) => { saveWorkspaceDraft(sessionId, ""); session.send(content); }} onCancel={() => void session.cancel()} />

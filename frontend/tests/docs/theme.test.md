@@ -23,7 +23,7 @@
 
 ## 测试函数
 
-- `Codex 主题使用统一的 light/dark token`：验证 light/dark 的关键颜色值是否收敛到 Codex 风格的白底、深灰和蓝色 accent。
+- `TraceAgent 主题使用统一的 Antigravity / Codex 中性色阶、柔光高亮与暗色白纸文档`：验证 `globals.css` 与 `workspace.module.css` 中 Light/Dark 中性色阶（`#FAFAFA`、`#E6E6E6`、`#FFFFFF`、`#3978C8` 与 `#141414`、`#181818`、`#222222`、`#4E8EE0`）、Dark 模式左侧文档恒定 `#FAFAFA` 白纸黑字及钢蓝柔光块无弯钩样式。
 - `工作台面板和代码块都复用主题表面变量`：验证 replay 工作台的主面板、工具面板、代码块和对话框背景都不再直接写死白底，而是跟随主题变量切换。
 - `Agent turn 使用更开的上下间距，工具行内部保持紧凑`：验证每条 turn 内“对话内容 -> tool 行”的上下间隔更开（当前目标是 14px），同时工具行和折叠 tool group 内部保持紧凑横向间隔；折叠 group 使用 `icon / summary / chevron` 三列，箭头展开时旋转，展开明细不额外左缩进，PDF 删除按钮也有明确点击尺寸。
 - `Agent 文本和工具摘要在窄宽度下换行，不用隐藏省略裁剪`：验证 Agent 正文、evidence 链接、tool 摘要和折叠 tool group 摘要都允许在窄列中换行，防止压缩侧栏或打开 Review 后文字被 ellipsis/overflow hidden 截断。

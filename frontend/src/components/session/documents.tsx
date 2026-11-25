@@ -1,6 +1,6 @@
 "use client";
 
-import { FileText, Plus, Search, X } from "lucide-react";
+import { Download, FileText, Plus, Search, Trash2, X } from "lucide-react";
 import styles from "./workspace.module.css";
 import { useEffect, useRef, useState } from "react";
 import { listSessionDocuments, sessionFileUrl } from "@/lib/api";
@@ -12,6 +12,7 @@ import { SourceReader, documentRoot, documentLabel } from "./source-reader";
 import type { DocumentEntry, SessionResource } from "@/lib/session-types";
 
 export interface DocumentSelection { key: string; block: boolean; version: number }
+
 export function SessionDocuments({ sessionId, resources, disabled, selection, onSelect, onUpload, onRemove, uploads = [], mutating = false, onRetry, onDismiss, onClose, onFilePickerChange }: {
   uploads?: FileUpload[]; mutating?: boolean; onRetry?: (file: File) => void; onDismiss?: (file: File) => void;
   onClose: () => void; onFilePickerChange?: (open: boolean) => void;
@@ -45,45 +46,84 @@ export function SessionDocuments({ sessionId, resources, disabled, selection, on
   }, [sessionId, revision, hasDocuments]);
   const roots = [...new Set(entries.map((entry) => documentRoot(entry.key)))];
   const root = selection?.key ? documentRoot(selection.key) : null;
+
   if (root && hasDocuments) return <section className={styles.sources} aria-label="Document reader">
     <header className={styles.readerHeader}>
-      <label><span>Source document</span><select aria-label="Source document" value={root} onChange={(event) => onSelect(event.target.value)}>
+      <select aria-label="Source document" value={root} onChange={(event) => onSelect(event.target.value)}>
         {roots.map((key) => <option key={key} value={key}>{documentLabel(key)}</option>)}
-      </select></label>
-      <button type="button" aria-label="Close document" title="Back to sources" onClick={onClose}><X size={18} /></button>
+      </select>
+      <button type="button" className={styles.iconBtn} aria-label="Close document" title="Back to sources" onClick={onClose}>
+        <X size={15} />
+      </button>
     </header>
     <div className={styles.sourceContent} aria-label="Source content">
-      <SourceReader sessionId={sessionId} root={root} revision={revision} selection={selection} onSelect={onSelect} />
+      <div className={styles.sourcePaper}>
+        <SourceReader
+          sessionId={sessionId}
+          root={root}
+          revision={revision}
+          selection={selection}
+          onSelect={onSelect}
+        />
+      </div>
     </div>
   </section>;
+
+  const totalCount = raw.length + pending.filter((item) => !raw.some((resource) => resource.location.split("/").at(-1) === item.file.name)).length;
   return <section className={styles.sources} aria-label="Session documents">
     <div className={styles.sourcesControls}>
-      <div className={styles.sourceHeading}><h2>Sources</h2><span>{raw.length + pending.filter((item) => !raw.some((resource) => resource.location.split("/").at(-1) === item.file.name)).length}</span>
-        <label className={styles.uploadLabel}><Plus size={16} />Add files<input ref={fileInput} type="file" className="sr-only" aria-label="Add session files" multiple accept={DOCUMENT_ACCEPT} disabled={disabled} onClick={() => onFilePickerChange?.(true)} onChange={(event) => {
-          const files = Array.from(event.target.files ?? []); event.target.value = ""; if (files.length) onUpload(files);
-          onFilePickerChange?.(false);
-        }} /></label>
+      <div className={styles.sourceHeading}>
+        <h2>Sources</h2>
+        <span className={styles.sourceCount}>{totalCount}</span>
+        <label className={styles.uploadLabel} title="Add files">
+          <Plus size={15} strokeWidth={1.9} />
+          <input ref={fileInput} type="file" className="sr-only" aria-label="Add session files" multiple accept={DOCUMENT_ACCEPT} disabled={disabled} onClick={() => onFilePickerChange?.(true)} onChange={(event) => {
+            const files = Array.from(event.target.files ?? []);
+            event.target.value = "";
+            if (files.length) onUpload(files);
+            onFilePickerChange?.(false);
+          }} />
+        </label>
       </div>
-      <label className={styles.search}><Search size={16} /><input type="search" aria-label="Search sources" placeholder="Search sources" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
-      {search && !filtered.length && !visibleUploads.length && <p className="text-sm text-muted-foreground">No matching sources</p>}
+      <label className={styles.search}>
+        <Search size={14} />
+        <input type="search" aria-label="Search sources" placeholder="Search" value={search} onChange={(event) => setSearch(event.target.value)} />
+      </label>
+      {search && !filtered.length && !visibleUploads.length && <p className="px-4 py-2 text-xs text-muted-foreground">No matching sources</p>}
       <ul className={styles.sourceList} aria-label="Sources list">
         {visibleUploads.map((item) => <li key={`upload:${item.file.name}`}>
-          <span className={styles.fileIcon}><FileText size={21} /></span>
-          <span className={styles.fileName}>{item.file.name}{item.error && <small role="alert" className="text-destructive">{item.error}</small>}</span>
+          <span className={styles.fileIcon}><FileText size={15} strokeWidth={1.75} /></span>
+          <span className={styles.fileName}>
+            {item.file.name}
+            {item.error && <small role="alert">{item.error}</small>}
+          </span>
           <UploadStatus item={item} disabled={disabled} onRetry={() => onRetry?.(item.file)} />
-          {item.status === "failed" && <button aria-label={`Dismiss ${item.file.name}`} onClick={() => onDismiss?.(item.file)}>Remove</button>}
+          {item.status === "failed" && <button type="button" className={styles.rowIconAction} aria-label={`Dismiss ${item.file.name}`} title={`Dismiss ${item.file.name}`} onClick={() => onDismiss?.(item.file)}>
+            <X size={14} />
+          </button>}
         </li>)}
         {filtered.map((resource) => {
           const name = resource.location.split("/").at(-1) ?? "Document";
-          return <li key={resource.id} >
-            <span className={styles.fileIcon}><FileText size={21} /></span>
-            <a href={sessionFileUrl(sessionId, resource.id)} aria-label={`Download ${name}`} className={styles.fileName}>{name}<small>{name.split(".").at(-1)?.toUpperCase()} · Download</small></a>
-            <button disabled={disabled || mutating} aria-label={`Remove ${name}`} onClick={() => onRemove(resource.id)} className="text-muted-foreground disabled:opacity-40">Remove</button>
+          const stem = name.replace(/\.[^.]+$/, "").toLowerCase();
+          const matchedRoot = roots.find((candidate) => documentLabel(candidate).toLowerCase() === stem);
+          return <li key={resource.id}>
+            <span className={styles.fileIcon}><FileText size={15} strokeWidth={1.75} /></span>
+            {matchedRoot
+              ? <button type="button" className={styles.fileName} onClick={() => onSelect(matchedRoot)} title={name}>{name}</button>
+              : <span className={styles.fileName} title={name}>{name}</span>}
+            <span className={styles.rowActions}>
+              <a href={sessionFileUrl(sessionId, resource.id)} aria-label={`Download ${name}`} title={`Download ${name}`} className={styles.rowIconAction}>
+                <Download size={14} strokeWidth={1.75} />
+              </a>
+              <button type="button" disabled={disabled || mutating} aria-label={`Remove ${name}`} title={`Remove ${name}`} onClick={() => onRemove(resource.id)} className={styles.rowIconAction}>
+                <Trash2 size={14} strokeWidth={1.75} />
+              </button>
+            </span>
           </li>;
         })}
       </ul>
     </div>
-    {listError && <p role="alert" className="p-4 text-sm">{listError}</p>}
-    {!hasDocuments && <p className="p-4 text-sm text-muted-foreground">Upload documents to start.</p>}
+    {listError && <p role="alert" className="p-3 text-xs text-destructive">{listError}</p>}
+    {!hasDocuments && <p className="p-4 text-xs text-muted-foreground">Upload documents to start.</p>}
   </section>;
 }

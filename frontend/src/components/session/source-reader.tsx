@@ -13,8 +13,20 @@ export function documentLabel(key: string) {
   return (key.split("/").at(-1) ?? key).replace(/^\d+-/, "").replace(/\.md$/, "").replace(/-Processed (?:DOCX|PDF)$/, "");
 }
 
+function scrollContainerTo(container: HTMLDivElement, top: number, behavior: ScrollBehavior) {
+  if (typeof container.scrollTo === "function") {
+    container.scrollTo({ top, behavior });
+  } else {
+    container.scrollTop = top;
+  }
+}
+
 export function SourceReader({ sessionId, root, revision, selection, onSelect }: {
-  sessionId: string; root: string; revision: string; selection: DocumentSelection | null; onSelect: (key: string) => void;
+  sessionId: string;
+  root: string;
+  revision: string;
+  selection: DocumentSelection | null;
+  onSelect: (key: string) => void;
 }) {
   const [result, setResult] = useState<{ id: string; root: string; revision: string; document?: FullDocument; error?: string } | null>(null);
   const nodes = useRef(new Map<string, HTMLDivElement>());
@@ -30,9 +42,24 @@ export function SourceReader({ sessionId, root, revision, selection, onSelect }:
   const shown = result?.id === sessionId && result.root === root && result.revision === revision ? result : null;
   const selectedKey = selection?.block ? selection.key : null;
   useEffect(() => {
-    if (selectedKey && shown?.document) nodes.current.get(selectedKey)?.scrollIntoView?.({ block: "center", behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    if (!selectedKey || !shown?.document) return;
+    const target = nodes.current.get(selectedKey);
+    const container = target?.closest("[aria-label='Source content']") as HTMLDivElement | null;
+    if (!target || !container) return;
+    const containerRect = container.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const margin = 24;
+    const hasGeometry = containerRect.height > 0 && targetRect.height > 0;
+    const alreadyVisible = hasGeometry
+      && targetRect.top >= containerRect.top + margin
+      && targetRect.bottom <= containerRect.bottom - margin;
+    if (alreadyVisible) return;
+    const relativeTop = targetRect.top - containerRect.top + container.scrollTop;
+    const desiredTop = Math.max(0, relativeTop - Math.max(0, (container.clientHeight - targetRect.height) / 2));
+    const behavior = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+    scrollContainerTo(container, desiredTop, behavior);
   }, [selectedKey, selection?.version, shown?.document]);
-  if (!shown) return <p className="text-sm text-muted-foreground">Loading document...</p>;
+  if (!shown) return <p className="text-xs text-muted-foreground">Loading document...</p>;
   if (shown.error) return <p role="alert">{shown.error}</p>;
   const blocks = shown.document?.blocks ?? [];
   return <article aria-label="Full document" className={styles.fullDocument}>

@@ -1,24 +1,25 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { FileText, Loader2, Plus, SendHorizonal, X } from "lucide-react";
+import Link from "next/link";
+import { ArrowUp, FileText, Loader2, Paperclip, X } from "lucide-react";
 import { createSession, openCompletion } from "@/lib/api";
 import { formatUserError } from "@/lib/error-messages";
 import { consumeSessionStream } from "@/lib/session-stream";
 import { rememberSession } from "@/lib/session-store";
 import { DOCUMENT_ACCEPT } from "@/lib/document-files";
-import { useFileUploads } from "@/lib/use-file-uploads";
+import { useFileUploads, type FileUpload } from "@/lib/use-file-uploads";
 import { UploadStatus } from "@/components/session/upload-status";
-import Link from "next/link";
 import { WorkspaceShell } from "@/components/session/workspace-shell";
 import { Button } from "@/components/ui/button";
-import { WorkspaceOverview } from "@/components/session/workspace-overview";
-import styles from "@/components/session/workspace.module.css";
 import { Textarea } from "@/components/ui/textarea";
+import styles from "@/components/session/workspace.module.css";
 
-export function UploadWorkbench({ onCreated, onFilesReady }: { onCreated?: (sessionId: string) => void; onFilesReady?: (sessionId: string, draft: string) => void }) {
+export function UploadWorkbench({ onCreated, onFilesReady }: {
+  onCreated?: (sessionId: string) => void;
+  onFilesReady?: (sessionId: string, draft: string) => void;
+}) {
   const [question, setQuestion] = useState("");
-  const [sourceRequest, setSourceRequest] = useState(0);
   const [createdId, setCreatedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -78,58 +79,63 @@ export function UploadWorkbench({ onCreated, onFilesReady }: { onCreated?: (sess
     }
   }
 
-  function choosePrompt(prompt: string) {
-    setQuestion(prompt);
-    document.getElementById("first-question")?.focus();
-  }
-  const sources = <section className={styles.sources}>
-    <div className={styles.sourceHeading}><h2>Sources</h2><span>{files.length}</span></div>
-    <ul className={styles.sourceList} aria-label="Sources list">
-      {uploads.items.map((item) => <li key={item.file.name}>
-        <FileRow item={item} submitting={submitting} busy={uploads.busy} onRetry={() => uploads.retry(item.file)} onRemove={() => void uploads.remove(item.file)} />
-      </li>)}
-    </ul>
-    {!files.length && <div className={styles.sourceEmpty}><FileText size={30} strokeWidth={1.3} /><p>Your sources live here</p><small>Add a PDF or Word document to get started.</small></div>}
-    <button type="button" className={styles.addSource} disabled={submitting} onClick={() => fileInput.current?.click()}><Plus size={19} />Add source</button>
-  </section>;
-  return <WorkspaceShell sessionId={createdId ?? undefined} review={sources} reviewRequest={sourceRequest}>
+  return <WorkspaceShell sessionId={createdId ?? undefined}>
     <main className={styles.home} aria-label="Agent task workspace">
-      <WorkspaceOverview count={files.length} onAdd={() => fileInput.current?.click()} onPrompt={choosePrompt} />
-      <form className={styles.firstComposer} aria-label="Create task composer" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
-        <input ref={fileInput} type="file" multiple accept={DOCUMENT_ACCEPT} aria-label="Document file input" className="sr-only" disabled={submitting} onChange={(event) => {
-          const selected = Array.from(event.target.files ?? []);
-          uploads.add(selected);
-          setSourceRequest((value) => value + 1);
-          event.target.value = ""; setError(null);
-        }} />
-        <div className={styles.inputRow}>
-          <Textarea id="first-question" aria-label="QA question input" value={question} onChange={(event) => setQuestion(event.target.value)}
-            placeholder="Ask a question about your sources..." disabled={submitting}
+      <div className={styles.homeCenter}>
+        <h1 className={styles.homeTitle}>TraceAgent</h1>
+        <form className={styles.firstComposer} aria-label="Create task composer" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+          <input ref={fileInput} type="file" multiple accept={DOCUMENT_ACCEPT} aria-label="Document file input" className="sr-only" disabled={submitting} onChange={(event) => {
+            const selected = Array.from(event.target.files ?? []);
+            uploads.add(selected);
+            event.target.value = "";
+            setError(null);
+          }} />
+          {uploads.items.length > 0 && <ul className={styles.inlineFileList} aria-label="Sources list">
+            {uploads.items.map((item) => <li key={item.file.name} className={styles.inlineFileRow}>
+              <InlineFileRow item={item} submitting={submitting} busy={uploads.busy} onRetry={() => uploads.retry(item.file)} onRemove={() => void uploads.remove(item.file)} />
+            </li>)}
+          </ul>}
+          <Textarea id="first-question" aria-label="QA question input" className={styles.homeTextarea} value={question} onChange={(event) => setQuestion(event.target.value)}
+            placeholder="Ask a question about your documents..." disabled={submitting}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey && !event.nativeEvent.isComposing) {
                 event.preventDefault(); void submit();
               }
             }} />
-          <Button type="submit" size="icon" aria-label="Upload documents and ask" disabled={submitting || uploads.busy || (files.length > 0 && !uploads.ready)}>
-            {submitting ? <Loader2 size={20} className="animate-spin" /> : <SendHorizonal size={20} />}
-          </Button>
-        </div>
-        {(error || uploads.error) && <div className="home-task-composer-error" role="alert">{error ?? uploads.error}</div>}
-        <div className={styles.composerHint}>{submitting ? "Starting your answer..." : uploads.busy ? "Processing sources..." : files.length ? `${files.length} document${files.length > 1 ? "s" : ""}` : "Add sources to start a conversation"}</div>
-        {createdId && !uploads.busy && <Link className="text-xs underline" href={`/tasks/${createdId}`}>Open workspace</Link>}
-      </form>
+          {(error || uploads.error) && <div className="home-task-composer-error" role="alert">{error ?? uploads.error}</div>}
+          <div className={styles.composerBar}>
+            <div className={styles.composerBarLeft}>
+              <button type="button" className={styles.attachBtn} aria-label="Add sources" title="Add PDF or DOCX files" disabled={submitting} onClick={() => fileInput.current?.click()}>
+                <Paperclip size={16} strokeWidth={1.8} />
+              </button>
+              <span className={styles.composerHint}>
+                {submitting ? "Starting answer..." : uploads.busy ? "Processing..." : files.length ? `${files.length} document${files.length > 1 ? "s" : ""}` : "PDF, DOCX"}
+              </span>
+            </div>
+            <Button type="submit" size="icon" className={styles.sendBtn} aria-label="Upload documents and ask" disabled={submitting || uploads.busy || (files.length > 0 && !uploads.ready)}>
+              {submitting ? <Loader2 size={16} className="animate-spin" /> : <ArrowUp size={16} strokeWidth={2.2} />}
+            </Button>
+          </div>
+          {createdId && !uploads.busy && <Link className={styles.workspaceLink} href={`/tasks/${createdId}`}>Open workspace</Link>}
+        </form>
+      </div>
     </main>
   </WorkspaceShell>;
 }
 
-function FileRow({ item, submitting, busy, onRetry, onRemove }: {
-  item: import("@/lib/use-file-uploads").FileUpload; submitting: boolean; busy: boolean; onRetry: () => void; onRemove: () => void;
+function InlineFileRow({ item, submitting, busy, onRetry, onRemove }: {
+  item: FileUpload; submitting: boolean; busy: boolean; onRetry: () => void; onRemove: () => void;
 }) {
   const file = item.file;
   return <>
-    <span className={styles.fileIcon}><FileText size={23} /></span>
-    <span className={styles.fileName}>{file.name}<small>{file.name.split(".").at(-1)?.toUpperCase()} · {(file.size / 1024).toFixed(1)} KB</small>{item.error && <small role="alert" className="text-destructive">{item.error}</small>}</span>
+    <FileText size={15} strokeWidth={1.75} />
+    <span className={styles.inlineFileName}>
+      {file.name}
+      {item.error && <small role="alert">{item.error}</small>}
+    </span>
     <UploadStatus item={item} disabled={submitting} onRetry={onRetry} />
-    <button type="button" disabled={submitting || ["processing", "removing"].includes(item.status) || (busy && item.status === "ready")} aria-label={`Remove ${file.name}`} onClick={onRemove}><X size={16} /></button>
+    <button type="button" className={styles.rowIconAction} disabled={submitting || ["processing", "removing"].includes(item.status) || (busy && item.status === "ready")} aria-label={`Remove ${file.name}`} title={`Remove ${file.name}`} onClick={onRemove}>
+      <X size={14} />
+    </button>
   </>;
 }

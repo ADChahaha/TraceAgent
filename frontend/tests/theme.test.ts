@@ -16,16 +16,30 @@ function cssRuleContainingSelector(selector: string) {
   );
 }
 
-it("Codex 主题使用统一的 light/dark token", () => {
-  expect(globalsCss).toContain("--foreground: #1a1c1f;");
-  expect(globalsCss).toContain("--secondary: #f4f4f5;");
-  expect(globalsCss).toContain("--muted-foreground: #6f6f76;");
-  expect(globalsCss).toContain("--codex-accent: #339cff;");
+it("TraceAgent 主题使用统一的 Antigravity / Codex 中性色阶、柔光高亮与暗色白纸文档", () => {
+  expect(globalsCss).toContain("--background: #ffffff;");
+  expect(globalsCss).toContain("--foreground: #171717;");
+  expect(globalsCss).toContain("--border: #e6e6e6;");
+  expect(globalsCss).toContain("--codex-accent: #3978c8;");
   expect(globalsCss).toContain("--background: #181818;");
-  expect(globalsCss).toContain("--card: #202020;");
-  expect(globalsCss).toContain("--secondary: #262626;");
-  expect(globalsCss).toContain("--accent: #2a2a2a;");
-  expect(globalsCss).toContain("--border: #303030;");
+  expect(globalsCss).toContain("--card: #222222;");
+  expect(globalsCss).toContain("--codex-accent: #4e8ee0;");
+
+  const workspaceCss = readFileSync(resolve(__dirname, "../src/components/session/workspace.module.css"), "utf8");
+  expect(workspaceCss).toContain("--ws-left-bg: #fafafa;");
+  expect(workspaceCss).toContain("--ws-chat-bg: #ffffff;");
+  expect(workspaceCss).toContain("--ws-line: #e6e6e6;");
+  expect(workspaceCss).toContain("--ws-accent: #3978c8;");
+  expect(workspaceCss).toContain("--ws-topbar-bg: #141414;");
+  expect(workspaceCss).toContain("--ws-chat-bg: #181818;");
+  expect(workspaceCss).toContain("--ws-elevated-bg: #222222;");
+  expect(workspaceCss).toContain("--ws-accent: #4e8ee0;");
+  expect(workspaceCss).toContain("--ws-paper-bg: #fafafa;");
+  expect(workspaceCss).toContain("--ws-paper-gutter: 8px;");
+  expect(workspaceCss).toContain("--replay-foreground: #171717;");
+  expect(workspaceCss).toContain("border-radius: 0 6px 6px 0;");
+  expect(workspaceCss).toContain("background: rgba(57, 120, 200, 0.13);");
+  expect(workspaceCss).toContain("border-left-color: #3978c8;");
 });
 
 it("工作台面板和代码块都复用主题表面变量", () => {

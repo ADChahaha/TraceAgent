@@ -75,7 +75,7 @@ it("追加去重文件、移除文件，Enter 提交而 Shift Enter 换行", asy
   await waitFor(() => expect(complete).toHaveBeenCalled());
 });
 
-it("无文件不创建会话，选文件即创建但空问题不发送，保留主题和侧栏缩放", async () => {
+it("无文件不创建会话，选文件即创建但空问题不发送，保留主题切换", async () => {
   render(<UploadWorkbench />);
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Upload documents and ask" }));
@@ -85,9 +85,6 @@ it("无文件不创建会话，选文件即创建但空问题不发送，保留�
   expect(await screen.findByRole("alert")).toHaveTextContent("Enter a question");
   expect(create).toHaveBeenCalledTimes(1);
   expect(complete).not.toHaveBeenCalled();
-  const resize = screen.getByRole("separator", { name: "Resize left sidebar" });
-  resize.focus(); await user.keyboard("{ArrowRight}");
-  expect(resize).toHaveAttribute("aria-valuenow", "240");
   await user.click(screen.getByRole("button", { name: "Toggle theme" }));
   expect(document.documentElement).toHaveAttribute("data-theme", "dark");
 });
@@ -103,17 +100,16 @@ it("窄窗口默认收起侧栏，仍可打开最近会话", async () => {
   } finally { Object.defineProperty(window, "innerWidth", { configurable: true, value: width }); }
 });
 
-it("资料工作台保留摘要入口，但输入框下方不显示建议问题", async () => {
+it("首页使用 TraceAgent 单聚焦居中舞台，无左侧空栏与快捷提示卡", async () => {
   render(<UploadWorkbench />);
-  expect(screen.getByRole("heading", { name: "Your document workspace" })).toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "Sources" })).toBeInTheDocument();
-  expect(screen.queryByText(/notebooklm/i)).not.toBeInTheDocument();
-  for (const name of ["Summarize the main ideas", "What are the key findings?", "Compare the sources"]) {
-    expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "TraceAgent" })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "TraceAgent" })).toBeInTheDocument();
+  expect(screen.queryByRole("complementary", { name: "Document review" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("separator", { name: "Resize left sidebar" })).not.toBeInTheDocument();
+  for (const name of ["Get a summary", "Explore the details", "Summarize the main ideas", "What are the key findings?", "Compare the sources"]) {
+    expect(screen.queryByRole("button", { name: new RegExp(name, "i") })).not.toBeInTheDocument();
   }
-  await userEvent.click(screen.getByRole("button", { name: /Get a summary/ }));
-  expect(screen.getByLabelText("QA question input")).toHaveValue("Summarize the main ideas");
-  expect(create).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Add sources" })).toBeInTheDocument();
   await userEvent.upload(screen.getByLabelText("Document file input"), new File(["doc"], "contract.docx"));
   expect(screen.getByLabelText("Sources list")).toHaveTextContent("contract.docx");
 });

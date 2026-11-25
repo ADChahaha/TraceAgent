@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Pause, SendHorizonal } from "lucide-react";
+import { ArrowUp, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export function SessionComposer({ running, disabled, canCancel, cancelling, onSend, onCancel, initialDraft = "" }: {
@@ -18,7 +18,7 @@ export function SessionComposer({ running, disabled, canCancel, cancelling, onSe
   return <form className="replay-agent-composer" aria-label="QA composer" onSubmit={(event) => { event.preventDefault(); send(); }}>
     <div className="replay-agent-composer-balance-row">
       <textarea aria-label="QA question input" value={draft} onChange={(event) => setDraft(event.target.value)}
-        placeholder="Ask a follow-up question" className="replay-agent-composer-input"
+        placeholder="Ask a follow-up question..." className="replay-agent-composer-input"
         onKeyDown={(event) => {
           if (event.key === "Enter" && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey && !event.nativeEvent.isComposing) { event.preventDefault(); send(); }
         }} />
@@ -26,8 +26,8 @@ export function SessionComposer({ running, disabled, canCancel, cancelling, onSe
         <Button type="button" size="icon" aria-label="Submit or pause answer" disabled={running ? !canCancel || cancelling : disabled}
           onClick={() => running ? onCancel() : send()}>
           <span className="replay-agent-composer-action-icon-shell" aria-hidden="true">
-            <SendHorizonal className="replay-agent-composer-action-icon h-4 w-4" data-visible={running ? "false" : "true"} />
-            <Pause className="replay-agent-composer-action-icon h-4 w-4" data-visible={running ? "true" : "false"} />
+            <ArrowUp className="replay-agent-composer-action-icon h-4 w-4" strokeWidth={2.2} data-visible={running ? "false" : "true"} />
+            <Square className="replay-agent-composer-action-icon h-3 w-3 fill-current" data-visible={running ? "true" : "false"} />
           </span>
         </Button>
       </div>
