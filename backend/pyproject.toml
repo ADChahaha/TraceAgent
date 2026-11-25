@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agent-gate-backend"
 version = "0.1.0"
-description = "Backend governance API for Agent Gate."
+description = "Backend session orchestration and persistence API for TraceAgent."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
