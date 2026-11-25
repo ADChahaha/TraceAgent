@@ -21,6 +21,8 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --workers 1
 
 独立启动 agent，默认 gRPC 地址 127.0.0.1:8001；独立启动 document service，默认 gRPC 地址 127.0.0.1:8002。一个 backend worker 保证每个 session 唯一 owner；进程重启会将遗留活跃轮标为失败。
 
+服务默认读取仓库根目录 `config.toml`（模板见 [config.example.toml](../config.example.toml)，不再读取 `.env`），下表同名环境变量可覆盖对应配置：
+
 | 环境变量 | 默认值 |
 | --- | --- |
 | BACKEND_DATABASE_PATH | backend/backend.sqlite3 |

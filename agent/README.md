@@ -36,6 +36,8 @@ python main.py --check-health 127.0.0.1:8001 --timeout 5
 
 探活使用标准 `grpc.health.v1.Health/Check`，成功输出 SERVING、退出码为 0，失败为 1。不再提供 HTTP 路由或 OpenAPI 页面。仓库根目录的 `scripts/start.sh` 会分别启动两个 gRPC 进程和 backend。
 
+服务默认读取仓库根目录 `config.toml`（模板见 [config.example.toml](../config.example.toml)，不再读取 `.env`），下表 CLI 参数与同名进程环境变量均可用于覆盖配置文件值：
+
 | 参数 / 环境变量 | 默认值 | 用途 |
 | --- | --- | --- |
 | `--host` / `AGENT_HOST` | 127.0.0.1 | 监听地址 |
@@ -48,7 +50,7 @@ document service 使用 `DOCUMENT_HOST`、`DOCUMENT_PORT`（默认 8002）、`DO
 
 服务使用 `grpc.aio`：RPC 方法与事件等待运行在事件循环中，文档处理通过 `asyncio.to_thread` 执行；问答资源预检和每个问答工具调用由 `python -m service.file_extraction_agent.core.tools.worker` 一次性子进程执行。问答流等待事件不占工作线程，也没有 workers−2 的活动流限制；模型 astream/ainvoke、图执行、工具调度和事件生产都运行在协程中。工具子进程会在调用结束、超时或取消时被 kill。客户端也须配置足够的消息收发上限，尤其是多文件 bytes 上传。当前使用明文 gRPC，与原本机服务部署边界一致。
 
-document service 的准备阶段需要 embedding 依赖；PDF 使用 MinerU，DOCX 使用 python-docx。默认 embedding 后端为 OpenVINO。问答模型配置 `BASE_URL`、`OPENAI_API_KEY`、`MODEL`；可选 `MODEL_API_TRANSPORT=responses` 或 `chat_completions`。PDF 语言由 `DOCUMENT_PROCESSOR_MINERU_LANG` 指定，默认 japan。
+document service 的准备阶段需要 embedding 依赖；PDF 使用 MinerU，DOCX 使用 python-docx。默认 embedding 后端为 OpenVINO。问答模型默认读取 `config.toml` 的 `[model]`（标题总结可选 `[title_model]`，同名环境变量 `BASE_URL`、`OPENAI_API_KEY`、`MODEL`、`MODEL_API_TRANSPORT=responses|chat_completions` 可覆盖）。PDF 语言由 `[document_service].mineru_lang`（或 `DOCUMENT_PROCESSOR_MINERU_LANG`）指定，默认 japan。
 
 资源发布到独立的 storage 服务（仓库顶层 `storage/`，S3 兼容 HTTP）。agent 通过 boto3
 （`S3_ENDPOINT_URL`，默认 `http://localhost:9000`）访问；先启动 storage 服务再启动 agent。

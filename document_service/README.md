@@ -19,5 +19,4 @@ conda activate agent-gate
 python -m document_service.main --host 127.0.0.1 --port 8002
 ```
 
-服务使用 `DOCUMENT_HOST`、`DOCUMENT_PORT`、`DOCUMENT_GRPC_WORKERS`、
-`DOCUMENT_GRPC_MAX_MESSAGE_BYTES` 和 `S3_ENDPOINT_URL` 配置。
+服务默认读取仓库根目录 `config.toml`（模板见 [config.example.toml](../config.example.toml)，不再读取 `.env`），并支持使用 `DOCUMENT_HOST`、`DOCUMENT_PORT`、`DOCUMENT_GRPC_WORKERS`、`DOCUMENT_GRPC_MAX_MESSAGE_BYTES` 和 `S3_ENDPOINT_URL` 等环境变量覆盖。

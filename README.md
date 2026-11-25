@@ -15,26 +15,26 @@
 
 > **TraceAgent 将文档回答、原文证据和工具查阅过程放在同一个工作台。**
 
-模型回答文档事实时附带数字引用，点击即可打开原文并高亮对应内容。你可以核对它查阅了什么、读了哪里，以及结论由哪一段支撑。浏览器工作台显示为 Agent Gate。
+模型回答文档事实时附带数字引用，点击即可打开原文并高亮对应内容。你可以核对它查阅了什么、读了哪里，以及结论由哪一段支撑。
 
 <h2 id="demo">🎬 Demo</h2>
 
 <p align="center">
-  <img src="docs/assets/demo-qa-evidence-review.png" alt="Agent Gate：左侧原文引用高亮，右侧文档问答与工具过程" width="100%">
+  <img src="docs/assets/demo-qa-evidence-review.png" alt="TraceAgent：左侧白纸原文引用高亮，右侧对话区与展开的工具查阅步骤" width="100%">
 </p>
-<p align="center"><em>左：全文阅读与引用高亮 · 右：工具过程、回答与数字引用</em></p>
+<p align="center"><em>左：白纸全文阅读与钢蓝柔光引用高亮 · 右：折叠工具过程、回答与数字引用</em></p>
 
-截图来自本地实际运行的工作台和已有 Orion 示例文档会话，更新于 2026-10-02。
+截图来自本地实际运行的 TraceAgent 工作台与虚构示例文档 Orion（不含任何个人信息），更新于 2026-11-25。
 
 <table>
 <tr>
 <td width="50%">
-<img src="docs/assets/demo-home-workspace.png" alt="Agent Gate 首页文档上传与首问入口" width="100%">
-<p align="center"><em>首页：添加文档、摘要与问题草稿入口</em></p>
+<img src="docs/assets/demo-home-workspace.png" alt="TraceAgent 单聚焦首页文档上传与首问入口" width="100%">
+<p align="center"><em>首页：单聚焦文档上传与首问入口</em></p>
 </td>
 <td width="50%">
-<img src="docs/assets/demo-qa-workspace.png" alt="Agent Gate 会话来源列表与文档问答" width="100%">
-<p align="center"><em>会话：来源管理、工具过程与带引用的回答</em></p>
+<img src="docs/assets/demo-qa-workspace.png" alt="TraceAgent Dark 模式来源管理与中性炭黑对话区" width="100%">
+<p align="center"><em>Dark 模式：来源管理、紧凑工具过程与中性炭黑对话区</em></p>
 </td>
 </tr>
 </table>
@@ -43,12 +43,12 @@
 
 | &nbsp; | 功能 | 说明 |
 |:---:|---|---|
-| 💬 | **多轮文档 QA** | 上传 PDF / DOCX，围绕同一批文档连续追问 |
+| 💬 | **多轮文档 QA** | 上传 PDF / DOCX，默认左 36% 文件栏 / 右 64% 对话区，围绕同一批文档连续追问 |
 | 🔗 | **数字引用** | 回答中的文档链接绑定 Markdown 块，显示为可点击的数字引用 |
-| 📖 | **原文 Review** | 点击引用在左侧打开全文，高亮目标块并保留前后章节 |
-| | **来源管理** | 逐文件显示处理状态，支持失败重试、补传、下载与删除 |
-| | **会话恢复** | 最近会话来自后端数据库，刷新或打开会话链接可恢复文件与历史 |
-| 🧭 | **过程可见** | 展示模型浏览目录、搜索关键词、阅读片段的完整轨迹 |
+| 📖 | **白纸原文 Review** | 点击引用在左侧打开 `#FAFAFA` 白纸全文，以钢蓝柔光块高亮目标段（Dark 模式下纸面恒定白纸黑字），自由拖拽分栏且不重置宽度 |
+| 📁 | **来源管理** | 逐文件显示处理状态，支持失败重试、补传、下载与删除 |
+| 🗂️ | **会话恢复与自动标题** | 首轮提问后异步生成可读会话标题，最近会话存后端 SQLite，刷新或打开链接可完整恢复 |
+| 🧭 | **紧凑过程可见** | 连续工具调用合并为单个低噪折叠入口，展开后以可读英文动作名展示查阅轨迹，不暴露底层函数名 |
 | 🛑 | **可取消生成** | 随时取消当前回答，后端立即终止 agent 循环 |
 | 📄 | **多格式** | PDF（MinerU OCR）与 DOCX（python-docx）解析为 HTML，再生成 Markdown 文件树与 embedding 索引 |
 
@@ -72,7 +72,7 @@ TraceAgent 将文档映射为**只读虚拟仓库**。模型通过 `ls` / `grep`
 
 浏览器通过 Next.js 代理访问 backend。backend 校验上传文件，通过独立 document service 准备资源，再将资源引用和消息历史交给 agent 执行问答。SQLite 保存会话、资源引用、轮次和完整消息；恢复页面时先读取快照，再订阅活跃轮次。过程增量只在内存中广播，历史工具活动由已保存的工具调用和结果恢复。
 
-> 详细架构设计见 [`agent/docs/DESIGN.md`](agent/docs/DESIGN.md)
+> 详细架构分层见 [`ARCHITECTURE.md`](ARCHITECTURE.md)，Agent 设计见 [`agent/docs/DESIGN.md`](agent/docs/DESIGN.md)
 
 <h2 id="quickstart">⚡ Quick Start</h2>
 
@@ -136,11 +136,11 @@ port = 9000
 打开 http://127.0.0.1:3000 即可使用。
 
 1. 点击首页输入框左下角回形针选择 PDF 或 DOCX，文件即进入行内串行处理队列。单次选择最多 20 个文件、合计 32 MiB，空文件不支持。
-2. 文件全部处理完成后自动进入 `/tasks/{session_id}`。输入问题并发送，系统在后台异步总结可读会话标题并实时更新顶栏与最近会话目录。
+2. 文件全部处理完成后自动进入 `/tasks/{session_id}`（默认左 36% 文件栏 / 右 64% 对话区）。输入问题并发送，系统在后台异步总结可读会话标题并实时更新顶栏与最近会话目录；顶栏左上 `+` 可随时开启新会话。
 3. 点击回答中的数字引用，在左侧白纸阅读器查看全文与钢蓝柔光高亮块（自由拖拽中间分割线调整宽度）；关闭阅读器可回到 Sources，通过 `+` 补传文档。
 4. 点击左上角菜单打开 Recent workspaces，或再次打开会话链接，恢复同一后端数据库中的文件与历史。
 
-默认数据库为 `backend/backend.sqlite3`，可通过 `BACKEND_DATABASE_PATH` 配置。当前面向单用户本地运行，backend 使用单进程；没有租户鉴权，旧 `qa_*` 数据不自动迁移。
+默认数据库为 `backend/backend.sqlite3`，可在 `config.toml` 的 `[backend].database_path`（或 `BACKEND_DATABASE_PATH`）配置。当前面向单用户本地运行，backend 使用单进程；没有租户鉴权，旧 `qa_*` 数据不自动迁移。
 
 > 详细配置和设计：[`agent/`](agent/README.md) · [`document_service/`](document_service/README.md) · [`backend/`](backend/README.md) · [`frontend/`](frontend/docs/DESIGN.md)
 
