@@ -37,3 +37,9 @@
 - 决定：首轮提交建立订阅后，`SessionManager` 在后台并发调用 `AgentService.GenerateTitle` 生成可读标题，经条件 `UPDATE`（仅标题为空时）落库并推送 `session.updated` 事件；模型报错、超时或未配置时静默降级为首条用户问题或首个文件名摘要，旧会话由查询与快照接口兜底派生（空会话回退 `Untitled workspace`），绝不展示 UUID；关闭 manager 取消标题任务时，若已进入线程池 SQLite 事务则等待线程退出后再释放连接。
 - 原因：严守 `backend` 不做模型推理的分层边界，不阻塞首轮主问答 SSE 响应，同时避免异步写线程与数据库连接关闭竞态导致崩溃。
 - 排除：在 `backend` 进程内直接调用 LLM SDK 生成标题；在首轮问答开始前同步等待标题生成；在会话列表中直接暴露 UUID。
+
+## 7. 核心服务遵循依赖倒置原则（DIP），具体传输与对象存储仅在 `backend/main.py` 装配注入
+
+- 决定：新增 [protocols.py](protocols.py) 声明 `DatabaseProtocol`、`CompletionStream`、`AgentGateway` 与 `DocumentGateway` 抽象协议；核心会话编排拆分为 `session_manager.py`、`session_resource_mixin.py`、`session_files.py`、`session_title_worker.py` 与 `session_catalog.py`（均 <= 300 行），仅依赖抽象协议与共享 `ObjectStore` 接口，禁止直接导入具体 `AgentClient`、`DocumentResourceClient` 或 `S3ObjectStore`/`build_s3_object_store`；具体实现统一由装配根 [backend/main.py](../main.py) 创建并注入，由 [check_architecture.py](../../scripts/check_architecture.py) 机械锁死。
+- 原因：解耦核心并发编排与外部传输/存储细节，使测试与架构演进只需替换抽象实现，避免隐藏的局部具体构造破坏依赖方向。
+- 排除：在 `SessionManager` 内部按需导入 `build_s3_object_store()` 或在业务模块直接绑定具体 gRPC client 类。

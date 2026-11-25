@@ -6,6 +6,28 @@ on:
   pull_request:
 
 jobs:
+  repo-gates:
+    name: Docs & architecture linters
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install linter test runner
+        run: python -m pip install pytest
+
+      - name: Run repository docs and architecture gates
+        run: |
+          python scripts/check_docs.py
+          python scripts/check_architecture.py
+          PYTHONPATH="$PWD:$PWD/shared" python -m pytest scripts/tests -q
+
   agent-ocr-install:
     name: Agent OCR dependencies install
     runs-on: ubuntu-latest

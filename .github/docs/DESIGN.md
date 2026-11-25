@@ -1,6 +1,6 @@
 # CI 设计
 
-CI 从仓库根目录安装并验证可独立运行的服务。`main` 的 push 和 pull request 触发工作流；Agent、backend、frontend 在各自的干净 runner 上验证，全部通过后才执行生产启动检查。
+CI 从仓库根目录安装并验证可独立运行的服务。`main` 的 push 和 pull request 触发工作流；前置 `repo-gates` job 执行文档门禁（`scripts/check_docs.py`）、300 行上限与分层/依赖倒置门禁（`scripts/check_architecture.py`）及 `scripts/tests`；Agent、backend、frontend 在各自的干净 runner 上验证，全部通过后才执行生产启动检查。
 
 backend 安装本地 `agent_proto`、`shared` 和 `backend[dev]`，让 pip 直接解析仓库内共享包，不去公共索引寻找未发布的 `traceagent-*` 包。测试使用 pytest `tmp_path` 临时 SQLite 文件数据库，Agent 调用由测试替身替代。
 

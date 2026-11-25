@@ -25,3 +25,9 @@
 - 决定：HTML 转 Markdown 文档树时线性扫描 `h1`-`h6` 与块级标签（`p`/`ul`/`ol`/`table`），通过维护 `section_stack` 重建嵌套目录，不依赖输入 HTML 的 `<section>` DOM 嵌套；不跳过正文 `h1`（文档内多个 `h1` 各自生成一级章节目录，首个 `h1`/`title` 仍用作文档顶层目录名后缀）；`p`、`ul`/`ol`、`table` 各自收敛为单个 `.md` 文件，段落与列表文件名截取前 24 个可见字符（`DEFAULT_SNIPPET_CHARS = 24`），同级统一使用三位数字前缀（`001-`）保证原文顺序并消除重名。
 - 原因：PDF/OCR 产出的 HTML 常因分页打断 `<section>` 标签，线性标题栈更稳定；保留多 `h1` 建目录可防止多章节文档丢失一级结构；块级单 `.md` 落盘避免列表与表格节点爆炸。
 - 排除：要求上游重写跨页 `<section>` 标签或建树时依赖 `<section>` 嵌套；跳过正文 `h1`；将列表或表格拆为多层子目录/逐项文件；省略数字前缀或使用 `...` / `--summary` 工程后缀。
+
+## 5. 资源构建、块读取与 gRPC 路由遵循依赖倒置，对象存储工厂统一由 `document_service/main.py` 注入
+
+- 决定：新增 [protocols.py](../protocols.py) 声明 `ObjectStoreFactory`、`TextEmbedder` 与 `DocumentParser` 抽象协议；`application.py`、`reader.py` 与 `routes.py` 只依赖 `ObjectStore` Protocol 与注入的 `store_factory`，不再直接导入或调用 `build_s3_object_store` / `S3ObjectStore`；具体 S3 客户端构造统一收口于装配根 [document_service/main.py](../../main.py)，并由 [check_architecture.py](../../../scripts/check_architecture.py) 机械校验。
+- 原因：贯彻依赖倒置原则（DIP），确保核心文档构建与块读取逻辑完全不耦合具体 S3 传输实现，方便测试注入与边界审查。
+- 排除：在 `reader.py` 或 `application.py` 内部隐式调用 `build_s3_object_store()`。

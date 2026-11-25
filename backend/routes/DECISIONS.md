@@ -13,3 +13,9 @@
 - 决定：在 [backend/services/user_errors.py](../services/user_errors.py) 集中维护错误分类与英文用户态文案映射，由 [errors.py](errors.py)、[chat.py](chat.py) 与 [turn_runtime.py](../services/turn_runtime.py) 在对外出口调用；原始 gRPC 异常、上游报错与堆栈先写入服务端日志，HTTP `detail` 与 SSE/快照 `turn.error` 只返回清晰、具体、可操作且不含底层实现细节的英文提示（`AgentClient`/`DocumentResourceClient` 内部异常原文保持不变）。
 - 原因：前端工作台面向最终用户，直接透出 `gRPC`、`ipv4:127.0.0.1:8002`、Python 依赖名或 Pydantic 堆栈既影响可读性又暴露内部实现；同时服务端排障仍需要完整技术信息。
 - 排除：把内部 gRPC/Python 异常原文直接返回给浏览器；在底层 gRPC client 中抹掉原始错误文本导致排障失明；仅靠前端正则掩盖而允许后端 HTTP/SSE 继续泄露内部细节。
+
+## 3. HTTP 路由层禁止跳过 `services` 直连 `crud` 或数据库模块
+
+- 决定：所有 HTTP 路由（如 `GET /chat/sessions`）统一经 `backend/services/` 用例入口（如 `session_catalog.list_recent_sessions`）访问持久化数据，禁止 `backend/routes/*` 直接 import `backend.crud`、`backend.core.db` 或 `backend.models`，并由 [check_architecture.py](../../scripts/check_architecture.py) 机械校验。
+- 原因：保持 `models -> core -> crud -> protocols -> services -> routes -> main` 的清晰单向分层，让列表查询、标题兜底派生与错误映射统一收口在业务服务层，避免路由层混杂 SQLite 细节。
+- 排除：允许只读 GET 路由作为特例直接导入 `backend.crud`。

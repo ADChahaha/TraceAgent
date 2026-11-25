@@ -2,7 +2,9 @@
 
 ## 2026-11-25
 
-全仓配置从 `.env` 切换为单文件 `config.toml`：根目录新增模板 [config.example.toml](../../config.example.toml) 并在 `.gitignore` 忽略 `config.toml`；在 `shared/traceagent_shared/config.py` 新增基于 Python 3.11 标准库 `tomllib` 的统一配置读取器与 `--shell-exports` CLI；`scripts/start.sh`、`storage`、`shared`、`document_service`、`agent`、`backend` 与 `.github/workflows/ci.yml` 统一接入 `config.toml` 并移除运行态对 `.env` 的读取，保留显式进程环境变量覆盖能力。
+新增架构与单文件行数上限机械门禁：参考 OpenAI Harness Engineering 新增 [scripts/check_architecture.py](../check_architecture.py) 及 `scripts/arch_lint/{rules,file_limits,python_checks,frontend_checks}.py` 与 [test_check_architecture.py](../tests/test_check_architecture.py)，机械校验全仓非忽略手写文件（`.py`/`.ts`/`.tsx`/`.js`/`.jsx`/`.css`，含测试，仅豁免 `*_pb2*.py`）<= 300 行、顶层 7 包单向分层、各包内分层与依赖倒置原则（DIP）、前端单向分层与零循环依赖，并在 `.github/workflows/ci.yml` 增加前置 `repo-gates` job 同步执行文档与架构门禁。
+
+全仓配置从 `.env` 切换为单文件 `config.toml`：根目录新增模板 [config.example.toml](../../config.example.toml) 并在 `.gitignore` 忽略 `config.toml`；在 `shared/traceagent_shared/config.py` 新增基于 Python 3.11 标准库 `tomllib` 的统一配置读取器与 `--shell-exports` CLI（按 300 行门禁拆分为 `config.py`、`config_values.py` 与 `config_exports.py`）；`scripts/start.sh`、`storage`、`shared`、`document_service`、`agent`、`backend` 与 `.github/workflows/ci.yml` 统一接入 `config.toml` 并移除运行态对 `.env` 的读取，保留显式进程环境变量覆盖能力。
 
 拆离公开仓库文档门禁与个人本地记忆：新增 [scripts/check_docs.py](../check_docs.py) 与 [scripts/tests/test_check_docs.py](../tests/test_check_docs.py) 承接仓库级文档骨架、断链与中文锚点、全仓模块 `DECISIONS.md` 总目收录、归档计划决策迁出与文风预算检查（扫描时显式忽略 `.gitignore` 里的 `memory/`、`.agents/`、`experiments/` 与 `storage/data/`）；将 `memory/` 与 `.agents/` 加入 `.gitignore` 并以 `git rm -r --cached` 退出 Git 追踪，本地个人文件完好保留。
 

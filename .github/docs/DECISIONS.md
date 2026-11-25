@@ -19,3 +19,9 @@
 - 决定：`deployment-smoke` 使用 `/tmp/traceagent-ci-backend.sqlite3`（启动前先清理旧文件及 `-wal`/`-shm`），并在 `/healthz` 之后额外探活 `GET /chat/sessions`；`backend` 单测 job 移除无效的 `BACKEND_DATABASE_PATH: ":memory:"`；由 `.github/tests/test_ci.py` 机械校验所有 job 不再配置内存库路径。
 - 原因：`backend` 的 `ThreadLocalDatabase` 依赖普通文件库 + WAL 与按线程独立连接（详见 [backend/core/DECISIONS.md](../../backend/core/DECISIONS.md)），配置 `:memory:` 会导致启动崩溃；且 `/healthz` 不访问数据库，补探 `/chat/sessions` 可直接端到端验证建表与跨工作线程查询正常。
 - 排除：在 CI 中保留 `:memory:` 配置；仅探活 `/healthz` 而不校验 SQLite 查询路径。
+
+## 4. CI 增加前置 `repo-gates` job 机械运行文档、300 行与架构依赖门禁
+
+- 决定：在 `.github/workflows/ci.yml` 增加独立轻量的 `repo-gates` job，每次 push 与 PR 自动执行 `python scripts/check_docs.py`、`python scripts/check_architecture.py` 与 `pytest scripts/tests -q`。
+- 原因：让文档完整性、300 行单文件上限以及跨包/包内依赖倒置门禁在 CI 自动阻断违规合并，而不必等待重量级 OCR 依赖安装。
+- 排除：仅依赖本地人工运行架构与文档门禁脚本而不接入 CI。

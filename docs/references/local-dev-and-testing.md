@@ -39,3 +39,4 @@
   - 已移除 DeepSeek `thinking` / `reasoning_content` 专有适配，接入默认开启思考模式的 DeepSeek 端点会因未回传 `reasoning_content` 报 400。
   - 多上游轮询且无通道粘性的中转代理会导致 Prompt Cache 命中恒为 0。
 - 仓库知识文档门禁：`python3 scripts/check_docs.py`（校验必需骨架、链接锚点、模块 `DECISIONS.md` 收录、归档计划决策迁出与文风预算，回归测试见 `scripts/tests/test_check_docs.py`）。
+- 仓库架构与 300 行上限门禁：`python3 scripts/check_architecture.py`（校验全仓非忽略手写文件 <= 300 行、顶层 7 包单向分层、包内分层与依赖倒置原则、前端单向分层与零循环依赖，回归测试见 `scripts/tests/test_check_architecture.py`，CI 前置 job `repo-gates` 同步执行）。
